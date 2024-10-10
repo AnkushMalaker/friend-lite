@@ -4,4 +4,4 @@ pip install --upgrade pip
 pip install poetry
 poetry install
 poetry shell
-poetry run python main.py
+poetry run python examples/streaming_vad.py
