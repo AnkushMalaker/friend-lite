@@ -1,0 +1,5 @@
+{
+    "mypy-type-checker.args": [
+        "\"mypy-type-checker.args\" = [\"--config-file=./backend/pyproject.toml\"]"
+    ]
+}
