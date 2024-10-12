@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import List, Optional
 
@@ -13,15 +12,13 @@ from dotenv import load_dotenv
 from easy_audio_interfaces.audio_interfaces import RechunkingBlock, SocketReceiver
 from easy_audio_interfaces.extras.models import SileroVad, WhisperBlock
 from easy_audio_interfaces.types import NumpyFrame
-from ez_wearable_backend.utils import decode_friend_message
-from opuslib import Decoder
+from ez_wearable_backend.helper import FriendSocketReceiver
 from prompt_template import log_taker_prompt_tmpl_str
 from utils import llm_refactor, record_till_silence, save_segment, wait_for_voice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-decoder = Decoder(fs=16000, channels=1)
 
 load_dotenv()
 
@@ -71,11 +68,10 @@ def llm_refactor(transcription_text: str, chores: Optional[List[str]] = None) ->
 
 async def main_async():
     rechunking_block = RechunkingBlock(chunk_size=512)
-    socket_receiver = SocketReceiver(
+    socket_receiver = FriendSocketReceiver(
         host="0.0.0.0",
         port=8081,
         sample_rate=16000,
-        post_process_callback=partial(decode_friend_message, decoder=decoder),
     )
     await socket_receiver.open()
     vad = SileroVad(sampling_rate=16000)

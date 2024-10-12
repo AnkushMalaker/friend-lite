@@ -2,15 +2,14 @@ import asyncio
 import logging
 import wave
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 
 import fire
 import numpy as np
-from easy_audio_interfaces.audio_interfaces import RechunkingBlock, SocketReceiver
+from easy_audio_interfaces.audio_interfaces import RechunkingBlock
 from easy_audio_interfaces.extras.models import SileroVad, VoiceGate, WhisperBlock
 from easy_audio_interfaces.types import NumpySegment
-from ez_wearable_backend.utils import decode_friend_message
+from ez_wearable_backend.helper import FriendSocketReceiver
 from opuslib import Decoder
 from pydantic import BaseModel
 
@@ -49,11 +48,10 @@ def save_segment(segment: NumpySegment, path: Path | str):
 async def main_async():
     silero = SileroVad(sampling_rate=16000)
     rechunking_block = RechunkingBlock(chunk_size=512)
-    socket_receiver = SocketReceiver(
+    socket_receiver = FriendSocketReceiver(
         host="0.0.0.0",
         port=8081,
         sample_rate=16000,
-        post_process_callback=partial(decode_friend_message, decoder=decoder),
     )
     await socket_receiver.open()
 
