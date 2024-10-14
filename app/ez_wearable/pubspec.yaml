@@ -34,6 +34,7 @@ dependencies:
   permission_handler: ^11.3.1
   shared_preferences: ^2.3.2
   cupertino_icons: ^1.0.6
+  fluttertoast: ^8.2.1
   web_socket_channel: ^3.0.1
 
 dev_dependencies:
