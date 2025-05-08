@@ -1,0 +1,26 @@
+services:
+  friend-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./audio_chunks:/app/audio_chunks
+      - ./qdrant:/app/qdrant
+    environment:
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ~/my-services/ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

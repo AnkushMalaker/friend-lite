@@ -1,0 +1,5 @@
+*
+!.python-version
+!Dockerfile
+!pyproject.toml
+!README.md
