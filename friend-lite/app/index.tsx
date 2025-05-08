@@ -342,7 +342,7 @@ export default function App() {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Omi SDK Example</Text>
+        <Text style={styles.title}>Friend Lite</Text>
 
         <BluetoothStatusBanner
           bluetoothState={bluetoothState}
