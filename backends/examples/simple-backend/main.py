@@ -7,12 +7,9 @@
 * Each 30-second chunk is passed to **`transcribe_audio()`** (user-supplied) to get a transcript.
 * The transcript is stored in **mem0** (vector store backed by Qdrant, embeddings/LLM via Ollama).
 
-Replace `transcribe_audio` with your actual speech-to-text function.
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
 import wave
@@ -51,7 +48,7 @@ MEM0_CONFIG = {
         "provider": "ollama",
         "config": {
             "model": "llama3.1:latest",
-            "ollama_base_url": "http://192.168.0.110:11434",
+            "ollama_base_url": "http://ollama:11434",
             "temperature": 0,
             "max_tokens": 2000,
         },
@@ -61,21 +58,22 @@ MEM0_CONFIG = {
         "config": {
             "model": "nomic-embed-text:latest",
             "embedding_dims": 768,
-            "ollama_base_url": "http://192.168.0.110:11434",
+            "ollama_base_url": "http://ollama:11434",
         },
     },
     "vector_store": {
         "provider": "qdrant",
         "config": {
-            "collection_name": "john_memories",
+            "collection_name": "omi_memories",
             "embedding_model_dims": 768,
-            "path": "./qdrant",
+            "host": "qdrant",
+            "port": 6333
         },
     },
 }
 
 memory = Memory.from_config(MEM0_CONFIG)
-ollama_client = ollama.Client(host="http://192.168.0.110:11434")  # noqa: S110
+ollama_client = ollama.Client(host="http://ollama:11434")  # noqa: S110
 
 ###############################################################################
 # STT function
