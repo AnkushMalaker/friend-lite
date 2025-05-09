@@ -1,5 +1,5 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, Platform, FlatList, ActivityIndicator, Alert, Switch, Button } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, Platform, FlatList, ActivityIndicator, Alert, Switch, Button, TouchableOpacity } from 'react-native';
 import { OmiConnection } from '@omiai/omi-react-native'; // OmiDevice also comes from here
 import { State as BluetoothState } from 'react-native-ble-plx'; // Import State from ble-plx
 
@@ -420,6 +420,37 @@ export default function App() {
                 />
             </View>
         )}
+        
+        {/* Show disconnect button when connected but scan list isn't visible */}
+        {deviceConnection.connectedDeviceId && !filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
+          <View style={styles.section}>
+            <View style={styles.disconnectContainer}>
+              <Text style={styles.connectedText}>
+                Connected to device: {deviceConnection.connectedDeviceId.substring(0, 15)}...
+              </Text>
+              <TouchableOpacity
+                style={[styles.button, styles.buttonDanger]}
+                onPress={async () => {
+                  console.log('[App.tsx] Manual disconnect initiated via standalone disconnect button.');
+                  await saveLastConnectedDeviceId(null);
+                  setLastKnownDeviceId(null); 
+                  setTriedAutoReconnectForCurrentId(true);
+                  
+                  try {
+                    await deviceConnection.disconnectFromDevice();
+                    console.log('[App.tsx] Manual disconnect from device successful.');
+                  } catch (error) {
+                    console.error('[App.tsx] Error during manual disconnect call:', error);
+                    Alert.alert('Error', 'Failed to disconnect from the device.');
+                  }
+                }}
+                disabled={deviceConnection.isConnecting}
+              >
+                <Text style={styles.buttonText}>{deviceConnection.isConnecting ? 'Disconnecting...' : 'Disconnect'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {deviceConnection.connectedDeviceId && (
           <DeviceDetails
@@ -503,5 +534,32 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#555',
     textAlign: 'center',
+  },
+  disconnectContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 5,
+  },
+  connectedText: {
+    fontSize: 14,
+    color: '#333',
+    flex: 1,
+    marginRight: 10,
+  },
+  button: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  buttonDanger: {
+    backgroundColor: '#FF3B30',
+  },
+  buttonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
