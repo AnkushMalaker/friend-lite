@@ -32,4 +32,4 @@ COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8080
-CMD ["python", "parakeet-offline.py"]
+CMD ["python", "parakeet-offline.py", "--port", "8080"]

@@ -18,6 +18,12 @@ dependencies = [
 
 [tool.uv]
 compile-bytecode = true
+conflicts = [
+  [
+    { group = "demo" },
+    { group = "parakeet" }
+  ]
+]
 
 [tool.uv.sources]
 useful-moonshine-onnx = { git = "https://github.com/usefulsensors/moonshine.git", subdirectory = "moonshine-onnx" }
@@ -34,5 +40,6 @@ moonshine = [
 ]
 parakeet = [
     "nemo-toolkit[asr]>=2.1.0",
-    "cuda-python>=12.3"
+    "cuda-python>=12.3",
+    "numpy>=1.26,<2.0",
 ]
