@@ -1,0 +1,19 @@
+[project]
+name = "parakeet_ws_server"
+version = "0.3.0"
+description = "WebSocket ASR server using NVIDIA Parakeet-TDT-0.6b-v2 (NeMo toolkit)"
+requires-python = ">=3.10"
+
+# PEP 621: dependencies as an *array of requirement strings*
+# Extras are encoded with PEP 508 syntax (nemo_toolkit[asr]).
+dependencies = [
+  "torch>=2.3",
+  "torchaudio>=2.3",
+  "nemo_toolkit[asr]>=1.30",
+  "websockets>=12.0",
+  "numpy>=1.26",
+  "soundfile>=0.12"
+]
+
+[tool.uv]
+compile-bytecode = true
