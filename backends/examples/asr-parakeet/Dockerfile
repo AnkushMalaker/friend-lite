@@ -32,4 +32,4 @@ COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8080
-CMD ["python", "main.py"]
+CMD ["python", "online.py"]
