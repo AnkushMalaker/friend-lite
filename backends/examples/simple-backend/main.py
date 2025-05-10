@@ -87,22 +87,26 @@ def transcribe_deepgram(pcm_bytes: bytes) -> str:
 
     try:
         deepgram = DeepgramClient(DEEPGRAM_API_KEY)
-        source = {'buffer': pcm_bytes, 'mimetype': 'audio/wav'} # Deepgram expects WAV
+        source = {'buffer': pcm_bytes}
         options = PrerecordedOptions(
-            smart_format=True, model="nova-2", language="en-US"
+            smart_format=True,
+            model="nova-2",
+            language="en-US",
+            encoding="linear16",  # Specify encoding for raw PCM audio
+            sample_rate=16000     # Specify the sample rate of the audio
         )
         response = deepgram.listen.prerecorded.v('1').transcribe_file(source, options)
-        # Extract transcript from the first channel and first alternative
         if response.results and response.results.channels and \
            response.results.channels[0].alternatives:
             transcript = response.results.channels[0].alternatives[0].transcript
             if transcript:
-                 return transcript
+                return transcript
         audio_logger.warning("Deepgram transcription returned empty or unexpected response format.")
         return "[transcription unavailable - empty response from Deepgram]"
     except Exception as e:
         audio_logger.error(f"Deepgram transcription failed: {e}")
         return f"[transcription error: {e}]"
+
 
 
 def transcribe_audio(pcm_bytes: bytes) -> str:
