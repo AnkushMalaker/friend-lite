@@ -7,18 +7,18 @@ WORKDIR /app
 # NeMo and texterrors need libs and C++ compiler
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libsndfile1 \
-        build-essential \
+        build-essential git \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependency manifest first for cache‑friendly installs
 COPY pyproject.toml ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --compile-bytecode
+    uv sync --no-install-project --compile-bytecode --group parakeet
 
 # Add source and install project itself
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --compile-bytecode
+    uv sync --compile-bytecode --group parakeet
 
 #########################  runtime #################################
 FROM python:3.12-slim-bookworm AS runtime
@@ -32,4 +32,4 @@ COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8080
-CMD ["python", "online.py"]
+CMD ["python", "parakeet-offline.py"]
