@@ -1,6 +1,8 @@
 services:
   parakeet-ws:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile_Parakeet
     image: parakeet-ws:latest
     ports:
       - "8080:8080"
