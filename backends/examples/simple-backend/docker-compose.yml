@@ -32,7 +32,7 @@ services:
       - "6333:6333" # gRPC
       - "6334:6334" # HTTP
     volumes:
-      - qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
+      - ./qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
   ngrok:
     image: ngrok/ngrok:latest
     ports:
@@ -43,5 +43,3 @@ services:
     depends_on:
       - friend-backend
 
-volumes:
-  qdrant_data: # Define the named volume for Qdrant persistence
