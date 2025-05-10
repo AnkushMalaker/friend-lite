@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import tempfile
-import time
 from collections import deque
 from typing import Deque
 
@@ -80,6 +79,7 @@ class Transcriber:
                 os.remove(tmpfile_name)
 
 
+transcriber = Transcriber() # Uses default model
 # --------------------------------------------------------------------------- #
 async def handle_client(
     websocket: ServerConnection
@@ -93,7 +93,6 @@ async def handle_client(
               • final – True when VAD says the utterance ended
     """
     logger.info("Handling client")
-    transcriber     = Transcriber() # Uses default model
     vad_model       = load_silero_vad(onnx=True)
     vad_iterator    = VADIterator(
         model=vad_model,

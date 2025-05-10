@@ -6,7 +6,7 @@ import numpy as np
 import sounddevice as sd
 from websockets.asyncio.client import connect
 
-URI = "ws://localhost:8765/"
+URI = "ws://192.168.0.110:8080/"
 
 async def main():
     print(f"Connecting to {URI}")

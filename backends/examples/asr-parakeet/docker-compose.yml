@@ -19,4 +19,3 @@ services:
     environment:
       - HF_HOME=/models
     restart: unless-stopped
-    
