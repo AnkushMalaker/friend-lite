@@ -1,19 +1,32 @@
 [project]
 name = "parakeet_ws_server"
-version = "0.3.0"
+version = "0.3.1"
 description = "WebSocket ASR server using NVIDIA Parakeet-TDT-0.6b-v2 (NeMo toolkit)"
 requires-python = ">=3.10"
 
-# PEP 621: dependencies as an *array of requirement strings*
-# Extras are encoded with PEP 508 syntax (nemo_toolkit[asr]).
 dependencies = [
   "torch>=2.3",
   "torchaudio>=2.3",
-  "nemo_toolkit[asr]>=1.30",
+  "cuda-python>=12.3",
   "websockets>=12.0",
   "numpy>=1.26",
-  "soundfile>=0.12"
+  "soundfile>=0.12",
+  "omi-sdk>=0.1.4",
+  "fastapi>=0.115.12",
+  "uvicorn>=0.34.2",
+  "useful-moonshine-onnx",
 ]
 
 [tool.uv]
 compile-bytecode = true
+
+[tool.uv.sources]
+useful-moonshine-onnx = { git = "https://github.com/usefulsensors/moonshine.git", subdirectory = "moonshine-onnx" }
+
+[dependency-groups]
+demo = [
+    "fastrtc>=0.0.23",
+    "gradio>=5.29.0",
+    "silero-vad>=5.1.2",
+    "sounddevice>=0.5.1",
+]
