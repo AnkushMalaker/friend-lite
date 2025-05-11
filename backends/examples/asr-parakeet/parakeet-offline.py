@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO)
 # --------------------------------------------------------------------------- #
 SAMPLING_RATE = 16_000
 CHUNK_SAMPLES = 512                       # Silero requirement (32 ms @ 16 kHz)
-CHUNK_BYTES   = CHUNK_SAMPLES * 4         # float32 → 4 B per sample
+CHUNK_BYTES   = CHUNK_SAMPLES * 2         # int16 → 2 B per sample
 
 LOOKBACK_CHUNKS  = 5                      # prepend a little context
 MAX_SPEECH_SECS  = 30                     # Max duration of a speech segment
@@ -119,7 +119,7 @@ async def handle_client(
             del byte_backlog[:CHUNK_BYTES]
 
             logger.debug(f"Chunk bytes: {len(chunk_bytes)}")
-            chunk = np.frombuffer(chunk_bytes, dtype=np.float32)
+            chunk = np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
             speech_buf = np.concatenate((speech_buf, chunk))
             if not recording:
@@ -127,6 +127,7 @@ async def handle_client(
                 max_idle = LOOKBACK_CHUNKS * CHUNK_SAMPLES
                 speech_buf = speech_buf[-max_idle:]
             
+            logger.info(f"Speech buffer: {len(speech_buf)}")
             # Limit total speech_buf to avoid excessive memory usage if VAD fails to end
             if len(speech_buf) > MAX_SPEECH_SECS * SAMPLING_RATE:
                 logger.warning(f"Speech buffer exceeded {MAX_SPEECH_SECS}s, truncating.")
@@ -136,7 +137,12 @@ async def handle_client(
             # ---------------------------------------------------------------- #
             # 2)  Run VAD on this chunk
             # ---------------------------------------------------------------- #
-            vad_event = vad_iterator(chunk)
+            try:
+                vad_event = vad_iterator(chunk)
+                logger.info(f"VAD event: {vad_event}")
+            except Exception as e:
+                logger.error(f"Error during VAD: {e}")
+
             if vad_event:
                 logger.info(f"VAD event: {vad_event}")
                 if "start" in vad_event and not recording:
@@ -194,7 +200,7 @@ async def send_caption(
     text   = await loop.run_in_executor(None, transcriber, speech)
     
     if not text: # If transcription is empty or failed
-        logger.info("Transcription resulted in empty text. Not sending.")
+        logger.warning("Transcription resulted in empty text. Not sending.")
         return
 
     merged = build_line_with_cache(text, cache)
