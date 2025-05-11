@@ -7,41 +7,12 @@ services:
       - "8000:8000"
     volumes:
       - ./audio_chunks:/app/audio_chunks
-    environment:
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-    depends_on:
-      - qdrant
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ~/my-services/ollama-data:/root/.ollama
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant
-    ports:
-      - "6333:6333" # gRPC
-      - "6334:6334" # HTTP
-    volumes:
-      - qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
   ngrok:
     image: ngrok/ngrok:latest
     ports:
       - "4040:4040" # Ngrok web interface
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    command: "http friend-backend:8000"
+    command: "http friend-backend:8000 --url=square-feline-partly.ngrok-free.app"
     depends_on:
       - friend-backend
-
-volumes:
-  qdrant_data: # Define the named volume for Qdrant persistence
