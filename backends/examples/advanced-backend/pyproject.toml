@@ -1,0 +1,19 @@
+[project]
+name = "simple-omi-backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.12",
+    "mem0ai>=0.1.97",
+    "ollama>=0.4.8",
+    "omi-sdk>=0.1.5",
+    "python-dotenv>=1.1.0",
+    "uvicorn>=0.34.2",
+]
+
+[dependency-groups]
+deepgram = [
+    "deepgram-sdk>=4.0.0",
+]

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Unified Omi-audio service
+"""Simple WebSocket Audio Service
 
 * Accepts Opus packets over a WebSocket (`/ws`).
-* Uses **OmiSDK** (`OmiOpusDecoder`) to convert them to 16-kHz/16-bit/mono PCM.
+* Uses OmiSDK (`OmiOpusDecoder`) to convert them to 16-kHz/16-bit/mono PCM.
 * Buffers PCM and writes 30-second WAV chunks to `./audio_chunks/`.
-* Each 30-second chunk is passed to **`transcribe_audio()`** (user-supplied) to get a transcript.
-* The transcript is stored in **mem0** (vector store backed by Qdrant, embeddings/LLM via Ollama).
-
 """
 from __future__ import annotations
 
@@ -17,14 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-import ollama  # Ollama python client
-from deepgram import DeepgramClient, PrerecordedOptions
-from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from mem0 import Memory  # mem0 core
 from omi.decoder import OmiOpusDecoder  # OmiSDK
-
-load_dotenv()
 
 ###############################################################################
 # Configuration
@@ -39,95 +30,14 @@ TARGET_SAMPLES = SAMPLE_RATE * SEGMENT_SECONDS
 CHUNK_DIR = Path("./audio_chunks")
 CHUNK_DIR.mkdir(parents=True, exist_ok=True)
 
-# ---- Deepgram Configuration ------------------------------------------------ #
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", '')
-
-# ---- mem0 + Ollama --------------------------------------------------------- #
-MEM0_CONFIG = {
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": "llama3.1:latest",
-            "ollama_base_url": "http://ollama:11434",
-            "temperature": 0,
-            "max_tokens": 2000,
-        },
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": "nomic-embed-text:latest",
-            "embedding_dims": 768,
-            "ollama_base_url": "http://ollama:11434",
-        },
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "collection_name": "omi_memories",
-            "embedding_model_dims": 768,
-            "host": "qdrant",
-            "port": 6333
-        },
-    },
-}
-
-memory = Memory.from_config(MEM0_CONFIG)
-ollama_client = ollama.Client(host="http://ollama:11434")  # noqa: S110
-
-###############################################################################
-# STT function
-###############################################################################
-
-def transcribe_deepgram(pcm_bytes: bytes) -> str:
-    """Transcribe PCM audio bytes using Deepgram."""
-    if not DEEPGRAM_API_KEY:
-        audio_logger.error("DEEPGRAM_API_KEY not set. Skipping transcription.")
-        return "[transcription unavailable - DEEPGRAM_API_KEY not set]"
-
-    try:
-        deepgram = DeepgramClient(DEEPGRAM_API_KEY)
-        source = {'buffer': pcm_bytes}
-        options = PrerecordedOptions(
-            smart_format=True,
-            model="nova-2",
-            language="en-US",
-            encoding="linear16",  # Specify encoding for raw PCM audio
-            sample_rate=16000     # Specify the sample rate of the audio
-        )
-        response = deepgram.listen.prerecorded.v('1').transcribe_file(source, options)
-        if response.results and response.results.channels and \
-           response.results.channels[0].alternatives:
-            transcript = response.results.channels[0].alternatives[0].transcript
-            if transcript:
-                return transcript
-        audio_logger.warning("Deepgram transcription returned empty or unexpected response format.")
-        return "[transcription unavailable - empty response from Deepgram]"
-    except Exception as e:
-        audio_logger.error(f"Deepgram transcription failed: {e}")
-        return f"[transcription error: {e}]"
-
-
-
-def transcribe_audio(pcm_bytes: bytes) -> str:
-    """Turn raw PCM into text.
-
-    This function now delegates to `transcribe_deepgram`.
-    It's kept for potential future use with other STT engines or for compatibility.
-    """
-    return transcribe_deepgram(pcm_bytes)
-
 ###############################################################################
 # FastAPI WebSocket server
 ###############################################################################
-app = FastAPI(title="Omi Unified Audio Service")
+app = FastAPI(title="Simple Audio Service")
 
 audio_logger = logging.getLogger("audio_service")
 audio_logger.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-
-
-decoder = OmiOpusDecoder()
 
 
 class ClientState:
@@ -140,11 +50,12 @@ class ClientState:
         self.sample_count = 0  # samples accumulated in current segment
         self.segment_index = 0
         self.start_time = datetime.utcnow().isoformat()
+        self.decoder = OmiOpusDecoder()
 
     # --------------------------------------------------------------------- #
     async def add_opus_packet(self, packet: bytes):
         """Decode a single Opus packet -> PCM, buffer it, handle rollover."""
-        pcm = decoder.decode_packet(packet, strip_header=False)
+        pcm = self.decoder.decode_packet(packet, strip_header=False)
         if pcm is None:
             audio_logger.error("Client %s: decode failed (packet dropped)", self.id)
             return
@@ -173,14 +84,6 @@ class ClientState:
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(pcm_bytes)
         audio_logger.info("Client %s: wrote %s (%.1fs)", self.id, wav_path.name, duration)
-
-        # Transcribe and store in mem0 ------------------------------------ #
-        transcript = transcribe_deepgram(pcm_bytes)
-        if transcript and not transcript.startswith("[transcription unavailable") and not transcript.startswith("[transcription error"):
-            memory.add(transcript, user_id=f"client_{self.id}")
-            audio_logger.info("Client %s: transcript added to memory – %s", self.id, transcript[:60])
-        elif transcript:
-            audio_logger.warning("Client %s: transcription issue – %s", self.id, transcript)
 
         # Reset buffers
         self.pcm_frames.clear()
@@ -228,5 +131,5 @@ if __name__ == "__main__":
 
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
-    audio_logger.info("Starting Omi unified service at ws://%s:%s/ws", host, port)
+    audio_logger.info("Starting simple audio service at ws://%s:%s/ws", host, port)
     uvicorn.run("main:app", host=host, port=port, reload=False)

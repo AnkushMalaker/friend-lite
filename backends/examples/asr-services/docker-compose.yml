@@ -1,0 +1,21 @@
+services:
+  parakeet-ws:
+    build:
+      context: .
+      dockerfile: Dockerfile_Parakeet
+    image: parakeet-ws:latest
+    ports:
+      - "8765:8765"
+    volumes:
+      # Persist Hugging Face cache (models + tokenizer) between restarts
+      - ./model_cache:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - HF_HOME=/models
+    restart: unless-stopped
