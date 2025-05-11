@@ -9,7 +9,7 @@ services:
       - ./audio_chunks:/app/audio_chunks
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - PARAKEET_ASR_WS_URI=ws://host.docker.internal:8080/
+      - OFFLINE_ASR_WS_URI=${OFFLINE_ASR_WS_URI}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
     depends_on:
       - qdrant
