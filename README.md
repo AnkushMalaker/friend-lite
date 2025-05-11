@@ -1,5 +1,5 @@
 # Own your Friend DevKit, DevKit 2, OMI 
-The original server and app don't handle basic required functions well. The sf techbro backend is bloated as shit and very difficult to spin up. 
+The original server and app don't handle basic required functions well.
 This provides simple solutions to both.
 
 The app uses react native sdk
