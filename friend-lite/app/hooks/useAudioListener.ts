@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { Alert } from 'react-native';
 import { OmiConnection } from '@omiai/omi-react-native';
-import { Subscription } from 'react-native-ble-plx'; // OmiConnection might use this type for subscriptions
+import { Subscription, ConnectionPriority } from 'react-native-ble-plx'; // OmiConnection might use this type for subscriptions
 
 interface UseAudioListener {
   isListeningAudio: boolean;
@@ -50,7 +50,7 @@ export const useAudioListener = (
       Alert.alert('Not Connected', 'Please connect to a device first to start audio listener.');
       return;
     }
-    if (isListeningAudio) {
+    if (isListeningAudio) { 
         console.log('Audio listener is already active. Stopping first.');
         await stopAudioListener();
     }
@@ -59,6 +59,15 @@ export const useAudioListener = (
     localPacketCounterRef.current = 0;
     console.log('Starting audio bytes listener...');
 
+    // Request high connection priority before starting audio listener
+    try {
+      await omiConnection.requestConnectionPriority(ConnectionPriority.High); // 1 for ConnectionPriority.High
+      console.log('Requested high connection priority.');
+    } catch (error) {
+      console.error('Failed to request high connection priority:', error);
+      Alert.alert('Error', `Failed to request high connection priority: ${error}`);
+    }
+    
     // Batch UI updates for packet counter
     if (uiUpdateIntervalRef.current) clearInterval(uiUpdateIntervalRef.current);
     uiUpdateIntervalRef.current = setInterval(() => {
