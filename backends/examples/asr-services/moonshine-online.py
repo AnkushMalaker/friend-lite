@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 # --------------------------------------------------------------------------- #
 SAMPLING_RATE = 16_000
 CHUNK_SAMPLES = 512                       # Silero requirement (32 ms @ 16 kHz)
-CHUNK_BYTES   = CHUNK_SAMPLES * 4         # float32 → 4 B per sample
+CHUNK_BYTES   = CHUNK_SAMPLES * 2         # float32 → 4 B per sample
 
 LOOKBACK_CHUNKS  = 5                      # prepend a little context
 MAX_SPEECH_SECS  = 15
@@ -93,7 +93,7 @@ async def handle_client(
 
             logger.debug(f"Chunk bytes: {len(chunk_bytes)}")
             # fast float32 unpack without copy
-            chunk = np.frombuffer(chunk_bytes, dtype=np.float32)
+            chunk = np.frombuffer(chunk_bytes, dtype=np.int16)
 
             speech_buf = np.concatenate((speech_buf, chunk))
             if not recording:
