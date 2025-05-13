@@ -1,5 +1,5 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, Platform, FlatList, ActivityIndicator, Alert, Switch, Button, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, Platform, FlatList, ActivityIndicator, Alert, Switch, Button, TouchableOpacity, KeyboardAvoidingView } from 'react-native';
 import { OmiConnection } from '@omiai/omi-react-native'; // OmiDevice also comes from here
 import { State as BluetoothState } from 'react-native-ble-plx'; // Import State from ble-plx
 
@@ -338,139 +338,145 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView 
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView 
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
       >
-        <Text style={styles.title}>Friend Lite</Text>
+        <ScrollView 
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.title}>Friend Lite</Text>
 
-        <BluetoothStatusBanner
-          bluetoothState={bluetoothState}
-          isPermissionsLoading={isPermissionsLoading}
-          permissionGranted={permissionGranted}
-          onRequestPermission={requestBluetoothPermission}
-        />
+          <BluetoothStatusBanner
+            bluetoothState={bluetoothState}
+            isPermissionsLoading={isPermissionsLoading}
+            permissionGranted={permissionGranted}
+            onRequestPermission={requestBluetoothPermission}
+          />
 
-        <ScanControls
-          scanning={scanning}
-          onScanPress={startScan}
-          onStopScanPress={stopDeviceScanAction}
-          canScan={canScan}
-        />
+          <ScanControls
+            scanning={scanning}
+            onScanPress={startScan}
+            onStopScanPress={stopDeviceScanAction}
+            canScan={canScan}
+          />
 
-        {filteredDevices.length > 0 && !deviceConnection.connectedDeviceId && !isAttemptingAutoReconnect && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeaderWithFilter}>
-              <Text style={styles.sectionTitle}>Found Devices</Text>
-              <View style={styles.filterContainer}>
-                <Text style={styles.filterText}>Show only OMI/Friend</Text>
-                <Switch
-                  trackColor={{ false: "#767577", true: "#81b0ff" }}
-                  thumbColor={showOnlyOmi ? "#f5dd4b" : "#f4f3f4"}
-                  ios_backgroundColor="#3e3e3e"
-                  onValueChange={setShowOnlyOmi}
-                  value={showOnlyOmi}
-                />
+          {filteredDevices.length > 0 && !deviceConnection.connectedDeviceId && !isAttemptingAutoReconnect && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeaderWithFilter}>
+                <Text style={styles.sectionTitle}>Found Devices</Text>
+                <View style={styles.filterContainer}>
+                  <Text style={styles.filterText}>Show only OMI/Friend</Text>
+                  <Switch
+                    trackColor={{ false: "#767577", true: "#81b0ff" }}
+                    thumbColor={showOnlyOmi ? "#f5dd4b" : "#f4f3f4"}
+                    ios_backgroundColor="#3e3e3e"
+                    onValueChange={setShowOnlyOmi}
+                    value={showOnlyOmi}
+                  />
+                </View>
               </View>
-            </View>
-            <FlatList
-              data={filteredDevices}
-              renderItem={({ item }) => (
-                <DeviceListItem
-                  device={item}
-                  onConnect={deviceConnection.connectToDevice}
-                  onDisconnect={deviceConnection.disconnectFromDevice}
-                  isConnecting={deviceConnection.isConnecting}
-                  connectedDeviceId={deviceConnection.connectedDeviceId}
-                />
-              )}
-              keyExtractor={(item) => item.id}
-              style={{ maxHeight: 200 }}
-            />
-          </View>
-        )}
-        
-        {deviceConnection.connectedDeviceId && filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
-             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Connected Device</Text>
-                <DeviceListItem
-                    device={filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId)!}
-                    onConnect={() => {}}
-                    onDisconnect={async () => {
-                      console.log('[App.tsx] Manual disconnect initiated via DeviceListItem.');
-                      // Prevent auto-reconnection by clearing the last known device ID *before* disconnecting.
-                      await saveLastConnectedDeviceId(null);
-                      setLastKnownDeviceId(null); 
-                      setTriedAutoReconnectForCurrentId(true); 
-                      
-                      // TODO: Consider adding setIsDisconnecting(true) here if a visual indicator is needed
-                      // and a finally block to set it to false, similar to the old handleDisconnectPress.
-                      // For now, focusing on the core logic.
-
-                      try {
-                        await deviceConnection.disconnectFromDevice();
-                        console.log('[App.tsx] Manual disconnect from device successful.');
-                      } catch (error) {
-                        console.error('[App.tsx] Error during manual disconnect call:', error);
-                        Alert.alert('Error', 'Failed to disconnect from the device.');
-                      }
-                    }}
+              <FlatList
+                data={filteredDevices}
+                renderItem={({ item }) => (
+                  <DeviceListItem
+                    device={item}
+                    onConnect={deviceConnection.connectToDevice}
+                    onDisconnect={deviceConnection.disconnectFromDevice}
                     isConnecting={deviceConnection.isConnecting}
                     connectedDeviceId={deviceConnection.connectedDeviceId}
-                />
+                  />
+                )}
+                keyExtractor={(item) => item.id}
+                style={{ maxHeight: 200 }}
+              />
             </View>
-        )}
-        
-        {/* Show disconnect button when connected but scan list isn't visible */}
-        {deviceConnection.connectedDeviceId && !filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
-          <View style={styles.section}>
-            <View style={styles.disconnectContainer}>
-              <Text style={styles.connectedText}>
-                Connected to device: {deviceConnection.connectedDeviceId.substring(0, 15)}...
-              </Text>
-              <TouchableOpacity
-                style={[styles.button, styles.buttonDanger]}
-                onPress={async () => {
-                  console.log('[App.tsx] Manual disconnect initiated via standalone disconnect button.');
-                  await saveLastConnectedDeviceId(null);
-                  setLastKnownDeviceId(null); 
-                  setTriedAutoReconnectForCurrentId(true);
-                  
-                  try {
-                    await deviceConnection.disconnectFromDevice();
-                    console.log('[App.tsx] Manual disconnect from device successful.');
-                  } catch (error) {
-                    console.error('[App.tsx] Error during manual disconnect call:', error);
-                    Alert.alert('Error', 'Failed to disconnect from the device.');
-                  }
-                }}
-                disabled={deviceConnection.isConnecting}
-              >
-                <Text style={styles.buttonText}>{deviceConnection.isConnecting ? 'Disconnecting...' : 'Disconnect'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
+          )}
+          
+          {deviceConnection.connectedDeviceId && filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
+               <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>Connected Device</Text>
+                  <DeviceListItem
+                      device={filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId)!}
+                      onConnect={() => {}}
+                      onDisconnect={async () => {
+                        console.log('[App.tsx] Manual disconnect initiated via DeviceListItem.');
+                        // Prevent auto-reconnection by clearing the last known device ID *before* disconnecting.
+                        await saveLastConnectedDeviceId(null);
+                        setLastKnownDeviceId(null); 
+                        setTriedAutoReconnectForCurrentId(true); 
+                        
+                        // TODO: Consider adding setIsDisconnecting(true) here if a visual indicator is needed
+                        // and a finally block to set it to false, similar to the old handleDisconnectPress.
+                        // For now, focusing on the core logic.
 
-        {deviceConnection.connectedDeviceId && (
-          <DeviceDetails
-            connectedDeviceId={deviceConnection.connectedDeviceId}
-            onGetAudioCodec={deviceConnection.getAudioCodec}
-            currentCodec={deviceConnection.currentCodec}
-            onGetBatteryLevel={deviceConnection.getBatteryLevel}
-            batteryLevel={deviceConnection.batteryLevel}
-            isListeningAudio={isOmiAudioListenerActive}
-            onStartAudioListener={handleStartAudioListeningAndStreaming}
-            onStopAudioListener={handleStopAudioListeningAndStreaming}
-            audioPacketsReceived={audioPacketsReceived}
-            webSocketUrl={webSocketUrl}
-            onSetWebSocketUrl={handleSetAndSaveWebSocketUrl}
-            isAudioStreaming={audioStreamer.isStreaming}
-            isConnectingAudioStreamer={audioStreamer.isConnecting}
-            audioStreamerError={audioStreamer.error}
-          />
-        )}
-      </ScrollView>
+                        try {
+                          await deviceConnection.disconnectFromDevice();
+                          console.log('[App.tsx] Manual disconnect from device successful.');
+                        } catch (error) {
+                          console.error('[App.tsx] Error during manual disconnect call:', error);
+                          Alert.alert('Error', 'Failed to disconnect from the device.');
+                        }
+                      }}
+                      isConnecting={deviceConnection.isConnecting}
+                      connectedDeviceId={deviceConnection.connectedDeviceId}
+                  />
+              </View>
+          )}
+          
+          {/* Show disconnect button when connected but scan list isn't visible */}
+          {deviceConnection.connectedDeviceId && !filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
+            <View style={styles.section}>
+              <View style={styles.disconnectContainer}>
+                <Text style={styles.connectedText}>
+                  Connected to device: {deviceConnection.connectedDeviceId.substring(0, 15)}...
+                </Text>
+                <TouchableOpacity
+                  style={[styles.button, styles.buttonDanger]}
+                  onPress={async () => {
+                    console.log('[App.tsx] Manual disconnect initiated via standalone disconnect button.');
+                    await saveLastConnectedDeviceId(null);
+                    setLastKnownDeviceId(null); 
+                    setTriedAutoReconnectForCurrentId(true);
+                    
+                    try {
+                      await deviceConnection.disconnectFromDevice();
+                      console.log('[App.tsx] Manual disconnect from device successful.');
+                    } catch (error) {
+                      console.error('[App.tsx] Error during manual disconnect call:', error);
+                      Alert.alert('Error', 'Failed to disconnect from the device.');
+                    }
+                  }}
+                  disabled={deviceConnection.isConnecting}
+                >
+                  <Text style={styles.buttonText}>{deviceConnection.isConnecting ? 'Disconnecting...' : 'Disconnect'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {deviceConnection.connectedDeviceId && (
+            <DeviceDetails
+              connectedDeviceId={deviceConnection.connectedDeviceId}
+              onGetAudioCodec={deviceConnection.getAudioCodec}
+              currentCodec={deviceConnection.currentCodec}
+              onGetBatteryLevel={deviceConnection.getBatteryLevel}
+              batteryLevel={deviceConnection.batteryLevel}
+              isListeningAudio={isOmiAudioListenerActive}
+              onStartAudioListener={handleStartAudioListeningAndStreaming}
+              onStopAudioListener={handleStopAudioListeningAndStreaming}
+              audioPacketsReceived={audioPacketsReceived}
+              webSocketUrl={webSocketUrl}
+              onSetWebSocketUrl={handleSetAndSaveWebSocketUrl}
+              isAudioStreaming={audioStreamer.isStreaming}
+              isConnectingAudioStreamer={audioStreamer.isConnecting}
+              audioStreamerError={audioStreamer.error}
+            />
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
