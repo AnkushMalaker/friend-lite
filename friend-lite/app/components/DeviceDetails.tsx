@@ -102,6 +102,8 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
           placeholder="wss://your-backend.com/ws/audio"
           autoCapitalize="none"
           keyboardType="url"
+          returnKeyType="done"
+          autoCorrect={false}
           editable={!isListeningAudio && !isAudioStreaming} // Prevent edit while listening/streaming
         />
 

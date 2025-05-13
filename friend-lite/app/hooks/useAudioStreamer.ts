@@ -186,7 +186,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const sendAudio = useCallback((audioBytes: Uint8Array) => {
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
       try {
-        console.log(`[AudioStreamer] Attempting to send audio: ${audioBytes.length} bytes. WebSocket readyState: ${websocketRef.current?.readyState}`);
+        // console.debug(`[AudioStreamer] Attempting to send audio: ${audioBytes.length} bytes. WebSocket readyState: ${websocketRef.current?.readyState}`);
         websocketRef.current.send(audioBytes);
       } catch (e) {
         const errorMessage = (e as any).message || 'Error sending audio data.';
