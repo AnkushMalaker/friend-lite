@@ -7,7 +7,7 @@ WORKDIR /app
 # NeMo and texterrors need libs and C++ compiler
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libsndfile1 \
-        build-essential \
+        build-essential git \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependency manifest first for cache‑friendly installs
