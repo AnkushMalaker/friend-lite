@@ -36,7 +36,7 @@ export default function App() {
 
   // State for WebSocket URL for custom audio streaming
   const [webSocketUrl, setWebSocketUrl] = useState<string>('');
-
+  
   // Bluetooth Management Hook
   const {
     bleManager,
@@ -49,10 +49,6 @@ export default function App() {
   // Custom Audio Streamer Hook
   const audioStreamer = useAudioStreamer();
 
-  // Initialize Audio Listener hook next. It might depend on omiConnection and a readiness check.
-  // Its outputs (isListeningAudio, stopAudioListener) are needed for onDeviceDisconnect.
-  // The readiness check for useAudioListener (isAudioReadyToListen) depends on deviceConnection.connectedDeviceId.
-  const tempIsAudioReadyCb = useCallback(() => omiConnection.isConnected(), [omiConnection]);
 
   const {
     isListeningAudio: isOmiAudioListenerActive,
@@ -61,7 +57,7 @@ export default function App() {
     stopAudioListener: originalStopAudioListener,
   } = useAudioListener(
     omiConnection,
-    tempIsAudioReadyCb
+    () => !!deviceConnection.connectedDeviceId
   );
 
   // Refs to hold the current state for onDeviceDisconnect without causing re-memoization
