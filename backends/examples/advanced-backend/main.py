@@ -136,7 +136,7 @@ async def continuous_offline_transcription_handler(client_state: ClientState, pa
                 nonlocal send_task_running
                 try:
                     while True:
-                        audio_logger.info(f"Number of PCM frames in queue: {client_state.pcm_frames.qsize()}")
+                        audio_logger.debug(f"Number of PCM frames in queue: {client_state.pcm_frames.qsize()}")
                         pcm_data = await client_state.pcm_frames.get()
                         if pcm_data is None:  # Sentinel to stop
                             audio_logger.info(f"Client {client_state.id}: PCM send task received stop signal from main WebSocket handler.")
