@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Alert, Linking, Platform } from 'react-native';
-import { BleManager, Device, State as BluetoothState } from 'react-native-ble-plx';
+import { BleManager, State as BluetoothState } from 'react-native-ble-plx';
 import { OmiConnection, OmiDevice } from '@omiai/omi-react-native'; // Assuming this is the correct import for Omi types
 
 interface UseDeviceScanning {
