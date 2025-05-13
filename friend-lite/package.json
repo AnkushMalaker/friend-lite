@@ -9,11 +9,10 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@omiai/omi-react-native": "file:../react-native",
+    "@omiai/omi-react-native": "^1.0.2",
     "@react-native-async-storage/async-storage": "2.1.2",
     "@react-native-community/netinfo": "11.4.1",
     "deprecated-react-native-prop-types": "^5.0.0",
-    "expo": "^53.0.0",
     "expo-status-bar": "~2.2.3",
     "install": "^0.13.0",
     "promise": "^8.3.0",
@@ -21,7 +20,8 @@
     "react-native": "0.79.2",
     "react-native-ble-plx": "^3.4.2",
     "setimmediate": "^1.0.5",
-    "webidl-conversions": "^7.0.0"
+    "webidl-conversions": "^7.0.0",
+    "expo": "~53.0.9"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
