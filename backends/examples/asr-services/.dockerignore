@@ -1,3 +1,6 @@
-__pycache__/
-*.pyc
-.venv/
+*
+!moonshine-online.py
+!parakeet-offline.py
+!pyproject.toml
+!README.md
+!uv.lock
