@@ -8,3 +8,4 @@ example/*
 backends/examples/ai_server/*
 backends/examples/example-satellite/*
 **/model_cache/*
+.vscode/*
