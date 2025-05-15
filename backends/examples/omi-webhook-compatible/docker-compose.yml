@@ -1,0 +1,18 @@
+services:
+  friend-webhook-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./audio_recordings:/app/audio_recordings
+  ngrok:
+    image: ngrok/ngrok:latest
+    ports:
+      - "4040:4040" # Ngrok web interface
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    command: "http friend-webhook-backend:8000"
+    depends_on:
+      - friend-webhook-backend
