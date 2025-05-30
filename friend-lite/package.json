@@ -9,7 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@omiai/omi-react-native": "^1.0.2",
+    "friend-lite-react-native": "^1.0.2",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-community/netinfo": "^11.4.1",
     "deprecated-react-native-prop-types": "^5.0.0",
