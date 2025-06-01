@@ -1,6 +1,6 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, ScrollView, Platform, FlatList, ActivityIndicator, Alert, Switch, Button, TouchableOpacity, KeyboardAvoidingView } from 'react-native';
-import { OmiConnection } from '@omiai/omi-react-native'; // OmiDevice also comes from here
+import { OmiConnection } from 'friend-lite-react-native'; // OmiDevice also comes from here
 import { State as BluetoothState } from 'react-native-ble-plx'; // Import State from ble-plx
 
 // Hooks

@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { Alert } from 'react-native';
-import { OmiConnection, BleAudioCodec, OmiDevice } from '@omiai/omi-react-native';
+import { OmiConnection, BleAudioCodec, OmiDevice } from 'friend-lite-react-native';
 
 interface UseDeviceConnection {
   connectedDevice: OmiDevice | null;
