@@ -15,7 +15,7 @@ The backend uses the python sdk
 
 ## IOS install with expo
 - Go to friend-lite folder
-- npm expo prebuild --clean
+- npx expo prebuild --clean
 - npx expo install expo-dev-client
 - npx expo start --dev-client
 - npx expo run:ios --device
