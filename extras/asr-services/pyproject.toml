@@ -1,7 +1,7 @@
 [project]
-name = "parakeet_ws_server"
-version = "0.3.1"
-description = "WebSocket ASR server using NVIDIA Parakeet-TDT-0.6b-v2 (NeMo toolkit)"
+name = "asr-services"
+version = "0.1.0"
+description = "Wyoming compatible WebSocket ASR server for friend-lite"
 requires-python = ">=3.10"
 
 dependencies = [
@@ -14,6 +14,8 @@ dependencies = [
   "fastapi>=0.115.12",
   "uvicorn>=0.34.2",
   "silero-vad>=5.1.2",
+  "wyoming>=1.6.1",
+  "easy-audio-interfaces[local-audio]",
 ]
 
 [tool.uv]
@@ -27,12 +29,16 @@ conflicts = [
 
 [tool.uv.sources]
 useful-moonshine-onnx = { git = "https://github.com/usefulsensors/moonshine.git", subdirectory = "moonshine-onnx" }
+easy-audio-interfaces = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git" }
 
 [dependency-groups]
 demo = [
     "fastrtc>=0.0.23",
     "gradio>=5.29.0",
     "sounddevice>=0.5.1",
+]
+dev = [
+    "black>=25.1.0",
 ]
 
 moonshine = [

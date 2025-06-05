@@ -1,34 +1,40 @@
 import asyncio
-import json
-import sys
+import logging
 
-import numpy as np
-import sounddevice as sd
-from websockets.asyncio.client import connect
+from easy_audio_interfaces.extras.local_audio import InputMicStream
+from wyoming.audio import AudioChunk
+from wyoming.client import AsyncTcpClient
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 URI = "ws://192.168.0.110:8080/"
+URI = "tcp://localhost:8765/"
+
 
 async def main():
     print(f"Connecting to {URI}")
-    async with connect(URI) as ws:
+    async with AsyncTcpClient.from_uri(URI) as client:
         print("Connected")
         async def mic():
-            with sd.InputStream(
-                samplerate=16_000, channels=1, dtype=np.float32, blocksize=2048
-            ) as stream:
+            async with InputMicStream(chunk_size=512) as stream:
                 while True:
-                    data, _ = stream.read(2048)
-                    await ws.send(data.tobytes())
+                    data = await stream.read()
+                    await client.write_event(
+                        AudioChunk(
+                            audio=data.raw_data, # type: ignore
+                            width=2,
+                            rate=16_000,
+                            channels=1,
+                        ).event()
+                    )
+                    logger.debug(f"Sent audio chunk: {len(data.raw_data)} bytes")
                     await asyncio.sleep(0.01)
 
         async def captions():
-            async for msg in ws:
-                if json.loads(msg)['final']:
-                    payload = json.loads(msg)
-                    sys.stdout.write("\r" + " " * 90 + "\r")
-                    sys.stdout.write(payload["text"])
-                    sys.stdout.flush()
-                await asyncio.sleep(0.01)
+            while True:
+                event = await client.read_event()
+                print(f"Received event: {event}")
 
         await asyncio.gather(mic(), captions())
 

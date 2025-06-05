@@ -19,3 +19,5 @@ The backend uses the python sdk
 - npx expo install expo-dev-client
 - npx expo start --dev-client
 - npx expo run:ios --device
+
+# Wyoming protocol compatible ASR services under extras/asr-services
