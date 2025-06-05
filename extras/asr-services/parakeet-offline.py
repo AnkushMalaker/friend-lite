@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
 """
-WebSocket live-caption server using Nemo Parakeet ASR + Silero VAD.
-
-▸  Client  →  binary frames: 16-kHz mono float32 PCM
-▸  Server  →  text frames   : {"text": "<caption>", "final": true|false}
+Wyoming ASR server using Nemo Parakeet ASR + Silero VAD.
 
 Dependencies
 ------------
-pip install websockets sounddevice numpy silero-vad nemo_toolkit[asr] soundfile
+pip install numpy silero-vad nemo_toolkit[asr] soundfile wyoming
 """
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import tempfile
-from collections import deque
-from typing import Deque
 
 import nemo.collections.asr as nemo_asr
 import numpy as np
 import soundfile as sf
 from silero_vad import VADIterator, load_silero_vad
-from websockets.asyncio.server import ServerConnection, serve
+from wyoming.asr import Transcribe, Transcript
+from wyoming.audio import AudioChunk, AudioStart, AudioStop
+from wyoming.event import Event
+from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
+from wyoming.server import AsyncEventHandler, AsyncTcpServer
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -31,9 +29,8 @@ logging.basicConfig(level=logging.INFO)
 # --------------------------------------------------------------------------- #
 SAMPLING_RATE = 16_000
 CHUNK_SAMPLES = 512                       # Silero requirement (32 ms @ 16 kHz)
-CHUNK_BYTES   = CHUNK_SAMPLES * 2         # int16 → 2 B per sample
-
-MAX_SPEECH_SECS  = 30                     # Max duration of a speech segment
+MAX_SPEECH_SECS = 30                     # Max duration of a speech segment
+MIN_SPEECH_SECS = 0.2                    # Min duration for transcription
 
 # --------------------------------------------------------------------------- #
 class Transcriber:
@@ -50,7 +47,6 @@ class Transcriber:
             logger.info("Nemo ASR model warmed up successfully.")
         except Exception as e:
             logger.error(f"Error during ASR model warm-up: {e}")
-
 
     def __call__(self, pcm: np.ndarray) -> str:
         tmpfile_name = None
@@ -77,208 +73,206 @@ class Transcriber:
             if tmpfile_name and os.path.exists(tmpfile_name):
                 os.remove(tmpfile_name)
 
-
-transcriber = Transcriber() # Uses default model
 # --------------------------------------------------------------------------- #
-async def handle_client(
-    websocket: ServerConnection
-) -> None:
+class ParakeetTranscriptionHandler(AsyncEventHandler):
     """
-    One WebSocket = one live-caption session.
-
-    Incoming: binary frames of arbitrary length (16-kHz float32 PCM).
-    Outgoing: JSON text frames with keys:
-              • text  – entire current line (incl. cached context)
-              • final – True when VAD says the utterance ended
+    Wyoming ASR handler for Parakeet offline transcription.
     """
-    logger.info("Handling client")
-    vad_model       = load_silero_vad(onnx=True)
-    vad_iterator    = VADIterator(
-        model=vad_model,
-        sampling_rate=SAMPLING_RATE,
-        threshold=0.4, # VAD sensitivity
-    )
 
-    caption_cache: Deque[str] = deque(maxlen=10)  # small history for look-back
-    speech_buf     = np.empty(0, np.float32)      # rolling window
-    byte_backlog   = bytearray()                  # leftover bytes < CHUNK_SAMPLES
-    recording      = False
-    
-    async for message in websocket:
-        logger.debug(f"Received message: {len(message)}")
-        if not isinstance(message, (bytes, bytearray)):
-            continue  # ignore text frames from the client
-
-        # ------------------------------------------------------------------ #
-        # 1)  Accumulate bytes until we have ≥ CHUNK_SAMPLES
-        # ------------------------------------------------------------------ #
-        byte_backlog.extend(message)
-        while len(byte_backlog) >= CHUNK_BYTES:
-            chunk_bytes = byte_backlog[:CHUNK_BYTES]
-            del byte_backlog[:CHUNK_BYTES]
-
-            logger.debug(f"Chunk bytes: {len(chunk_bytes)}")
-            chunk = np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-
-            
-            if recording: # NEW: Accumulate only if already recording
-                speech_buf = np.concatenate((speech_buf, chunk))
-            # If not recording, speech_buf remains as it was (likely empty or from a previous reset)
-            # It will be initialized with the current chunk upon a VAD "start" event.
-
-            logger.debug(f"Speech buffer: {len(speech_buf)}")
-            # Limit total speech_buf to avoid excessive memory usage if VAD fails to end
-            if len(speech_buf) > MAX_SPEECH_SECS * SAMPLING_RATE:
-                logger.warning(f"Speech buffer exceeded {MAX_SPEECH_SECS}s, truncating.")
-                speech_buf = speech_buf[-(MAX_SPEECH_SECS * SAMPLING_RATE):]
-
-
-            # ---------------------------------------------------------------- #
-            # 2)  Run VAD on this chunk
-            # ---------------------------------------------------------------- #
-            try:
-                vad_event = vad_iterator(chunk)
-                logger.debug(f"VAD event: {vad_event}")
-            except Exception as e:
-                logger.error(f"Error during VAD: {e}")
-
-            if vad_event:
-                logger.info(f"VAD event: {vad_event}")
-                if "start" in vad_event and not recording:
-                    recording = True
-                    speech_buf = chunk # MODIFIED: Start fresh from this chunk
-
-                if "end" in vad_event and recording:
-                    recording = False
-                    if len(speech_buf) > SAMPLING_RATE * 0.2: # Min audio length for transcription (e.g. 0.2s)
-                        logger.info(f"VAD end detected. Transcribing {len(speech_buf)/SAMPLING_RATE:.2f}s of audio.")
-                        await send_caption(
-                            websocket, speech_buf, transcriber, caption_cache, final=True
-                        )
-                    else:
-                        logger.info("VAD end detected, but speech too short. Discarding.")
-                    speech_buf = np.empty(0, np.float32) # Clear buffer after processing
-                    soft_reset(vad_iterator) # Reset VAD state
-                    continue
-            
-            # ---------------------------------------------------------------- #
-            # 3) If speech buffer is too long without VAD end, force process (optional)
-            # ---------------------------------------------------------------- #
-            if recording and len(speech_buf) >= MAX_SPEECH_SECS * SAMPLING_RATE:
-                logger.warning(f"Max speech length {MAX_SPEECH_SECS}s reached without VAD end. Forcing transcription.")
-                await send_caption(
-                    websocket, speech_buf, transcriber, caption_cache, final=True # Treat as final
-                )
-                speech_buf = np.empty(0, np.float32)
-                recording = False
-                soft_reset(vad_iterator)
-
-
-    # WebSocket closed – flush anything still buffered
-    if recording and len(speech_buf) > SAMPLING_RATE * 0.2:
-        logger.info("WebSocket closed. Transcribing remaining buffered audio.")
-        await send_caption(
-            websocket, speech_buf, transcriber, caption_cache, final=True
+    def __init__(self, *args, model_name: str = "nvidia/parakeet-tdt-0.6b-v2", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._model_name = model_name
+        self._transcriber = Transcriber(model_name)
+        self._vad_model = load_silero_vad(onnx=True)
+        self._vad_iterator = VADIterator(
+            model=self._vad_model,
+            sampling_rate=SAMPLING_RATE,
+            threshold=0.4,  # VAD sensitivity
         )
+        
+        self._speech_buf = np.empty(0, np.float32)
+        self._recording = False
 
+    def soft_reset(self) -> None:
+        """Reset only the iterator's state, not the underlying model."""
+        self._vad_iterator.triggered = False
+        self._vad_iterator.temp_end = 0
+        self._vad_iterator.current_sample = 0
+        logger.debug("VAD iterator soft reset.")
 
-# --------------------------------------------------------------------------- #
-async def send_caption(
-    ws: ServerConnection,
-    speech: np.ndarray,
-    transcriber: Transcriber,
-    cache: Deque[str],
-    final: bool,
-):
-    """
-    Produce transcription, prepend recent captions for context, and send.
-    """
-    loop   = asyncio.get_running_loop()
-    # Run blocking ASR call in a separate thread
-    text   = await loop.run_in_executor(None, transcriber, speech)
-    
-    if not text: # If transcription is empty or failed
-        logger.warning("Transcription resulted in empty text. Not sending.")
-        return
+    def _chunk_to_numpy(self, chunk: AudioChunk) -> np.ndarray:
+        if chunk.width == 2:
+            logger.debug(f"Converting chunk to int16")
+            return np.array(np.frombuffer(chunk.audio, dtype=np.int16), dtype=np.float32) / 32768.0
+        elif chunk.width == 4:
+            logger.debug(f"Converting chunk to float32")
+            return np.array(np.frombuffer(chunk.audio, dtype=np.float32), dtype=np.float32)
+        else:
+            raise ValueError(f"Unsupported width: {chunk.width}")
 
-    merged = build_line_with_cache(text, cache)
-    logger.info(f"Sending caption: {merged} (final: {final})")
+    async def _process_audio_chunk(self, chunk: AudioChunk) -> None:
+        """Process audio chunk with VAD and transcription."""
+        chunk_array = self._chunk_to_numpy(chunk)
+        
+        # Run VAD on this chunk
+        try:
+            vad_event = self._vad_iterator(chunk_array)
+            logger.debug(f"VAD event: {vad_event}")
+        except Exception as e:
+            logger.error(f"Error during VAD: {e}")
+            return
 
-    if final: # Cache only final transcriptions
-        cache.append(text)
+        if vad_event:
+            logger.info(f"VAD event: {vad_event}")
+            
+            if "start" in vad_event and not self._recording:
+                # Start recording - initialize buffer with current chunk
+                self._recording = True
+                self._speech_buf = chunk_array.copy()
+                logger.info("Started recording speech")
 
-    await ws.send(json.dumps({"text": merged, "final": final}))
+            elif "end" in vad_event and self._recording:
+                # End recording - add final chunk and transcribe
+                self._speech_buf = np.concatenate((self._speech_buf, chunk_array))
+                self._recording = False
+                
+                speech_duration = len(self._speech_buf) / SAMPLING_RATE
+                logger.info(f"VAD end detected. Speech duration: {speech_duration:.2f}s")
+                
+                if speech_duration >= MIN_SPEECH_SECS:
+                    await self._transcribe_and_send(self._speech_buf)
+                else:
+                    logger.info("Speech too short for transcription. Discarding.")
+                
+                # Clear buffer and reset
+                self._speech_buf = np.empty(0, np.float32)
+                self.soft_reset()
+                return
+        
+        # If we're recording, accumulate the chunk
+        if self._recording:
+            self._speech_buf = np.concatenate((self._speech_buf, chunk_array))
+            
+            # Safety check: if speech buffer gets too long, force transcription
+            if len(self._speech_buf) >= MAX_SPEECH_SECS * SAMPLING_RATE:
+                logger.warning(f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription.")
+                await self._transcribe_and_send(self._speech_buf)
+                self._speech_buf = np.empty(0, np.float32)
+                self._recording = False
+                self.soft_reset()
 
+    async def _transcribe_and_send(self, speech: np.ndarray) -> None:
+        """Transcribe speech and send Wyoming transcript event."""
+        try:
+            # Run blocking ASR call in a separate thread
+            loop = asyncio.get_running_loop()
+            text = await loop.run_in_executor(None, self._transcriber, speech)
+            
+            if not text:  # If transcription is empty or failed
+                logger.warning("Transcription resulted in empty text. Not sending.")
+                return
 
-def build_line_with_cache(text: str, cache: Deque[str], width: int = 80) -> str:
-    """
-    Right-justify the current utterance and prepend as much cached
-    context as fits within `width` characters.
-    """
-    # Only prepend from cache if the current text is not empty
-    if text:
-        for prev in reversed(cache):
-            cat = f"{prev} {text}"
-            if len(cat) > width:
-                break
-            text = cat
-    # Ensure text does not exceed width, take the rightmost part if it does
-    if len(text) > width:
-        text = text[-width:]
-    return text.rjust(width)
+            logger.info(f"Transcription result: '{text}'")
 
+            # Send Wyoming transcript event
+            transcript = Transcript(text=text)
+            await self.write_event(transcript.event())
+            
+        except Exception as e:
+            logger.error(f"Error during transcription: {e}")
 
-def soft_reset(vad_it: VADIterator) -> None:
-    """Reset only the iterator's state, not the underlying model."""
-    vad_it.triggered = False
-    vad_it.temp_end  = 0
-    vad_it.current_sample = 0
-    logger.debug("VAD iterator soft reset.")
-
+    async def handle_event(self, event: Event) -> bool:
+        """Handle Wyoming protocol events"""
+        if Transcribe.is_type(event.type):
+            # Reset for new transcription request
+            self._recording = False
+            self._speech_buf = np.empty(0, np.float32)
+            self.soft_reset()
+            return True
+        elif AudioStart.is_type(event.type):
+            # Start a new audio stream
+            logger.info("Audio stream started")
+            return True
+        elif AudioChunk.is_type(event.type):
+            # Process audio chunk
+            audio_chunk = AudioChunk.from_event(event)
+            await self._process_audio_chunk(audio_chunk)
+            return True
+        elif AudioStop.is_type(event.type):
+            # End of audio stream
+            logger.info("Audio stream stopped")
+            # If we have accumulated speech, transcribe it
+            if self._recording and len(self._speech_buf) >= MIN_SPEECH_SECS * SAMPLING_RATE:
+                logger.info("Audio stream ended. Transcribing remaining speech.")
+                await self._transcribe_and_send(self._speech_buf)
+            
+            # Reset state
+            self._speech_buf = np.empty(0, np.float32)
+            self._recording = False
+            self.soft_reset()
+            return True
+        elif Describe.is_type(event.type):
+            # Respond with service capabilities
+            model = AsrModel(
+                name=self._model_name,
+                attribution=Attribution(
+                    name="Nemo Parakeet ASR",
+                    url="https://github.com/NVIDIA/NeMo"
+                ),
+                installed=True,
+                description="Nemo Parakeet ASR model",
+                version="1.0.0",
+                languages=["en"]
+            )
+            
+            program = AsrProgram(
+                name="parakeet-asr",
+                attribution=Attribution(
+                    name="Nemo Parakeet ASR",
+                    url="https://github.com/NVIDIA/NeMo"
+                ),
+                installed=True,
+                description="Nemo Parakeet ASR with Silero VAD",
+                version="1.0.0",
+                models=[model]
+            )
+            
+            info = Info(asr=[program])
+            await self.write_event(info.event())
+            return True
+        
+        return False
 
 # --------------------------------------------------------------------------- #
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Nemo ASR WebSocket Server")
+    parser = argparse.ArgumentParser(description="Nemo Parakeet ASR Wyoming Server")
     parser.add_argument(
-        "--host", default="0.0.0.0", help="Interface to bind the WebSocket server (default: 0.0.0.0)"
+        "--model_name",
+        default="nvidia/parakeet-tdt-0.6b-v2",
+        help="Nemo ASR model name from HuggingFace or NGC (default: nvidia/parakeet-tdt-0.6b-v2)"
     )
     parser.add_argument(
-        "--port", type=int, default=8765, help="Port to bind the WebSocket server (default: 8765)"
+        "--host", default="0.0.0.0", help="Interface to bind the TCP server (default: 0.0.0.0)"
     )
-    # Add Nemo model name as an argument if desired, otherwise Transcriber uses its default
-    # parser.add_argument(
-    #     "--nemo_model_name",
-    #     default="nvidia/parakeet-tdt-0.6b-v2",
-    #     help="Nemo ASR model name from HuggingFace or NGC (default: nvidia/parakeet-tdt-0.6b-v2)"
-    # )
+    parser.add_argument(
+        "--port", type=int, default=8765, help="Port to bind the TCP server (default: 8765)"
+    )
     args = parser.parse_args()
 
-    print(
-        f"Starting Nemo Parakeet ASR live-caption server on "
-        f"ws://{args.host}:{args.port}"
+    server = AsyncTcpServer(host=args.host, port=args.port)
+    logger.info(
+        f"Parakeet ASR service starting on {args.host}:{args.port} (model={args.model_name})"
     )
-    # To pass model name from args: lambda ws: handle_client(ws, args.nemo_model_name)
-    # And update handle_client and Transcriber to accept it.
-    # For now, Transcriber uses its internal default.
-    async with serve(
-        handle_client, # Corrected: pass the function directly
-        args.host,
-        args.port,
-        max_size=None,  # allow unlimited frame size
-        ping_interval=10,
-        ping_timeout=60
-    ) as server:
-        await server.serve_forever()
-
+    await server.run(
+        handler_factory=lambda *_args, **_kwargs: ParakeetTranscriptionHandler(
+            *_args, model_name=args.model_name, **_kwargs
+        )
+    )
 
 if __name__ == "__main__":
     # Set up logging format
     log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(level=logging.INFO, format=log_format)
-    logger = logging.getLogger(__name__) # Re-initialize logger with new format for main scope
+    logger = logging.getLogger(__name__)  # Re-initialize logger with new format for main scope
     
-    # Consider adding torch.set_num_threads(1) for CPU inference if multi-client causes issues
-    # import torch
-    # torch.set_num_threads(1) # Example
-
     asyncio.run(main())
