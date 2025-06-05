@@ -19,7 +19,6 @@ from typing import List, Optional
 import concurrent.futures
 
 import ollama  # Ollama python client
-from deepgram import DeepgramClient, PrerecordedOptions
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from mem0 import Memory  # mem0 core
@@ -29,6 +28,43 @@ from websockets.protocol import State as WebsocketState # Corrected import for S
 import asyncio
 import json
 import websockets.exceptions
+from motor.motor_asyncio import AsyncIOMotorClient
+import uuid   # for audio_uuid
+
+try:
+    from deepgram import DeepgramClient, PrerecordedOptions # type: ignore
+except ImportError:
+    pass
+
+MONGODB_URI = os.getenv("MONGODB_URI")
+mongo_client = AsyncIOMotorClient(MONGODB_URI)  # async + pooled
+db = mongo_client.get_default_database()        # "friend-lite"
+chunks_col = db["audio_chunks"]                 # collection handle
+
+class ChunkRepo:
+    """Async helpers for the audio_chunks collection."""
+    def __init__(self, collection):
+        self.col = collection
+
+    async def create_chunk(self, *, audio_uuid, audio_path,
+                           client_id, timestamp, transcript=None, speakers_identified=None):
+        doc = {
+            "audio_uuid": audio_uuid,
+            "audio_path": audio_path,
+            "client_id": client_id,
+            "timestamp": timestamp,
+            "transcription": transcript,
+            "speakers_identified": speakers_identified
+        }
+        await self.col.insert_one(doc)
+
+    async def add_transcript(self, audio_uuid, transcript):
+        await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {"$set": {"transcription": transcript}}
+        )
+
+chunk_repo = ChunkRepo(chunks_col) # Instantiate ChunkRepo
 
 load_dotenv()
 
@@ -176,9 +212,40 @@ async def continuous_offline_transcription_handler(client_state: ClientState, pa
                                     audio_logger.debug(f"Client {client_state.id}: Received empty final transcript.")
                                     continue
 
-                                audio_logger.info(f"Client {client_state.id}: Transcript: {transcript[:60]}")
+                                audio_logger.info(f"Client {client_state.id}: Transcript: {transcript}")
                                 
-                                memory.add(transcript, user_id=f"client_{client_state.id}", metadata={"source": "offline_streaming"})
+                                # pop the UUID queued earlier
+                                try:
+                                    uuid_for_this_transcript = await client_state.meta_uuid_queue.get() # New way
+                                    await chunk_repo.add_transcript(uuid_for_this_transcript, transcript)
+                                    audio_logger.info(f"Client {client_state.id}: Added transcript for {uuid_for_this_transcript} to DB.")
+                                except asyncio.QueueEmpty: # Changed from (asyncio.QueueEmpty, KeyError)
+                                    audio_logger.warning(f"Client {client_state.id}: meta_uuid_queue was empty. Creating chunk with unknown path.")
+                                    # fallback: create fresh doc if ever out-of-sync
+                                    new_uuid = uuid.uuid4().hex
+                                    await chunk_repo.create_chunk(
+                                        audio_uuid=new_uuid,
+                                        audio_path="unknown", # Or perhaps generate a placeholder name
+                                        client_id=client_state.id,
+                                        timestamp=datetime.utcnow(),
+                                        transcript=transcript # Add transcript directly
+                                    )
+                                    audio_logger.info(f"Client {client_state.id}: Created new chunk {new_uuid} with transcript due to queue empty.")
+                                except KeyError: # This should not happen with the new queue, but kept for safety.
+                                    audio_logger.error(f"Client {client_state.id}: KeyError when trying to get meta_uuid. This should not happen.")
+                                    # Fallback logic, similar to QueueEmpty
+                                    new_uuid = uuid.uuid4().hex
+                                    await chunk_repo.create_chunk(
+                                        audio_uuid=new_uuid,
+                                        audio_path="unknown_key_error",
+                                        client_id=client_state.id,
+                                        timestamp=datetime.utcnow(),
+                                        transcript=transcript
+                                    )
+                                    audio_logger.info(f"Client {client_state.id}: Created new chunk {new_uuid} with transcript due to KeyError.")
+
+
+                                memory.add(transcript, user_id=f"client_{client_state.id}", metadata={"source": "offline_streaming", "audio_uuid": uuid_for_this_transcript if 'uuid_for_this_transcript' in locals() else new_uuid if 'new_uuid' in locals() else "unknown"})
                                 audio_logger.info(f"Client {client_state.id}: Stored transcript in mem0.")
 
                                 await client_state.ws.send_text(json.dumps({"transcript": transcript, "client_id": client_state.id}))
@@ -248,6 +315,7 @@ class ClientState:
         self.ws = ws
         self.id = client_id
         self.pcm_frames: asyncio.Queue[Optional[bytes]] = asyncio.Queue()  # raw PCM chunks, Optional for None sentinel
+        self.meta_uuid_queue: asyncio.Queue[str] = asyncio.Queue() # Queue for audio_uuids
         self.save_pcm_frames: List[bytes] = []  # raw PCM chunks for WAV saving
         self.sample_count = 0  # samples accumulated in current segment
         self.segment_index = 0
@@ -306,18 +374,29 @@ class ClientState:
             return
 
         pcm_bytes = b"".join(self.save_pcm_frames)
-        duration = self.sample_count / SAMPLE_RATE
+        # duration = self.sample_count / SAMPLE_RATE # This was in the original, but not used in the new version.
+        timestamp = datetime.utcnow()
+        audio_uuid = str(uuid.uuid4())                # NEW
+        wav_path = CHUNK_DIR / f"{self.id}_{audio_uuid}.wav"   # simplified path
 
-        # Write WAV to disk, offloaded to thread pool
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        wav_path = CHUNK_DIR / f"client{self.id}_{timestamp}_{self.segment_index}.wav"
         await self._write_wav_async(wav_path, pcm_bytes)
-        audio_logger.info("Client %s: wrote %s (%.1fs)", self.id, wav_path.name, duration)
+        audio_logger.info("Client %s: wrote %s", self.id, wav_path.name) # Removed duration to match blueprint more closely
 
-        # Reset buffers for WAV saving
+        # 1 persist metadata (no transcript yet)
+        await chunk_repo.create_chunk(
+            audio_uuid=audio_uuid,
+            audio_path=str(wav_path),
+            client_id=self.id,
+            timestamp=timestamp
+        )
+
+        # 2 remember which UUID goes with the *next* transcript
+        await self.meta_uuid_queue.put(audio_uuid) # Use the new dedicated queue
+
+        # housekeeping …
         self.save_pcm_frames.clear()
         self.sample_count = 0
-        self.segment_index += 1
+        # self.segment_index += 1 # segment_index is not used in the new logic
 
 
 # ------------------------------------------------------------------------- #
