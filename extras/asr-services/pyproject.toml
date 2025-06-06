@@ -45,7 +45,7 @@ moonshine = [
   "useful-moonshine-onnx",
 ]
 parakeet = [
-    "nemo-toolkit[asr]>=2.1.0",
+    "nemo-toolkit[asr]>=2.2.0",
     "cuda-python>=12.3",
     "numpy>=1.26,<2.0",
 ]

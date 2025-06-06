@@ -9,6 +9,8 @@ services:
     volumes:
       # Persist Hugging Face cache (models + tokenizer) between restarts
       - ./model_cache:/models
+      - ./audio_chunks:/app/audio_chunks
+      - ./debug:/app/debug
     deploy:
       resources:
         reservations:
@@ -20,23 +22,23 @@ services:
       - HF_HOME=/models
     restart: unless-stopped
 
-  moonshine-asr:
-    build:
-      context: .
-      dockerfile: Dockerfile_Moonshine
-    image: moonshine-asr:latest
-    ports:
-      - "8765:8765"
-    volumes:
-      # Persist Hugging Face cache (models + tokenizer) between restarts
-      - ./model_cache:/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    environment:
-      - HF_HOME=/models
-    restart: unless-stopped
+  # moonshine-asr:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile_Moonshine
+  #   image: moonshine-asr:latest
+  #   ports:
+  #     - "8765:8765"
+  #   volumes:
+  #     # Persist Hugging Face cache (models + tokenizer) between restarts
+  #     - ./model_cache:/models
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   environment:
+  #     - HF_HOME=/models
+  #   restart: unless-stopped
