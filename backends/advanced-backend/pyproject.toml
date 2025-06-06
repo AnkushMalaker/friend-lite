@@ -28,4 +28,4 @@ webui = [
 ]
 
 [tool.uv.sources]
-easy-audio-interfaces = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git" }
+easy-audio-interfaces = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git", branch="upgrade-to-wyoming" }
