@@ -2,90 +2,106 @@
 """Unified Omi-audio service
 
 * Accepts Opus packets over a WebSocket (`/ws`).
-* Uses **OmiSDK** (`OmiOpusDecoder`) to convert them to 16-kHz/16-bit/mono PCM.
-* Buffers PCM and writes 30-second WAV chunks to `./audio_chunks/`.
-* Each 30-second chunk is passed to **`transcribe_audio()`** (user-supplied) to get a transcript.
-* The transcript is stored in **mem0** (vector store backed by Qdrant, embeddings/LLM via Ollama).
+* Uses a central queue to decouple audio ingestion from processing.
+* A saver consumer buffers PCM and writes 30-second WAV chunks to `./audio_chunks/`.
+* A transcription consumer sends each chunk to a Wyoming ASR service.
+* The transcript is stored in **mem0** and MongoDB.
 
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import os
+import time
+import uuid
 import wave
-from datetime import datetime
+from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
-from typing import List, Optional
-import concurrent.futures
+from typing import Optional, Tuple
 
 import ollama  # Ollama python client
-from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from mem0 import Memory  # mem0 core
-from omi.decoder import OmiOpusDecoder  # OmiSDK
-from websockets.asyncio.client import connect
-from websockets.protocol import State as WebsocketState # Corrected import for State
-import asyncio
-import json
 import websockets.exceptions
+from dotenv import load_dotenv
+from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from mem0 import Memory  # mem0 core
 from motor.motor_asyncio import AsyncIOMotorClient
-import uuid   # for audio_uuid
-
-try:
-    from deepgram import DeepgramClient, PrerecordedOptions # type: ignore
-except ImportError:
-    pass
+from omi.decoder import OmiOpusDecoder  # OmiSDK
+from pydub import AudioSegment
+from wyoming.asr import Transcribe, Transcript
+from wyoming.audio import AudioChunk, AudioStart, AudioStop
+from wyoming.client import AsyncTcpClient
+from wyoming.event import Event
 
 MONGODB_URI = os.getenv("MONGODB_URI")
 mongo_client = AsyncIOMotorClient(MONGODB_URI)  # async + pooled
-db = mongo_client.get_default_database()        # "friend-lite"
-chunks_col = db["audio_chunks"]                 # collection handle
+db = mongo_client.get_default_database("friend-lite")  # "friend-lite"
+chunks_col = db["audio_chunks"]  # collection handle
+
+# Central Queues
+# ----------------
+# (client_id, pcm_data) or (client_id, None) for disconnect
+central_chunk_queue = asyncio.Queue[Tuple[str, Optional[AudioChunk]]]()
+# (audio_uuid, pcm_bytes, client_id)
+transcription_input_queue = asyncio.Queue[Tuple[str, AudioChunk, str]]()
+
 
 class ChunkRepo:
     """Async helpers for the audio_chunks collection."""
+
     def __init__(self, collection):
         self.col = collection
 
-    async def create_chunk(self, *, audio_uuid, audio_path,
-                           client_id, timestamp, transcript=None, speakers_identified=None):
+    async def create_chunk(
+        self,
+        *,
+        audio_uuid,
+        audio_path,
+        client_id,
+        timestamp,
+        transcript=None,
+        speakers_identified=None,
+    ):
         doc = {
             "audio_uuid": audio_uuid,
             "audio_path": audio_path,
             "client_id": client_id,
             "timestamp": timestamp,
             "transcription": transcript,
-            "speakers_identified": speakers_identified
+            "speakers_identified": speakers_identified,
         }
         await self.col.insert_one(doc)
 
     async def add_transcript(self, audio_uuid, transcript):
         await self.col.update_one(
-            {"audio_uuid": audio_uuid},
-            {"$set": {"transcription": transcript}}
+            {"audio_uuid": audio_uuid}, {"$set": {"transcription": transcript}}
         )
 
-chunk_repo = ChunkRepo(chunks_col) # Instantiate ChunkRepo
+
+chunk_repo = ChunkRepo(chunks_col)  # Instantiate ChunkRepo
 
 load_dotenv()
 
 ###############################################################################
 # Configuration
 ###############################################################################
-SAMPLE_RATE = 16_000  # Hz
-CHANNELS = 1
-SAMPLE_WIDTH = 2  # bytes (16‑bit)
-SEGMENT_SECONDS = 30  # length of each stored chunk
-TARGET_SAMPLES = SAMPLE_RATE * SEGMENT_SECONDS
+OMI_SAMPLE_RATE = 16_000  # Hz
+OMI_CHANNELS = 1
+OMI_SAMPLE_WIDTH = 2  # bytes (16‑bit)
+SEGMENT_SECONDS = 60  # length of each stored chunk
+TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
 # Directory where WAV chunks are written
 CHUNK_DIR = Path("./audio_chunks")
 CHUNK_DIR.mkdir(parents=True, exist_ok=True)
 
-# ---- Deepgram Configuration ------------------------------------------------ #
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", '')
-
 # ---- Offline ASR Configuration --------------------------------------------- #
-OFFLINE_ASR_WS_URI = os.getenv("OFFLINE_ASR_WS_URI", "ws://192.168.0.110:8765/")
+OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://192.168.0.110:8765/")
 
 # ---- mem0 + Ollama --------------------------------------------------------- #
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -113,7 +129,7 @@ MEM0_CONFIG = {
             "collection_name": "omi_memories",
             "embedding_model_dims": 768,
             "host": "qdrant",
-            "port": 6333
+            "port": 6333,
         },
     },
 }
@@ -125,353 +141,322 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 memory = Memory.from_config(MEM0_CONFIG)
-ollama_client = ollama.Client(host=OLLAMA_BASE_URL)  # noqa: S110
+ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+audio_logger = logging.getLogger("audio_processing")
+
 
 ###############################################################################
-# STT function
+# Audio Saver Consumer
 ###############################################################################
 
-def transcribe_deepgram(pcm_bytes: bytes) -> str:
-    """Transcribe PCM audio bytes using Deepgram."""
-    if not DEEPGRAM_API_KEY:
-        audio_logger.error("DEEPGRAM_API_KEY not set. Skipping transcription.")
-        return "[transcription unavailable - DEEPGRAM_API_KEY not set]"
+
+def write_wav_sync(path: Path, pcm_bytes: bytes):
+    """Synchronously writes PCM data to a WAV file."""
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(OMI_CHANNELS)
+        wav_file.setsampwidth(OMI_SAMPLE_WIDTH)
+        wav_file.setframerate(OMI_SAMPLE_RATE)
+        wav_file.writeframes(pcm_bytes)
+
+
+_new_local_file_sink = partial(
+    LocalFileSink,
+    sample_rate=OMI_SAMPLE_RATE,
+    channels=OMI_CHANNELS,
+    sample_width=OMI_SAMPLE_WIDTH,
+)
+
+def _audio_chunk_to_audio_segment(audio_chunk: AudioChunk) -> AudioSegment:
+    return AudioSegment(
+        data=audio_chunk.audio,
+        frame_rate=OMI_SAMPLE_RATE,
+        channels=OMI_CHANNELS,
+        sample_width=OMI_SAMPLE_WIDTH,
+    )
+
+async def audio_saver_consumer():
+    """Consumes PCM data from the central queue, buffers it, and saves it to WAV files."""
+    _save_file_handle: Optional[LocalFileSink] = None
+    while True:
+        try:
+            client_id, audio_chunk = await central_chunk_queue.get()
+
+            if audio_chunk is None:  # Sentinel for client disconnection
+                audio_logger.info(
+                    f"Client {client_id} disconnected, flushing remaining buffer."
+                )
+                if _save_file_handle is not None:
+                    await _save_file_handle.close()
+                _save_file_handle = None
+                central_chunk_queue.task_done()
+                continue
+                
+            if _save_file_handle is None:
+                audio_uuid = uuid.uuid4().hex
+                timestamp = audio_chunk.timestamp or int(time.time())
+                wav_filename = f"{timestamp}_{client_id}_{audio_uuid}.wav"
+                _save_file_handle = _new_local_file_sink(f"{CHUNK_DIR}/{wav_filename}")
+
+                await chunk_repo.create_chunk(
+                    audio_uuid=audio_uuid,
+                    audio_path=wav_filename,
+                    client_id=client_id,
+                    timestamp=timestamp,
+                )
+
+            await _save_file_handle.write(_audio_chunk_to_audio_segment(audio_chunk))
+            
+            central_chunk_queue.task_done()
+
+            # Queue the chunk for transcription
+            await transcription_input_queue.put((audio_uuid, audio_chunk, client_id))
+        except Exception as e:
+            audio_logger.error(f"Error in audio_saver_consumer: {e}", exc_info=True)
+        finally:
+            if _save_file_handle is not None:
+                await _save_file_handle.close()
+                _save_file_handle = None
+
+
+###############################################################################
+# Transcription Consumer
+###############################################################################
+
+
+class TranscriptionManager:
+    """Manages persistent connection to ASR service with ordered processing."""
+
+    def __init__(self):
+        self.client = None
+        self._current_audio_uuid = None
+        self._streaming = False
+
+    async def connect(self):
+        """Establish connection to ASR service."""
+        try:
+            self.client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
+            await self.client.connect()
+            audio_logger.info(f"Connected to ASR service at {OFFLINE_ASR_TCP_URI}")
+        except Exception as e:
+            audio_logger.error(f"Failed to connect to ASR service: {e}")
+            self.client = None
+            raise
+
+    async def disconnect(self):
+        """Cleanly disconnect from ASR service."""
+        if self.client:
+            try:
+                await self.client.disconnect()
+                audio_logger.info("Disconnected from ASR service")
+            except Exception as e:
+                audio_logger.error(f"Error disconnecting from ASR service: {e}")
+            finally:
+                self.client = None
+
+    async def transcribe_chunk(self, audio_uuid: str, chunk_reference: AudioChunk, client_id: str):
+        """Transcribe a single chunk with ordered processing."""
+        if not self.client:
+            audio_logger.error(f"No ASR connection available for {audio_uuid}")
+            return
+
+        if self._current_audio_uuid != audio_uuid:
+            self._current_audio_uuid = audio_uuid
+            audio_logger.info(f"New audio_uuid: {audio_uuid}")
+            transcribe = Transcribe()
+            await self.client.write_event(transcribe.event())
+            audio_start = AudioStart(
+                rate=chunk_reference.rate,
+                width=chunk_reference.width,
+                channels=chunk_reference.channels,
+                timestamp=chunk_reference.timestamp,
+            )
+            await self.client.write_event(audio_start.event())
+        else:
+            audio_logger.info(f"Same audio_uuid: {audio_uuid}")
+            await self.client.write_event(chunk_reference.event())
+
+                # if Transcript.is_type(event.type):
+                #     transcript_obj = Transcript.from_event(event)
+                #     transcript = transcript_obj.text.strip()
+                #     if transcript:
+                #         audio_logger.info(f"Transcript for {audio_uuid}: {transcript}")
+                #         await chunk_repo.add_transcript(audio_uuid, transcript)
+                #         memory.add(
+                #             transcript,
+                #             user_id=client_id,
+                #             metadata={
+                #                 "source": "offline_streaming",
+                #                 "audio_uuid": audio_uuid,
+                #             },
+                #         )
+                #         audio_logger.info(
+                #             f"Added transcript for {audio_uuid} to DB and mem0."
+                #         )
+
+
+    async def _reconnect(self):
+        """Attempt to reconnect to ASR service."""
+        audio_logger.info("Attempting to reconnect to ASR service...")
+        await self.disconnect()
+        await asyncio.sleep(2)  # Brief delay before reconnecting
+        try:
+            await self.connect()
+        except Exception as e:
+            audio_logger.error(f"Reconnection failed: {e}")
+
+
+# Global transcription manager instance
+transcription_manager = TranscriptionManager()
+
+
+async def transcription_consumer():
+    """Consumes audio chunks from a queue and sends them for transcription with persistent connection."""
+    # Establish initial connection
+    try:
+        await transcription_manager.connect()
+    except Exception as e:
+        audio_logger.error(f"Failed to start transcription consumer: {e}")
+        return
 
     try:
-        deepgram = DeepgramClient(DEEPGRAM_API_KEY)
-        source = {'buffer': pcm_bytes, 'mimetype': 'audio/wav'} # Deepgram expects WAV
-        options = PrerecordedOptions(
-            smart_format=True, model="nova-2", language="en-US"
-        )
-        response = deepgram.listen.prerecorded.v('1').transcribe_file(source, options)
-        # Extract transcript from the first channel and first alternative
-        if response.results and response.results.channels and \
-           response.results.channels[0].alternatives:
-            transcript = response.results.channels[0].alternatives[0].transcript
-            if transcript:
-                 return transcript
-        audio_logger.warning("Deepgram transcription returned empty or unexpected response format.")
-        return "[transcription unavailable - empty response from Deepgram]"
-    except Exception as e:
-        audio_logger.error(f"Deepgram transcription failed: {e}")
-        return f"[transcription error: {e}]"
-
-
-###############################################################################
-# Continuous Offline ASR Transcription Handler
-###############################################################################
-async def continuous_offline_transcription_handler(client_state: ClientState, parakeet_ws_uri: str):
-    """Handles continuous transcription for a client using Offline ASR."""
-    try:
-        async with connect(parakeet_ws_uri) as parakeet_ws:
-            audio_logger.info(f"Client {client_state.id}: Connected to Offline ASR at {parakeet_ws_uri}")
-
-            send_task_running = True
-
-            async def send_pcm_to_parakeet():
-                nonlocal send_task_running
-                try:
-                    while True:
-                        audio_logger.debug(f"Number of PCM frames in queue: {client_state.pcm_frames.qsize()}")
-                        pcm_data = await client_state.pcm_frames.get()
-                        if pcm_data is None:  # Sentinel to stop
-                            audio_logger.info(f"Client {client_state.id}: PCM send task received stop signal from main WebSocket handler.")
-                            client_state.pcm_frames.task_done()
-                            break
-                        
-                        # Check WebSocket state before sending
-                        if parakeet_ws.protocol.state != WebsocketState.OPEN:
-                            audio_logger.warning(f"Client {client_state.id}: Offline WebSocket not OPEN (state: {parakeet_ws.protocol.state.name}). Re-queueing data and breaking send loop.")
-                            await client_state.pcm_frames.put(pcm_data) 
-                            break
-
-                        await parakeet_ws.send(pcm_data)
-                        # yield so receiver / other tasks may run
-                        await asyncio.sleep(0)
-                        # client_state.pcm_frames.task_done()
-                except websockets.exceptions.ConnectionClosed:
-                    audio_logger.warning(f"Client {client_state.id}: Connection to Offline ASR closed while sending PCM.")
-                except Exception as e:
-                    audio_logger.error(f"Client {client_state.id}: Error in send_pcm_to_parakeet: {type(e).__name__} {e}")
-                finally:
-                    send_task_running = False
-                    # Ensure parakeet_ws is closed if sender initiated closure, to help receiver task terminate.
-                    if pcm_data is None and parakeet_ws.protocol.state == WebsocketState.OPEN:
-                         audio_logger.info(f"Client {client_state.id}: Sender closing Offline WS.")
-                         await parakeet_ws.close()
-
-
-            async def receive_transcripts_from_parakeet():
-                try:
-                    async for message_str in parakeet_ws:
-                        try:
-                            message_json = json.loads(message_str)
-                            if message_json.get('final') and 'text' in message_json:
-                                transcript = message_json['text']
-                                if not transcript.strip(): 
-                                    audio_logger.debug(f"Client {client_state.id}: Received empty final transcript.")
-                                    continue
-
-                                audio_logger.info(f"Client {client_state.id}: Transcript: {transcript}")
-                                
-                                # pop the UUID queued earlier
-                                try:
-                                    uuid_for_this_transcript = await client_state.meta_uuid_queue.get() # New way
-                                    await chunk_repo.add_transcript(uuid_for_this_transcript, transcript)
-                                    audio_logger.info(f"Client {client_state.id}: Added transcript for {uuid_for_this_transcript} to DB.")
-                                except asyncio.QueueEmpty: # Changed from (asyncio.QueueEmpty, KeyError)
-                                    audio_logger.warning(f"Client {client_state.id}: meta_uuid_queue was empty. Creating chunk with unknown path.")
-                                    # fallback: create fresh doc if ever out-of-sync
-                                    new_uuid = uuid.uuid4().hex
-                                    await chunk_repo.create_chunk(
-                                        audio_uuid=new_uuid,
-                                        audio_path="unknown", # Or perhaps generate a placeholder name
-                                        client_id=client_state.id,
-                                        timestamp=datetime.utcnow(),
-                                        transcript=transcript # Add transcript directly
-                                    )
-                                    audio_logger.info(f"Client {client_state.id}: Created new chunk {new_uuid} with transcript due to queue empty.")
-                                except KeyError: # This should not happen with the new queue, but kept for safety.
-                                    audio_logger.error(f"Client {client_state.id}: KeyError when trying to get meta_uuid. This should not happen.")
-                                    # Fallback logic, similar to QueueEmpty
-                                    new_uuid = uuid.uuid4().hex
-                                    await chunk_repo.create_chunk(
-                                        audio_uuid=new_uuid,
-                                        audio_path="unknown_key_error",
-                                        client_id=client_state.id,
-                                        timestamp=datetime.utcnow(),
-                                        transcript=transcript
-                                    )
-                                    audio_logger.info(f"Client {client_state.id}: Created new chunk {new_uuid} with transcript due to KeyError.")
-
-
-                                memory.add(transcript, user_id=f"client_{client_state.id}", metadata={"source": "offline_streaming", "audio_uuid": uuid_for_this_transcript if 'uuid_for_this_transcript' in locals() else new_uuid if 'new_uuid' in locals() else "unknown"})
-                                audio_logger.info(f"Client {client_state.id}: Stored transcript in mem0.")
-
-                                await client_state.ws.send_text(json.dumps({"transcript": transcript, "client_id": client_state.id}))
-                            # Example for handling partial transcripts if needed in future
-                            # elif 'text' in message_json and not message_json.get('final'):
-                            #     partial_transcript = message_json['text']
-                            #     if partial_transcript.strip():
-                            #         await client_state.ws.send_text(json.dumps({"partial_transcript": partial_transcript, "client_id": client_state.id}))
-
-                        except json.JSONDecodeError:
-                            audio_logger.error(f"Client {client_state.id}: Malformed JSON from Offline: {message_str}")
-                        except websockets.exceptions.ConnectionClosed:
-                            audio_logger.warning(f"Client {client_state.id}: Original client WebSocket closed while sending transcript.")
-                            break # Stop if original client connection is gone
-                        except Exception as e:
-                            audio_logger.error(f"Client {client_state.id}: Error processing Offline message: {type(e).__name__} {e}")
-                except websockets.exceptions.ConnectionClosedOK:
-                     audio_logger.info(f"Client {client_state.id}: Offline ASR connection closed gracefully (receiver).")
-                except websockets.exceptions.ConnectionClosedError as e:
-                    audio_logger.warning(f"Client {client_state.id}: Offline ASR connection closed with error (receiver): {e}")
-                except Exception as e:
-                    audio_logger.error(f"Client {client_state.id}: Error in receive_transcripts_from_parakeet: {type(e).__name__} {e}")
-
-
-            sender_task = asyncio.create_task(send_pcm_to_parakeet())
-            receiver_task = asyncio.create_task(receive_transcripts_from_parakeet())
-            
-            await asyncio.gather(sender_task, receiver_task)
-            
-            # for task in pending:
-            #     task.cancel()
-            #     try:
-            #         await task 
-            # except asyncio.CancelledError:
-            #     pass 
-            # except Exception: # Log other exceptions during cancellation
-            #     audio_logger.error(f"Client {client_state.id}: Error during cancellation of a sub-task for Offline handler.")
-
-
-            # if parakeet_ws.protocol.state == WebsocketState.OPEN:
-            #     await parakeet_ws.close()
-
-    except (ConnectionRefusedError, websockets.exceptions.InvalidURI, websockets.exceptions.WebSocketException) as e: # More specific connection errors
-        audio_logger.error(f"Client {client_state.id}: Failed to connect or maintain connection with Offline ASR at {parakeet_ws_uri}: {type(e).__name__} {e}")
-    except Exception as e:
-        audio_logger.error(f"Client {client_state.id}: Overall Offline transcription handler failed: {type(e).__name__} {e}")
+        audio_uuid = None
+        while True:
+            try:
+                audio_uuid, chunk_reference, client_id = await transcription_input_queue.get()
+                if audio_uuid != audio_uuid:
+                    audio_logger.info(f"New audio_uuid: {audio_uuid}")
+                    audio_uuid = audio_uuid
+                else:
+                    audio_logger.info(f"Same audio_uuid: {audio_uuid}")
+                await transcription_manager.transcribe_chunk(
+                    audio_uuid, chunk_reference, client_id
+                )
+                transcription_input_queue.task_done()
+            except Exception as e:
+                audio_logger.error(
+                    f"Error in transcription_consumer: {e}", exc_info=True
+                )
     finally:
-        audio_logger.info(f"Client {client_state.id}: Offline transcription handler fully terminated.")
+        await transcription_manager.disconnect()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan events."""
+    # Startup
+    audio_logger.info("Starting application...")
+
+    # Start consumer tasks
+    audio_saver_task = asyncio.create_task(audio_saver_consumer())
+    audio_logger.info("Started audio saver consumer task.")
+
+    transcription_task = asyncio.create_task(transcription_consumer())
+    audio_logger.info("Started transcription consumer task.")
+
+    try:
+        yield
+    finally:
+        # Shutdown
+        audio_logger.info("Shutting down application...")
+
+        # Cancel consumer tasks
+        audio_saver_task.cancel()
+        transcription_task.cancel()
+
+        # Wait for tasks to finish
+        try:
+            await asyncio.gather(
+                audio_saver_task, transcription_task, return_exceptions=True
+            )
+        except Exception as e:
+            audio_logger.error(f"Error during task shutdown: {e}")
+
+        # Clean up transcription manager connection
+        await transcription_manager.disconnect()
+        audio_logger.info("Shutdown complete.")
 
 
 ###############################################################################
-# FastAPI WebSocket server
+# FastAPI Application
 ###############################################################################
-app = FastAPI(title="Omi Unified Audio Service")
 
-audio_logger = logging.getLogger("audio_service")
-audio_logger.setLevel(logging.INFO)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+app = FastAPI(lifespan=lifespan)
 
-
-
-
-class ClientState:
-    """Keep per-connection state."""
-
-    def __init__(self, ws: WebSocket, client_id: int):
-        self.ws = ws
-        self.id = client_id
-        self.pcm_frames: asyncio.Queue[Optional[bytes]] = asyncio.Queue()  # raw PCM chunks, Optional for None sentinel
-        self.meta_uuid_queue: asyncio.Queue[str] = asyncio.Queue() # Queue for audio_uuids
-        self.save_pcm_frames: List[bytes] = []  # raw PCM chunks for WAV saving
-        self.sample_count = 0  # samples accumulated in current segment
-        self.segment_index = 0
-        self.start_time = datetime.utcnow().isoformat()
-        self.decoder = OmiOpusDecoder()
-
-    # ----- Private helpers -------------------------------------------------- #
-    async def _decode_packet_async(self, packet: bytes) -> Optional[bytes]:
-        """Off-load Opus decode to thread-pool."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            _DEC_IO_EXECUTOR,
-            # lambda to pass keyword arg
-            lambda: self.decoder.decode_packet(packet, strip_header=False)
-        )
-    
-    async def _write_wav_async(self, path: Path, pcm_bytes: bytes):
-        """Blocking wave-write off-loaded."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            _DEC_IO_EXECUTOR,
-            self._write_wav_sync, path, pcm_bytes
-        )
-    
-    @staticmethod
-    def _write_wav_sync(path: Path, pcm_bytes: bytes):
-        with wave.open(str(path), "wb") as wf:
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(SAMPLE_WIDTH)
-            wf.setframerate(SAMPLE_RATE)
-            wf.writeframes(pcm_bytes)
-
-    # --------------------------------------------------------------------- #
-    async def add_opus_packet(self, packet: bytes):
-        """Decode a single Opus packet -> PCM, buffer it, handle rollover."""
-        pcm = await self._decode_packet_async(packet)
-        if pcm is None:
-            audio_logger.error("Client %s: decode failed (packet dropped)", self.id)
-            return
-        audio_logger.debug("Client %s: decoded packet", self.id)
-
-        await self.pcm_frames.put(pcm)
-        self.save_pcm_frames.append(pcm)
-
-        self.sample_count += len(pcm) // SAMPLE_WIDTH  # samples per frame
-        
-        # micro-yield so other tasks run even if packets flood in
-        await asyncio.sleep(0)
-
-        if self.sample_count >= TARGET_SAMPLES:
-            await self._flush_segment()
-
-    # ------------------------------------------------------------------ #
-    async def _flush_segment(self):
-        if not self.save_pcm_frames:
-            return
-
-        pcm_bytes = b"".join(self.save_pcm_frames)
-        # duration = self.sample_count / SAMPLE_RATE # This was in the original, but not used in the new version.
-        timestamp = datetime.utcnow()
-        audio_uuid = str(uuid.uuid4())                # NEW
-        wav_path = CHUNK_DIR / f"{self.id}_{audio_uuid}.wav"   # simplified path
-
-        await self._write_wav_async(wav_path, pcm_bytes)
-        audio_logger.info("Client %s: wrote %s", self.id, wav_path.name) # Removed duration to match blueprint more closely
-
-        # 1 persist metadata (no transcript yet)
-        await chunk_repo.create_chunk(
-            audio_uuid=audio_uuid,
-            audio_path=str(wav_path),
-            client_id=self.id,
-            timestamp=timestamp
-        )
-
-        # 2 remember which UUID goes with the *next* transcript
-        await self.meta_uuid_queue.put(audio_uuid) # Use the new dedicated queue
-
-        # housekeeping …
-        self.save_pcm_frames.clear()
-        self.sample_count = 0
-        # self.segment_index += 1 # segment_index is not used in the new logic
-
-
-# ------------------------------------------------------------------------- #
-# WebSocket endpoint
-# ------------------------------------------------------------------------- #
-
-clients: List[ClientState] = []
+app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
-    # Accept handshake
+    """Accepts WebSocket connections, decodes Opus audio, and puts it on a central queue."""
     await ws.accept()
-    client_id = len(clients) + 1
-    state = ClientState(ws, client_id)
-    clients.append(state)
-    audio_logger.info("Client %s connected", client_id)
 
-    # Start the continuous Offline transcription task for this client
-    transcription_task = asyncio.create_task(
-        continuous_offline_transcription_handler(state, OFFLINE_ASR_WS_URI)
-    )
+    client_id = f"client_{uuid.uuid4().hex[:8]}"
+    audio_logger.info(f"Client {client_id}: WebSocket connection accepted.")
+    decoder = OmiOpusDecoder()
 
     try:
         while True:
-            try:
-                packet = await ws.receive_bytes()
-            except WebSocketDisconnect:
-                audio_logger.info(f"Client {client_id} WebSocket disconnected by client.")
-                break  # Graceful client close
-            except Exception as e: # Catch other errors on receive_bytes
-                audio_logger.error(f"Client {client_id}: Error receiving packet: {type(e).__name__} {e}")
-                break
-            await state.add_opus_packet(packet)
-            # yield to avoid starving write/recv tasks
-            await asyncio.sleep(0)
-    except Exception as e: 
-        audio_logger.error(f"Client {client_id}: Unhandled error in main WebSocket loop: {type(e).__name__} {e}")
-    finally:
-        audio_logger.info(f"Client {client_id} disconnecting sequence initiated...")
-        
-        # Signal the transcription handler's PCM sending loop to stop
-        # This needs to be done before attempting to remove the client or await the task
-        await state.pcm_frames.put(None) 
-        
-        if state in clients: 
-            clients.remove(state)
-        
-        # Wait for the transcription task to finish cleaning up
-        if transcription_task and not transcription_task.done():
-            audio_logger.info(f"Client {client_id}: Waiting for transcription task (up to 5s)...")
-            try:
-                await asyncio.wait_for(transcription_task, timeout=5.0)
-                audio_logger.info(f"Client {client_id}: Transcription task completed.")
-            except asyncio.TimeoutError:
-                audio_logger.warning(f"Client {client_id}: Timeout waiting for transcription task. Cancelling.")
-                transcription_task.cancel()
-                try:
-                    await transcription_task # Allow cancellation to be processed
-                except asyncio.CancelledError:
-                    audio_logger.info(f"Client {client_id}: Transcription task cancelled successfully.")
-                except Exception as e_cancel:
-                     audio_logger.error(f"Client {client_id}: Error during transcription task cancellation: {type(e_cancel).__name__} {e_cancel}")
-            except Exception as e_shutdown:
-                audio_logger.error(f"Client {client_id}: Error during transcription task graceful shutdown: {type(e_shutdown).__name__} {e_shutdown}")
-                transcription_task.cancel() # Ensure cancellation on other errors
+            packet = await ws.receive_bytes()
+            loop = asyncio.get_running_loop()
+            pcm_data = await loop.run_in_executor(
+                _DEC_IO_EXECUTOR, decoder.decode_packet, packet
+            )
+            if pcm_data:
+                chunk = AudioChunk(
+                    audio=pcm_data,
+                    rate=OMI_SAMPLE_RATE,
+                    width=OMI_SAMPLE_WIDTH,
+                    channels=OMI_CHANNELS,
+                    timestamp=int(time.time()),
+                )
+                central_chunk_queue.put_nowait((client_id, chunk))
 
-        # Flush any remaining audio segment to disk
-        # This check is important to ensure there's something to flush.
-        if state.sample_count > 0 or len(state.save_pcm_frames) > 0 : 
-            audio_logger.info(f"Client {client_id}: Flushing final audio segment to disk.")
-            await state._flush_segment()
+    except WebSocketDisconnect:
+        audio_logger.info(f"Client {client_id}: WebSocket disconnected.")
+        await central_chunk_queue.put((client_id, None))  # Signal disconnect
+    except Exception as e:
+        audio_logger.error(f"Client {client_id}: An error occurred: {e}", exc_info=True)
+        await central_chunk_queue.put((client_id, None))  # Signal disconnect
 
-        audio_logger.info("Client %s disconnected fully.", client_id)
-    
+
+@app.get("/api/conversations")
+async def get_conversations():
+    """
+    Retrieves the last 20 transcribed audio chunks from MongoDB.
+    """
+    try:
+        cursor = chunks_col.find(
+            {"transcription": {"$ne": None}}, sort=[("timestamp", -1)], limit=20
+        )
+        conversations = []
+        for doc in await cursor.to_list(length=20):
+            doc["_id"] = str(doc["_id"])
+            conversations.append(doc)
+        return JSONResponse(content=conversations)
+    except Exception as e:
+        audio_logger.error(f"Error fetching conversations: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"message": "Error fetching conversations"}
+        )
+
+
+@app.get("/api/memories")
+async def get_memories():
+    """
+    Retrieves all memories from the mem0 store.
+    """
+    try:
+        all_memories = memory.get_all()
+        return JSONResponse(content=all_memories)
+    except Exception as e:
+        audio_logger.error(f"Error fetching memories: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"message": "Error fetching memories"}
+        )
+
 
 ###############################################################################
 # Entrypoint
