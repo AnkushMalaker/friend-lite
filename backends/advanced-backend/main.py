@@ -16,14 +16,11 @@ import logging
 import os
 import time
 import uuid
-import wave
 from contextlib import asynccontextmanager
-from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple
 
 import ollama  # Ollama python client
-import websockets.exceptions
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -32,13 +29,14 @@ from fastapi.staticfiles import StaticFiles
 from mem0 import Memory  # mem0 core
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder  # OmiSDK
-from pydub import AudioSegment
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.event import Event
 
-MONGODB_URI = os.getenv("MONGODB_URI")
+logging.basicConfig(level=logging.INFO)
+
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
 mongo_client = AsyncIOMotorClient(MONGODB_URI)  # async + pooled
 db = mongo_client.get_default_database("friend-lite")  # "friend-lite"
 chunks_col = db["audio_chunks"]  # collection handle
@@ -117,7 +115,14 @@ class ClientState:
                     self.current_audio_uuid = uuid.uuid4().hex
                     timestamp = audio_chunk.timestamp or int(time.time())
                     wav_filename = f"{timestamp}_{self.client_id}_{self.current_audio_uuid}.wav"
+                    audio_logger.info(f"Creating file sink with: rate={int(OMI_SAMPLE_RATE)}, channels={int(OMI_CHANNELS)}, width={int(OMI_SAMPLE_WIDTH)}")
                     self.file_sink = _new_local_file_sink(f"{CHUNK_DIR}/{wav_filename}")
+                    try:
+                        await _open_file_sink_properly(self.file_sink)
+                        audio_logger.info(f"File sink opened successfully for {wav_filename}")
+                    except Exception as e:
+                        audio_logger.error(f"Failed to open file sink: {e}")
+                        raise
                     
                     await chunk_repo.create_chunk(
                         audio_uuid=self.current_audio_uuid,
@@ -228,7 +233,7 @@ OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://192.168.0.110:8765
 
 # ---- mem0 + Ollama --------------------------------------------------------- #
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "http://qdrant:6333")
+QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 MEM0_CONFIG = {
     "llm": {
         "provider": "ollama",
@@ -277,12 +282,28 @@ audio_logger = logging.getLogger("audio_processing")
 ###############################################################################
 
 
-_new_local_file_sink = partial(
-    LocalFileSink,
-    sample_rate=OMI_SAMPLE_RATE,
-    channels=OMI_CHANNELS,
-    sample_width=OMI_SAMPLE_WIDTH,
-)
+def _new_local_file_sink(file_path):
+    """Create a properly configured LocalFileSink with all wave parameters set."""
+    sink = LocalFileSink(
+        file_path=file_path,
+        sample_rate=int(OMI_SAMPLE_RATE),
+        channels=int(OMI_CHANNELS),
+        sample_width=int(OMI_SAMPLE_WIDTH),
+    )
+    return sink
+
+
+async def _open_file_sink_properly(sink):
+    """Open a file sink and ensure all wave parameters are set correctly."""
+    await sink.open()
+    # Ensure compression type is set immediately after opening
+    if hasattr(sink, '_file_handle') and sink._file_handle:
+        # Re-set parameters in the correct order to ensure they stick
+        sink._file_handle.setnchannels(int(OMI_CHANNELS))
+        sink._file_handle.setsampwidth(int(OMI_SAMPLE_WIDTH))
+        sink._file_handle.setframerate(int(OMI_SAMPLE_RATE))
+        # sink._file_handle.setcomptype('NONE', 'not compressed')
+    return sink
 
 
 async def create_client_state(client_id: str) -> ClientState:

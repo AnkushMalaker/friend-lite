@@ -22,7 +22,6 @@ import numpy as np
 import soundfile as sf
 from easy_audio_interfaces.filesystem import LocalFileSink
 from nemo.collections.asr.models import ASRModel
-from pydub import AudioSegment
 from silero_vad import VADIterator, load_silero_vad
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
@@ -92,7 +91,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         self._model_name = model_name
         self._transcriber = Transcriber(model_name)
         self._vad_enabled = vad_enabled
-        
+
         # VAD-related initialization
         if self._vad_enabled:
             self._vad_model = load_silero_vad(onnx=True)
@@ -140,12 +139,6 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
 
     async def _write_debug_file(self, event: AudioChunk) -> None:
         """Logic to create debug files"""
-        create_audio_segment = partial(
-            AudioSegment,
-            sample_width=event.width,
-            frame_rate=event.rate,
-            channels=event.channels,
-        )
         if self._recording_debug_handle is None:
             self._cur_seg_duration = 0
             self._recording_debug_handle = LocalFileSink(
@@ -155,7 +148,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 sample_width=event.width,
             )
             await self._recording_debug_handle.open()
-        await self._recording_debug_handle.write(create_audio_segment(event.audio))
+        await self._recording_debug_handle.write(event)
         logger.debug(f"Wrote debug file: {self._recording_debug_handle._file_path}")
         self._cur_seg_duration += event.samples / event.rate
         logger.debug(f"Current segment duration: {self._cur_seg_duration} seconds")

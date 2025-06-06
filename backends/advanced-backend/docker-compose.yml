@@ -9,7 +9,7 @@ services:
       - ./audio_chunks:/app/audio_chunks
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - OFFLINE_ASR_WS_URI=${OFFLINE_ASR_WS_URI}
+      - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
     depends_on:
       - qdrant
@@ -34,6 +34,12 @@ services:
       - "6334:6334" # HTTP
     volumes:
       - ./qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo_data:/data/db
   # ngrok:
   #   image: ngrok/ngrok:latest
   #   ports:
