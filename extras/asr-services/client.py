@@ -34,6 +34,8 @@ async def main():
         async def captions():
             while True:
                 event = await client.read_event()
+                if event is None:
+                    break
                 print(f"Received event: {event}")
 
         await asyncio.gather(mic(), captions())

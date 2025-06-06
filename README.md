@@ -21,3 +21,6 @@ The backend uses the python sdk
 - npx expo run:ios --device
 
 # Wyoming protocol compatible ASR services under extras/asr-services
+
+# Arch
+![Architecture Diagram](.assets/plan.png)
