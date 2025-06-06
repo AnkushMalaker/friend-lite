@@ -4,7 +4,7 @@ Wyoming ASR server using Nemo Parakeet ASR + Silero VAD.
 
 Dependencies
 ------------
-pip install numpy silero-vad nemo_toolkit[asr] soundfile wyoming
+pip install numpy silero-vad nemo_toolkit[asr] soundfile wyoming easy_audio_interfaces pydub
 """
 
 import argparse
@@ -12,16 +12,23 @@ import asyncio
 import logging
 import os
 import tempfile
+import time
+from functools import partial
+from pathlib import Path
+from typing import Sequence, cast
 
 import nemo.collections.asr as nemo_asr
 import numpy as np
 import soundfile as sf
+from easy_audio_interfaces.filesystem import LocalFileSink
+from pydub import AudioSegment
 from silero_vad import VADIterator, load_silero_vad
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
+from nemo.collections.asr.models import ASRModel
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -38,7 +45,7 @@ class Transcriber:
 
     def __init__(self, model_name: str = "nvidia/parakeet-tdt-0.6b-v2"):
         logger.info(f"Loading Nemo ASR model: {model_name}")
-        self.model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_name)
+        self.model= cast(nemo_asr.models.ASRModel, nemo_asr.models.ASRModel.from_pretrained(model_name=model_name))
         self.rate = SAMPLING_RATE
         # Warm-up call
         logger.info("Warming up Nemo ASR model...")
@@ -56,9 +63,10 @@ class Transcriber:
             
             sf.write(tmpfile_name, pcm, self.rate)
             
-            results = self.model.transcribe([tmpfile_name], batch_size=1)
+            results = self.model.transcribe([tmpfile_name], batch_size=1, timestamps=True)
+            logger.debug(f"Transcription results: {results}")
             
-            if results and isinstance(results, list) and len(results) > 0:
+            if results and len(results) > 0:
                 # Check if the first result is an object with a .text attribute
                 if hasattr(results[0], 'text') and results[0].text is not None:
                     return results[0].text
@@ -90,8 +98,16 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             threshold=0.4,  # VAD sensitivity
         )
         
-        self._speech_buf = np.empty(0, np.float32)
+        self._speech_buf: list[AudioChunk] = []
         self._recording = False
+
+        self._debug_dir = Path("debug")
+        self._debug_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Debug file handling
+        self._recording_debug_handle = None
+        self._DEBUG_LENGTH = 30  # seconds
+        self._cur_seg_duration = 0
 
     def soft_reset(self) -> None:
         """Reset only the iterator's state, not the underlying model."""
@@ -110,9 +126,37 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         else:
             raise ValueError(f"Unsupported width: {chunk.width}")
 
+    async def _write_debug_file(self, event: AudioChunk) -> None:
+        """Logic to create debug files"""
+        create_audio_segment = partial(
+            AudioSegment,
+            sample_width=event.width,
+            frame_rate=event.rate,
+            channels=event.channels,
+        )
+        if self._recording_debug_handle is None:
+            self._cur_seg_duration = 0
+            self._recording_debug_handle = LocalFileSink(
+                file_path=self._debug_dir / f"{time.time()}.wav",
+                sample_rate=event.rate,
+                channels=event.channels,
+                sample_width=event.width,
+            )
+            await self._recording_debug_handle.open()
+        await self._recording_debug_handle.write(create_audio_segment(event.audio))
+        logger.debug(f"Wrote debug file: {self._recording_debug_handle._file_path}")
+        self._cur_seg_duration += event.samples / event.rate
+        logger.debug(f"Current segment duration: {self._cur_seg_duration} seconds")
+        if self._cur_seg_duration > self._DEBUG_LENGTH:
+            await self._recording_debug_handle.close()
+            self._recording_debug_handle = None
+
     async def _process_audio_chunk(self, chunk: AudioChunk) -> None:
         """Process audio chunk with VAD and transcription."""
-        chunk_array = self._chunk_to_numpy(chunk)
+        # Write debug file
+        await self._write_debug_file(chunk)
+        
+        chunk_array = self._chunk_to_numpy(chunk) # 512 samples, MAYBE?
         
         # Run VAD on this chunk
         try:
@@ -128,15 +172,15 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             if "start" in vad_event and not self._recording:
                 # Start recording - initialize buffer with current chunk
                 self._recording = True
-                self._speech_buf = chunk_array.copy()
+                self._speech_buf.append(chunk)
                 logger.info("Started recording speech")
 
             elif "end" in vad_event and self._recording:
                 # End recording - add final chunk and transcribe
-                self._speech_buf = np.concatenate((self._speech_buf, chunk_array))
+                self._speech_buf.append(chunk)
                 self._recording = False
                 
-                speech_duration = len(self._speech_buf) / SAMPLING_RATE
+                speech_duration = sum(chunk.seconds for chunk in self._speech_buf)
                 logger.info(f"VAD end detected. Speech duration: {speech_duration:.2f}s")
                 
                 if speech_duration >= MIN_SPEECH_SECS:
@@ -145,28 +189,29 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                     logger.info("Speech too short for transcription. Discarding.")
                 
                 # Clear buffer and reset
-                self._speech_buf = np.empty(0, np.float32)
+                self._speech_buf.clear()
                 self.soft_reset()
                 return
         
         # If we're recording, accumulate the chunk
         if self._recording:
-            self._speech_buf = np.concatenate((self._speech_buf, chunk_array))
+            self._speech_buf.append(chunk)
             
             # Safety check: if speech buffer gets too long, force transcription
             if len(self._speech_buf) >= MAX_SPEECH_SECS * SAMPLING_RATE:
                 logger.warning(f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription.")
                 await self._transcribe_and_send(self._speech_buf)
-                self._speech_buf = np.empty(0, np.float32)
+                self._speech_buf.clear()
                 self._recording = False
                 self.soft_reset()
 
-    async def _transcribe_and_send(self, speech: np.ndarray) -> None:
+    async def _transcribe_and_send(self, speech: Sequence[AudioChunk]) -> None:
         """Transcribe speech and send Wyoming transcript event."""
         try:
             # Run blocking ASR call in a separate thread
+            speech_array = np.concatenate([self._chunk_to_numpy(chunk) for chunk in speech])
             loop = asyncio.get_running_loop()
-            text = await loop.run_in_executor(None, self._transcriber, speech)
+            text = await loop.run_in_executor(None, self._transcriber, speech_array)
             
             if not text:  # If transcription is empty or failed
                 logger.warning("Transcription resulted in empty text. Not sending.")
@@ -186,7 +231,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         if Transcribe.is_type(event.type):
             # Reset for new transcription request
             self._recording = False
-            self._speech_buf = np.empty(0, np.float32)
+            self._speech_buf.clear()
             self.soft_reset()
             return True
         elif AudioStart.is_type(event.type):
@@ -207,7 +252,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 await self._transcribe_and_send(self._speech_buf)
             
             # Reset state
-            self._speech_buf = np.empty(0, np.float32)
+            self._speech_buf.clear()
             self._recording = False
             self.soft_reset()
             return True
@@ -242,6 +287,11 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             return True
         
         return False
+
+    async def disconnect(self) -> None:
+        """Clean up debug file handle on disconnect"""
+        if self._recording_debug_handle is not None:
+            await self._recording_debug_handle.close()
 
 # --------------------------------------------------------------------------- #
 async def main() -> None:
