@@ -421,6 +421,28 @@ async def ws_endpoint(ws: WebSocket):
         audio_logger.error(f"Client {client_id}: An error occurred: {e}", exc_info=True)
         await central_chunk_queue.put((client_id, None))  # Signal disconnect
 
+@app.websocket("/ws_pcm")
+async def ws_endpoint_pcm(ws: WebSocket):
+    """Accepts WebSocket connections, decodes PCM audio, and puts it on a central queue."""
+    await ws.accept()
+    client_id = f"client_{uuid.uuid4().hex[:8]}"
+    audio_logger.info(f"Client {client_id}: WebSocket connection accepted.")
+
+    try:
+        while True:
+            packet = await ws.receive_bytes()
+            if packet:
+                chunk = AudioChunk(
+                    audio=packet,
+                    rate=16000,
+                    width=2,
+                    channels=1,
+                    timestamp=int(time.time()),
+                )
+                central_chunk_queue.put_nowait((client_id, chunk))
+    except WebSocketDisconnect:
+        audio_logger.info(f"Client {client_id}: WebSocket disconnected.")
+        await central_chunk_queue.put((client_id, None))  # Signal disconnect
 
 @app.get("/api/conversations")
 async def get_conversations():
