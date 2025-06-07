@@ -1,9 +1,9 @@
-import asyncio
 import argparse
+import asyncio
 import logging
+
 import websockets
 import websockets.exceptions
-
 from easy_audio_interfaces.extras.local_audio import InputMicStream
 
 logger = logging.getLogger(__name__)
