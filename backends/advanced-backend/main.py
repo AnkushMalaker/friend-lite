@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 import ollama  # Ollama python client
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mem0 import Memory  # mem0 core
@@ -32,7 +32,7 @@ from omi.decoder import OmiOpusDecoder  # OmiSDK
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
-from wyoming.event import Event
+from wyoming.info import Describe
 
 logging.basicConfig(level=logging.INFO)
 
@@ -617,6 +617,124 @@ async def get_memories(user_id: str):
         return JSONResponse(
             status_code=500, content={"message": "Error fetching memories"}
         )
+
+@app.get("/health")
+async def health_check():
+    """
+    Comprehensive health check for all services.
+    """
+    health_status = {
+        "status": "healthy",
+        "services": {},
+        "timestamp": int(time.time())
+    }
+    
+    overall_healthy = True
+    
+    # Check MongoDB
+    try:
+        await mongo_client.admin.command('ping')
+        health_status["services"]["mongodb"] = {
+            "status": "✅ Connected",
+            "healthy": True
+        }
+    except Exception as e:
+        health_status["services"]["mongodb"] = {
+            "status": f"❌ Connection Failed: {str(e)}",
+            "healthy": False
+        }
+        overall_healthy = False
+    
+    # # Check Qdrant
+    # try:
+    #     async with httpx.AsyncClient() as client:
+    #         response = await client.get(f"http://{QDRANT_BASE_URL}:6333/health", timeout=5.0)
+    #         if response.status_code == 200:
+    #             health_status["services"]["qdrant"] = {
+    #                 "status": "✅ Connected",
+    #                 "healthy": True
+    #             }
+    #         else:
+    #             health_status["services"]["qdrant"] = {
+    #                 "status": f"❌ HTTP {response.status_code}",
+    #                 "healthy": False
+    #             }
+    #             overall_healthy = False
+    # except Exception as e:
+    #     health_status["services"]["qdrant"] = {
+    #         "status": f"❌ Connection Failed: {str(e)}",
+    #         "healthy": False
+    #     }
+    #     overall_healthy = False
+    
+    # Check Ollama
+    try:
+        response = ollama_client.list()
+        health_status["services"]["ollama"] = {
+            "status": "✅ Connected",
+            "healthy": True,
+            "models": len(response.get("models", []))
+        }
+    except Exception as e:
+        health_status["services"]["ollama"] = {
+            "status": f"❌ Connection Failed: {str(e)}",
+            "healthy": False
+        }
+        overall_healthy = False
+    
+    # Check Mem0
+    try:
+        # Test mem0 by trying to get memories for a test user (this will work even if user doesn't exist)
+        test_memories = memory.get_all(user_id="health_check_test_user")
+        health_status["services"]["mem0"] = {
+            "status": "✅ Connected",
+            "healthy": True
+        }
+    except Exception as e:
+        health_status["services"]["mem0"] = {
+            "status": f"❌ Connection Failed: {str(e)}",
+            "healthy": False
+        }
+        overall_healthy = False
+    
+    # Check ASR Service
+    try:
+        # Quick connection test to ASR service
+        test_client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
+        await test_client.connect()
+        await test_client.write_event(Describe().event())
+        text = await test_client.read_event()
+        print(text)
+        await test_client.disconnect()
+        health_status["services"]["asr"] = {
+            "status": f"✅ Connected: {text}",
+            "healthy": True,
+            "uri": OFFLINE_ASR_TCP_URI
+        }
+    except Exception as e:
+        health_status["services"]["asr"] = {
+            "status": f"❌ Connection Failed: {str(e)}",
+            "healthy": False,
+            "uri": OFFLINE_ASR_TCP_URI
+        }
+        overall_healthy = False
+    
+    # Set overall status
+    health_status["status"] = "healthy" if overall_healthy else "unhealthy"
+    health_status["overall_healthy"] = overall_healthy
+    
+    # Add configuration info
+    health_status["config"] = {
+        "mongodb_uri": MONGODB_URI,
+        "ollama_url": OLLAMA_BASE_URL,
+        "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
+        "asr_uri": OFFLINE_ASR_TCP_URI,
+        "chunk_dir": str(CHUNK_DIR),
+        "active_clients": len(active_clients)
+    }
+    
+    status_code = 200 if overall_healthy else 503
+    return JSONResponse(content=health_status, status_code=status_code)
 
 
 ###############################################################################
