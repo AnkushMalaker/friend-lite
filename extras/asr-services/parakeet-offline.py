@@ -16,6 +16,7 @@ import time
 from functools import partial
 from pathlib import Path
 from typing import Sequence, cast
+import torch
 
 import nemo.collections.asr as nemo_asr
 import numpy as np
@@ -66,7 +67,8 @@ class SharedTranscriber:
             
             sf.write(tmpfile_name, pcm, self.rate)
             
-            results = self.model.transcribe([tmpfile_name], batch_size=1, timestamps=True)
+            with torch.no_grad():
+                results = self.model.transcribe([tmpfile_name], batch_size=1, timestamps=True)
             logger.debug(f"Transcription results: {results}")
             
             if results and len(results) > 0:
