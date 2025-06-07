@@ -36,25 +36,29 @@ logging.basicConfig(level=logging.INFO)
 SAMPLING_RATE = 16_000
 CHUNK_SAMPLES = 512                       # Silero requirement (32 ms @ 16 kHz)
 MAX_SPEECH_SECS = 30                     # Max duration of a speech segment
-MIN_SPEECH_SECS = 0.2                    # Min duration for transcription
+MIN_SPEECH_SECS = 0.5                    # Min duration for transcription
 
 # --------------------------------------------------------------------------- #
-class Transcriber:
-    """Thin wrapper around Nemo ASR for synchronous calls."""
-
+class SharedTranscriber:
+    """Shared transcriber instance that can be used by multiple clients."""
+    
     def __init__(self, model_name: str = "nvidia/parakeet-tdt-0.6b-v2"):
-        logger.info(f"Loading Nemo ASR model: {model_name}")
-        self.model= cast(nemo_asr.models.ASRModel, nemo_asr.models.ASRModel.from_pretrained(model_name=model_name))
+        logger.info(f"Loading shared Nemo ASR model: {model_name}")
+        self.model = cast(nemo_asr.models.ASRModel, nemo_asr.models.ASRModel.from_pretrained(model_name=model_name))
         self.rate = SAMPLING_RATE
+        self._model_name = model_name
+        self._lock = asyncio.Lock()
+        
         # Warm-up call
-        logger.info("Warming up Nemo ASR model...")
+        logger.info("Warming up shared Nemo ASR model...")
         try:
-            self.__call__(np.zeros(self.rate // 10, np.float32))  # 0.1s silence
-            logger.info("Nemo ASR model warmed up successfully.")
+            self._transcribe(np.zeros(self.rate // 10, np.float32))  # 0.1s silence
+            logger.info("Shared Nemo ASR model warmed up successfully.")
         except Exception as e:
             logger.error(f"Error during ASR model warm-up: {e}")
 
-    def __call__(self, pcm: np.ndarray) -> str:
+    def _transcribe(self, pcm: np.ndarray) -> str:
+        """Internal transcription method."""
         tmpfile_name = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
@@ -80,16 +84,22 @@ class Transcriber:
             if tmpfile_name and os.path.exists(tmpfile_name):
                 os.remove(tmpfile_name)
 
+    async def transcribe_async(self, pcm: np.ndarray) -> str:
+        """Thread-safe async transcription method."""
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, self._transcribe, pcm)
+
 # --------------------------------------------------------------------------- #
 class ParakeetTranscriptionHandler(AsyncEventHandler):
     """
     Wyoming ASR handler for Parakeet offline transcription.
     """
 
-    def __init__(self, *args, model_name: str = "nvidia/parakeet-tdt-0.6b-v2", vad_enabled: bool = True, **kwargs):
+    def __init__(self, *args, shared_transcriber: SharedTranscriber, vad_enabled: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
-        self._model_name = model_name
-        self._transcriber = Transcriber(model_name)
+        self._transcriber = shared_transcriber
+        self._model_name = shared_transcriber._model_name
         self._vad_enabled = vad_enabled
 
         # VAD-related initialization
@@ -235,10 +245,9 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
     async def _transcribe_and_send(self, speech: Sequence[AudioChunk]) -> None:
         """Transcribe speech and send Wyoming transcript event."""
         try:
-            # Run blocking ASR call in a separate thread
+            # Run blocking ASR call using the shared transcriber
             speech_array = np.concatenate([self._chunk_to_numpy(chunk) for chunk in speech])
-            loop = asyncio.get_running_loop()
-            text = await loop.run_in_executor(None, self._transcriber, speech_array)
+            text = await self._transcriber.transcribe_async(speech_array)
             
             if not text:  # If transcription is empty or failed
                 logger.warning("Transcription resulted in empty text. Not sending.")
@@ -359,6 +368,11 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
+    # Create shared transcriber instance once
+    logger.info("Initializing shared transcriber...")
+    shared_transcriber = SharedTranscriber(args.model_name)
+    logger.info("Shared transcriber initialized successfully")
+
     server = AsyncTcpServer(host=args.host, port=args.port)
     vad_enabled = not args.disable_vad
     logger.info(
@@ -366,7 +380,7 @@ async def main() -> None:
     )
     await server.run(
         handler_factory=lambda *_args, **_kwargs: ParakeetTranscriptionHandler(
-            *_args, model_name=args.model_name, vad_enabled=vad_enabled, **_kwargs
+            *_args, shared_transcriber=shared_transcriber, vad_enabled=vad_enabled, **_kwargs
         )
     )
 

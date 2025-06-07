@@ -55,6 +55,7 @@ class ClientState:
         # Per-client queues
         self.chunk_queue = asyncio.Queue[Optional[AudioChunk]]()
         self.transcription_queue = asyncio.Queue[Tuple[Optional[str], Optional[AudioChunk]]]()
+        self.memory_queue = asyncio.Queue[Tuple[Optional[str], Optional[str], Optional[str]]]()  # (transcript, client_id, audio_uuid)
         
         # Per-client file sink
         self.file_sink: Optional[LocalFileSink] = None
@@ -66,11 +67,13 @@ class ClientState:
         # Tasks for this client
         self.saver_task: Optional[asyncio.Task] = None
         self.transcription_task: Optional[asyncio.Task] = None
+        self.memory_task: Optional[asyncio.Task] = None
     
     async def start_processing(self):
         """Start the processing tasks for this client."""
         self.saver_task = asyncio.create_task(self._audio_saver())
         self.transcription_task = asyncio.create_task(self._transcription_processor())
+        # self.memory_task = asyncio.create_task(self._memory_processor())
         audio_logger.info(f"Started processing tasks for client {self.client_id}")
     
     async def disconnect(self):
@@ -84,12 +87,15 @@ class ClientState:
         # Signal processors to stop
         await self.chunk_queue.put(None)
         await self.transcription_queue.put((None, None))
+        await self.memory_queue.put((None, None, None))
         
         # Wait for tasks to complete
         if self.saver_task:
             await self.saver_task
         if self.transcription_task:
             await self.transcription_task
+        if self.memory_task:
+            await self.memory_task
             
         # Clean up file sink
         if self.file_sink:
@@ -175,6 +181,37 @@ class ClientState:
                         
         except Exception as e:
             audio_logger.error(f"Error in transcription processor for client {self.client_id}: {e}", exc_info=True)
+    
+    async def _memory_processor(self):
+        """Per-client memory processor - handles memory.add operations in background."""
+        try:
+            while self.connected:
+                transcript, client_id, audio_uuid = await self.memory_queue.get()
+                return
+                
+                if transcript is None or client_id is None or audio_uuid is None:  # Disconnect signal
+                    break
+                
+                # Process memory in background (this is the slow operation)
+                # Run in separate process to completely isolate heavy ML operations
+                try:
+                    loop = asyncio.get_running_loop()
+                    success = await loop.run_in_executor(
+                        _MEMORY_PROCESS_EXECUTOR,
+                        _add_memory_to_store,
+                        transcript,
+                        client_id,
+                        audio_uuid
+                    )
+                    if success:
+                        audio_logger.info(f"Added transcript for {audio_uuid} to mem0 (client: {client_id}).")
+                    else:
+                        audio_logger.error(f"Failed to add memory for {audio_uuid}")
+                except Exception as e:
+                    audio_logger.error(f"Error adding memory for {audio_uuid}: {e}")
+                        
+        except Exception as e:
+            audio_logger.error(f"Error in memory processor for client {self.client_id}: {e}", exc_info=True)
 
 
 # Global client state registry
@@ -271,8 +308,37 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="opus_io",
 )
 
+# Process pool executor for heavy memory operations
+_MEMORY_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
+    max_workers=2,  # Keep this low to avoid overwhelming the system
+)
+
 memory = Memory.from_config(MEM0_CONFIG)
 ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+
+
+def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bool:
+    """
+    Function to add memory in a separate process.
+    This function will be pickled and run in a process pool.
+    """
+    try:
+        # Create a new memory instance in this process
+        process_memory = Memory.from_config(MEM0_CONFIG)
+        process_memory.add(
+            transcript,
+            user_id=client_id,
+            metadata={
+                "source": "offline_streaming",
+                "audio_uuid": audio_uuid,
+            },
+        )
+        return True
+    except Exception as e:
+        # Log to stderr since we're in a separate process
+        import sys
+        print(f"Error in memory process for {audio_uuid}: {e}", file=sys.stderr)
+        return False
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -359,46 +425,60 @@ class TranscriptionManager:
             finally:
                 self.client = None
 
+
     async def transcribe_chunk(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
         """Transcribe a single chunk with ordered processing."""
         if not self.client:
             audio_logger.error(f"No ASR connection available for {audio_uuid}")
             return
 
-        if self._current_audio_uuid != audio_uuid:
-            self._current_audio_uuid = audio_uuid
-            audio_logger.info(f"New audio_uuid: {audio_uuid}")
-            transcribe = Transcribe()
-            await self.client.write_event(transcribe.event())
-            audio_start = AudioStart(
-                rate=chunk.rate,
-                width=chunk.width,
-                channels=chunk.channels,
-                timestamp=chunk.timestamp,
-            )
-            await self.client.write_event(audio_start.event())
-        else:
-            audio_logger.info(f"Same audio_uuid: {audio_uuid}")
+        try:
+            if self._current_audio_uuid != audio_uuid:
+                self._current_audio_uuid = audio_uuid
+                audio_logger.info(f"New audio_uuid: {audio_uuid}")
+                transcribe = Transcribe()
+                await self.client.write_event(transcribe.event())
+                audio_start = AudioStart(
+                    rate=chunk.rate,
+                    width=chunk.width,
+                    channels=chunk.channels,
+                    timestamp=chunk.timestamp,
+                )
+                await self.client.write_event(audio_start.event())
+            
+            # Send the audio chunk
             await self.client.write_event(chunk.event())
-
-                # if Transcript.is_type(event.type):
-                #     transcript_obj = Transcript.from_event(event)
-                #     transcript = transcript_obj.text.strip()
-                #     if transcript:
-                #         audio_logger.info(f"Transcript for {audio_uuid}: {transcript}")
-                #         await chunk_repo.add_transcript(audio_uuid, transcript)
-                #         memory.add(
-                #             transcript,
-                #             user_id=client_id,
-                #             metadata={
-                #                 "source": "offline_streaming",
-                #                 "audio_uuid": audio_uuid,
-                #             },
-                #         )
-                #         audio_logger.info(
-                #             f"Added transcript for {audio_uuid} to DB and mem0."
-                #         )
-
+            
+            # Read and process any available events (non-blocking)
+            try:
+                while True:
+                    event = await asyncio.wait_for(self.client.read_event(), timeout=0.001)
+                    if event is None:
+                        break
+                        
+                    if Transcript.is_type(event.type):
+                        transcript_obj = Transcript.from_event(event)
+                        transcript = transcript_obj.text.strip()
+                        if transcript:
+                            audio_logger.info(f"Transcript for {audio_uuid}: {transcript}")
+                            # Store transcript in DB immediately (fast)
+                            await chunk_repo.add_transcript(audio_uuid, transcript)
+                            audio_logger.info(f"Added transcript for {audio_uuid} to DB.")
+                            
+                            # Queue memory processing (slow, non-blocking)
+                            # Find the client state to queue the memory processing
+                            if client_id in active_clients:
+                                await active_clients[client_id].memory_queue.put((transcript, client_id, audio_uuid))
+                            else:
+                                audio_logger.warning(f"Client {client_id} not found for memory processing")
+            except asyncio.TimeoutError:
+                # No events available right now, that's fine
+                pass
+                
+        except Exception as e:
+            audio_logger.error(f"Error in transcribe_chunk for {audio_uuid}: {e}")
+            # Attempt to reconnect on error
+            await self._reconnect()
 
     async def _reconnect(self):
         """Attempt to reconnect to ASR service."""
@@ -430,6 +510,10 @@ async def lifespan(app: FastAPI):
         # Clean up all active clients
         for client_id in list(active_clients.keys()):
             await cleanup_client_state(client_id)
+        
+        # Shutdown process pool executor
+        _MEMORY_PROCESS_EXECUTOR.shutdown(wait=True)
+        audio_logger.info("Memory process pool shut down.")
         
         audio_logger.info("Shutdown complete.")
 
