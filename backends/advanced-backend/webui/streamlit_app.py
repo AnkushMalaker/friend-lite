@@ -6,88 +6,54 @@ import pandas as pd
 import requests
 import streamlit as st
 from dotenv import load_dotenv
-from mem0 import Memory
-from pymongo import MongoClient
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---- mem0 + Ollama Configuration (copied from main.py) ---- #
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434") # Added for completeness
-MEM0_CONFIG = {
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": "llama3.1:latest",
-            "ollama_base_url": OLLAMA_BASE_URL,
-            "temperature": 0,
-            "max_tokens": 2000,
-        },
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": "nomic-embed-text:latest",
-            "embedding_dims": 768,
-            "ollama_base_url": OLLAMA_BASE_URL,
-        },
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "collection_name": "omi_memories",
-            "embedding_model_dims": 768,
-            "host": "qdrant", # Make sure this matches your docker-compose setup for streamlit if run in a container
-            "port": 6333
-        },
-    },
-}
+# ---- Configuration ---- #
+BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://192.168.0.110:8000")
 
-
-# ---------- connections ----------
-# Ensure MONGODB_URI is set in your environment or .env file
-# Example: MONGODB_URI=mongodb://localhost:27017/omi if running locally and mongo is on localhost
-# Or: MONGODB_URI=mongodb://mongo:27017/omi if streamlit is in a docker container on the same network as a 'mongo' service
-mongo_client = MongoClient(os.getenv("MONGODB_URI_STREAMLIT"))
-db = mongo_client.get_default_database() # The blueprint specified "friend-lite", make sure this is consistent
-chunks_col = db["audio_chunks"]
-users_col = db["users"]
-logger.info("Connected to MongoDB")
-
-# Ensure the vector store config for mem0 points to the correct Qdrant instance
-# If Streamlit runs in a container, 'qdrant' as a hostname might need to be resolvable
-# or replaced with localhost if Qdrant is also local and not containerized with Streamlit.
-memory_streamlit_config = {
-    "llm": MEM0_CONFIG["llm"],
-    "embedder": MEM0_CONFIG["embedder"],
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "collection_name": MEM0_CONFIG["vector_store"]["config"]["collection_name"],
-            "embedding_model_dims": MEM0_CONFIG["vector_store"]["config"]["embedding_model_dims"],
-            "host": os.getenv("QDRANT_HOST_STREAMLIT", MEM0_CONFIG["vector_store"]["config"]["host"]), # Allow override for streamlit
-            "port": int(os.getenv("QDRANT_PORT_STREAMLIT", MEM0_CONFIG["vector_store"]["config"]["port"])) # Allow override for streamlit
+# ---- Health Check Functions ---- #
+@st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too many requests
+def get_system_health():
+    """Get comprehensive system health from backend."""
+    try:
+        response = requests.get(f"{BACKEND_API_URL}/health", timeout=10)
+        if response.status_code in [200, 503]:  # Both OK and unhealthy responses are valid
+            return response.json()
+        else:
+            return {
+                "status": "unhealthy",
+                "overall_healthy": False,
+                "services": {
+                    "backend": {
+                        "status": f"❌ Backend API Error: HTTP {response.status_code}",
+                        "healthy": False
+                    }
+                },
+                "error": "Backend API returned unexpected status code"
+            }
+    except Exception as e:
+        return {
+            "status": "unhealthy", 
+            "overall_healthy": False,
+            "services": {
+                "backend": {
+                    "status": f"❌ Backend API Connection Failed: {str(e)}",
+                    "healthy": False
+                }
+            },
+            "error": str(e)
         }
-    }
-}
-memory = Memory.from_config(memory_streamlit_config)
-logger.info("Connected to Mem0")
 
-# ---------- UI ----------
-st.set_page_config(page_title="Friend-Lite Dashboard", layout="wide")
-BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
-
-# --- UI ---
-st.title("Friend-Lite Dashboard")
-
-# --- Helper Functions ---
+# ---- Helper Functions ---- #
 def get_data(endpoint: str):
     """Helper function to get data from the backend API."""
     try:
         response = requests.get(f"{BACKEND_API_URL}{endpoint}")
-        response.raise_for_status()  # Raises an HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         st.error(f"Could not connect to the backend at `{BACKEND_API_URL}`. Please ensure it's running. Error: {e}")
@@ -113,7 +79,68 @@ def delete_data(endpoint: str, params: dict | None = None):
         st.error(f"Error deleting from backend: {e}")
         return None
 
-# --- Main App ---
+st.set_page_config(
+    page_title="Friend-Lite Dashboard", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.title("Friend-Lite Dashboard")
+
+
+# ---- Sidebar with Health Checks ---- #
+with st.sidebar:
+    st.header("🔍 System Health")
+    
+    with st.expander("Service Status", expanded=True):
+        # Get system health from backend
+        with st.spinner("Checking system health..."):
+            health_data = get_system_health()
+            
+            if health_data.get("overall_healthy", False):
+                st.success(f"🟢 System Status: {health_data.get('status', 'Unknown').title()}")
+            else:
+                st.error(f"🔴 System Status: {health_data.get('status', 'Unknown').title()}")
+            
+            # Show individual services
+            services = health_data.get("services", {})
+            for service_name, service_info in services.items():
+                status_text = service_info.get("status", "Unknown")
+                st.write(f"**{service_name.title()}:** {status_text}")
+                
+                # Show additional info if available
+                if "models" in service_info:
+                    st.caption(f"Models available: {service_info['models']}")
+                if "uri" in service_info:
+                    st.caption(f"URI: {service_info['uri']}")
+    
+    if st.button("🔄 Refresh Health Check"):
+        st.cache_data.clear()
+        st.rerun()
+    
+    st.divider()
+    
+    # Configuration Info  
+    with st.expander("Configuration"):
+        health_data = get_system_health()
+        config = health_data.get("config", {})
+        
+        st.code(f"""
+Backend API: {BACKEND_API_URL}
+Active Clients: {config.get('active_clients', 'Unknown')}
+MongoDB URI: {config.get('mongodb_uri', 'Unknown')[:30]}...
+Ollama URL: {config.get('ollama_url', 'Unknown')}
+Qdrant URL: {config.get('qdrant_url', 'Unknown')}
+ASR URI: {config.get('asr_uri', 'Unknown')}
+Chunk Directory: {config.get('chunk_dir', 'Unknown')}
+        """)
+
+# Show warning if system is unhealthy
+health_data = get_system_health()
+if not health_data.get("overall_healthy", False):
+    st.error("⚠️ Some critical services are unavailable. The dashboard may not function properly.")
+
+# ---- Main Content ---- #
 tab_convos, tab_mem, tab_users = st.tabs(["Conversations", "Memories", "User Management"])
 
 with tab_convos:
@@ -128,7 +155,7 @@ with tab_convos:
             col1, col2 = st.columns([1, 4])
             with col1:
                 # Format timestamp for better readability
-                ts = datetime.fromisoformat(convo['timestamp'].replace("Z", "+00:00"))
+                ts = datetime.fromtimestamp(convo['timestamp'])
                 st.write(f"**Timestamp:**")
                 st.write(ts.strftime('%Y-%m-%d %H:%M:%S'))
                 
@@ -191,7 +218,7 @@ with tab_mem:
         
         # Make the dataframe more readable
         if "created_at" in df.columns:
-             df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
 
         # Reorder and rename columns for clarity
         display_cols = {
@@ -292,4 +319,4 @@ with tab_users:
     - Users are automatically created when they connect with audio if they don't exist
     - Deleting a user will not delete their memories or conversations
     - Use the 'Memories' tab to view specific user memories
-    """)    
+    """)
