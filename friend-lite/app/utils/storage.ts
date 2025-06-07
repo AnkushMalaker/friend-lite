@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const LAST_CONNECTED_DEVICE_ID_KEY = 'LAST_CONNECTED_DEVICE_ID';
 const WEBSOCKET_URL_KEY = 'WEBSOCKET_URL_KEY';
 const DEEPGRAM_API_KEY_KEY = 'DEEPGRAM_API_KEY_KEY';
+const USER_ID_KEY = 'USER_ID_KEY';
 
 export const saveLastConnectedDeviceId = async (deviceId: string | null): Promise<void> => {
   try {
@@ -79,6 +80,32 @@ export const getDeepgramApiKey = async (): Promise<string | null> => {
     return apiKey;
   } catch (error) {
     console.error('[Storage] Error retrieving Deepgram API Key:', error);
+    return null;
+  }
+};
+
+// User ID
+export const saveUserId = async (userId: string | null): Promise<void> => {
+  try {
+    if (userId) {
+      await AsyncStorage.setItem(USER_ID_KEY, userId);
+      console.log('[Storage] User ID saved:', userId);
+    } else {
+      await AsyncStorage.removeItem(USER_ID_KEY);
+      console.log('[Storage] User ID removed.');
+    }
+  } catch (error) {
+    console.error('[Storage] Error saving User ID:', error);
+  }
+};
+
+export const getUserId = async (): Promise<string | null> => {
+  try {
+    const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    console.log('[Storage] Retrieved User ID:', userId);
+    return userId;
+  } catch (error) {
+    console.error('[Storage] Error retrieving User ID:', error);
     return null;
   }
 }; 
