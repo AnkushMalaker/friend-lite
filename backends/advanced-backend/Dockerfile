@@ -5,6 +5,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
     libsndfile1 \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -18,7 +19,7 @@ COPY pyproject.toml .
 
 # Install dependencies using uv
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --group deepgram
+    uv sync
 
 
 # Set up the working directory

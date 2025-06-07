@@ -21,14 +21,13 @@ import nemo.collections.asr as nemo_asr
 import numpy as np
 import soundfile as sf
 from easy_audio_interfaces.filesystem import LocalFileSink
-from pydub import AudioSegment
+from nemo.collections.asr.models import ASRModel
 from silero_vad import VADIterator, load_silero_vad
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
-from nemo.collections.asr.models import ASRModel
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -87,19 +86,30 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
     Wyoming ASR handler for Parakeet offline transcription.
     """
 
-    def __init__(self, *args, model_name: str = "nvidia/parakeet-tdt-0.6b-v2", **kwargs):
+    def __init__(self, *args, model_name: str = "nvidia/parakeet-tdt-0.6b-v2", vad_enabled: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
         self._model_name = model_name
         self._transcriber = Transcriber(model_name)
-        self._vad_model = load_silero_vad(onnx=True)
-        self._vad_iterator = VADIterator(
-            model=self._vad_model,
-            sampling_rate=SAMPLING_RATE,
-            threshold=0.4,  # VAD sensitivity
-        )
+        self._vad_enabled = vad_enabled
+
+        # VAD-related initialization
+        if self._vad_enabled:
+            self._vad_model = load_silero_vad(onnx=True)
+            self._vad_iterator = VADIterator(
+                model=self._vad_model,
+                sampling_rate=SAMPLING_RATE,
+                threshold=0.4,  # VAD sensitivity
+            )
+        else:
+            self._vad_model = None
+            self._vad_iterator = None
+
         
         self._speech_buf: list[AudioChunk] = []
         self._recording = False
+        
+        # Non-VAD mode: collect everything from AudioStart to AudioStop
+        self._collecting_audio = False
 
         self._debug_dir = Path("debug")
         self._debug_dir.mkdir(parents=True, exist_ok=True)
@@ -111,10 +121,11 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
 
     def soft_reset(self) -> None:
         """Reset only the iterator's state, not the underlying model."""
-        self._vad_iterator.triggered = False
-        self._vad_iterator.temp_end = 0
-        self._vad_iterator.current_sample = 0
-        logger.debug("VAD iterator soft reset.")
+        if self._vad_enabled and self._vad_iterator:
+            self._vad_iterator.triggered = False
+            self._vad_iterator.temp_end = 0
+            self._vad_iterator.current_sample = 0
+            logger.debug("VAD iterator soft reset.")
 
     def _chunk_to_numpy(self, chunk: AudioChunk) -> np.ndarray:
         if chunk.width == 2:
@@ -128,12 +139,6 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
 
     async def _write_debug_file(self, event: AudioChunk) -> None:
         """Logic to create debug files"""
-        create_audio_segment = partial(
-            AudioSegment,
-            sample_width=event.width,
-            frame_rate=event.rate,
-            channels=event.channels,
-        )
         if self._recording_debug_handle is None:
             self._cur_seg_duration = 0
             self._recording_debug_handle = LocalFileSink(
@@ -143,7 +148,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 sample_width=event.width,
             )
             await self._recording_debug_handle.open()
-        await self._recording_debug_handle.write(create_audio_segment(event.audio))
+        await self._recording_debug_handle.write(event)
         logger.debug(f"Wrote debug file: {self._recording_debug_handle._file_path}")
         self._cur_seg_duration += event.samples / event.rate
         logger.debug(f"Current segment duration: {self._cur_seg_duration} seconds")
@@ -156,10 +161,20 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         # Write debug file
         await self._write_debug_file(chunk)
         
-        chunk_array = self._chunk_to_numpy(chunk) # 512 samples, MAYBE?
+        if self._vad_enabled:
+            # VAD-enabled mode: use VAD to detect speech segments
+            await self._process_with_vad(chunk)
+        else:
+            # VAD-disabled mode: collect all audio from start to stop
+            await self._process_without_vad(chunk)
+
+    async def _process_with_vad(self, chunk: AudioChunk) -> None:
+        """Process audio chunk using VAD for speech detection."""
+        chunk_array = self._chunk_to_numpy(chunk)
         
         # Run VAD on this chunk
         try:
+            assert self._vad_iterator is not None
             vad_event = self._vad_iterator(chunk_array)
             logger.debug(f"VAD event: {vad_event}")
         except Exception as e:
@@ -205,6 +220,18 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 self._recording = False
                 self.soft_reset()
 
+    async def _process_without_vad(self, chunk: AudioChunk) -> None:
+        """Process audio chunk without VAD - collect everything from start to stop."""
+        if self._collecting_audio:
+            self._speech_buf.append(chunk)
+            
+            # Safety check: if speech buffer gets too long, force transcription
+            speech_duration = sum(c.seconds for c in self._speech_buf)
+            if speech_duration >= MAX_SPEECH_SECS:
+                logger.warning(f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription.")
+                await self._transcribe_and_send(self._speech_buf)
+                self._speech_buf.clear()
+
     async def _transcribe_and_send(self, speech: Sequence[AudioChunk]) -> None:
         """Transcribe speech and send Wyoming transcript event."""
         try:
@@ -231,12 +258,20 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         if Transcribe.is_type(event.type):
             # Reset for new transcription request
             self._recording = False
+            self._collecting_audio = False
+            if len(self._speech_buf) > 0:
+                logger.warning(f"Clearing speech buffer of {len(self._speech_buf)} chunks")
             self._speech_buf.clear()
             self.soft_reset()
             return True
         elif AudioStart.is_type(event.type):
             # Start a new audio stream
             logger.info("Audio stream started")
+            if not self._vad_enabled:
+                # In non-VAD mode, start collecting all audio
+                self._collecting_audio = True
+                self._speech_buf.clear()
+                logger.info("Started collecting audio (VAD disabled)")
             return True
         elif AudioChunk.is_type(event.type):
             # Process audio chunk
@@ -246,14 +281,26 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         elif AudioStop.is_type(event.type):
             # End of audio stream
             logger.info("Audio stream stopped")
-            # If we have accumulated speech, transcribe it
-            if self._recording and len(self._speech_buf) >= MIN_SPEECH_SECS * SAMPLING_RATE:
-                logger.info("Audio stream ended. Transcribing remaining speech.")
-                await self._transcribe_and_send(self._speech_buf)
+            
+            if self._vad_enabled:
+                # VAD mode: transcribe any remaining speech if we were recording
+                if self._recording and len(self._speech_buf) >= MIN_SPEECH_SECS * SAMPLING_RATE:
+                    logger.info("Audio stream ended. Transcribing remaining speech.")
+                    await self._transcribe_and_send(self._speech_buf)
+            else:
+                # Non-VAD mode: transcribe the entire collected audio
+                if self._collecting_audio and self._speech_buf:
+                    speech_duration = sum(chunk.seconds for chunk in self._speech_buf)
+                    logger.info(f"Audio stream ended. Transcribing entire segment (duration: {speech_duration:.2f}s)")
+                    if speech_duration >= MIN_SPEECH_SECS:
+                        await self._transcribe_and_send(self._speech_buf)
+                    else:
+                        logger.info("Audio segment too short for transcription. Discarding.")
             
             # Reset state
             self._speech_buf.clear()
             self._recording = False
+            self._collecting_audio = False
             self.soft_reset()
             return True
         elif Describe.is_type(event.type):
@@ -307,15 +354,19 @@ async def main() -> None:
     parser.add_argument(
         "--port", type=int, default=8765, help="Port to bind the TCP server (default: 8765)"
     )
+    parser.add_argument(
+        "--disable-vad", action="store_true", help="Disable VAD and use normal Wyoming protocol (default: VAD enabled)"
+    )
     args = parser.parse_args()
 
     server = AsyncTcpServer(host=args.host, port=args.port)
+    vad_enabled = not args.disable_vad
     logger.info(
-        f"Parakeet ASR service starting on {args.host}:{args.port} (model={args.model_name})"
+        f"Parakeet ASR service starting on {args.host}:{args.port} (model={args.model_name}, VAD={'enabled' if vad_enabled else 'disabled'})"
     )
     await server.run(
         handler_factory=lambda *_args, **_kwargs: ParakeetTranscriptionHandler(
-            *_args, model_name=args.model_name, **_kwargs
+            *_args, model_name=args.model_name, vad_enabled=vad_enabled, **_kwargs
         )
     )
 

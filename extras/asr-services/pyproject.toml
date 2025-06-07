@@ -29,7 +29,7 @@ conflicts = [
 
 [tool.uv.sources]
 useful-moonshine-onnx = { git = "https://github.com/usefulsensors/moonshine.git", subdirectory = "moonshine-onnx" }
-easy-audio-interfaces = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git" }
+easy-audio-interfaces = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git", branch="upgrade-to-wyoming" }
 
 [dependency-groups]
 demo = [
