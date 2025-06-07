@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 import ollama  # Ollama python client
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mem0 import Memory  # mem0 core
@@ -40,6 +40,8 @@ MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
 mongo_client = AsyncIOMotorClient(MONGODB_URI)  # async + pooled
 db = mongo_client.get_default_database("friend-lite")  # "friend-lite"
 chunks_col = db["audio_chunks"]  # collection handle
+users_col = db["users"]  # collection handle
+
 
 # Client State Management
 # ----------------------
@@ -442,12 +444,13 @@ app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 
 
 @app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket):
+async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
     await ws.accept()
 
-    client_id = f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(f"Client {client_id}: WebSocket connection accepted.")
+    # Use user_id if provided, otherwise generate a random client_id
+    client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
+    audio_logger.info(f"Client {client_id}: WebSocket connection accepted (user_id: {user_id}).")
     decoder = OmiOpusDecoder()
     
     # Create client state and start processing
@@ -479,11 +482,13 @@ async def ws_endpoint(ws: WebSocket):
         await cleanup_client_state(client_id)
 
 @app.websocket("/ws_pcm")
-async def ws_endpoint_pcm(ws: WebSocket):
+async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
     """Accepts WebSocket connections, processes PCM audio per-client."""
     await ws.accept()
-    client_id = f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(f"Client {client_id}: WebSocket connection accepted.")
+    
+    # Use user_id if provided, otherwise generate a random client_id
+    client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
+    audio_logger.info(f"Client {client_id}: WebSocket connection accepted (user_id: {user_id}).")
     
     # Create client state and start processing
     client_state = await create_client_state(client_id)
@@ -528,14 +533,84 @@ async def get_conversations():
             status_code=500, content={"message": "Error fetching conversations"}
         )
 
+@app.get("/api/users")
+async def get_users():
+    """
+    Retrieves all users from the database.
+    """
+    try:
+        cursor = users_col.find()
+        users = []
+        for doc in await cursor.to_list(length=100):
+            doc["_id"] = str(doc["_id"])  # Convert ObjectId to string
+            users.append(doc)
+        return JSONResponse(content=users)
+    except Exception as e:
+        audio_logger.error(f"Error fetching users: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"message": "Error fetching users"}
+        )
+
+@app.post("/api/create_user")
+async def create_user(user_id: str):
+    """
+    Creates a new user in the database.
+    """
+    try:
+        # Check if user already exists
+        existing_user = await users_col.find_one({"user_id": user_id})
+        if existing_user:
+            return JSONResponse(
+                status_code=409, 
+                content={"message": f"User {user_id} already exists"}
+            )
+        
+        # Create new user
+        result = await users_col.insert_one({"user_id": user_id})
+        return JSONResponse(
+            status_code=201,
+            content={"message": f"User {user_id} created successfully", "id": str(result.inserted_id)}
+        )
+    except Exception as e:
+        audio_logger.error(f"Error creating user: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"message": "Error creating user"}
+        )
+
+@app.delete("/api/delete_user")
+async def delete_user(user_id: str):
+    """
+    Deletes a user from the database.
+    """
+    try:
+        result = await users_col.delete_one({"user_id": user_id})
+        if result.deleted_count == 0:
+            return JSONResponse(
+                status_code=404,
+                content={"message": f"User {user_id} not found"}
+            )
+        
+        return JSONResponse(
+            status_code=200,
+            content={"message": f"User {user_id} deleted successfully"}
+        )
+    except Exception as e:
+        audio_logger.error(f"Error deleting user: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"message": "Error deleting user"}
+        )
 
 @app.get("/api/memories")
-async def get_memories():
+async def get_memories(user_id: str):
     """
     Retrieves all memories from the mem0 store.
     """
     try:
-        all_memories = memory.get_all()
+        all_memories = memory.get_all(
+            user_id=user_id,
+        )
         return JSONResponse(content=all_memories)
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)

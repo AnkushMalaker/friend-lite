@@ -1,11 +1,11 @@
 [project]
-name = "simple-omi-backend"
+name = "advanced-omi-backend"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "easy-audio-interfaces[local-audio]",
+    "easy-audio-interfaces",
     "fastapi>=0.115.12",
     "mem0ai>=0.1.97",
     "motor>=3.7.1",

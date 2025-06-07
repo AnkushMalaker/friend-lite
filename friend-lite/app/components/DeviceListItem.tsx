@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { OmiDevice } from '@omiai/omi-react-native';
+import { OmiDevice } from 'friend-lite-react-native';
 
 interface DeviceListItemProps {
   device: OmiDevice;
