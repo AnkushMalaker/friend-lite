@@ -308,23 +308,25 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="opus_io",
 )
 
-# Process pool executor for heavy memory operations
-_MEMORY_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
-    max_workers=2,  # Keep this low to avoid overwhelming the system
-)
+# Global variable to hold the memory instance in each worker process
+_process_memory = None
 
-memory = Memory.from_config(MEM0_CONFIG)
-ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
-
+def _init_process_memory():
+    """Initialize memory instance once per worker process."""
+    global _process_memory
+    if _process_memory is None:
+        _process_memory = Memory.from_config(MEM0_CONFIG)
+    return _process_memory
 
 def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bool:
     """
     Function to add memory in a separate process.
     This function will be pickled and run in a process pool.
+    Uses a persistent memory instance per process.
     """
     try:
-        # Create a new memory instance in this process
-        process_memory = Memory.from_config(MEM0_CONFIG)
+        # Get or create the persistent memory instance for this process
+        process_memory = _init_process_memory()
         process_memory.add(
             transcript,
             user_id=client_id,
@@ -339,6 +341,15 @@ def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bo
         import sys
         print(f"Error in memory process for {audio_uuid}: {e}", file=sys.stderr)
         return False
+
+# Process pool executor with initializer for heavy memory operations
+_MEMORY_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
+    max_workers=2,  # Keep this low to avoid overwhelming the system
+    initializer=_init_process_memory,  # Initialize memory once per process
+)
+
+memory = Memory.from_config(MEM0_CONFIG)
+ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
