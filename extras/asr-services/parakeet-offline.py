@@ -9,6 +9,7 @@ pip install numpy silero-vad nemo_toolkit[asr] soundfile wyoming easy_audio_inte
 
 import argparse
 import asyncio
+import csv
 import logging
 import os
 import tempfile
@@ -17,7 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Sequence, cast
 import torch
-
+from typing import AsyncGenerator
 import nemo.collections.asr as nemo_asr
 import numpy as np
 import soundfile as sf
@@ -29,6 +30,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +67,7 @@ class SharedTranscriber:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
                 tmpfile_name = tmpfile.name
             
+            logger.info(f"Writing to file: {tmpfile_name}")
             sf.write(tmpfile_name, pcm, self.rate)
             
             with torch.no_grad():
@@ -111,6 +114,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 model=self._vad_model,
                 sampling_rate=SAMPLING_RATE,
                 threshold=0.4,  # VAD sensitivity
+                min_silence_duration_ms=1000,  # Minimum silence duration in ms
             )
         else:
             self._vad_model = None
@@ -123,13 +127,47 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         # Non-VAD mode: collect everything from AudioStart to AudioStop
         self._collecting_audio = False
 
+        # VAD sample buffering - ensure exactly 512 samples per VAD call
+        self._vad_sample_buffer = np.array([], dtype=np.float32)
+        self._vad_buffer_size = CHUNK_SAMPLES
+
         self._debug_dir = Path("debug")
         self._debug_dir.mkdir(parents=True, exist_ok=True)
         
+        # Results directory for CSV logging
+        self._results_dir = Path("results")
+        self._results_dir.mkdir(parents=True, exist_ok=True)
+        
+        # CSV file for logging transcriptions
+        self._csv_file = self._results_dir / "transcription_results.csv"
+        self._csv_lock = asyncio.Lock()
+        self._init_csv_file()
+        
         # Debug file handling
         self._recording_debug_handle = None
+        self._current_debug_file_path = None
         self._DEBUG_LENGTH = 30  # seconds
         self._cur_seg_duration = 0
+        self._resized_chunks = []
+
+    def _init_csv_file(self) -> None:
+        """Initialize CSV file with headers if it doesn't exist."""
+        if not self._csv_file.exists():
+            with open(self._csv_file, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['timestamp', 'audio_path', 'transcription', 'ground_truth'])
+                logger.info(f"Created CSV file: {self._csv_file}")
+
+    async def _log_to_csv(self, audio_path: str, transcription: str) -> None:
+        """Log transcription result to CSV file."""
+        async with self._csv_lock:
+            try:
+                with open(self._csv_file, 'a', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow([time.time(), audio_path, transcription, ''])  # Empty ground_truth
+                    logger.info(f"Logged to CSV: {audio_path} -> '{transcription}'")
+            except Exception as e:
+                logger.error(f"Error writing to CSV: {e}")
 
     def soft_reset(self) -> None:
         """Reset only the iterator's state, not the underlying model."""
@@ -137,8 +175,10 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             self._vad_iterator.triggered = False
             self._vad_iterator.temp_end = 0
             self._vad_iterator.current_sample = 0
+            # Clear the VAD sample buffer
+            self._vad_sample_buffer = np.array([], dtype=np.float32)
             logger.debug("VAD iterator soft reset.")
-
+    
     def _chunk_to_numpy(self, chunk: AudioChunk) -> np.ndarray:
         if chunk.width == 2:
             logger.debug(f"Converting chunk to int16")
@@ -153,8 +193,9 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         """Logic to create debug files"""
         if self._recording_debug_handle is None:
             self._cur_seg_duration = 0
+            self._current_debug_file_path = self._debug_dir / f"{time.time()}.wav"
             self._recording_debug_handle = LocalFileSink(
-                file_path=self._debug_dir / f"{time.time()}.wav",
+                file_path=self._current_debug_file_path,
                 sample_rate=event.rate,
                 channels=event.channels,
                 sample_width=event.width,
@@ -167,70 +208,24 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         if self._cur_seg_duration > self._DEBUG_LENGTH:
             await self._recording_debug_handle.close()
             self._recording_debug_handle = None
+            self._current_debug_file_path = None
 
     async def _process_audio_chunk(self, chunk: AudioChunk) -> None:
         """Process audio chunk with VAD and transcription."""
-        # Write debug file
-        await self._write_debug_file(chunk)
-        
         if self._vad_enabled:
             # VAD-enabled mode: use VAD to detect speech segments
             await self._process_with_vad(chunk)
         else:
             # VAD-disabled mode: collect all audio from start to stop
+            await self._write_debug_file(chunk)
             await self._process_without_vad(chunk)
 
     async def _process_with_vad(self, chunk: AudioChunk) -> None:
-        """Process audio chunk using VAD for speech detection."""
+        """Process audio chunk using VAD for speech detection with 512-sample buffering."""
         chunk_array = self._chunk_to_numpy(chunk)
         
-        # Run VAD on this chunk
-        try:
-            assert self._vad_iterator is not None
-            vad_event = self._vad_iterator(chunk_array)
-            logger.debug(f"VAD event: {vad_event}")
-        except Exception as e:
-            logger.error(f"Error during VAD: {e}")
-            return
-
-        if vad_event:
-            logger.info(f"VAD event: {vad_event}")
-            
-            if "start" in vad_event and not self._recording:
-                # Start recording - initialize buffer with current chunk
-                self._recording = True
-                self._speech_buf.append(chunk)
-                logger.info("Started recording speech")
-
-            elif "end" in vad_event and self._recording:
-                # End recording - add final chunk and transcribe
-                self._speech_buf.append(chunk)
-                self._recording = False
-                
-                speech_duration = sum(chunk.seconds for chunk in self._speech_buf)
-                logger.info(f"VAD end detected. Speech duration: {speech_duration:.2f}s")
-                
-                if speech_duration >= MIN_SPEECH_SECS:
-                    await self._transcribe_and_send(self._speech_buf)
-                else:
-                    logger.info("Speech too short for transcription. Discarding.")
-                
-                # Clear buffer and reset
-                self._speech_buf.clear()
-                self.soft_reset()
-                return
-        
-        # If we're recording, accumulate the chunk
-        if self._recording:
-            self._speech_buf.append(chunk)
-            
-            # Safety check: if speech buffer gets too long, force transcription
-            if len(self._speech_buf) >= MAX_SPEECH_SECS * SAMPLING_RATE:
-                logger.warning(f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription.")
-                await self._transcribe_and_send(self._speech_buf)
-                self._speech_buf.clear()
-                self._recording = False
-                self.soft_reset()
+        # Use buffered VAD processing to ensure exactly 512 samples per VAD call
+        await self._buffer_and_process_vad(chunk, chunk_array)
 
     async def _process_without_vad(self, chunk: AudioChunk) -> None:
         """Process audio chunk without VAD - collect everything from start to stop."""
@@ -248,6 +243,16 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         """Transcribe speech and send Wyoming transcript event."""
         try:
             # Run blocking ASR call using the shared transcriber
+            logger.info(f"audio_chunk_details:\
+                   audio length: {len(speech[0].audio)}\
+                   audio rate: {speech[0].rate}\
+                   audio channels: {speech[0].channels}\
+                   audio width: {speech[0].width}\
+                   audio samples: {speech[0].samples}\
+                   audio seconds: {speech[0].seconds}\
+                   total samples: {sum(chunk.samples for chunk in speech)}\
+                   total chunks: {len(speech)}\
+                   ")
             speech_array = np.concatenate([self._chunk_to_numpy(chunk) for chunk in speech])
             text = await self._transcriber.transcribe_async(speech_array)
             
@@ -256,6 +261,21 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 return
 
             logger.info(f"Transcription result: '{text}'")
+
+            # Log to CSV if we have a current debug file path
+            if self._current_debug_file_path:
+                await self._log_to_csv(str(self._current_debug_file_path), text)
+            else:
+                # Create a temporary audio file for this transcription segment
+                temp_audio_path = self._debug_dir / f"transcription_{time.time()}.wav"
+                try:
+                    # Save the audio segment for CSV logging
+                    sf.write(temp_audio_path, speech_array, SAMPLING_RATE)
+                    await self._log_to_csv(str(temp_audio_path), text)
+                except Exception as e:
+                    logger.error(f"Error saving temporary audio file: {e}")
+                    # Log with timestamp as fallback
+                    await self._log_to_csv(f"temp_audio_{time.time()}", text)
 
             # Send Wyoming transcript event
             transcript = Transcript(text=text)
@@ -294,6 +314,9 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             logger.info("Audio stream stopped")
             
             if self._vad_enabled:
+                # Flush any remaining samples in the VAD buffer
+                await self._flush_vad_buffer()
+                
                 # VAD mode: transcribe any remaining speech if we were recording
                 if self._recording and len(self._speech_buf) >= MIN_SPEECH_SECS * SAMPLING_RATE:
                     logger.info("Audio stream ended. Transcribing remaining speech.")
@@ -350,6 +373,93 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         """Clean up debug file handle on disconnect"""
         if self._recording_debug_handle is not None:
             await self._recording_debug_handle.close()
+
+    async def _process_vad_samples(self, samples: np.ndarray) -> None:
+        """Process exactly 512 samples with VAD iterator."""
+        if len(samples) != self._vad_buffer_size:
+            logger.warning(f"Expected {self._vad_buffer_size} samples, got {len(samples)}")
+            return
+            
+        try:
+            assert self._vad_iterator is not None
+            vad_event = self._vad_iterator(samples)
+            logger.debug(f"VAD event: {vad_event}")
+        except Exception as e:
+            logger.error(f"Error during VAD: {e}")
+            return
+
+        if vad_event:
+            logger.info(f"VAD event: {vad_event}")
+            
+            if "start" in vad_event and not self._recording:
+                # Start recording
+                self._recording = True
+                logger.info("Started recording speech")
+
+            elif "end" in vad_event and self._recording:
+                # End recording and transcribe
+                self._recording = False
+                
+                speech_duration = sum(chunk.seconds for chunk in self._speech_buf)
+                logger.info(f"VAD end detected. Speech duration: {speech_duration:.2f}s")
+                
+                if speech_duration >= MIN_SPEECH_SECS:
+                    await self._transcribe_and_send(self._speech_buf)
+                else:
+                    logger.info("Speech too short for transcription. Discarding.")
+                
+                # Clear buffer and reset
+                self._speech_buf.clear()
+                self.soft_reset()
+
+    async def _buffer_and_process_vad(self, chunk: AudioChunk, chunk_array: np.ndarray) -> None:
+        """Buffer audio samples and process VAD with exactly 512 samples at a time."""
+        # Add new samples to buffer
+        self._vad_sample_buffer = np.concatenate([self._vad_sample_buffer, chunk_array])
+        
+        # Process complete 512-sample chunks
+        while len(self._vad_sample_buffer) >= self._vad_buffer_size:
+            # Extract exactly 512 samples
+            samples_to_process = self._vad_sample_buffer[:self._vad_buffer_size]
+            
+            # Process with VAD
+            await self._write_debug_file(chunk)
+            await self._process_vad_samples(samples_to_process)
+            
+            # If we're recording, accumulate the original chunk
+            # Note: We add the chunk, not the 512 samples, to maintain chunk boundaries
+            if self._recording:
+                self._speech_buf.append(chunk)
+                
+                # Safety check: if speech buffer gets too long, force transcription
+                if len(self._speech_buf) >= MAX_SPEECH_SECS * SAMPLING_RATE:
+                    logger.warning(f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription.")
+                    await self._transcribe_and_send(self._speech_buf)
+                    self._speech_buf.clear()
+                    self._recording = False
+                    self.soft_reset()
+            
+            # Remove processed samples from buffer
+            self._vad_sample_buffer = self._vad_sample_buffer[self._vad_buffer_size:]
+
+    async def _flush_vad_buffer(self) -> None:
+        """Process any remaining samples in the VAD buffer at stream end."""
+        if len(self._vad_sample_buffer) > 0:
+            logger.debug(f"Flushing {len(self._vad_sample_buffer)} remaining samples from VAD buffer")
+            
+            # Pad with zeros to reach 512 samples if needed
+            if len(self._vad_sample_buffer) < self._vad_buffer_size:
+                padding_needed = self._vad_buffer_size - len(self._vad_sample_buffer)
+                self._vad_sample_buffer = np.concatenate([
+                    self._vad_sample_buffer, 
+                    np.zeros(padding_needed, dtype=np.float32)
+                ])
+            
+            # Process the final chunk
+            await self._process_vad_samples(self._vad_sample_buffer)
+            
+            # Clear the buffer
+            self._vad_sample_buffer = np.array([], dtype=np.float32)
 
 # --------------------------------------------------------------------------- #
 async def main() -> None:
