@@ -64,6 +64,10 @@ class ClientState:
         # Per-client transcription manager
         self.transcription_manager: Optional[TranscriptionManager] = None
         
+        # Conversation timeout tracking
+        self.last_transcript_time: Optional[float] = None
+        self.conversation_start_time: float = time.time()
+        
         # Tasks for this client
         self.saver_task: Optional[asyncio.Task] = None
         self.transcription_task: Optional[asyncio.Task] = None
@@ -109,6 +113,28 @@ class ClientState:
             
         audio_logger.info(f"Client {self.client_id} disconnected and cleaned up")
     
+    def _should_start_new_conversation(self) -> bool:
+        """Check if we should start a new conversation based on timeout."""
+        if self.last_transcript_time is None:
+            return False  # No transcript yet, keep current conversation
+        
+        current_time = time.time()
+        time_since_last_transcript = current_time - self.last_transcript_time
+        timeout_seconds = NEW_CONVERSATION_TIMEOUT_MINUTES * 60
+        
+        return time_since_last_transcript > timeout_seconds
+    
+    async def start_new_conversation(self):
+        """Start a new conversation by closing current file sink and resetting state."""
+        if self.file_sink:
+            await self.file_sink.close()
+            self.file_sink = None
+            audio_logger.info(f"Client {self.client_id}: Started new conversation due to {NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout")
+        
+        self.current_audio_uuid = None
+        self.conversation_start_time = time.time()
+        self.last_transcript_time = None
+    
     async def _audio_saver(self):
         """Per-client audio saver consumer."""
         try:
@@ -117,6 +143,10 @@ class ClientState:
                 
                 if audio_chunk is None:  # Disconnect signal
                     break
+                
+                # Check if we should start a new conversation due to timeout
+                if self._should_start_new_conversation():
+                    await self.start_new_conversation()
                     
                 if self.file_sink is None:
                     # Create new file sink for this client
@@ -239,15 +269,52 @@ class ChunkRepo:
             "audio_path": audio_path,
             "client_id": client_id,
             "timestamp": timestamp,
-            "transcription": transcript,
-            "speakers_identified": speakers_identified,
+            "transcript": transcript or [],  # List of conversation segments
+            "speakers_identified": speakers_identified or [],  # List of identified speakers
         }
         await self.col.insert_one(doc)
 
-    async def add_transcript(self, audio_uuid, transcript):
+    async def add_transcript_segment(self, audio_uuid, transcript_segment):
+        """Add a single transcript segment to the conversation."""
         await self.col.update_one(
-            {"audio_uuid": audio_uuid}, {"$set": {"transcription": transcript}}
+            {"audio_uuid": audio_uuid}, 
+            {"$push": {"transcript": transcript_segment}}
         )
+    
+    async def add_speaker(self, audio_uuid, speaker_id):
+        """Add a speaker to the speakers_identified list if not already present."""
+        await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {"$addToSet": {"speakers_identified": speaker_id}}
+        )
+    
+    async def update_transcript(self, audio_uuid, full_transcript):
+        """Update the entire transcript list (for compatibility)."""
+        await self.col.update_one(
+            {"audio_uuid": audio_uuid}, 
+            {"$set": {"transcript": full_transcript}}
+        )
+    
+    async def update_segment_timing(self, audio_uuid, segment_index, start_time, end_time):
+        """Update timing information for a specific transcript segment."""
+        await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {
+                "$set": {
+                    f"transcript.{segment_index}.start": start_time,
+                    f"transcript.{segment_index}.end": end_time
+                }
+            }
+        )
+    
+    async def update_segment_speaker(self, audio_uuid, segment_index, speaker_id):
+        """Update speaker information for a specific transcript segment."""
+        await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {"$set": {f"transcript.{segment_index}.speaker": speaker_id}}
+        )
+        # Also add to speakers_identified if not already present
+        await self.add_speaker(audio_uuid, speaker_id)
 
 
 chunk_repo = ChunkRepo(chunks_col)  # Instantiate ChunkRepo
@@ -262,6 +329,9 @@ OMI_CHANNELS = 1
 OMI_SAMPLE_WIDTH = 2  # bytes (16‑bit)
 SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
+
+# New conversation timeout configuration
+NEW_CONVERSATION_TIMEOUT_MINUTES = int(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "10"))  # Default 10 minutes
 
 # Directory where WAV chunks are written
 CHUNK_DIR = Path("./audio_chunks")
@@ -469,17 +539,33 @@ class TranscriptionManager:
                         
                     if Transcript.is_type(event.type):
                         transcript_obj = Transcript.from_event(event)
-                        transcript = transcript_obj.text.strip()
-                        if transcript:
-                            audio_logger.info(f"Transcript for {audio_uuid}: {transcript}")
-                            # Store transcript in DB immediately (fast)
-                            await chunk_repo.add_transcript(audio_uuid, transcript)
-                            audio_logger.info(f"Added transcript for {audio_uuid} to DB.")
+                        transcript_text = transcript_obj.text.strip()
+                        if transcript_text:
+                            audio_logger.info(f"Transcript for {audio_uuid}: {transcript_text}")
+                            
+                            # Create transcript segment with new format
+                            # For now, we'll use a default speaker since ASR doesn't provide speaker info
+                            # This can be enhanced later with speaker diarization
+                            transcript_segment = {
+                                "speaker": f"speaker_{client_id}",  # Default speaker ID
+                                "text": transcript_text,
+                                "start": 0.0,  # Will need timing info from ASR for accurate values
+                                "end": 0.0     # Will need timing info from ASR for accurate values
+                            }
+                            
+                            # Store transcript segment in DB immediately (fast)
+                            await chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
+                            await chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
+                            audio_logger.info(f"Added transcript segment for {audio_uuid} to DB.")
+                            
+                            # Update transcript time for conversation timeout tracking
+                            if client_id in active_clients:
+                                active_clients[client_id].last_transcript_time = time.time()
                             
                             # Queue memory processing (slow, non-blocking)
                             # Find the client state to queue the memory processing
                             if client_id in active_clients:
-                                await active_clients[client_id].memory_queue.put((transcript, client_id, audio_uuid))
+                                await active_clients[client_id].memory_queue.put((transcript_text, client_id, audio_uuid))
                             else:
                                 audio_logger.warning(f"Client {client_id} not found for memory processing")
             except asyncio.TimeoutError:
@@ -615,7 +701,9 @@ async def get_conversations():
     """
     try:
         cursor = chunks_col.find(
-            {"transcription": {"$ne": None}}, sort=[("timestamp", -1)], limit=20
+            {"transcript": {"$exists": True, "$not": {"$size": 0}}}, 
+            sort=[("timestamp", -1)], 
+            limit=20
         )
         conversations = []
         for doc in await cursor.to_list(length=20):
@@ -674,21 +762,65 @@ async def create_user(user_id: str):
         )
 
 @app.delete("/api/delete_user")
-async def delete_user(user_id: str):
+async def delete_user(user_id: str, delete_conversations: bool = False, delete_memories: bool = False):
     """
     Deletes a user from the database.
+    Optionally deletes conversations and/or memories based on parameters.
     """
     try:
-        result = await users_col.delete_one({"user_id": user_id})
-        if result.deleted_count == 0:
+        # Check if user exists
+        existing_user = await users_col.find_one({"user_id": user_id})
+        if not existing_user:
             return JSONResponse(
                 status_code=404,
                 content={"message": f"User {user_id} not found"}
             )
         
+        deleted_data = {}
+        
+        # Delete user from users collection
+        user_result = await users_col.delete_one({"user_id": user_id})
+        deleted_data["user_deleted"] = user_result.deleted_count > 0
+        
+        if delete_conversations:
+            # Delete all conversations (audio chunks) for this user
+            conversations_result = await chunks_col.delete_many({"client_id": user_id})
+            deleted_data["conversations_deleted"] = conversations_result.deleted_count
+        
+        if delete_memories:
+            # Delete all memories for this user from mem0
+            try:
+                # Get all memories for the user first to count them
+                user_memories = memory.get_all(user_id=user_id)
+                memory_count = len(user_memories) if user_memories else 0
+                
+                # Delete all memories for this user using the proper mem0 API
+                if memory_count > 0:
+                    memory.delete_all(user_id=user_id)
+                
+                deleted_data["memories_deleted"] = memory_count
+            except Exception as mem_error:
+                audio_logger.error(f"Error deleting memories for user {user_id}: {mem_error}")
+                deleted_data["memories_deleted"] = 0
+                deleted_data["memory_deletion_error"] = str(mem_error)
+        
+        # Build message based on what was deleted
+        message = f"User {user_id} deleted successfully"
+        deleted_items = []
+        if delete_conversations and deleted_data.get('conversations_deleted', 0) > 0:
+            deleted_items.append(f"{deleted_data['conversations_deleted']} conversations")
+        if delete_memories and deleted_data.get('memories_deleted', 0) > 0:
+            deleted_items.append(f"{deleted_data['memories_deleted']} memories")
+        
+        if deleted_items:
+            message += f" along with {' and '.join(deleted_items)}"
+        
         return JSONResponse(
             status_code=200,
-            content={"message": f"User {user_id} deleted successfully"}
+            content={
+                "message": message,
+                "deleted_data": deleted_data
+            }
         )
     except Exception as e:
         audio_logger.error(f"Error deleting user: {e}", exc_info=True)
@@ -713,15 +845,74 @@ async def get_memories(user_id: str):
             status_code=500, content={"message": "Error fetching memories"}
         )
 
+@app.post("/api/conversations/{audio_uuid}/speakers")
+async def add_speaker_to_conversation(audio_uuid: str, speaker_id: str):
+    """
+    Add a speaker to the speakers_identified list for a conversation.
+    """
+    try:
+        await chunk_repo.add_speaker(audio_uuid, speaker_id)
+        return JSONResponse(
+            content={"message": f"Speaker {speaker_id} added to conversation {audio_uuid}"}
+        )
+    except Exception as e:
+        audio_logger.error(f"Error adding speaker: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"message": "Error adding speaker"}
+        )
+
+@app.put("/api/conversations/{audio_uuid}/transcript/{segment_index}")
+async def update_transcript_segment(
+    audio_uuid: str, 
+    segment_index: int,
+    speaker_id: Optional[str] = None,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None
+):
+    """
+    Update a specific transcript segment with timing or speaker information.
+    """
+    try:
+        if speaker_id:
+            await chunk_repo.update_segment_speaker(audio_uuid, segment_index, speaker_id)
+        
+        if start_time is not None or end_time is not None:
+            # Get current segment to preserve existing values
+            doc = await chunks_col.find_one({"audio_uuid": audio_uuid})
+            if doc and "transcript" in doc and len(doc["transcript"]) > segment_index:
+                current_segment = doc["transcript"][segment_index]
+                new_start = start_time if start_time is not None else current_segment.get("start", 0.0)
+                new_end = end_time if end_time is not None else current_segment.get("end", 0.0)
+                await chunk_repo.update_segment_timing(audio_uuid, segment_index, new_start, new_end)
+        
+        return JSONResponse(
+            content={"message": f"Transcript segment {segment_index} updated for {audio_uuid}"}
+        )
+    except Exception as e:
+        audio_logger.error(f"Error updating transcript segment: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"message": "Error updating transcript segment"}
+        )
+
 @app.get("/health")
 async def health_check():
     """
     Comprehensive health check for all services.
+    Returns detailed status but always returns 200 OK so containers don't restart.
     """
     health_status = {
         "status": "healthy",
+        "timestamp": int(time.time()),
         "services": {},
-        "timestamp": int(time.time())
+        "config": {
+            "mongodb_uri": MONGODB_URI,
+            "ollama_url": OLLAMA_BASE_URL,
+            "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
+            "asr_uri": OFFLINE_ASR_TCP_URI,
+            "chunk_dir": str(CHUNK_DIR),
+            "active_clients": len(active_clients),
+            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES
+        }
     }
     
     overall_healthy = True
@@ -740,35 +931,14 @@ async def health_check():
         }
         overall_healthy = False
     
-    # # Check Qdrant
-    # try:
-    #     async with httpx.AsyncClient() as client:
-    #         response = await client.get(f"http://{QDRANT_BASE_URL}:6333/health", timeout=5.0)
-    #         if response.status_code == 200:
-    #             health_status["services"]["qdrant"] = {
-    #                 "status": "✅ Connected",
-    #                 "healthy": True
-    #             }
-    #         else:
-    #             health_status["services"]["qdrant"] = {
-    #                 "status": f"❌ HTTP {response.status_code}",
-    #                 "healthy": False
-    #             }
-    #             overall_healthy = False
-    # except Exception as e:
-    #     health_status["services"]["qdrant"] = {
-    #         "status": f"❌ Connection Failed: {str(e)}",
-    #         "healthy": False
-    #     }
-    #     overall_healthy = False
-    
     # Check Ollama
     try:
-        response = ollama_client.list()
+        models = ollama_client.list()
+        model_count = len(models.get('models', []))
         health_status["services"]["ollama"] = {
             "status": "✅ Connected",
             "healthy": True,
-            "models": len(response.get("models", []))
+            "models": model_count
         }
     except Exception as e:
         health_status["services"]["ollama"] = {
@@ -777,10 +947,10 @@ async def health_check():
         }
         overall_healthy = False
     
-    # Check Mem0
+    # Check mem0
     try:
-        # Test mem0 by trying to get memories for a test user (this will work even if user doesn't exist)
-        test_memories = memory.get_all(user_id="health_check_test_user")
+        # Simple check - try to initialize memory (this should be fast)
+        test_memory = Memory.from_config(MEM0_CONFIG)
         health_status["services"]["mem0"] = {
             "status": "✅ Connected",
             "healthy": True
@@ -792,17 +962,13 @@ async def health_check():
         }
         overall_healthy = False
     
-    # Check ASR Service
+    # Check ASR service
     try:
-        # Quick connection test to ASR service
         test_client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
         await test_client.connect()
-        await test_client.write_event(Describe().event())
-        text = await test_client.read_event()
-        print(text)
         await test_client.disconnect()
         health_status["services"]["asr"] = {
-            "status": f"✅ Connected: {text}",
+            "status": "✅ Connected",
             "healthy": True,
             "uri": OFFLINE_ASR_TCP_URI
         }
@@ -815,21 +981,19 @@ async def health_check():
         overall_healthy = False
     
     # Set overall status
-    health_status["status"] = "healthy" if overall_healthy else "unhealthy"
     health_status["overall_healthy"] = overall_healthy
+    if not overall_healthy:
+        health_status["status"] = "unhealthy"
     
-    # Add configuration info
-    health_status["config"] = {
-        "mongodb_uri": MONGODB_URI,
-        "ollama_url": OLLAMA_BASE_URL,
-        "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
-        "asr_uri": OFFLINE_ASR_TCP_URI,
-        "chunk_dir": str(CHUNK_DIR),
-        "active_clients": len(active_clients)
-    }
-    
-    status_code = 200 if overall_healthy else 503
-    return JSONResponse(content=health_status, status_code=status_code)
+    return JSONResponse(content=health_status, status_code=200)
+
+@app.get("/readiness")
+async def readiness_check():
+    """
+    Simple readiness check for container orchestration.
+    Returns 200 if the API server is ready to accept requests.
+    """
+    return JSONResponse(content={"status": "ready", "timestamp": int(time.time())}, status_code=200)
 
 
 ###############################################################################

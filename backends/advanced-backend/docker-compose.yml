@@ -12,7 +12,16 @@ services:
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_started
+      mongo:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
   
   streamlit:
     build:
@@ -22,10 +31,14 @@ services:
       - "8501:8501"
     environment:
       - BACKEND_API_URL=http://friend-backend:8000
+      - BACKEND_PUBLIC_URL=http://localhost:8000
     depends_on:
-      - friend-backend
-      - mongo
-      - qdrant
+      friend-backend:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      qdrant:
+        condition: service_started
     volumes:
       - ./webui:/app
     
