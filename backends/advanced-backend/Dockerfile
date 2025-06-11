@@ -6,6 +6,7 @@ RUN apt-get update && \
     build-essential \
     libsndfile1 \
     git \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
