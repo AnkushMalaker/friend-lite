@@ -10,10 +10,6 @@
 """
 from __future__ import annotations
 
-###############################################################################
-# IMPORTS & SETUP
-###############################################################################
-
 import asyncio
 import concurrent.futures
 import logging
@@ -21,8 +17,8 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from functools import partial
+from pathlib import Path
 from typing import Optional, Tuple
 
 import ollama  # Ollama python client
@@ -39,6 +35,10 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe
 
+###############################################################################
+# SETUP
+###############################################################################
+
 # Load environment variables first
 load_dotenv()
 
@@ -50,6 +50,8 @@ if not os.getenv("MEM0_TELEMETRY"):
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 audio_logger = logging.getLogger("audio_processing")
+
+import speaker_recognition
 
 ###############################################################################
 # CONFIGURATION
@@ -203,6 +205,25 @@ _MEMORY_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
     max_workers=2,  # Keep this low to avoid overwhelming the system
     initializer=_init_process_memory,  # Initialize memory once per process
 )
+
+# Speaker recognition queue and worker
+SPKR_QUEUE: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+
+async def speaker_worker():
+    """Background worker for speaker diarization and verification."""
+    while True:
+        try:
+            wav_path, audio_uuid = await SPKR_QUEUE.get()
+                # Run speaker processing directly since it's already async
+            await speaker_recognition.process_file(
+                CHUNK_DIR / wav_path,
+                audio_uuid,
+                chunks_col,
+            )
+        except Exception as e:
+            audio_logger.error("Speaker worker failed: %s", e)
+        finally:
+            SPKR_QUEUE.task_done()
 
 
 class ChunkRepo:
@@ -464,8 +485,18 @@ class ClientState:
     async def start_new_conversation(self):
         """Start a new conversation by closing current file sink and resetting state."""
         if self.file_sink:
+            # Store current audio info before closing
+            current_uuid = self.current_audio_uuid
+            current_path = self.file_sink._file_path.name if hasattr(self.file_sink, '_file_path') else None
+            
             await self.file_sink.close()
             self.file_sink = None
+            
+            # Queue for speaker processing if we have a completed file
+            if current_uuid and current_path:
+                await SPKR_QUEUE.put((current_path, current_uuid))
+                audio_logger.info(f"Queued {current_path} for speaker processing")
+            
             audio_logger.info(f"Client {self.client_id}: Started new conversation due to {NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout")
         
         self.current_audio_uuid = None
@@ -515,8 +546,17 @@ class ClientState:
             audio_logger.error(f"Error in audio saver for client {self.client_id}: {e}", exc_info=True)
         finally:
             if self.file_sink:
+                # Store current audio info before closing
+                current_uuid = self.current_audio_uuid
+                current_path = self.file_sink._file_path.name if hasattr(self.file_sink, '_file_path') else None
+                
                 await self.file_sink.close()
                 self.file_sink = None
+                
+                # Queue for speaker processing if we have a completed file
+                if current_uuid and current_path:
+                    await SPKR_QUEUE.put((current_path, current_uuid))
+                    audio_logger.info(f"Queued {current_path} for speaker processing")
     
     async def _transcription_processor(self):
         """Per-client transcription processor."""
@@ -610,6 +650,10 @@ async def lifespan(app: FastAPI):
     """Manage application lifespan events."""
     # Startup
     audio_logger.info("Starting application...")
+    
+    asyncio.create_task(speaker_worker(), name="speaker-worker")
+    audio_logger.info("Speaker recognition worker started")
+        
     audio_logger.info("Application ready - clients will have individual processing pipelines.")
 
     try:
