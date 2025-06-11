@@ -12,6 +12,8 @@ import {
   getLastConnectedDeviceId,
   saveWebSocketUrl,
   getWebSocketUrl,
+  saveUserId,
+  getUserId,
 } from './utils/storage';
 import { useAudioListener } from './hooks/useAudioListener';
 import { useAudioStreamer } from './hooks/useAudioStreamer';
@@ -36,6 +38,9 @@ export default function App() {
 
   // State for WebSocket URL for custom audio streaming
   const [webSocketUrl, setWebSocketUrl] = useState<string>('');
+  
+  // State for User ID
+  const [userId, setUserId] = useState<string>('');
   
   // Bluetooth Management Hook
   const {
@@ -125,6 +130,12 @@ export default function App() {
       if (storedWsUrl) {
         console.log('[App.tsx] Loaded WebSocket URL from storage:', storedWsUrl);
         setWebSocketUrl(storedWsUrl);
+      }
+
+      const storedUserId = await getUserId();
+      if (storedUserId) {
+        console.log('[App.tsx] Loaded User ID from storage:', storedUserId);
+        setUserId(storedUserId);
       }
     };
     loadSettings();
@@ -218,8 +229,18 @@ export default function App() {
     }
 
     try {
+      // Modify WebSocket URL to include user_id if provided
+      let finalWebSocketUrl = webSocketUrl;
+      if (userId && userId.trim() !== '') {
+        const separator = webSocketUrl.includes('?') ? '&' : '?';
+        finalWebSocketUrl = `${webSocketUrl}${separator}user_id=${encodeURIComponent(userId.trim())}`;
+        console.log('[App.tsx] Using WebSocket URL with user_id:', finalWebSocketUrl);
+      } else {
+        console.log('[App.tsx] Using WebSocket URL without user_id:', finalWebSocketUrl);
+      }
+
       // Start custom WebSocket streaming first
-      await audioStreamer.startStreaming(webSocketUrl);
+      await audioStreamer.startStreaming(finalWebSocketUrl);
 
       // Then start OMI audio listener
       await originalStartAudioListener((audioBytes) => {
@@ -234,7 +255,7 @@ export default function App() {
       // Ensure cleanup if one part started but the other failed
       if (audioStreamer.isStreaming) audioStreamer.stopStreaming();
     }
-  }, [originalStartAudioListener, audioStreamer, webSocketUrl, omiConnection, deviceConnection.connectedDeviceId]);
+  }, [originalStartAudioListener, audioStreamer, webSocketUrl, userId, omiConnection, deviceConnection.connectedDeviceId]);
 
   const handleStopAudioListeningAndStreaming = useCallback(async () => {
     console.log('[App.tsx] Stopping audio listening and streaming.');
@@ -290,6 +311,32 @@ export default function App() {
     setWebSocketUrl(url);
     await saveWebSocketUrl(url);
   }, []);
+
+  const handleSetAndSaveUserId = useCallback(async (id: string) => {
+    setUserId(id);
+    await saveUserId(id || null);
+  }, []);
+
+  const fetchUsers = useCallback(async (): Promise<string[]> => {
+    if (!webSocketUrl) {
+      throw new Error('WebSocket URL not set');
+    }
+    
+    // Convert WebSocket URL to HTTP URL for API call
+    const baseUrl = webSocketUrl.replace('ws://', 'http://').replace('wss://', 'https://').split('/ws')[0];
+    
+    try {
+      const response = await fetch(`${baseUrl}/api/users`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      const users = await response.json();
+      return users.map((user: any) => user.user_id);
+    } catch (error) {
+      console.error('[App.tsx] Error fetching users:', error);
+      throw error;
+    }
+  }, [webSocketUrl]);
 
   const handleCancelAutoReconnect = useCallback(async () => {
     console.log('[App.tsx] Cancelling auto-reconnection attempt.');
@@ -469,6 +516,9 @@ export default function App() {
               isAudioStreaming={audioStreamer.isStreaming}
               isConnectingAudioStreamer={audioStreamer.isConnecting}
               audioStreamerError={audioStreamer.error}
+              userId={userId}
+              onSetUserId={handleSetAndSaveUserId}
+              onFetchUsers={fetchUsers}
             />
           )}
         </ScrollView>
