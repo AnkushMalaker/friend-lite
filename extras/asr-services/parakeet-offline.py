@@ -148,7 +148,6 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         self._current_debug_file_path = None
         self._DEBUG_LENGTH = 30  # seconds
         self._cur_seg_duration = 0
-        self._resized_chunks = []
 
     def _init_csv_file(self) -> None:
         """Initialize CSV file with headers if it doesn't exist."""
