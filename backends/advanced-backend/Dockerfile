@@ -7,6 +7,8 @@ RUN apt-get update && \
     libsndfile1 \
     git \
     curl \
+    ffmpeg \
+    libavformat58 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv

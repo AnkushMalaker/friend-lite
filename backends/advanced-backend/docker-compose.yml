@@ -11,6 +11,7 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - HF_TOKEN=${HF_TOKEN}
     depends_on:
       qdrant:
         condition: service_started
@@ -22,6 +23,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
   
   streamlit:
     build:
