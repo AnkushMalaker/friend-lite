@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from datetime import datetime
 
 import pandas as pd
@@ -14,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 # ---- Configuration ---- #
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://192.168.0.110:8000")
+# For browser-accessible URLs (audio files), use localhost instead of Docker service name
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
 
 # ---- Health Check Functions ---- #
 @st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too many requests
@@ -21,7 +24,7 @@ def get_system_health():
     """Get comprehensive system health from backend."""
     try:
         response = requests.get(f"{BACKEND_API_URL}/health", timeout=10)
-        if response.status_code in [200, 503]:  # Both OK and unhealthy responses are valid
+        if response.status_code == 200:  # Backend always returns 200
             return response.json()
         else:
             return {
@@ -50,14 +53,24 @@ def get_system_health():
 
 # ---- Helper Functions ---- #
 def get_data(endpoint: str):
-    """Helper function to get data from the backend API."""
-    try:
-        response = requests.get(f"{BACKEND_API_URL}{endpoint}")
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Could not connect to the backend at `{BACKEND_API_URL}`. Please ensure it's running. Error: {e}")
-        return None
+    """Helper function to get data from the backend API with retry logic."""
+    max_retries = 3
+    base_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(f"{BACKEND_API_URL}{endpoint}")
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"GET {endpoint} attempt {attempt + 1} failed, retrying in {delay}s: {str(e)}")
+                time.sleep(delay)
+                continue
+            else:
+                st.error(f"Could not connect to the backend at `{BACKEND_API_URL}`. Please ensure it's running. Error: {e}")
+                return None
 
 def post_data(endpoint: str, params: dict | None = None):
     """Helper function to post data to the backend API."""
@@ -127,6 +140,7 @@ with st.sidebar:
         
         st.code(f"""
 Backend API: {BACKEND_API_URL}
+Backend Public: {BACKEND_PUBLIC_URL}
 Active Clients: {config.get('active_clients', 'Unknown')}
 MongoDB URI: {config.get('mongodb_uri', 'Unknown')[:30]}...
 Ollama URL: {config.get('ollama_url', 'Unknown')}
@@ -141,7 +155,7 @@ if not health_data.get("overall_healthy", False):
     st.error("⚠️ Some critical services are unavailable. The dashboard may not function properly.")
 
 # ---- Main Content ---- #
-tab_convos, tab_mem, tab_users = st.tabs(["Conversations", "Memories", "User Management"])
+tab_convos, tab_mem, tab_users, tab_manage = st.tabs(["Conversations", "Memories", "User Management", "Conversation Management"])
 
 with tab_convos:
     st.header("Latest Conversations")
@@ -167,12 +181,60 @@ with tab_convos:
                 else:
                     st.write(f"**User ID:**")
                     st.write(f"👤 `{client_id}`")
+                
+                # Show Audio UUID
+                audio_uuid = convo.get("audio_uuid", "N/A")
+                st.write(f"**Audio UUID:**")
+                st.code(audio_uuid, language=None)
+                
+                # Show identified speakers
+                speakers = convo.get("speakers_identified", [])
+                if speakers:
+                    st.write(f"**Speakers:**")
+                    for speaker in speakers:
+                        st.write(f"🎤 `{speaker}`")
+            
             with col2:
-                st.text_area("Transcription", convo.get("transcription", "No transcript available."), height=100, disabled=True, key=f"transcript_{convo['_id']}")
+                # Display conversation transcript with new format
+                transcript = convo.get("transcript", [])
+                if transcript:
+                    st.write("**Conversation:**")
+                    conversation_text = ""
+                    for segment in transcript:
+                        speaker = segment.get("speaker", "Unknown")
+                        text = segment.get("text", "")
+                        start_time = segment.get("start", 0.0)
+                        end_time = segment.get("end", 0.0)
+                        
+                        # Format timing if available
+                        timing_info = ""
+                        if start_time > 0 or end_time > 0:
+                            timing_info = f" [{start_time:.1f}s - {end_time:.1f}s]"
+                        
+                        conversation_text += f"**{speaker}**{timing_info}: {text}\n\n"
+                    
+                    # Display in a scrollable container with max height
+                    st.markdown(
+                        f"""
+                        <div style="
+                            max-height: 300px; 
+                            overflow-y: auto; 
+                            padding: 10px; 
+                            border: 1px solid #ddd; 
+                            border-radius: 5px;
+                            background-color: #f9f9f9;
+                        ">{conversation_text}</div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
+                else:
+                    # Fallback for old format
+                    old_transcript = convo.get("transcription", "No transcript available.")
+                    st.text_area("Transcription", old_transcript, height=150, disabled=True, key=f"transcript_{convo['_id']}")
                 
                 audio_path = convo.get("audio_path")
                 if audio_path:
-                    audio_url = f"{BACKEND_API_URL}/audio/{audio_path}"
+                    audio_url = f"{BACKEND_PUBLIC_URL}/audio/{audio_path}"
                     st.audio(audio_url, format="audio/wav")
 
             st.divider()
@@ -276,20 +338,80 @@ with tab_users:
     if users:
         st.write(f"**Total Users:** {len(users)}")
         
+        # Initialize session state for delete confirmation
+        if 'delete_confirmation' not in st.session_state:
+            st.session_state.delete_confirmation = {}
+        
         # Display users in a nice format
         for user in users:
+            user_id = user.get('user_id', 'Unknown')
+            user_db_id = user.get('_id', 'unknown')
+            
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.write(f"👤 **{user.get('user_id', 'Unknown')}**")
+                st.write(f"👤 **{user_id}**")
                 if '_id' in user:
                     st.caption(f"ID: {user['_id']}")
+            
             with col2:
-                delete_btn = st.button("Delete", key=f"delete_{user.get('_id', 'unknown')}")
-                if delete_btn:
-                    result = delete_data("/api/delete_user", {"user_id": user.get('user_id')})
-                    if result:
-                        st.success(f"User '{user.get('user_id')}' deleted successfully!")
+                # Check if we're in confirmation mode for this user
+                if user_id in st.session_state.delete_confirmation:
+                    # Show confirmation dialog in a container
+                    with st.container():
+                        st.error("⚠️ **Confirm Deletion**")
+                        st.write(f"Delete user **{user_id}** and optionally:")
+                        
+                        # Checkboxes for what to delete
+                        delete_conversations = st.checkbox(
+                            "🗨️ Delete all conversations", 
+                            key=f"conv_{user_db_id}",
+                            help="Permanently delete all audio recordings and transcripts"
+                        )
+                        delete_memories = st.checkbox(
+                            "🧠 Delete all memories", 
+                            key=f"mem_{user_db_id}",
+                            help="Permanently delete all extracted memories from conversations"
+                        )
+                        
+                        # Action buttons
+                        col_cancel, col_confirm = st.columns([1, 1])
+                        
+                        with col_cancel:
+                            if st.button("❌ Cancel", key=f"cancel_{user_db_id}", use_container_width=True, type="secondary"):
+                                del st.session_state.delete_confirmation[user_id]
+                                st.rerun()
+                        
+                        with col_confirm:
+                            if st.button("🗑️ Confirm Delete", key=f"confirm_{user_db_id}", use_container_width=True, type="primary"):
+                                # Build delete parameters
+                                params = {
+                                    "user_id": user_id,
+                                    "delete_conversations": delete_conversations,
+                                    "delete_memories": delete_memories
+                                }
+                                
+                                result = delete_data("/api/delete_user", params)
+                                if result:
+                                    deleted_data = result.get('deleted_data', {})
+                                    message = result.get('message', f"User '{user_id}' deleted")
+                                    st.success(message)
+                                    
+                                    # Show detailed deletion info
+                                    if deleted_data.get('conversations_deleted', 0) > 0 or deleted_data.get('memories_deleted', 0) > 0:
+                                        st.info(f"📊 Deleted: {deleted_data.get('conversations_deleted', 0)} conversations, {deleted_data.get('memories_deleted', 0)} memories")
+                                    
+                                    del st.session_state.delete_confirmation[user_id]
+                                    st.rerun()
+                        
+                        if delete_conversations or delete_memories:
+                            st.caption("⚠️ Selected data will be **permanently deleted** and cannot be recovered!")
+                else:
+                    # Show normal delete button
+                    delete_btn = st.button("🗑️ Delete", key=f"delete_{user_db_id}", type="secondary")
+                    if delete_btn:
+                        st.session_state.delete_confirmation[user_id] = True
                         st.rerun()
+            
             st.divider()
     
     elif users is not None:
@@ -317,6 +439,109 @@ with tab_users:
     st.markdown("""
     - **User IDs** should be unique identifiers (e.g., usernames, email prefixes)
     - Users are automatically created when they connect with audio if they don't exist
-    - Deleting a user will not delete their memories or conversations
+    - **Delete Options:**
+      - **User Account**: Always deleted when you click delete
+      - **🗨️ Conversations**: Check to delete all audio recordings and transcripts
+      - **🧠 Memories**: Check to delete all extracted memories from conversations
+      - Mix and match: You can delete just conversations, just memories, or both
     - Use the 'Memories' tab to view specific user memories
     """)
+
+with tab_manage:
+    st.header("Conversation Management")
+    
+    st.subheader("Add Speaker to Conversation")
+    st.write("Add speakers to conversations even if they haven't spoken yet.")
+    
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        audio_uuid_input = st.text_input("Audio UUID:", placeholder="Enter the audio UUID")
+    with col2:
+        speaker_id_input = st.text_input("Speaker ID:", placeholder="e.g., speaker_1, john_doe")
+    with col3:
+        st.write("")  # Spacer
+        add_speaker_btn = st.button("Add Speaker", key="add_speaker")
+    
+    if add_speaker_btn:
+        if audio_uuid_input.strip() and speaker_id_input.strip():
+            result = post_data(f"/api/conversations/{audio_uuid_input.strip()}/speakers", 
+                             {"speaker_id": speaker_id_input.strip()})
+            if result:
+                st.success(f"Speaker '{speaker_id_input.strip()}' added to conversation!")
+        else:
+            st.error("Please enter both Audio UUID and Speaker ID")
+    
+    st.divider()
+    
+    st.subheader("Update Transcript Segment")
+    st.write("Modify speaker identification or timing information for transcript segments.")
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        update_audio_uuid = st.text_input("Audio UUID:", placeholder="Enter the audio UUID", key="update_uuid")
+        segment_index = st.number_input("Segment Index:", min_value=0, value=0, step=1)
+        new_speaker = st.text_input("New Speaker ID (optional):", placeholder="Leave empty to keep current")
+    
+    with col2:
+        start_time = st.number_input("Start Time (seconds):", min_value=0.0, value=0.0, step=0.1, format="%.1f")
+        end_time = st.number_input("End Time (seconds):", min_value=0.0, value=0.0, step=0.1, format="%.1f")
+        update_segment_btn = st.button("Update Segment", key="update_segment")
+    
+    if update_segment_btn:
+        if update_audio_uuid.strip():
+            params = {}
+            if new_speaker.strip():
+                params["speaker_id"] = new_speaker.strip()
+            if start_time > 0:
+                params["start_time"] = start_time
+            if end_time > 0:
+                params["end_time"] = end_time
+            
+            if params:
+                # Use requests.put for this endpoint
+                try:
+                    response = requests.put(
+                        f"{BACKEND_API_URL}/api/conversations/{update_audio_uuid.strip()}/transcript/{segment_index}",
+                        params=params
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    st.success("Transcript segment updated successfully!")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Error updating segment: {e}")
+            else:
+                st.warning("Please specify at least one field to update")
+        else:
+            st.error("Please enter the Audio UUID")
+    
+    st.divider()
+    
+    st.subheader("💡 Schema Information")
+    st.markdown("""
+    **New Conversation Schema:**
+    ```json
+    {
+        "audio_uuid": "unique_identifier",
+        "audio_path": "path/to/audio/file.wav",
+        "client_id": "user_or_client_id", 
+        "timestamp": 1234567890,
+        "transcript": [
+            {
+                "speaker": "speaker_1",
+                "text": "Hello, how are you?",
+                "start": 0.0,
+                "end": 3.2
+            },
+            {
+                "speaker": "speaker_2", 
+                "text": "I'm good, thanks!",
+                "start": 3.3,
+                "end": 5.0
+            }
+        ],
+        "speakers_identified": ["speaker_1", "speaker_2"]
+    }
+    ```
+    """)
+    
+    st.info("💡 **Tip**: You can find Audio UUIDs in the conversation details on the 'Conversations' tab.")
