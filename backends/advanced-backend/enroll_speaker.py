@@ -125,9 +125,9 @@ async def identify_speaker_api(host: str, port: int, audio_file_path: str, start
 def record_audio(duration: float, output_file: Path):
     """Record audio from microphone."""
     try:
+        import numpy as np
         import sounddevice as sd
         import soundfile as sf
-        import numpy as np
         
         logger.info(f"🎤 Recording audio for {duration} seconds...")
         logger.info("💡 Speak clearly into your microphone now!")
@@ -142,10 +142,6 @@ def record_audio(duration: float, output_file: Path):
         logger.info(f"✅ Audio saved to: {output_file}")
         return True
         
-    except ImportError:
-        logger.error("❌ Recording requires 'sounddevice' and 'soundfile' packages:")
-        logger.error("   pip install sounddevice soundfile")
-        return False
     except Exception as e:
         logger.error(f"❌ Failed to record audio: {e}")
         return False

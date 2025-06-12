@@ -12,6 +12,8 @@ dependencies = [
     "ollama>=0.4.8",
     "omi-sdk>=0.1.5",
     "python-dotenv>=1.1.0",
+    "sounddevice>=0.5.2",
+    "soundfile>=0.13.1",
     "uvicorn>=0.34.2",
     "wyoming>=1.6.1",
 ]
