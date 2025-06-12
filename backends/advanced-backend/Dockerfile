@@ -8,7 +8,6 @@ RUN apt-get update && \
     git \
     curl \
     ffmpeg \
-    libavformat58 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -22,7 +21,7 @@ COPY pyproject.toml .
 
 # Install dependencies using uv
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync
+    uv sync --group speaker
 
 
 # Set up the working directory
@@ -33,4 +32,4 @@ COPY . .
 
 
 # Run the application
-CMD ["uv", "run", "python3", "main.py"]
+CMD ["uv", "run", "--group", "speaker", "python3", "main.py"]

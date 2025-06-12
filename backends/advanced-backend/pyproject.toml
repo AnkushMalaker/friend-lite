@@ -16,6 +16,9 @@ dependencies = [
     "wyoming>=1.6.1",
 ]
 
+[tool.setuptools.packages.find]
+packages = ["speaker_recognition"]
+
 [dependency-groups]
 deepgram = [
     "deepgram-sdk>=4.0.0",
@@ -30,8 +33,11 @@ speaker = [
     # core pyannote stack
     "pyannote.audio>=3.3.2",
     # fast nearest-neighbor search for verification
-    "faiss-gpu>=1.8",  # or faiss-cpu if no GPU
+    "faiss-cpu>=1.8",  # or faiss-cpu if no GPU
     "torch>=2.0.0",
+    # additional dependencies needed
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
 ]
 
 [tool.uv.sources]

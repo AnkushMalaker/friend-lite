@@ -63,6 +63,7 @@ mongo_client = AsyncIOMotorClient(MONGODB_URI)
 db = mongo_client.get_default_database("friend-lite")
 chunks_col = db["audio_chunks"]
 users_col = db["users"]
+speakers_col = db["speakers"]  # New collection for speaker management
 
 # Audio Configuration
 OMI_SAMPLE_RATE = 16_000  # Hz
@@ -351,15 +352,25 @@ class TranscriptionManager:
             # Read and process any available events (non-blocking)
             try:
                 while True:
-                    event = await asyncio.wait_for(self.client.read_event(), timeout=0.001)
+                    event = await asyncio.wait_for(self.client.read_event(), timeout=0.001) # this is a quick poll, feels like a better solution can exist
                     if event is None:
                         break
                         
                     if Transcript.is_type(event.type):
                         transcript_obj = Transcript.from_event(event)
                         transcript_text = transcript_obj.text.strip()
+                        
+                        # Handle both Transcript and StreamingTranscript types
+                        # Check the 'final' attribute from the event data, not the reconstructed object
+                        is_final = event.data.get('final', True)  # Default to True for standard Transcript
+                        
+                        # Only process final transcripts, ignore partial ones
+                        if not is_final:
+                            audio_logger.info(f"Ignoring partial transcript for {audio_uuid}: {transcript_text}")
+                            continue
+                        
                         if transcript_text:
-                            audio_logger.info(f"Transcript for {audio_uuid}: {transcript_text}")
+                            audio_logger.info(f"Transcript for {audio_uuid}: {transcript_text} (final: {is_final})")
                             
                             # Create transcript segment with new format
                             transcript_segment = {
@@ -953,29 +964,266 @@ async def update_transcript_segment(
     start_time: Optional[float] = None,
     end_time: Optional[float] = None
 ):
-    """Update a specific transcript segment with timing or speaker information."""
+    """Update a specific transcript segment with speaker or timing information."""
     try:
-        if speaker_id:
-            await chunk_repo.update_segment_speaker(audio_uuid, segment_index, speaker_id)
+        update_doc = {}
         
-        if start_time is not None or end_time is not None:
-            # Get current segment to preserve existing values
-            doc = await chunks_col.find_one({"audio_uuid": audio_uuid})
-            if doc and "transcript" in doc and len(doc["transcript"]) > segment_index:
-                current_segment = doc["transcript"][segment_index]
-                new_start = start_time if start_time is not None else current_segment.get("start", 0.0)
-                new_end = end_time if end_time is not None else current_segment.get("end", 0.0)
-                await chunk_repo.update_segment_timing(audio_uuid, segment_index, new_start, new_end)
+        if speaker_id is not None:
+            update_doc[f"transcript.{segment_index}.speaker"] = speaker_id
+            # Also add to speakers_identified if not already present
+            await chunk_repo.add_speaker(audio_uuid, speaker_id)
         
-        return JSONResponse(
-            content={"message": f"Transcript segment {segment_index} updated for {audio_uuid}"}
+        if start_time is not None:
+            update_doc[f"transcript.{segment_index}.start"] = start_time
+            
+        if end_time is not None:
+            update_doc[f"transcript.{segment_index}.end"] = end_time
+        
+        if not update_doc:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No update parameters provided"}
+            )
+        
+        result = await chunks_col.update_one(
+            {"audio_uuid": audio_uuid},
+            {"$set": update_doc}
         )
+        
+        if result.matched_count == 0:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Conversation not found"}
+            )
+        
+        return JSONResponse(content={"message": "Transcript segment updated successfully"})
+        
     except Exception as e:
-        audio_logger.error(f"Error updating transcript segment: {e}", exc_info=True)
+        audio_logger.error(f"Error updating transcript segment: {e}")
         return JSONResponse(
-            status_code=500, content={"message": "Error updating transcript segment"}
+            status_code=500,
+            content={"error": "Internal server error"}
         )
 
+
+@app.post("/api/speakers/enroll")
+async def enroll_speaker(
+    speaker_id: str,
+    speaker_name: str,
+    audio_file_path: str,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None
+):
+    """
+    Enroll a new speaker from an audio file.
+    
+    Args:
+        speaker_id: Unique identifier for the speaker
+        speaker_name: Human-readable name for the speaker  
+        audio_file_path: Path to the audio file (relative to audio_chunks directory)
+        start_time: Start time in seconds (optional)
+        end_time: End time in seconds (optional)
+    """
+    try:
+        # Full path to audio file
+        full_audio_path = CHUNK_DIR / audio_file_path
+        
+        if not full_audio_path.exists():
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Audio file not found: {audio_file_path}"}
+            )
+        
+        # Enroll speaker using speaker_recognition module
+        success = speaker_recognition.enroll_speaker(
+            speaker_id=speaker_id,
+            speaker_name=speaker_name,
+            audio_file=str(full_audio_path),
+            start_time=start_time,
+            end_time=end_time
+        )
+        
+        if success:
+            # Store speaker info in MongoDB
+            speaker_doc = {
+                "speaker_id": speaker_id,
+                "speaker_name": speaker_name,
+                "audio_file_path": audio_file_path,
+                "start_time": start_time,
+                "end_time": end_time,
+                "enrolled_at": time.time()
+            }
+            
+            await speakers_col.insert_one(speaker_doc)
+            
+            return JSONResponse(content={
+                "message": f"Speaker {speaker_id} enrolled successfully",
+                "speaker_id": speaker_id,
+                "speaker_name": speaker_name
+            })
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to enroll speaker"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error enrolling speaker: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Internal server error: {str(e)}"}
+        )
+
+@app.get("/api/speakers")
+async def list_speakers():
+    """Get list of all enrolled speakers."""
+    try:
+        # Get speakers from speaker_recognition module
+        enrolled_speakers = speaker_recognition.list_enrolled_speakers()
+        
+        # Get additional info from MongoDB
+        mongo_speakers = []
+        async for speaker in speakers_col.find({}, {"_id": 0}):
+            mongo_speakers.append(speaker)
+        
+        # Combine information
+        speakers_map = {s["speaker_id"]: s for s in mongo_speakers}
+        
+        result = []
+        for speaker in enrolled_speakers:
+            speaker_info = speakers_map.get(speaker["id"], {})
+            result.append({
+                "id": speaker["id"],
+                "name": speaker["name"],
+                "audio_file_path": speaker_info.get("audio_file_path"),
+                "enrolled_at": speaker_info.get("enrolled_at")
+            })
+        
+        return JSONResponse(content={"speakers": result})
+        
+    except Exception as e:
+        audio_logger.error(f"Error listing speakers: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"}
+        )
+
+@app.delete("/api/speakers/{speaker_id}")
+async def remove_speaker(speaker_id: str):
+    """Remove an enrolled speaker."""
+    try:
+        # Remove from speaker_recognition module
+        success = speaker_recognition.remove_speaker(speaker_id)
+        
+        if success:
+            # Remove from MongoDB
+            await speakers_col.delete_one({"speaker_id": speaker_id})
+            
+            return JSONResponse(content={
+                "message": f"Speaker {speaker_id} removed successfully"
+            })
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Speaker {speaker_id} not found"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error removing speaker: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"}
+        )
+
+@app.get("/api/speakers/{speaker_id}")
+async def get_speaker_info(speaker_id: str):
+    """Get detailed information about a specific speaker."""
+    try:
+        # Get from MongoDB
+        speaker = await speakers_col.find_one({"speaker_id": speaker_id}, {"_id": 0})
+        
+        if not speaker:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Speaker {speaker_id} not found"}
+            )
+        
+        return JSONResponse(content=speaker)
+        
+    except Exception as e:
+        audio_logger.error(f"Error getting speaker info: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"}
+        )
+
+@app.post("/api/speakers/identify")
+async def identify_speaker_from_file(
+    audio_file_path: str,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None
+):
+    """
+    Identify a speaker from an audio file segment.
+    
+    Args:
+        audio_file_path: Path to the audio file (relative to audio_chunks directory)
+        start_time: Start time in seconds (optional)
+        end_time: End time in seconds (optional)
+    """
+    try:
+        # Full path to audio file
+        full_audio_path = CHUNK_DIR / audio_file_path
+        
+        if not full_audio_path.exists():
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Audio file not found: {audio_file_path}"}
+            )
+        
+        # Load audio and extract embedding using imports from pyannote
+        from pyannote.core import Segment
+        from pyannote.audio import Audio
+        audio_loader = Audio(sample_rate=16000, mono="downmix")
+        
+        if start_time is not None and end_time is not None:
+            segment = Segment(start_time, end_time)
+            waveform, _ = audio_loader.crop(str(full_audio_path), segment)
+        else:
+            waveform, _ = audio_loader(str(full_audio_path))
+        
+        # Extract embedding
+        waveform = waveform.unsqueeze(0)  # Add batch dimension
+        embedding = speaker_recognition.embedding_model(waveform)
+        
+        # Normalize embedding
+        import numpy as np
+        embedding = embedding / np.linalg.norm(embedding, axis=-1, keepdims=True)
+        
+        # Identify speaker
+        identified_speaker = speaker_recognition.identify_speaker(embedding[0])
+        
+        if identified_speaker:
+            # Get speaker info
+            speaker_info = await speakers_col.find_one({"speaker_id": identified_speaker}, {"_id": 0})
+            
+            return JSONResponse(content={
+                "identified": True,
+                "speaker_id": identified_speaker,
+                "speaker_info": speaker_info
+            })
+        else:
+            return JSONResponse(content={
+                "identified": False,
+                "message": "Speaker not recognized"
+            })
+        
+    except Exception as e:
+        audio_logger.error(f"Error identifying speaker: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Internal server error: {str(e)}"}
+        )
 
 @app.get("/health")
 async def health_check():
