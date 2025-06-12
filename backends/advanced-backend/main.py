@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from mem0 import Memory  # mem0 core
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder  # OmiSDK
+from pydantic import BaseModel
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
@@ -1005,61 +1006,62 @@ async def update_transcript_segment(
             content={"error": "Internal server error"}
         )
 
+class SpeakerEnrollmentRequest(BaseModel):
+    speaker_id: str
+    speaker_name: str
+    audio_file_path: str
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+
+class SpeakerIdentificationRequest(BaseModel):
+    audio_file_path: str
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
 
 @app.post("/api/speakers/enroll")
-async def enroll_speaker(
-    speaker_id: str,
-    speaker_name: str,
-    audio_file_path: str,
-    start_time: Optional[float] = None,
-    end_time: Optional[float] = None
-):
+async def enroll_speaker(request: SpeakerEnrollmentRequest):
     """
     Enroll a new speaker from an audio file.
     
     Args:
-        speaker_id: Unique identifier for the speaker
-        speaker_name: Human-readable name for the speaker  
-        audio_file_path: Path to the audio file (relative to audio_chunks directory)
-        start_time: Start time in seconds (optional)
-        end_time: End time in seconds (optional)
+        request: SpeakerEnrollmentRequest containing speaker_id, speaker_name, audio_file_path, start_time, end_time
     """
     try:
         # Full path to audio file
-        full_audio_path = CHUNK_DIR / audio_file_path
+        full_audio_path = CHUNK_DIR / request.audio_file_path
         
         if not full_audio_path.exists():
             return JSONResponse(
                 status_code=404,
-                content={"error": f"Audio file not found: {audio_file_path}"}
+                content={"error": f"Audio file not found: {request.audio_file_path}"}
             )
         
         # Enroll speaker using speaker_recognition module
         success = speaker_recognition.enroll_speaker(
-            speaker_id=speaker_id,
-            speaker_name=speaker_name,
+            speaker_id=request.speaker_id,
+            speaker_name=request.speaker_name,
             audio_file=str(full_audio_path),
-            start_time=start_time,
-            end_time=end_time
+            start_time=request.start_time,
+            end_time=request.end_time
         )
         
         if success:
             # Store speaker info in MongoDB
             speaker_doc = {
-                "speaker_id": speaker_id,
-                "speaker_name": speaker_name,
-                "audio_file_path": audio_file_path,
-                "start_time": start_time,
-                "end_time": end_time,
+                "speaker_id": request.speaker_id,
+                "speaker_name": request.speaker_name,
+                "audio_file_path": request.audio_file_path,
+                "start_time": request.start_time,
+                "end_time": request.end_time,
                 "enrolled_at": time.time()
             }
             
             await speakers_col.insert_one(speaker_doc)
             
             return JSONResponse(content={
-                "message": f"Speaker {speaker_id} enrolled successfully",
-                "speaker_id": speaker_id,
-                "speaker_name": speaker_name
+                "message": f"Speaker {request.speaker_id} enrolled successfully",
+                "speaker_id": request.speaker_id,
+                "speaker_name": request.speaker_name
             })
         else:
             return JSONResponse(
@@ -1158,36 +1160,30 @@ async def get_speaker_info(speaker_id: str):
         )
 
 @app.post("/api/speakers/identify")
-async def identify_speaker_from_file(
-    audio_file_path: str,
-    start_time: Optional[float] = None,
-    end_time: Optional[float] = None
-):
+async def identify_speaker_from_file(request: SpeakerIdentificationRequest):
     """
     Identify a speaker from an audio file segment.
     
     Args:
-        audio_file_path: Path to the audio file (relative to audio_chunks directory)
-        start_time: Start time in seconds (optional)
-        end_time: End time in seconds (optional)
+        request: SpeakerIdentificationRequest containing audio_file_path, start_time, end_time
     """
     try:
         # Full path to audio file
-        full_audio_path = CHUNK_DIR / audio_file_path
+        full_audio_path = CHUNK_DIR / request.audio_file_path
         
         if not full_audio_path.exists():
             return JSONResponse(
                 status_code=404,
-                content={"error": f"Audio file not found: {audio_file_path}"}
+                content={"error": f"Audio file not found: {request.audio_file_path}"}
             )
         
         # Load audio and extract embedding using imports from pyannote
-        from pyannote.core import Segment
         from pyannote.audio import Audio
+        from pyannote.core import Segment
         audio_loader = Audio(sample_rate=16000, mono="downmix")
         
-        if start_time is not None and end_time is not None:
-            segment = Segment(start_time, end_time)
+        if request.start_time is not None and request.end_time is not None:
+            segment = Segment(request.start_time, request.end_time)
             waveform, _ = audio_loader.crop(str(full_audio_path), segment)
         else:
             waveform, _ = audio_loader(str(full_audio_path))
