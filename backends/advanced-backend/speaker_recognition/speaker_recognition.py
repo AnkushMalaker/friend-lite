@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
 import faiss
 import numpy as np
 import torch
-from scipy.spatial.distance import cdist
 
 from pyannote.audio import Pipeline
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
@@ -109,8 +108,12 @@ def enroll_speaker(speaker_id: str, speaker_name: str, audio_file: str,
                 # Update existing speaker
                 existing_speaker["name"] = speaker_name
                 existing_speaker["embedding"] = embedding[0]
-                # Update FAISS index (we'd need to rebuild it, so just add new one)
-                index.add(embedding.astype(np.float32))
+                # Rebuild FAISS index to properly update
+                global index
+                index = faiss.IndexFlatIP(EMB_DIM)
+                if enrolled_speakers:
+                    embeddings = np.vstack([spk["embedding"] for spk in enrolled_speakers])
+                    index.add(embeddings.astype(np.float32))
                 return True
         
         # Add new speaker
@@ -120,7 +123,7 @@ def enroll_speaker(speaker_id: str, speaker_name: str, audio_file: str,
             "embedding": embedding[0]  # Remove batch dimension
         })
         
-        # Add to FAISS index
+        # Add to FAISS index - ensure 2D array
         index.add(embedding.astype(np.float32))
         
         log.info(f"Successfully enrolled speaker: {speaker_id} ({speaker_name})")
@@ -143,7 +146,10 @@ def identify_speaker(embedding: np.ndarray) -> Optional[str]:
     if len(enrolled_speakers) == 0:
         return None
     
-    embedding = normalize_embedding(embedding.reshape(1, -1))
+    # Ensure embedding is 2D and normalized
+    if embedding.ndim == 1:
+        embedding = embedding.reshape(1, -1)
+    embedding = normalize_embedding(embedding)
     
     # Search in FAISS index
     similarities, indices = index.search(embedding.astype(np.float32), 1)
@@ -202,7 +208,10 @@ async def process_file(wav_path: Path, audio_uuid: str, mongo_chunks):
     try:
         # Define a wrapper function for the diarization pipeline
         def run_diarization(file_path: str):
-            return diar(file_path)
+            if diar is not None:
+                return diar(file_path)
+            else:
+                raise RuntimeError("Diarization pipeline not available")
         
         # Run diarization in executor to avoid blocking the event loop
         loop = asyncio.get_running_loop()

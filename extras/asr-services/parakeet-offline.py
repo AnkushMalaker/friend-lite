@@ -16,12 +16,12 @@ import tempfile
 import time
 from functools import partial
 from pathlib import Path
-from typing import Sequence, cast
-import torch
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Sequence, cast
+
 import nemo.collections.asr as nemo_asr
 import numpy as np
 import soundfile as sf
+import torch
 from easy_audio_interfaces.filesystem import LocalFileSink
 from nemo.collections.asr.models import ASRModel
 from silero_vad import VADIterator, load_silero_vad
@@ -30,7 +30,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
-
+from wyoming.vad import VoiceStarted, VoiceStopped
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -389,15 +389,17 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
 
         if vad_event:
             logger.info(f"VAD event: {vad_event}")
-            
+
             if "start" in vad_event and not self._recording:
                 # Start recording
                 self._recording = True
+                await self.write_event(VoiceStarted().event())
                 logger.info("Started recording speech")
 
             elif "end" in vad_event and self._recording:
                 # End recording and transcribe
                 self._recording = False
+                await self.write_event(VoiceStopped().event())
                 
                 speech_duration = sum(chunk.seconds for chunk in self._speech_buf)
                 logger.info(f"VAD end detected. Speech duration: {speech_duration:.2f}s")

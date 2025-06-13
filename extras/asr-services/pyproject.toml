@@ -15,7 +15,7 @@ dependencies = [
   "uvicorn>=0.34.2",
   "silero-vad>=5.1.2",
   "wyoming>=1.6.1",
-  "easy-audio-interfaces[local-audio]",
+  "easy-audio-interfaces>=0.2.6",
 ]
 
 [tool.uv]
@@ -29,7 +29,6 @@ conflicts = [
 
 [tool.uv.sources]
 useful-moonshine-onnx = { git = "https://github.com/usefulsensors/moonshine.git", subdirectory = "moonshine-onnx" }
-easy-audio-interfaces = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git", branch="upgrade-to-wyoming" }
 
 [dependency-groups]
 demo = [
