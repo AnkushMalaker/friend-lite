@@ -28,6 +28,7 @@ deepgram = [
 ]
 dev = [
     { name = "black" },
+    { name = "isort" },
 ]
 speaker = [
     { name = "faiss-cpu" },
@@ -42,7 +43,7 @@ webui = [
 
 [package.metadata]
 requires-dist = [
-    { name = "easy-audio-interfaces", git = "https://github.com/AnkushMalaker/python-audio-interfaces.git?branch=upgrade-to-wyoming" },
+    { name = "easy-audio-interfaces", specifier = ">=0.2.6" },
     { name = "fastapi", specifier = ">=0.115.12" },
     { name = "mem0ai", specifier = ">=0.1.97" },
     { name = "motor", specifier = ">=3.7.1" },
@@ -55,7 +56,10 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 deepgram = [{ name = "deepgram-sdk", specifier = ">=4.0.0" }]
-dev = [{ name = "black", specifier = ">=25.1.0" }]
+dev = [
+    { name = "black", specifier = ">=25.1.0" },
+    { name = "isort", specifier = ">=6.0.1" },
+]
 speaker = [
     { name = "faiss-cpu", specifier = ">=1.8" },
     { name = "numpy", specifier = ">=1.24.0" },
@@ -561,17 +565,20 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf57
 
 [[package]]
 name = "easy-audio-interfaces"
-version = "0.2.3"
-source = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git?branch=upgrade-to-wyoming#535f7fd71247793c1a6debb371aae8e5fd4c7519" }
+version = "0.2.6"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
     { name = "opuslib" },
     { name = "rich" },
-    { name = "samplerate" },
     { name = "scipy" },
     { name = "soxr" },
     { name = "websockets" },
     { name = "wyoming" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/1c/d68b416d5f7d5410ab65b7444ec159201125becb50abff70a93f2719fde0/easy_audio_interfaces-0.2.6.tar.gz", hash = "sha256:5f41c513f3d2e476ca7ff93e24056e4d2a9fda98bd946c89130243caab5aba7a", size = 22673, upload_time = "2025-06-12T16:46:07.019Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/33/536371113037c2d88360f7c3adddff3b08858001bdcf21230ead21324282/easy_audio_interfaces-0.2.6-py3-none-any.whl", hash = "sha256:e6f92ae4b53954d3f00ea5963a8bc3d45cebec1af7af79a3688e5e45b0b3c895", size = 28237, upload_time = "2025-06-12T16:46:05.902Z" },
 ]
 
 [[package]]
@@ -949,6 +956,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f1/70/7703c29685631f5a7590aa73f1f1d3fa9a380e654b86af429e0934a32f7d/idna-3.10.tar.gz", hash = "sha256:12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9", size = 190490, upload_time = "2024-09-15T18:07:39.745Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl", hash = "sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3", size = 70442, upload_time = "2024-09-15T18:07:37.964Z" },
+]
+
+[[package]]
+name = "isort"
+version = "6.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/21/1e2a441f74a653a144224d7d21afe8f4169e6c7c20bb13aec3a2dc3815e0/isort-6.0.1.tar.gz", hash = "sha256:1cb5df28dfbc742e490c5e41bad6da41b805b0a8be7bc93cd0fb2a8a890ac450", size = 821955, upload_time = "2025-02-26T21:13:16.955Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/11/114d0a5f4dabbdcedc1125dee0888514c3c3b16d3e9facad87ed96fad97c/isort-6.0.1-py3-none-any.whl", hash = "sha256:2dc5d7f65c9678d94c88dfc29161a320eec67328bc97aad576874cb4be1e9615", size = 94186, upload_time = "2025-02-26T21:13:14.911Z" },
 ]
 
 [[package]]
@@ -2431,19 +2447,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/87/b8/01c29b924dcbbed75cc45b30c30d565d763b9c4d540545a0eeecffb8f09c/ruamel.yaml.clib-0.2.12-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:4f6f3eac23941b32afccc23081e1f50612bdbe4e982012ef4f5797986828cd01", size = 709059, upload_time = "2024-12-11T19:58:18.846Z" },
     { url = "https://files.pythonhosted.org/packages/30/8c/ed73f047a73638257aa9377ad356bea4d96125b305c34a28766f4445cc0f/ruamel.yaml.clib-0.2.12-cp313-cp313-win32.whl", hash = "sha256:6442cb36270b3afb1b4951f060eccca1ce49f3d087ca1ca4563a6eb479cb3de6", size = 98583, upload_time = "2024-10-20T10:13:09.658Z" },
     { url = "https://files.pythonhosted.org/packages/b0/85/e8e751d8791564dd333d5d9a4eab0a7a115f7e349595417fd50ecae3395c/ruamel.yaml.clib-0.2.12-cp313-cp313-win_amd64.whl", hash = "sha256:e5b8daf27af0b90da7bb903a876477a9e6d7270be6146906b276605997c7e9a3", size = 115190, upload_time = "2024-10-20T10:13:10.66Z" },
-]
-
-[[package]]
-name = "samplerate"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cffi" },
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/da/9c/6a13fbc59b1ceaef194a53d3aeafa983057133fb13660c423854184eafa7/samplerate-0.1.0.tar.gz", hash = "sha256:75ef725e6cd9c4545569caf4c47147beab7b53b2c36e5122e8c285d348f88847", size = 4044998, upload_time = "2017-02-24T00:01:56.505Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/3c/4c1aa376332d18e708dcc3289e4dbdd2c508bcac1b8eb1b35b73092fa00f/samplerate-0.1.0-py2.py3-none-any.whl", hash = "sha256:f55e5c9d0a8ba3c82a53b7d9c34a2d145439c61166a7f310efaec88f2781b8f8", size = 4028658, upload_time = "2017-02-24T00:01:44.947Z" },
 ]
 
 [[package]]
