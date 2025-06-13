@@ -390,7 +390,7 @@ with tab_mem:
     # User selection for memories
     col1, col2 = st.columns([2, 1])
     with col1:
-        user_id_input = st.text_input("User ID (leave empty to view memories for all users):", 
+        user_id_input = st.text_input("Enter username to view memories:", 
                                     value=default_user,
                                     placeholder="e.g., john_doe, alice123")
     with col2:
@@ -409,11 +409,10 @@ with tab_mem:
         memories = get_data(f"/api/memories?user_id={user_id_input.strip()}")
         st.info(f"Showing memories for user: **{user_id_input.strip()}**")
     else:
-        # Show all users' memories or implement a different endpoint
-        st.info("Showing memories for all users (this may require backend modification)")
-        # For now, let's show a message about needing a specific user
+        # Show instruction to enter a username
         memories = None
-        st.warning("Please enter a specific User ID to view memories. The backend requires a user_id parameter.")
+        st.info("👆 Please enter a username above to view their memories.")
+        st.markdown("💡 **Tip:** You can find existing usernames in the 'User Management' tab.")
 
     if memories:
         df = pd.DataFrame(memories)
