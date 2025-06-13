@@ -26,6 +26,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
+from wyoming.vad import VoiceStarted, VoiceStopped
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -193,10 +194,12 @@ class StreamingTranscriptionHandler(AsyncEventHandler):
                 self._recording = True
                 self._last_refresh_t = time.time()
                 logger.info("Started recording speech")
+                await self.write_event(VoiceStarted().event())
 
             elif "end" in vad_event and self._recording:
                 # End recording and transcribe
                 self._recording = False
+                await self.write_event(VoiceStopped().event())
                 text = self._transcriber(self._speech_samples)
                 transcript = StreamingTranscript(text=text, final=True)
                 await self.write_event(transcript.event())

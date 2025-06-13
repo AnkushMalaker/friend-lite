@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "easy-audio-interfaces",
+    "easy-audio-interfaces>=0.2.6",
     "fastapi>=0.115.12",
     "mem0ai>=0.1.97",
     "motor>=3.7.1",
@@ -27,6 +27,7 @@ deepgram = [
 ]
 dev = [
     "black>=25.1.0",
+    "isort>=6.0.1",
 ]
 webui = [
     "streamlit>=1.45.1",
@@ -42,5 +43,5 @@ speaker = [
     "scipy>=1.10.0",
 ]
 
-[tool.uv.sources]
-easy-audio-interfaces = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git", branch="upgrade-to-wyoming" }
+[tool.isort]
+profile = "black"

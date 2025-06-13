@@ -13,13 +13,14 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import multiprocessing
 import os
 import time
 import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import ollama  # Ollama python client
 from dotenv import load_dotenv
@@ -35,6 +36,9 @@ from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe
+from wyoming.vad import VoiceStarted, VoiceStopped
+
+from speaker_recognition import speaker_recognition
 
 ###############################################################################
 # SETUP
@@ -51,8 +55,9 @@ if not os.getenv("MEM0_TELEMETRY"):
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 audio_logger = logging.getLogger("audio_processing")
+audio_cropper_logger = logging.getLogger("audio_cropper")
+audio_cropper_logger.error("Audio cropper logger initialized")
 
-import speaker_recognition
 
 ###############################################################################
 # CONFIGURATION
@@ -75,6 +80,11 @@ TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
 # Conversation timeout configuration
 NEW_CONVERSATION_TIMEOUT_MINUTES = int(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "10"))
+
+# Audio cropping configuration
+AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
+MIN_SPEECH_SEGMENT_DURATION = float(os.getenv("MIN_SPEECH_SEGMENT_DURATION", "1.0"))  # seconds
+CROPPING_CONTEXT_PADDING = float(os.getenv("CROPPING_CONTEXT_PADDING", "0.1"))  # seconds of padding around speech
 
 # Directory where WAV chunks are written
 CHUNK_DIR = Path("./audio_chunks")
@@ -132,6 +142,140 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # Initialize mem0 and ollama client
 memory = Memory.from_config(MEM0_CONFIG)
 ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+
+###############################################################################
+# AUDIO PROCESSING FUNCTIONS
+###############################################################################
+
+async def _process_audio_cropping_with_relative_timestamps(
+    original_path: str, 
+    speech_segments: List[Tuple[float, float]], 
+    output_path: str, 
+    audio_uuid: str
+) -> bool:
+    """
+    Process audio cropping with automatic relative timestamp conversion.
+    This function handles both live processing and reprocessing scenarios.
+    """
+    try:
+        # Convert absolute timestamps to relative timestamps
+        # Extract file start time from filename: timestamp_client_uuid.wav
+        filename = original_path.split('/')[-1]
+        file_start_timestamp = float(filename.split('_')[0])
+        
+        # Convert speech segments to relative timestamps
+        relative_segments = []
+        for start_abs, end_abs in speech_segments:
+            start_rel = start_abs - file_start_timestamp
+            end_rel = end_abs - file_start_timestamp
+            
+            # Ensure relative timestamps are positive (sanity check)
+            if start_rel < 0:
+                audio_logger.warning(f"⚠️ Negative start timestamp: {start_rel}, clamping to 0.0")
+                start_rel = 0.0
+            if end_rel < 0:
+                audio_logger.warning(f"⚠️ Negative end timestamp: {end_rel}, skipping segment")
+                continue
+                
+            relative_segments.append((start_rel, end_rel))
+        
+        audio_logger.info(f"🕐 Converting timestamps for {audio_uuid}: file_start={file_start_timestamp}")
+        audio_logger.info(f"🕐 Absolute segments: {speech_segments}")
+        audio_logger.info(f"🕐 Relative segments: {relative_segments}")
+        
+        success = await _crop_audio_with_ffmpeg(original_path, relative_segments, output_path)
+        if success:
+            # Update database with cropped file info (keep original absolute timestamps for reference)
+            cropped_filename = output_path.split('/')[-1]
+            await chunk_repo.update_cropped_audio(audio_uuid, cropped_filename, speech_segments)
+            audio_logger.info(f"Successfully processed cropped audio: {cropped_filename}")
+            return True
+        else:
+            audio_logger.error(f"Failed to crop audio for {audio_uuid}")
+            return False
+    except Exception as e:
+        audio_logger.error(f"Error in audio cropping task for {audio_uuid}: {e}")
+        return False
+
+
+async def _crop_audio_with_ffmpeg(original_path: str, speech_segments: List[Tuple[float, float]], output_path: str) -> bool:
+    """Use ffmpeg to crop audio - runs as async subprocess, no GIL issues"""
+    audio_cropper_logger.info(f"Cropping audio {original_path} with {len(speech_segments)} speech segments")
+    
+    if not AUDIO_CROPPING_ENABLED:
+        audio_cropper_logger.info(f"Audio cropping disabled, skipping {original_path}")
+        return False
+    
+    if not speech_segments:
+        audio_cropper_logger.warning(f"No speech segments to crop for {original_path}")
+        return False
+    
+    # Filter out segments that are too short
+    filtered_segments = []
+    for start, end in speech_segments:
+        duration = end - start
+        if duration >= MIN_SPEECH_SEGMENT_DURATION:
+            # Add padding around speech segments
+            padded_start = max(0, start - CROPPING_CONTEXT_PADDING)
+            padded_end = end + CROPPING_CONTEXT_PADDING
+            filtered_segments.append((padded_start, padded_end))
+        else:
+            audio_cropper_logger.debug(f"Skipping short segment: {start}-{end} ({duration:.2f}s < {MIN_SPEECH_SEGMENT_DURATION}s)")
+    
+    if not filtered_segments:
+        audio_cropper_logger.warning(f"No segments meet minimum duration ({MIN_SPEECH_SEGMENT_DURATION}s) for {original_path}")
+        return False
+        
+    audio_cropper_logger.info(f"Cropping audio {original_path} with {len(filtered_segments)} speech segments (filtered from {len(speech_segments)})")
+    
+    try:
+        # Build ffmpeg filter for concatenating speech segments
+        filter_parts = []
+        for i, (start, end) in enumerate(filtered_segments):
+            duration = end - start
+            filter_parts.append(f"[0:a]atrim=start={start}:duration={duration},asetpts=PTS-STARTPTS[seg{i}]")
+        
+        # Concatenate all segments
+        inputs = "".join(f"[seg{i}]" for i in range(len(filtered_segments)))
+        concat_filter = f"{inputs}concat=n={len(filtered_segments)}:v=0:a=1[out]"
+        
+        full_filter = ";".join(filter_parts + [concat_filter])
+        
+        # Run ffmpeg as async subprocess
+        cmd = [
+            "ffmpeg", "-y",  # -y = overwrite output
+            "-i", original_path,
+            "-filter_complex", full_filter,
+            "-map", "[out]",
+            "-c:a", "pcm_s16le",  # Keep same format as original
+            output_path
+        ]
+        
+        audio_cropper_logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await process.communicate()
+        if stdout:
+            audio_cropper_logger.debug(f"FFMPEG stdout: {stdout.decode()}")
+        
+        if process.returncode == 0:
+            # Calculate cropped duration
+            cropped_duration = sum(end - start for start, end in filtered_segments)
+            audio_cropper_logger.info(f"Successfully cropped {original_path} -> {output_path} ({cropped_duration:.1f}s from {len(filtered_segments)} segments)")
+            return True
+        else:
+            error_msg = stderr.decode() if stderr else "Unknown ffmpeg error"
+            audio_logger.error(f"ffmpeg failed for {original_path}: {error_msg}")
+            return False
+            
+    except Exception as e:
+        audio_logger.error(f"Error running ffmpeg on {original_path}: {e}")
+        return False
 
 ###############################################################################
 # UTILITY FUNCTIONS & HELPER CLASSES
@@ -206,6 +350,7 @@ def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bo
 _MEMORY_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
     max_workers=2,  # Keep this low to avoid overwhelming the system
     initializer=_init_process_memory,  # Initialize memory once per process
+    mp_context=multiprocessing.get_context('spawn')  # Use spawn instead of fork to avoid threading issues
 )
 
 # Speaker recognition queue and worker
@@ -288,13 +433,33 @@ class ChunkRepo:
         )
     
     async def update_segment_speaker(self, audio_uuid, segment_index, speaker_id):
-        """Update speaker information for a specific transcript segment."""
-        await self.col.update_one(
+        """Update the speaker for a specific transcript segment."""
+        result = await self.col.update_one(
             {"audio_uuid": audio_uuid},
             {"$set": {f"transcript.{segment_index}.speaker": speaker_id}}
         )
-        # Also add to speakers_identified if not already present
-        await self.add_speaker(audio_uuid, speaker_id)
+        if result.modified_count > 0:
+            audio_logger.info(f"Updated segment {segment_index} speaker to {speaker_id} for {audio_uuid}")
+        return result.modified_count > 0
+
+    async def update_cropped_audio(self, audio_uuid: str, cropped_path: str, speech_segments: List[Tuple[float, float]]):
+        """Update the chunk with cropped audio information."""
+        cropped_duration = sum(end - start for start, end in speech_segments)
+        
+        result = await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {
+                "$set": {
+                    "cropped_audio_path": cropped_path,
+                    "speech_segments": [{"start": start, "end": end} for start, end in speech_segments],
+                    "cropped_duration": cropped_duration,
+                    "cropped_at": time.time()
+                }
+            }
+        )
+        if result.modified_count > 0:
+            audio_logger.info(f"Updated cropped audio info for {audio_uuid}: {cropped_path}")
+        return result.modified_count > 0
 
 
 class TranscriptionManager:
@@ -395,6 +560,23 @@ class TranscriptionManager:
                                 await active_clients[client_id].memory_queue.put((transcript_text, client_id, audio_uuid))
                             else:
                                 audio_logger.warning(f"Client {client_id} not found for memory processing")
+                    
+                    elif VoiceStarted.is_type(event.type):
+                        audio_logger.info(f"VoiceStarted event received for {audio_uuid}")
+                        # Voice activity started - record the start time
+                        current_time = time.time()
+                        if client_id in active_clients:
+                            active_clients[client_id].record_speech_start(audio_uuid, current_time)
+                            audio_logger.info(f"🎤 Voice started for {audio_uuid} at {current_time}")
+                    
+                    elif VoiceStopped.is_type(event.type):
+                        audio_logger.info(f"VoiceStopped event received for {audio_uuid}")
+                        # Voice activity stopped - record the end time
+                        current_time = time.time()
+                        if client_id in active_clients:
+                            active_clients[client_id].record_speech_end(audio_uuid, current_time)
+                            audio_logger.info(f"🔇 Voice stopped for {audio_uuid} at {current_time}")
+                            
             except asyncio.TimeoutError:
                 # No events available right now, that's fine
                 pass
@@ -438,10 +620,33 @@ class ClientState:
         self.last_transcript_time: Optional[float] = None
         self.conversation_start_time: float = time.time()
         
+        # Speech segment tracking for audio cropping
+        self.speech_segments: Dict[str, List[Tuple[float, float]]] = {}  # audio_uuid -> [(start, end), ...]
+        self.current_speech_start: Dict[str, Optional[float]] = {}  # audio_uuid -> start_time
+        
         # Tasks for this client
         self.saver_task: Optional[asyncio.Task] = None
         self.transcription_task: Optional[asyncio.Task] = None
         self.memory_task: Optional[asyncio.Task] = None
+    
+    def record_speech_start(self, audio_uuid: str, timestamp: float):
+        """Record the start of a speech segment."""
+        self.current_speech_start[audio_uuid] = timestamp
+        audio_logger.info(f"Recorded speech start for {audio_uuid}: {timestamp}")
+        
+    def record_speech_end(self, audio_uuid: str, timestamp: float):
+        """Record the end of a speech segment."""
+        if audio_uuid in self.current_speech_start and self.current_speech_start[audio_uuid] is not None:
+            start_time = self.current_speech_start[audio_uuid]
+            if start_time is not None:  # Type guard
+                if audio_uuid not in self.speech_segments:
+                    self.speech_segments[audio_uuid] = []
+                self.speech_segments[audio_uuid].append((start_time, timestamp))
+                self.current_speech_start[audio_uuid] = None
+                duration = timestamp - start_time
+                audio_logger.info(f"Recorded speech segment for {audio_uuid}: {start_time:.3f} -> {timestamp:.3f} (duration: {duration:.3f}s)")
+        else:
+            audio_logger.warning(f"Speech end recorded for {audio_uuid} but no start time found")
     
     async def start_processing(self):
         """Start the processing tasks for this client."""
@@ -458,6 +663,9 @@ class ClientState:
         self.connected = False
         audio_logger.info(f"Disconnecting client {self.client_id}")
         
+        # Close current conversation with all processing before signaling shutdown
+        await self._close_current_conversation()
+        
         # Signal processors to stop
         await self.chunk_queue.put(None)
         await self.transcription_queue.put((None, None))
@@ -471,15 +679,14 @@ class ClientState:
         if self.memory_task:
             await self.memory_task
             
-        # Clean up file sink
-        if self.file_sink:
-            await self.file_sink.close()
-            self.file_sink = None
-            
         # Clean up transcription manager
         if self.transcription_manager:
             await self.transcription_manager.disconnect()
             self.transcription_manager = None
+        
+        # Clean up any remaining speech segment tracking
+        self.speech_segments.clear()
+        self.current_speech_start.clear()
             
         audio_logger.info(f"Client {self.client_id} disconnected and cleaned up")
     
@@ -494,26 +701,63 @@ class ClientState:
         
         return time_since_last_transcript > timeout_seconds
     
-    async def start_new_conversation(self):
-        """Start a new conversation by closing current file sink and resetting state."""
+    async def _close_current_conversation(self):
+        """Close the current conversation with proper cleanup including audio cropping and speaker processing."""
         if self.file_sink:
             # Store current audio info before closing
             current_uuid = self.current_audio_uuid
             current_path = self.file_sink._file_path.name if hasattr(self.file_sink, '_file_path') else None
             
+            audio_logger.info(f"🔒 Closing conversation {current_uuid}, file: {current_path}")
             await self.file_sink.close()
             self.file_sink = None
             
-            # Queue for speaker processing if we have a completed file
+            # Process audio cropping if we have speech segments
             if current_uuid and current_path:
-                await SPKR_QUEUE.put((current_path, current_uuid))
-                audio_logger.info(f"Queued {current_path} for speaker processing")
+                if current_uuid in self.speech_segments:
+                    speech_segments = self.speech_segments[current_uuid]
+                    audio_logger.info(f"🎯 Found {len(speech_segments)} speech segments for {current_uuid}: {speech_segments}")
+                    if speech_segments:  # Only crop if we have speech segments
+                        cropped_path = current_path.replace('.wav', '_cropped.wav')
+                        
+                        # Process in background - won't block
+                        asyncio.create_task(self._process_audio_cropping(
+                            f"{CHUNK_DIR}/{current_path}",
+                            speech_segments, 
+                            f"{CHUNK_DIR}/{cropped_path}",
+                            current_uuid
+                        ))
+                        audio_logger.info(f"✂️ Queued audio cropping for {current_path} with {len(speech_segments)} speech segments")
+                    else:
+                        audio_logger.info(f"⚠️ Empty speech segments list found for {current_path}, skipping cropping")
+                    
+                    # Clean up segments for this conversation
+                    del self.speech_segments[current_uuid]
+                    if current_uuid in self.current_speech_start:
+                        del self.current_speech_start[current_uuid]
+                else:
+                    audio_logger.info(f"⚠️ No speech segments found for {current_path} (uuid: {current_uuid}), skipping cropping")
             
-            audio_logger.info(f"Client {self.client_id}: Started new conversation due to {NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout")
+                # Queue for speaker processing if we have a completed file
+                await SPKR_QUEUE.put((current_path, current_uuid))
+                audio_logger.info(f"🎭 Queued {current_path} for speaker processing")
+        else:
+            audio_logger.info(f"🔒 No active file sink to close for client {self.client_id}")
+    
+    async def start_new_conversation(self):
+        """Start a new conversation by closing current conversation and resetting state."""
+        await self._close_current_conversation()
         
+        # Reset conversation state
         self.current_audio_uuid = None
         self.conversation_start_time = time.time()
         self.last_transcript_time = None
+        
+        audio_logger.info(f"Client {self.client_id}: Started new conversation due to {NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout")
+    
+    async def _process_audio_cropping(self, original_path: str, speech_segments: List[Tuple[float, float]], output_path: str, audio_uuid: str):
+        """Background task for audio cropping using ffmpeg."""
+        await _process_audio_cropping_with_relative_timestamps(original_path, speech_segments, output_path, audio_uuid)
     
     async def _audio_saver(self):
         """Per-client audio saver consumer."""
@@ -557,18 +801,8 @@ class ClientState:
         except Exception as e:
             audio_logger.error(f"Error in audio saver for client {self.client_id}: {e}", exc_info=True)
         finally:
-            if self.file_sink:
-                # Store current audio info before closing
-                current_uuid = self.current_audio_uuid
-                current_path = self.file_sink._file_path.name if hasattr(self.file_sink, '_file_path') else None
-                
-                await self.file_sink.close()
-                self.file_sink = None
-                
-                # Queue for speaker processing if we have a completed file
-                if current_uuid and current_path:
-                    await SPKR_QUEUE.put((current_path, current_uuid))
-                    audio_logger.info(f"Queued {current_path} for speaker processing")
+            # Close current conversation with all processing when audio saver ends
+            await self._close_current_conversation()
     
     async def _transcription_processor(self):
         """Per-client transcription processor."""
@@ -765,23 +999,90 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
 
 @app.get("/api/conversations")
 async def get_conversations():
-    """Retrieves the last 20 transcribed audio chunks from MongoDB."""
+    """Get all conversations grouped by client_id."""
     try:
-        cursor = chunks_col.find(
-            {"transcript": {"$exists": True, "$not": {"$size": 0}}}, 
-            sort=[("timestamp", -1)], 
-            limit=20
-        )
-        conversations = []
-        for doc in await cursor.to_list(length=20):
-            doc["_id"] = str(doc["_id"])
-            conversations.append(doc)
-        return JSONResponse(content=conversations)
+        # Get all audio chunks and group by client_id
+        cursor = chunks_col.find({}).sort("timestamp", -1)
+        conversations = {}
+        
+        async for chunk in cursor:
+            client_id = chunk.get("client_id", "unknown")
+            if client_id not in conversations:
+                conversations[client_id] = []
+            
+            conversations[client_id].append({
+                "audio_uuid": chunk["audio_uuid"],
+                "audio_path": chunk["audio_path"],
+                "cropped_audio_path": chunk.get("cropped_audio_path"),
+                "timestamp": chunk["timestamp"],
+                "transcript": chunk.get("transcript", []),
+                "speakers_identified": chunk.get("speakers_identified", []),
+                "speech_segments": chunk.get("speech_segments", []),
+                "cropped_duration": chunk.get("cropped_duration")
+            })
+        
+        return {"conversations": conversations}
     except Exception as e:
-        audio_logger.error(f"Error fetching conversations: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500, content={"message": "Error fetching conversations"}
-        )
+        audio_logger.error(f"Error getting conversations: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/conversations/{audio_uuid}/cropped")
+async def get_cropped_audio_info(audio_uuid: str):
+    """Get cropped audio information for a specific conversation."""
+    try:
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not chunk:
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        return {
+            "audio_uuid": audio_uuid,
+            "original_audio_path": chunk["audio_path"],
+            "cropped_audio_path": chunk.get("cropped_audio_path"),
+            "speech_segments": chunk.get("speech_segments", []),
+            "cropped_duration": chunk.get("cropped_duration"),
+            "cropped_at": chunk.get("cropped_at"),
+            "has_cropped_version": bool(chunk.get("cropped_audio_path"))
+        }
+    except Exception as e:
+        audio_logger.error(f"Error getting cropped audio info: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/conversations/{audio_uuid}/reprocess")  
+async def reprocess_audio_cropping(audio_uuid: str):
+    """Trigger reprocessing of audio cropping for a specific conversation."""
+    try:
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not chunk:
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        original_path = f"{CHUNK_DIR}/{chunk['audio_path']}"
+        if not Path(original_path).exists():
+            return JSONResponse(status_code=404, content={"error": "Original audio file not found"})
+        
+        # Check if we have speech segments
+        speech_segments = chunk.get("speech_segments", [])
+        if not speech_segments:
+            return JSONResponse(status_code=400, content={"error": "No speech segments available for cropping"})
+        
+        # Convert speech segments from dict format to tuple format  
+        speech_segments_tuples = [(seg["start"], seg["end"]) for seg in speech_segments]
+        
+        cropped_filename = chunk['audio_path'].replace('.wav', '_cropped.wav')
+        cropped_path = f"{CHUNK_DIR}/{cropped_filename}"
+        
+        # Process in background using shared logic
+        async def reprocess_task():
+            audio_logger.info(f"🔄 Starting reprocess for {audio_uuid}")
+            await _process_audio_cropping_with_relative_timestamps(original_path, speech_segments_tuples, cropped_path, audio_uuid)
+        
+        asyncio.create_task(reprocess_task())
+        
+        return {"message": "Reprocessing started", "audio_uuid": audio_uuid}
+    except Exception as e:
+        audio_logger.error(f"Error reprocessing audio: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/api/users")
@@ -1177,24 +1478,25 @@ async def identify_speaker_from_file(request: SpeakerIdentificationRequest):
                 content={"error": f"Audio file not found: {request.audio_file_path}"}
             )
         
-        # Load audio and extract embedding using imports from pyannote
-        from pyannote.audio import Audio
-        from pyannote.core import Segment
-        audio_loader = Audio(sample_rate=16000, mono="downmix")
+        # Use speaker_recognition module's audio loading and embedding extraction
+        if not speaker_recognition.audio_loader or not speaker_recognition.embedding_model:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Speaker recognition models not available"}
+            )
         
+        # Load audio
         if request.start_time is not None and request.end_time is not None:
+            from pyannote.core import Segment
             segment = Segment(request.start_time, request.end_time)
-            waveform, _ = audio_loader.crop(str(full_audio_path), segment)
+            waveform, _ = speaker_recognition.audio_loader.crop(str(full_audio_path), segment)
         else:
-            waveform, _ = audio_loader(str(full_audio_path))
+            waveform, _ = speaker_recognition.audio_loader(str(full_audio_path))
         
-        # Extract embedding
+        # Extract and normalize embedding
         waveform = waveform.unsqueeze(0)  # Add batch dimension
         embedding = speaker_recognition.embedding_model(waveform)
-        
-        # Normalize embedding
-        import numpy as np
-        embedding = embedding / np.linalg.norm(embedding, axis=-1, keepdims=True)
+        embedding = speaker_recognition.normalize_embedding(embedding)
         
         # Identify speaker
         identified_speaker = speaker_recognition.identify_speaker(embedding[0])
@@ -1316,6 +1618,31 @@ async def health_check():
 async def readiness_check():
     """Simple readiness check for container orchestration."""
     return JSONResponse(content={"status": "ready", "timestamp": int(time.time())}, status_code=200)
+
+
+@app.get("/api/debug/speech_segments")
+async def debug_speech_segments():
+    """Debug endpoint to check current speech segments for all active clients."""
+    debug_info = {
+        "active_clients": len(active_clients),
+        "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
+        "min_speech_duration": MIN_SPEECH_SEGMENT_DURATION,
+        "cropping_padding": CROPPING_CONTEXT_PADDING,
+        "clients": {}
+    }
+    
+    for client_id, client_state in active_clients.items():
+        debug_info["clients"][client_id] = {
+            "current_audio_uuid": client_state.current_audio_uuid,
+            "speech_segments": {
+                uuid: segments for uuid, segments in client_state.speech_segments.items()
+            },
+            "current_speech_start": dict(client_state.current_speech_start),
+            "connected": client_state.connected,
+            "last_transcript_time": client_state.last_transcript_time
+        }
+    
+    return JSONResponse(content=debug_info)
 
 
 ###############################################################################
