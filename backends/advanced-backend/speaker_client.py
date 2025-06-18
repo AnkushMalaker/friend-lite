@@ -14,16 +14,23 @@ from typing import Dict, List, Optional, Union
 
 import aiohttp
 
+# Configuration
+SPEAKER_SERVICE_URL = os.getenv("SPEAKER_SERVICE_URL")
+SPEAKER_SERVICE_ENABLED = SPEAKER_SERVICE_URL is not None
+
 log = logging.getLogger("speaker_client")
 
-# Configuration
-SPEAKER_SERVICE_URL = os.getenv("SPEAKER_SERVICE_URL", "http://localhost:8001")
+# Log the speaker service status
+if SPEAKER_SERVICE_ENABLED:
+    log.info(f"Speaker service enabled with URL: {SPEAKER_SERVICE_URL}")
+else:
+    log.info("Speaker service disabled - SPEAKER_SERVICE_URL not provided")
 
 class SpeakerRecognitionClient:
     """Client for speaker recognition service."""
     
-    def __init__(self, base_url: str = SPEAKER_SERVICE_URL):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: Optional[str] = SPEAKER_SERVICE_URL):
+        self.base_url = base_url.rstrip("/") if base_url else None
         self.session: Optional[aiohttp.ClientSession] = None
     
     async def __aenter__(self):
@@ -130,7 +137,7 @@ class SpeakerRecognitionClient:
 class SpeakerRecognitionService:
     """Mock object that provides the same interface as the original speaker_recognition module."""
     
-    def __init__(self, client_url: str = SPEAKER_SERVICE_URL):
+    def __init__(self, client_url: Optional[str] = SPEAKER_SERVICE_URL):
         self.client_url = client_url
         # Mock the original attributes for compatibility
         self.audio_loader = self  # Fake object for compatibility checks
@@ -242,17 +249,31 @@ class SpeakerRecognitionService:
         return None
 
 
-# Create the singleton instance for backward compatibility
-speaker_recognition = SpeakerRecognitionService()
-
-# Export the same interface as the original module
-process_file = speaker_recognition.process_file
-enroll_speaker = speaker_recognition.enroll_speaker
-identify_speaker = speaker_recognition.identify_speaker
-list_enrolled_speakers = speaker_recognition.list_enrolled_speakers
-remove_speaker = speaker_recognition.remove_speaker
-normalize_embedding = speaker_recognition.normalize_embedding
-audio_loader = speaker_recognition.audio_loader
-embedding_model = speaker_recognition.embedding_model
-diar = speaker_recognition.diar
-SIMILARITY_THRESHOLD = speaker_recognition.SIMILARITY_THRESHOLD 
+# Conditionally create the singleton instance for backward compatibility
+if SPEAKER_SERVICE_ENABLED:
+    speaker_recognition = SpeakerRecognitionService()
+    
+    # Export the same interface as the original module
+    process_file = speaker_recognition.process_file
+    enroll_speaker = speaker_recognition.enroll_speaker
+    identify_speaker = speaker_recognition.identify_speaker
+    list_enrolled_speakers = speaker_recognition.list_enrolled_speakers
+    remove_speaker = speaker_recognition.remove_speaker
+    normalize_embedding = speaker_recognition.normalize_embedding
+    audio_loader = speaker_recognition.audio_loader
+    embedding_model = speaker_recognition.embedding_model
+    diar = speaker_recognition.diar
+    SIMILARITY_THRESHOLD = speaker_recognition.SIMILARITY_THRESHOLD
+else:
+    # Export None when service is disabled
+    speaker_recognition = None
+    process_file = None
+    enroll_speaker = None
+    identify_speaker = None
+    list_enrolled_speakers = None
+    remove_speaker = None
+    normalize_embedding = None
+    audio_loader = None
+    embedding_model = None
+    diar = None
+    SIMILARITY_THRESHOLD = None 
