@@ -946,6 +946,7 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
                 _DEC_IO_EXECUTOR, _decode_packet, packet
             )
             if pcm_data:
+                audio_logger.debug(f"Received {len(pcm_data)} bytes of PCM data")
                 chunk = AudioChunk(
                     audio=pcm_data,
                     rate=OMI_SAMPLE_RATE,
