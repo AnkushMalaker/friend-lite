@@ -10,9 +10,9 @@ services:
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - HF_TOKEN=${HF_TOKEN}
-      - SPEAKER_SERVICE_URL=http://speaker-recognition:8001
+      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
     depends_on:
       qdrant:
         condition: service_started
