@@ -8,7 +8,6 @@
 * The transcript is stored in **mem0** and MongoDB.
 
 """
-from __future__ import annotations
 
 import asyncio
 import concurrent.futures
@@ -39,6 +38,9 @@ from wyoming.info import Describe
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 import speaker_client as speaker_recognition
+
+# Check if speaker service is available
+SPEAKER_SERVICE_AVAILABLE = speaker_recognition.speaker_recognition is not None
 
 ###############################################################################
 # SETUP
@@ -384,10 +386,16 @@ SPKR_QUEUE: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
 
 async def speaker_worker():
     """Background worker for speaker diarization and verification."""
+    
+    if not SPEAKER_SERVICE_AVAILABLE:
+        audio_logger.info("Speaker service not available - speaker worker will not process tasks")
+        return
+    
     while True:
         try:
             wav_path, audio_uuid = await SPKR_QUEUE.get()
                 # Run speaker processing directly since it's already async
+            assert speaker_recognition is not None
             await speaker_recognition.process_file(
                 CHUNK_DIR / wav_path,
                 audio_uuid,
@@ -788,9 +796,12 @@ class ClientState:
                 else:
                     audio_logger.info(f"⚠️ No speech segments found for {current_path} (uuid: {current_uuid}), skipping cropping")
             
-                # Queue for speaker processing if we have a completed file
-                await SPKR_QUEUE.put((current_path, current_uuid))
-                audio_logger.info(f"🎭 Queued {current_path} for speaker processing")
+                # Queue for speaker processing if we have a completed file and speaker service is available
+                if SPEAKER_SERVICE_AVAILABLE:
+                    await SPKR_QUEUE.put((current_path, current_uuid))
+                    audio_logger.info(f"🎭 Queued {current_path} for speaker processing")
+                else:
+                    audio_logger.debug(f"Speaker service not available - skipping speaker processing for {current_path}")
         else:
             audio_logger.info(f"🔒 No active file sink to close for client {self.client_id}")
     
@@ -947,8 +958,11 @@ async def lifespan(app: FastAPI):
     # Startup
     audio_logger.info("Starting application...")
     
-    asyncio.create_task(speaker_worker(), name="speaker-worker")
-    audio_logger.info("Speaker recognition worker started")
+    if SPEAKER_SERVICE_AVAILABLE:
+        asyncio.create_task(speaker_worker(), name="speaker-worker")
+        audio_logger.info("Speaker recognition worker started")
+    else:
+        audio_logger.info("Speaker service not available - skipping speaker worker")
         
     audio_logger.info("Application ready - clients will have individual processing pipelines.")
 
@@ -1378,6 +1392,12 @@ async def enroll_speaker(request: SpeakerEnrollmentRequest):
     Args:
         request: SpeakerEnrollmentRequest containing speaker_id, speaker_name, audio_file_path, start_time, end_time
     """
+    if not SPEAKER_SERVICE_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Speaker service is not available. Please set SPEAKER_SERVICE_URL environment variable."}
+        )
+        
     try:
         # Full path to audio file
         full_audio_path = CHUNK_DIR / request.audio_file_path
@@ -1431,6 +1451,12 @@ async def enroll_speaker(request: SpeakerEnrollmentRequest):
 @app.get("/api/speakers")
 async def list_speakers():
     """Get list of all enrolled speakers."""
+    if not SPEAKER_SERVICE_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Speaker service is not available. Please set SPEAKER_SERVICE_URL environment variable."}
+        )
+        
     try:
         # Get speakers from speaker_recognition module
         enrolled_speakers = speaker_recognition.list_enrolled_speakers()
@@ -1445,10 +1471,10 @@ async def list_speakers():
         
         result = []
         for speaker in enrolled_speakers:
-            speaker_info = speakers_map.get(speaker["id"], {})
+            speaker_info = speakers_map.get(speaker["speaker_id"], {})
             result.append({
-                "id": speaker["id"],
-                "name": speaker["name"],
+                "id": speaker["speaker_id"],
+                "name": speaker["speaker_name"],
                 "audio_file_path": speaker_info.get("audio_file_path"),
                 "enrolled_at": speaker_info.get("enrolled_at")
             })
@@ -1465,6 +1491,12 @@ async def list_speakers():
 @app.delete("/api/speakers/{speaker_id}")
 async def remove_speaker(speaker_id: str):
     """Remove an enrolled speaker."""
+    if not SPEAKER_SERVICE_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Speaker service is not available. Please set SPEAKER_SERVICE_URL environment variable."}
+        )
+        
     try:
         # Remove from speaker_recognition module
         success = speaker_recognition.remove_speaker(speaker_id)
@@ -1519,6 +1551,12 @@ async def identify_speaker_from_file(request: SpeakerIdentificationRequest):
     Args:
         request: SpeakerIdentificationRequest containing audio_file_path, start_time, end_time
     """
+    if not SPEAKER_SERVICE_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Speaker service is not available. Please set SPEAKER_SERVICE_URL environment variable."}
+        )
+        
     try:
         # Full path to audio file
         full_audio_path = CHUNK_DIR / request.audio_file_path
@@ -1564,7 +1602,7 @@ async def identify_speaker_from_file(request: SpeakerIdentificationRequest):
         else:
             return JSONResponse(content={
                 "identified": False,
-                "message": "Speaker not recognized"
+                "message": "No matching speaker found"
             })
         
     except Exception as e:
