@@ -11,3 +11,4 @@ backends/examples/example-satellite/*
 .vscode/*
 **/audio_chunks/*
 **/mongo_data/*
+.cursor/*
