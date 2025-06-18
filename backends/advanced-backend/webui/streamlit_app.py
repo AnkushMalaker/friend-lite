@@ -23,9 +23,52 @@ BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
 def get_system_health():
     """Get comprehensive system health from backend."""
     try:
-        response = requests.get(f"{BACKEND_API_URL}/health", timeout=10)
-        if response.status_code == 200:  # Backend always returns 200
-            return response.json()
+        # First try the simple readiness check with shorter timeout
+        response = requests.get(f"{BACKEND_API_URL}/readiness", timeout=5)
+        if response.status_code == 200:
+            # Backend is responding, now try the full health check with longer timeout
+            try:
+                health_response = requests.get(f"{BACKEND_API_URL}/health", timeout=30)
+                if health_response.status_code == 200:
+                    return health_response.json()
+                else:
+                    # Health check failed but backend is responsive
+                    return {
+                        "status": "partial",
+                        "overall_healthy": False,
+                        "services": {
+                            "backend": {
+                                "status": f"⚠️ Backend responsive but health check failed: HTTP {health_response.status_code}",
+                                "healthy": False
+                            }
+                        },
+                        "error": "Health check endpoint returned unexpected status code"
+                    }
+            except requests.exceptions.Timeout:
+                # Health check timed out but backend is responsive
+                return {
+                    "status": "partial",
+                    "overall_healthy": False,
+                    "services": {
+                        "backend": {
+                            "status": "⚠️ Backend responsive but health check timed out (some services may be slow)",
+                            "healthy": False
+                        }
+                    },
+                    "error": "Health check timed out - external services may be unavailable"
+                }
+            except Exception as e:
+                return {
+                    "status": "partial",
+                    "overall_healthy": False,
+                    "services": {
+                        "backend": {
+                            "status": f"⚠️ Backend responsive but health check failed: {str(e)}",
+                            "healthy": False
+                        }
+                    },
+                    "error": str(e)
+                }
         else:
             return {
                 "status": "unhealthy",
