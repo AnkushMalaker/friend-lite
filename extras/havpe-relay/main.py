@@ -12,9 +12,8 @@ import argparse
 import asyncio
 import logging
 import signal
-import time
-from typing import Optional
 
+import numpy as np
 import websockets
 from easy_audio_interfaces import ResamplingBlock
 from wyoming.audio import AudioChunk
@@ -71,24 +70,17 @@ class AudioConverter:
             return b""
     
     def _convert_32bit_to_16bit(self, audio_32bit: bytes) -> bytes:
-        """Convert 32-bit PCM data to 16-bit PCM data."""
-        import struct
-
-        # Unpack 32-bit samples (little-endian float32)
-        num_samples = len(audio_32bit) // 4
-        samples_32bit = struct.unpack(f'<{num_samples}f', audio_32bit)
+        """Convert 32-bit PCM data to 16-bit PCM data using NumPy."""
         
-        # Convert to 16-bit integers (clamp to [-1, 1] range first)
-        samples_16bit = []
-        for sample in samples_32bit:
-            # Clamp to [-1, 1] range
-            clamped = max(-1.0, min(1.0, sample))
-            # Convert to 16-bit integer
-            sample_16bit = int(clamped * 32767)
-            samples_16bit.append(sample_16bit)
+        # Convert bytes to numpy array of int32 (little-endian)
+        samples_32bit = np.frombuffer(audio_32bit, dtype=np.int32)
         
-        # Pack as 16-bit integers (little-endian)
-        return struct.pack(f'<{len(samples_16bit)}h', *samples_16bit)
+        # Convert int32 to int16 by right-shifting by 16 bits
+        # This preserves the most significant bits while reducing bit depth
+        samples_16bit = (samples_32bit >> 16).astype(np.int16)
+        
+        # Return as bytes
+        return samples_16bit.tobytes()
     
     async def open(self):
         """Initialize the audio converter."""
