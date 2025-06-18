@@ -96,7 +96,7 @@ services:
     volumes:
       - ./qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
   mongo:
-    image: mongo:latest
+    image: mongo:4.4.18
     ports:
       - "27017:27017"
     volumes:
