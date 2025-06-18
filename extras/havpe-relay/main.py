@@ -49,12 +49,8 @@ class AudioConverter:
                 channels=ESP32_CHANNELS,
             )
             
-            # Process through resampler to convert format
-            async def single_chunk_generator():
-                yield input_chunk
-            
             converted_chunks = []
-            async for converted_chunk in self.resampler.process(single_chunk_generator()):
+            async for converted_chunk in self.resampler.process_chunk(input_chunk):
                 converted_chunks.append(converted_chunk)
             
             if converted_chunks:
