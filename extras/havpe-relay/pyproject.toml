@@ -1,0 +1,10 @@
+[project]
+name = "havpe-relay"
+version = "0.1.0"
+description = "TCP-to-WebSocket relay for ESPHome Voice-PE that connects to the Omi advanced backend."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "easy-audio-interfaces>=0.2.6",
+    "websockets>=15.0.1",
+]
