@@ -54,7 +54,20 @@ if not os.getenv("MEM0_TELEMETRY"):
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("advanced-backend")
 audio_logger = logging.getLogger("audio_processing")
+
+# Conditional Deepgram import
+try:
+    from deepgram import (
+        DeepgramClient,
+        FileSource,
+        PrerecordedOptions,
+    )
+    DEEPGRAM_AVAILABLE = True
+except ImportError:
+    DEEPGRAM_AVAILABLE = False
+    logger.warning("Deepgram SDK not available. Install with: pip install deepgram-sdk")
 audio_cropper_logger = logging.getLogger("audio_cropper")
 audio_cropper_logger.error("Audio cropper logger initialized")
 
@@ -92,6 +105,19 @@ CHUNK_DIR.mkdir(parents=True, exist_ok=True)
 
 # ASR Configuration
 OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://192.168.0.110:8765/")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+
+# Determine transcription strategy based on environment variables
+USE_DEEPGRAM = bool(DEEPGRAM_API_KEY and DEEPGRAM_AVAILABLE)
+if DEEPGRAM_API_KEY and not DEEPGRAM_AVAILABLE:
+    audio_logger.error("DEEPGRAM_API_KEY provided but Deepgram SDK not available. Falling back to offline ASR.")
+audio_logger.info(f"Transcription strategy: {'Deepgram' if USE_DEEPGRAM else 'Offline ASR'}")
+
+# Deepgram client placeholder (not implemented)
+deepgram_client = None
+if USE_DEEPGRAM:
+    audio_logger.warning("Deepgram transcription requested but not yet implemented. Falling back to offline ASR.")
+    USE_DEEPGRAM = False
 
 # Ollama & Qdrant Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -463,37 +489,63 @@ class ChunkRepo:
 
 
 class TranscriptionManager:
-    """Manages persistent connection to ASR service with ordered processing."""
+    """Manages transcription using either Deepgram or offline ASR service."""
 
     def __init__(self):
         self.client = None
         self._current_audio_uuid = None
         self._streaming = False
+        self.use_deepgram = USE_DEEPGRAM
+        self.deepgram_client = deepgram_client
+        self._audio_buffer = []  # Buffer for Deepgram batch processing
 
     async def connect(self):
-        """Establish connection to ASR service."""
+        """Establish connection to ASR service (only for offline ASR)."""
+        if self.use_deepgram:
+            audio_logger.info("Using Deepgram transcription - no connection needed")
+            return
+            
         try:
             self.client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
             await self.client.connect()
-            audio_logger.info(f"Connected to ASR service at {OFFLINE_ASR_TCP_URI}")
+            audio_logger.info(f"Connected to offline ASR service at {OFFLINE_ASR_TCP_URI}")
         except Exception as e:
-            audio_logger.error(f"Failed to connect to ASR service: {e}")
+            audio_logger.error(f"Failed to connect to offline ASR service: {e}")
             self.client = None
             raise
 
     async def disconnect(self):
         """Cleanly disconnect from ASR service."""
+        if self.use_deepgram:
+            audio_logger.info("Using Deepgram - no disconnection needed")
+            return
+            
         if self.client:
             try:
                 await self.client.disconnect()
-                audio_logger.info("Disconnected from ASR service")
+                audio_logger.info("Disconnected from offline ASR service")
             except Exception as e:
-                audio_logger.error(f"Error disconnecting from ASR service: {e}")
+                audio_logger.error(f"Error disconnecting from offline ASR service: {e}")
             finally:
                 self.client = None
 
     async def transcribe_chunk(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
-        """Transcribe a single chunk with ordered processing."""
+        """Transcribe a single chunk using either Deepgram or offline ASR."""
+        if self.use_deepgram:
+            await self._transcribe_chunk_deepgram(audio_uuid, chunk, client_id)
+        else:
+            await self._transcribe_chunk_offline(audio_uuid, chunk, client_id)
+
+    async def _transcribe_chunk_deepgram(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
+        """Transcribe using Deepgram API."""
+        raise NotImplementedError("Deepgram transcription is not yet implemented. Please use offline ASR by not setting DEEPGRAM_API_KEY.")
+
+    async def _process_deepgram_buffer(self, audio_uuid: str, client_id: str):
+        """Process buffered audio with Deepgram."""
+        raise NotImplementedError("Deepgram transcription is not yet implemented.")
+
+    async def _transcribe_chunk_offline(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
+        """Transcribe using offline ASR service."""
         if not self.client:
             audio_logger.error(f"No ASR connection available for {audio_uuid}")
             return
@@ -540,13 +592,13 @@ class TranscriptionManager:
                             
                             # Create transcript segment with new format
                             transcript_segment = {
-                                "speaker": f"speaker_{client_id}",  # Default speaker ID
+                                "speaker": f"speaker_{client_id}",
                                 "text": transcript_text,
-                                "start": 0.0,  # Will need timing info from ASR for accurate values
-                                "end": 0.0     # Will need timing info from ASR for accurate values
+                                "start": 0.0,
+                                "end": 0.0
                             }
                             
-                            # Store transcript segment in DB immediately (fast)
+                            # Store transcript segment in DB immediately
                             await chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
                             await chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
                             audio_logger.info(f"Added transcript segment for {audio_uuid} to DB.")
@@ -555,7 +607,7 @@ class TranscriptionManager:
                             if client_id in active_clients:
                                 active_clients[client_id].last_transcript_time = time.time()
                             
-                            # Queue memory processing (slow, non-blocking)
+                            # Queue memory processing
                             if client_id in active_clients:
                                 await active_clients[client_id].memory_queue.put((transcript_text, client_id, audio_uuid))
                             else:
@@ -563,7 +615,6 @@ class TranscriptionManager:
                     
                     elif VoiceStarted.is_type(event.type):
                         audio_logger.info(f"VoiceStarted event received for {audio_uuid}")
-                        # Voice activity started - record the start time
                         current_time = time.time()
                         if client_id in active_clients:
                             active_clients[client_id].record_speech_start(audio_uuid, current_time)
@@ -571,7 +622,6 @@ class TranscriptionManager:
                     
                     elif VoiceStopped.is_type(event.type):
                         audio_logger.info(f"VoiceStopped event received for {audio_uuid}")
-                        # Voice activity stopped - record the end time
                         current_time = time.time()
                         if client_id in active_clients:
                             active_clients[client_id].record_speech_end(audio_uuid, current_time)
@@ -582,7 +632,7 @@ class TranscriptionManager:
                 pass
                 
         except Exception as e:
-            audio_logger.error(f"Error in transcribe_chunk for {audio_uuid}: {e}")
+            audio_logger.error(f"Error in offline transcribe_chunk for {audio_uuid}: {e}")
             # Attempt to reconnect on error
             await self._reconnect()
 
