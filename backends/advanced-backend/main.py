@@ -71,7 +71,6 @@ except ImportError:
     DEEPGRAM_AVAILABLE = False
     logger.warning("Deepgram SDK not available. Install with: pip install deepgram-sdk")
 audio_cropper_logger = logging.getLogger("audio_cropper")
-audio_cropper_logger.error("Audio cropper logger initialized")
 
 
 ###############################################################################
@@ -1631,74 +1630,144 @@ async def health_check():
     }
     
     overall_healthy = True
+    critical_services_healthy = True
     
-    # Check MongoDB
+    # Check MongoDB (critical service)
     try:
-        await mongo_client.admin.command('ping')
+        await asyncio.wait_for(mongo_client.admin.command('ping'), timeout=5.0)
         health_status["services"]["mongodb"] = {
             "status": "✅ Connected",
-            "healthy": True
+            "healthy": True,
+            "critical": True
         }
+    except asyncio.TimeoutError:
+        health_status["services"]["mongodb"] = {
+            "status": "❌ Connection Timeout (5s)",
+            "healthy": False,
+            "critical": True
+        }
+        overall_healthy = False
+        critical_services_healthy = False
     except Exception as e:
         health_status["services"]["mongodb"] = {
             "status": f"❌ Connection Failed: {str(e)}",
-            "healthy": False
+            "healthy": False,
+            "critical": True
         }
         overall_healthy = False
+        critical_services_healthy = False
     
-    # Check Ollama
+    # Check Ollama (non-critical service - may not be running)
     try:
-        models = ollama_client.list()
+        # Run in executor to avoid blocking the main thread
+        loop = asyncio.get_running_loop()
+        models = await asyncio.wait_for(
+            loop.run_in_executor(None, ollama_client.list), 
+            timeout=8.0
+        )
         model_count = len(models.get('models', []))
         health_status["services"]["ollama"] = {
             "status": "✅ Connected",
             "healthy": True,
-            "models": model_count
+            "models": model_count,
+            "critical": False
         }
+    except asyncio.TimeoutError:
+        health_status["services"]["ollama"] = {
+            "status": "⚠️ Connection Timeout (8s) - Service may not be running",
+            "healthy": False,
+            "critical": False
+        }
+        overall_healthy = False
     except Exception as e:
         health_status["services"]["ollama"] = {
-            "status": f"❌ Connection Failed: {str(e)}",
-            "healthy": False
+            "status": f"⚠️ Connection Failed: {str(e)} - Service may not be running",
+            "healthy": False,
+            "critical": False
         }
         overall_healthy = False
     
-    # Check mem0
+    # Check mem0 (depends on Ollama and Qdrant)
     try:
-        # Simple check - try to initialize memory (this should be fast)
-        test_memory = Memory.from_config(MEM0_CONFIG)
+        # Run initialization in executor with timeout
+        loop = asyncio.get_running_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: Memory.from_config(MEM0_CONFIG)),
+            timeout=10.0
+        )
         health_status["services"]["mem0"] = {
             "status": "✅ Connected",
-            "healthy": True
+            "healthy": True,
+            "critical": False
         }
+    except asyncio.TimeoutError:
+        health_status["services"]["mem0"] = {
+            "status": "⚠️ Initialization Timeout (10s) - Depends on Ollama/Qdrant",
+            "healthy": False,
+            "critical": False
+        }
+        overall_healthy = False
     except Exception as e:
         health_status["services"]["mem0"] = {
-            "status": f"❌ Connection Failed: {str(e)}",
-            "healthy": False
+            "status": f"⚠️ Initialization Failed: {str(e)} - Check Ollama/Qdrant services",
+            "healthy": False,
+            "critical": False
         }
         overall_healthy = False
     
-    # Check ASR service
+    # Check ASR service (non-critical - may be external)
     try:
         test_client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
-        await test_client.connect()
+        await asyncio.wait_for(test_client.connect(), timeout=5.0)
         await test_client.disconnect()
         health_status["services"]["asr"] = {
             "status": "✅ Connected",
             "healthy": True,
-            "uri": OFFLINE_ASR_TCP_URI
+            "uri": OFFLINE_ASR_TCP_URI,
+            "critical": False
         }
+    except asyncio.TimeoutError:
+        health_status["services"]["asr"] = {
+            "status": f"⚠️ Connection Timeout (5s) - Check external ASR service",
+            "healthy": False,
+            "uri": OFFLINE_ASR_TCP_URI,
+            "critical": False
+        }
+        overall_healthy = False
     except Exception as e:
         health_status["services"]["asr"] = {
-            "status": f"❌ Connection Failed: {str(e)}",
+            "status": f"⚠️ Connection Failed: {str(e)} - Check external ASR service",
             "healthy": False,
-            "uri": OFFLINE_ASR_TCP_URI
+            "uri": OFFLINE_ASR_TCP_URI,
+            "critical": False
         }
         overall_healthy = False
     
     # Set overall status
     health_status["overall_healthy"] = overall_healthy
+    health_status["critical_services_healthy"] = critical_services_healthy
+    
+    if not critical_services_healthy:
+        health_status["status"] = "critical"
+    elif not overall_healthy:
+        health_status["status"] = "degraded"
+    else:
+        health_status["status"] = "healthy"
+    
+    # Add helpful messages
     if not overall_healthy:
-        health_status["status"] = "unhealthy"
+        messages = []
+        if not critical_services_healthy:
+            messages.append("Critical services (MongoDB) are unavailable - core functionality will not work")
+        
+        unhealthy_optional = [
+            name for name, service in health_status["services"].items() 
+            if not service["healthy"] and not service.get("critical", True)
+        ]
+        if unhealthy_optional:
+            messages.append(f"Optional services unavailable: {', '.join(unhealthy_optional)}")
+        
+        health_status["message"] = "; ".join(messages)
     
     return JSONResponse(content=health_status, status_code=200)
 
