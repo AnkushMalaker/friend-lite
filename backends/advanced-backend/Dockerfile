@@ -21,7 +21,7 @@ COPY pyproject.toml .
 
 # Install dependencies using uv
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --group speaker
+    uv sync
 
 
 # Copy application code
@@ -29,4 +29,4 @@ COPY . .
 
 
 # Run the application
-CMD ["uv", "run", "--group", "speaker", "python3", "main.py"]
+CMD ["uv", "run", "python3", "main.py"]
