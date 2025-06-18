@@ -24,9 +24,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --group speaker
 
 
-# Set up the working directory
-WORKDIR /app
-
 # Copy application code
 COPY . .
 
