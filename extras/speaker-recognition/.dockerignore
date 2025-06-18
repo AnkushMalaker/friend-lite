@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.venv
+env/
+venv/
+.git/
+.gitignore
+*.md
+.DS_Store
+*.log
+debug/
+model_cache/
+audio_chunks/ 

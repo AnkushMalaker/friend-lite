@@ -14,10 +14,8 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "uvicorn>=0.34.2",
     "wyoming>=1.6.1",
+    "aiohttp>=3.8.0",
 ]
-
-[tool.setuptools.packages.find]
-packages = ["speaker_recognition"]
 
 [dependency-groups]
 deepgram = [
@@ -30,16 +28,7 @@ dev = [
 webui = [
     "streamlit>=1.45.1",
 ]
-speaker = [
-    # core pyannote stack
-    "pyannote.audio>=3.3.2",
-    # fast nearest-neighbor search for verification
-    "faiss-cpu>=1.8",  # or faiss-cpu if no GPU
-    "torch>=2.0.0",
-    # additional dependencies needed
-    "numpy>=1.24.0",
-    "scipy>=1.10.0",
-]
+
 
 [tool.isort]
 profile = "black"

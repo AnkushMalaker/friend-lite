@@ -38,7 +38,7 @@ from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe
 from wyoming.vad import VoiceStarted, VoiceStopped
 
-from speaker_recognition import speaker_recognition
+import speaker_client as speaker_recognition
 
 ###############################################################################
 # SETUP
