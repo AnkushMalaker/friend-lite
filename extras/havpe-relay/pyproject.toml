@@ -5,6 +5,11 @@ description = "TCP-to-WebSocket relay for ESPHome Voice-PE that connects to the 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "easy-audio-interfaces>=0.2.7",
+    "easy-audio-interfaces>=0.3.0",
     "websockets>=15.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
 ]
