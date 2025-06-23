@@ -16,9 +16,7 @@ import signal
 import time
 from datetime import datetime
 
-import numpy as np
 import websockets
-from easy_audio_interfaces import ResamplingBlock
 from pathlib import Path
 from wyoming.audio import AudioChunk
 from easy_audio_interfaces.filesystem import LocalFileSink
@@ -36,81 +34,8 @@ CHUNK_DURATION_SECONDS = 10
 
 # ESP32 audio format (from Voice-PE)
 ESP32_SAMPLE_RATE = 16000
-ESP32_CHANNELS = 2
-ESP32_SAMPLE_WIDTH = 4  # 32-bit (4 bytes per sample)
-
-# Target format for backend
-TARGET_SAMPLE_WIDTH = 2  # 16-bit (2 bytes per sample)
-TARGET_CHANNELS = 1  # Convert from stereo to mono
-
-
-class AudioConverter:
-    """Handles audio format conversion from 32-bit to 16-bit PCM."""
-
-    def __init__(self):
-        # We'll use ResamplingBlock for format conversion
-        # Even though sample rate stays the same, it handles bit depth conversion
-        self.resampler = ResamplingBlock(resample_rate=ESP32_SAMPLE_RATE)
-
-    async def convert_audio_chunk(self, audio_data: bytes) -> bytes:
-        """Convert 32-bit PCM audio data to 16-bit PCM."""
-        try:
-            # Create AudioChunk from incoming 32-bit data
-            input_chunk = AudioChunk(
-                audio=audio_data,
-                rate=ESP32_SAMPLE_RATE,
-                width=ESP32_SAMPLE_WIDTH,
-                channels=ESP32_CHANNELS,
-            )
-
-            converted_chunks = []
-            async for converted_chunk in self.resampler.process_chunk(input_chunk):
-                converted_chunks.append(converted_chunk)
-
-            if converted_chunks:
-                # The resampler maintains 32-bit format, so we need to manually convert to 16-bit
-                if len(converted_chunks) > 1:
-                    logging.warning(
-                        f"WARNING: {len(converted_chunks)} converted chunks returned from resampler"
-                    )
-                converted_chunk = converted_chunks[0]
-                return self._convert_32bit_to_16bit(converted_chunk.audio)
-            else:
-                logging.warning("No converted chunks returned from resampler")
-                return b""
-
-        except Exception as e:
-            logging.error(f"Error converting audio: {e}")
-            return b""
-
-    def _convert_32bit_to_16bit(self, audio_32bit: bytes) -> bytes:
-        """Convert 32-bit PCM data to 16-bit PCM data and stereo to mono using NumPy."""
-
-        # Convert bytes to numpy array of int32 (little-endian)
-        samples_32bit = np.frombuffer(audio_32bit, dtype=np.int32)
-
-        # Convert int32 to int16 by right-shifting by 16 bits
-        # This preserves the most significant bits while reducing bit depth
-        samples_16bit = (samples_32bit >> 16).astype(np.int16)
-
-        # Convert stereo to mono by averaging left and right channels
-        if ESP32_CHANNELS == 2:
-            # Reshape to separate channels (samples, channels)
-            stereo_samples = samples_16bit.reshape(-1, 2)
-            # Average left and right channels to create mono
-            mono_samples = np.mean(stereo_samples, axis=1, dtype=np.int16)
-            return mono_samples.tobytes()
-        else:
-            # Already mono or other channel configuration
-            return samples_16bit.tobytes()
-
-    async def open(self):
-        """Initialize the audio converter."""
-        await self.resampler.open()
-
-    async def close(self):
-        """Clean up the audio converter."""
-        await self.resampler.close()
+ESP32_CHANNELS = 1
+ESP32_SAMPLE_WIDTH = 2  # 16-bit (2 bytes per sample)
 
 
 class TCPToWSRelay:
@@ -119,11 +44,10 @@ class TCPToWSRelay:
         self.ws_url = ws_url
         self.running = True
         self.shutdown_event = asyncio.Event()
-        self.audio_converter = AudioConverter()
         
         # Audio sink management
         self.sink = None
-        self.sink_converted = None
+        self.sink_converted = None  # No longer used but kept for compatibility
         self.chunk_start_time = None
         self.current_chunk_samples = 0
         self.chunk_counter = 0
@@ -132,14 +56,14 @@ class TCPToWSRelay:
         """Create new audio sinks with timestamped filenames."""
         if self.sink:
             await self.sink.close()
-        if self.sink_converted:
-            await self.sink_converted.close()
+        # if self.sink_converted:
+        #     await self.sink_converted.close()
             
         if DEBUG:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.chunk_counter += 1
             
-            # Create new input sink (32-bit)
+            # Create new input sink (16-bit - no conversion needed)
             input_filename = f"relay_input_{timestamp}_chunk{self.chunk_counter:03d}.wav"
             self.sink = LocalFileSink(
                 DEBUG_DIR / input_filename,
@@ -149,20 +73,10 @@ class TCPToWSRelay:
             )
             await self.sink.open()
             
-            # Create new converted sink (16-bit)
-            output_filename = f"relay_output_{timestamp}_chunk{self.chunk_counter:03d}.wav"
-            self.sink_converted = LocalFileSink(
-                DEBUG_DIR / output_filename,
-                sample_rate=ESP32_SAMPLE_RATE,
-                channels=TARGET_CHANNELS,
-                sample_width=TARGET_SAMPLE_WIDTH,
-            )
-            await self.sink_converted.open()
-            
-            logging.info(f"Created new audio chunk files: {input_filename}, {output_filename}")
+            logging.info(f"Created new audio chunk file: {input_filename}")
         else:
             self.sink = None
-            self.sink_converted = None
+            self.sink_converted = None  # No longer used
             
         # Reset chunk timing
         self.chunk_start_time = time.time()
@@ -193,17 +107,7 @@ class TCPToWSRelay:
         await self._create_new_sinks()
 
         try:
-            # Initialize audio converter
-            await self.audio_converter.open()
-
-            # Add audio format parameters to WebSocket URL for the backend
-            ws_url_with_params = (
-                f"{self.ws_url}?user_id=havpe"
-                # f"&rate={ESP32_SAMPLE_RATE}"
-                # f"&width={TARGET_SAMPLE_WIDTH}"  # Tell backend we're sending 16-bit
-                # f"&channels={ESP32_CHANNELS}"
-                # f"&src=voice_pe"
-            )
+            ws_url_with_params = f"{self.ws_url}?user_id=havpe"
             logging.info(f"WebSocket URL with params: {ws_url_with_params}")
 
             async with websockets.connect(
@@ -237,30 +141,10 @@ class TCPToWSRelay:
                             logging.info("TCP client disconnected")
                             break
 
-                        # Convert audio format from 32-bit to 16-bit
-                        converted_data = await self.audio_converter.convert_audio_chunk(
-                            data
-                        )
+                        # Forward audio data directly to WebSocket (no conversion needed)
+                        await websocket.send(data)
+                        logging.debug(f"Relayed {len(data)} bytes directly from TCP to WebSocket")
 
-                        if converted_data:
-                            # Forward converted data to WebSocket
-                            await websocket.send(converted_data)
-                            if self.sink_converted:
-                                await self.sink_converted.write(
-                                    AudioChunk(
-                                        audio=converted_data,
-                                        rate=ESP32_SAMPLE_RATE,
-                                        channels=TARGET_CHANNELS,
-                                        width=TARGET_SAMPLE_WIDTH,
-                                    )
-                                )
-                            logging.debug(
-                                f"Relayed {len(data)} bytes (32-bit) -> {len(converted_data)} bytes (16-bit) from TCP to WebSocket"
-                            )
-                        else:
-                            logging.warning(
-                                f"Failed to convert {len(data)} bytes of audio data"
-                            )
 
                 except websockets.exceptions.ConnectionClosed:
                     logging.warning("WebSocket connection closed")
@@ -277,14 +161,9 @@ class TCPToWSRelay:
         except Exception as e:
             logging.error(f"Error connecting to WebSocket: {e}")
         finally:
-            # Clean up audio converter
-            await self.audio_converter.close()
-            
             # Clean up audio sinks
             if self.sink:
                 await self.sink.close()
-            if self.sink_converted:
-                await self.sink_converted.close()
 
             writer.close()
             await writer.wait_closed()
@@ -299,9 +178,8 @@ class TCPToWSRelay:
         addr = server.sockets[0].getsockname()
         logging.info(f"TCP-to-WebSocket relay listening on {addr[0]}:{addr[1]}")
         logging.info(f"Will forward to WebSocket: {self.ws_url}")
-        logging.info(
-            f"Audio conversion: {ESP32_CHANNELS}-channel {ESP32_SAMPLE_WIDTH*8}-bit -> {TARGET_CHANNELS}-channel {TARGET_SAMPLE_WIDTH*8}-bit PCM"
-        )
+
+        logging.info(f"Audio format: {ESP32_CHANNELS}-channel {ESP32_SAMPLE_WIDTH*8}-bit PCM (direct forwarding)")
 
         try:
             async with server:
