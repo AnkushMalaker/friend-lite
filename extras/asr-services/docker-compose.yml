@@ -9,8 +9,8 @@ services:
     volumes:
       # Persist Hugging Face cache (models + tokenizer) between restarts
       - ./model_cache:/models
-      - ./audio_chunks:/app/audio_chunks
       - ./debug:/app/debug
+      - ./results:/app/results
     deploy:
       resources:
         reservations:
@@ -32,6 +32,9 @@ services:
   #   volumes:
   #     # Persist Hugging Face cache (models + tokenizer) between restarts
   #     - ./model_cache:/models
+  #     - ./audio_chunks:/app/audio_chunks
+  #     - ./debug:/app/debug
+  #     - ./results:/app/results
   #   deploy:
   #     resources:
   #       reservations:
