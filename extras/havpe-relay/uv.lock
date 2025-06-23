@@ -48,7 +48,7 @@ wheels = [
 
 [[package]]
 name = "easy-audio-interfaces"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
@@ -59,9 +59,9 @@ dependencies = [
     { name = "websockets" },
     { name = "wyoming" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d3/23/9d4d30a17d675a70621c7db6aa4f73cb0043c0b0750f708643f2c231cb4b/easy_audio_interfaces-0.3.0.tar.gz", hash = "sha256:b14969751c218f4800a21a4837af91ad6dfc872973939a1c1f832201730db8f1", size = 23388 }
+sdist = { url = "https://files.pythonhosted.org/packages/3d/e4/e15a6349080b65ebf784d67299274360997def214ac85deb9e3a01baa239/easy_audio_interfaces-0.4.0.tar.gz", hash = "sha256:be023a2bc4fb7fdf4a658e8271b535583b5bbe774dc1f3d172e6f4c8f7b0672e", size = 31157 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9b/49/65a44781ae27be343c5cc57da1f2b0f4470df298bfd9a4874dd750063467/easy_audio_interfaces-0.3.0-py3-none-any.whl", hash = "sha256:a21357c18b3a75deed07c85bb768998251eac30b0ab4882a5a4aff5b9e0eeba4", size = 28884 },
+    { url = "https://files.pythonhosted.org/packages/88/92/0d7424bb767731dc7caf306cb9c384854ddf620ba1f6410f786776de5946/easy_audio_interfaces-0.4.0-py3-none-any.whl", hash = "sha256:bb1a98352472959a589dd89171d55c092b38d1de0fd70500d544a2b440ec04b3", size = 36568 },
 ]
 
 [[package]]
@@ -90,7 +90,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "easy-audio-interfaces", specifier = ">=0.3.0" },
+    { name = "easy-audio-interfaces", specifier = ">=0.4" },
     { name = "websockets", specifier = ">=15.0.1" },
 ]
 
