@@ -15,7 +15,7 @@ dependencies = [
   "uvicorn>=0.34.2",
   "silero-vad>=5.1.2",
   "wyoming>=1.6.1",
-  "easy-audio-interfaces>=0.2.6",
+  "easy-audio-interfaces>=0.4.0",
 ]
 
 [tool.uv]
