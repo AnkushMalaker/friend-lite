@@ -269,17 +269,11 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         """Process audio chunk with VAD and transcription."""
         if self._vad_enabled:
             # VAD-enabled mode: use VAD to detect speech segments
-            await self._process_with_vad(chunk)
+            await self._buffer_and_process_vad(chunk)
         else:
             # VAD-disabled mode: collect all audio from start to stop
             await self._write_debug_file(chunk)
             await self._process_without_vad(chunk)
-
-    async def _process_with_vad(self, chunk: AudioChunk) -> None:
-        """Process audio chunk using VAD for speech detection with 512-sample buffering."""
-
-        # Use buffered VAD processing to ensure exactly 512 samples per VAD call
-        await self._buffer_and_process_vad(chunk)
 
     async def _process_without_vad(self, chunk: AudioChunk) -> None:
         """Process audio chunk without VAD - collect everything from start to stop."""
