@@ -82,7 +82,7 @@ class SharedTranscriber:
                         audio=np.zeros(self._rate // 10, np.int32).tobytes(),
                         rate=self._rate,
                         channels=1,
-                        width=4,
+                        width=2,
                     )
                 ]
             )  # 0.1s silence
@@ -134,7 +134,9 @@ class SharedTranscriber:
             return ""
         finally:
             if tmpfile_name and os.path.exists(tmpfile_name):
-                os.remove(tmpfile_name)
+                # os.remove(tmpfile_name)
+                logger.warning(f"Not removing tmpfile: {tmpfile_name}")
+                pass
 
     async def transcribe_async(self, speech: Sequence[AudioChunk]) -> str:
         """Thread-safe async transcription method."""
@@ -240,6 +242,13 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         if self._recording_debug_handle is None:
             self._cur_seg_duration = 0
             self._current_debug_file_path = self._debug_dir / f"{time.time()}.wav"
+            logger.info(f"Writing debug file: {self._current_debug_file_path}\n\
+                        with rate: {event.rate}\n\
+                        channels: {event.channels}\n\
+                        width: {event.width}\n\
+                        samples: {event.samples}\n\
+                        seconds: {event.seconds}\n\
+                        ")
             self._recording_debug_handle = LocalFileSink(
                 file_path=self._current_debug_file_path,
                 sample_rate=event.rate,
@@ -493,32 +502,34 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         chunk_array = _chunk_to_numpy_float(chunk)
         self._vad_sample_buffer = np.concatenate([self._vad_sample_buffer, chunk_array])
 
+        # Write debug file once per chunk (not per VAD iteration)
+        await self._write_debug_file(chunk)
+
         # Process complete 512-sample chunks
         while len(self._vad_sample_buffer) >= self._vad_buffer_size:
             # Extract exactly 512 samples
             samples_to_process = self._vad_sample_buffer[: self._vad_buffer_size]
 
             # Process with VAD
-            await self._write_debug_file(chunk)
             await self._process_vad_samples(samples_to_process)
-
-            # If we're recording, accumulate the original chunk
-            # Note: We add the chunk, not the 512 samples, to maintain chunk boundaries
-            if self._recording:
-                self._speech_buf.append(chunk)
-
-                # Safety check: if speech buffer gets too long, force transcription
-                if len(self._speech_buf) >= MAX_SPEECH_SECS * SAMPLING_RATE:
-                    logger.warning(
-                        f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription."
-                    )
-                    await self._transcribe_and_send(self._speech_buf)
-                    self._speech_buf.clear()
-                    self._recording = False
-                    self.soft_reset()
 
             # Remove processed samples from buffer
             self._vad_sample_buffer = self._vad_sample_buffer[self._vad_buffer_size :]
+
+        # If we're recording, accumulate the original chunk once per chunk
+        if self._recording:
+            self._speech_buf.append(chunk)
+
+            # Safety check: if speech buffer gets too long, force transcription
+            speech_duration = sum(c.seconds for c in self._speech_buf)
+            if speech_duration >= MAX_SPEECH_SECS:
+                logger.warning(
+                    f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription."
+                )
+                await self._transcribe_and_send(self._speech_buf)
+                self._speech_buf.clear()
+                self._recording = False
+                self.soft_reset()
 
     async def _flush_vad_buffer(self) -> None:
         """Process any remaining samples in the VAD buffer at stream end."""
