@@ -18,15 +18,17 @@ WORKDIR /app
 
 # Copy dependency files
 COPY pyproject.toml .
+COPY uv.lock .
 
 # Install dependencies using uv
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync
 
-
 # Copy application code
 COPY . .
 
+# Expose the TCP port that the relay listens on
+EXPOSE 8989
 
 # Run the application
-CMD ["uv", "run", "python3", "main.py"]
+CMD ["uv", "run", "python3", "main.py"] 

@@ -10,7 +10,9 @@ services:
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - HF_TOKEN=${HF_TOKEN}
+      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
     depends_on:
       qdrant:
         condition: service_started
@@ -41,6 +43,36 @@ services:
         condition: service_started
     volumes:
       - ./webui:/app
+
+  # speaker-recognition:
+  #   build:
+  #     context: ../../extras/speaker-recognition
+  #     dockerfile: Dockerfile
+  #   # image: speaker-recognition:latest
+  #   ports:
+  #     - "8001:8001"
+  #   volumes:
+  #     # Persist Hugging Face cache (models) between restarts
+  #     - ./speaker_model_cache:/models
+  #     - ./audio_chunks:/app/audio_chunks  # Share audio chunks with backend
+  #     - ./speaker_debug:/app/debug
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   environment:
+  #     - HF_HOME=/models
+  #     - HF_TOKEN=${HF_TOKEN}
+  #     - SIMILARITY_THRESHOLD=0.85
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
     
   # ollama:
   #   image: ollama/ollama:latest
@@ -64,7 +96,7 @@ services:
     volumes:
       - ./qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
   mongo:
-    image: mongo:latest
+    image: mongo:4.4.18
     ports:
       - "27017:27017"
     volumes:
