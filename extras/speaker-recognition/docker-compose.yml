@@ -1,0 +1,32 @@
+services:
+  speaker-recognition:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: speaker-recognition:latest
+    ports:
+      - "8001:8001"
+    volumes:
+      # Persist Hugging Face cache (models) between restarts
+      - ./model_cache:/models
+      - ./audio_chunks:/app/audio_chunks
+      - ./debug:/app/debug
+      # Share audio chunks with advanced-backend
+      - ../../backends/advanced-backend/audio_chunks:/app/shared_audio_chunks
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - HF_HOME=/models
+      - HF_TOKEN=${HF_TOKEN}
+      - SIMILARITY_THRESHOLD=0.85
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3 

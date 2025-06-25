@@ -23,9 +23,52 @@ BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
 def get_system_health():
     """Get comprehensive system health from backend."""
     try:
-        response = requests.get(f"{BACKEND_API_URL}/health", timeout=10)
-        if response.status_code == 200:  # Backend always returns 200
-            return response.json()
+        # First try the simple readiness check with shorter timeout
+        response = requests.get(f"{BACKEND_API_URL}/readiness", timeout=5)
+        if response.status_code == 200:
+            # Backend is responding, now try the full health check with longer timeout
+            try:
+                health_response = requests.get(f"{BACKEND_API_URL}/health", timeout=30)
+                if health_response.status_code == 200:
+                    return health_response.json()
+                else:
+                    # Health check failed but backend is responsive
+                    return {
+                        "status": "partial",
+                        "overall_healthy": False,
+                        "services": {
+                            "backend": {
+                                "status": f"⚠️ Backend responsive but health check failed: HTTP {health_response.status_code}",
+                                "healthy": False
+                            }
+                        },
+                        "error": "Health check endpoint returned unexpected status code"
+                    }
+            except requests.exceptions.Timeout:
+                # Health check timed out but backend is responsive
+                return {
+                    "status": "partial",
+                    "overall_healthy": False,
+                    "services": {
+                        "backend": {
+                            "status": "⚠️ Backend responsive but health check timed out (some services may be slow)",
+                            "healthy": False
+                        }
+                    },
+                    "error": "Health check timed out - external services may be unavailable"
+                }
+            except Exception as e:
+                return {
+                    "status": "partial",
+                    "overall_healthy": False,
+                    "services": {
+                        "backend": {
+                            "status": f"⚠️ Backend responsive but health check failed: {str(e)}",
+                            "healthy": False
+                        }
+                    },
+                    "error": str(e)
+                }
         else:
             return {
                 "status": "unhealthy",
@@ -100,6 +143,24 @@ st.set_page_config(
 
 st.title("Friend-Lite Dashboard")
 
+# Inject custom CSS for conversation box using Streamlit theme variables
+st.markdown(
+    """
+    <style>
+    .conversation-box {
+        max-height: 300px;
+        overflow-y: auto;
+        padding: 10px;
+        border: 1px solid var(--secondary-background-color);
+        border-radius: 5px;
+        background-color: var(--secondary-background-color);
+        color: var(--text-color);
+        font-size: 1.05em;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ---- Sidebar with Health Checks ---- #
 with st.sidebar:
@@ -159,85 +220,207 @@ tab_convos, tab_mem, tab_users, tab_manage = st.tabs(["Conversations", "Memories
 
 with tab_convos:
     st.header("Latest Conversations")
-    if st.button("Refresh Conversations"):
-        st.rerun()
+    
+    # Add debug mode toggle
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if st.button("Refresh Conversations"):
+            st.rerun()
+    with col2:
+        debug_mode = st.checkbox("🔧 Debug Mode", 
+                                help="Show original audio files instead of cropped versions",
+                                key="debug_mode")
 
     conversations = get_data("/api/conversations")
 
     if conversations:
-        for convo in conversations:
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                # Format timestamp for better readability
-                ts = datetime.fromtimestamp(convo['timestamp'])
-                st.write(f"**Timestamp:**")
-                st.write(ts.strftime('%Y-%m-%d %H:%M:%S'))
-                
-                # Show client_id with better formatting
-                client_id = convo.get('client_id', 'N/A')
-                if client_id.startswith('client_'):
-                    st.write(f"**Client ID:**")
-                    st.write(f"`{client_id}`")
-                else:
-                    st.write(f"**User ID:**")
-                    st.write(f"👤 `{client_id}`")
-                
-                # Show Audio UUID
-                audio_uuid = convo.get("audio_uuid", "N/A")
-                st.write(f"**Audio UUID:**")
-                st.code(audio_uuid, language=None)
-                
-                # Show identified speakers
-                speakers = convo.get("speakers_identified", [])
-                if speakers:
-                    st.write(f"**Speakers:**")
-                    for speaker in speakers:
-                        st.write(f"🎤 `{speaker}`")
+        # Check if conversations is the new grouped format or old format
+        if isinstance(conversations, dict) and "conversations" in conversations:
+            # New grouped format
+            conversations_data = conversations["conversations"]
             
-            with col2:
-                # Display conversation transcript with new format
-                transcript = convo.get("transcript", [])
-                if transcript:
-                    st.write("**Conversation:**")
-                    conversation_text = ""
-                    for segment in transcript:
-                        speaker = segment.get("speaker", "Unknown")
-                        text = segment.get("text", "")
-                        start_time = segment.get("start", 0.0)
-                        end_time = segment.get("end", 0.0)
-                        
-                        # Format timing if available
-                        timing_info = ""
-                        if start_time > 0 or end_time > 0:
-                            timing_info = f" [{start_time:.1f}s - {end_time:.1f}s]"
-                        
-                        conversation_text += f"**{speaker}**{timing_info}: {text}\n\n"
-                    
-                    # Display in a scrollable container with max height
-                    st.markdown(
-                        f"""
-                        <div style="
-                            max-height: 300px; 
-                            overflow-y: auto; 
-                            padding: 10px; 
-                            border: 1px solid #ddd; 
-                            border-radius: 5px;
-                            background-color: #f9f9f9;
-                        ">{conversation_text}</div>
-                        """, 
-                        unsafe_allow_html=True
-                    )
-                else:
-                    # Fallback for old format
-                    old_transcript = convo.get("transcription", "No transcript available.")
-                    st.text_area("Transcription", old_transcript, height=150, disabled=True, key=f"transcript_{convo['_id']}")
+            for client_id, client_conversations in conversations_data.items():
+                st.subheader(f"👤 {client_id}")
                 
-                audio_path = convo.get("audio_path")
-                if audio_path:
-                    audio_url = f"{BACKEND_PUBLIC_URL}/audio/{audio_path}"
-                    st.audio(audio_url, format="audio/wav")
+                for convo in client_conversations:
+                    col1, col2 = st.columns([1, 4])
+                    with col1:
+                        # Format timestamp for better readability
+                        ts = datetime.fromtimestamp(convo['timestamp'])
+                        st.write(f"**Timestamp:**")
+                        st.write(ts.strftime('%Y-%m-%d %H:%M:%S'))
+                        
+                        # Show Audio UUID
+                        audio_uuid = convo.get("audio_uuid", "N/A")
+                        st.write(f"**Audio UUID:**")
+                        st.code(audio_uuid, language=None)
+                        
+                        # Show identified speakers
+                        speakers = convo.get("speakers_identified", [])
+                        if speakers:
+                            st.write(f"**Speakers:**")
+                            for speaker in speakers:
+                                st.write(f"🎤 `{speaker}`")
+                        
+                        # Show audio duration info if available
+                        cropped_duration = convo.get("cropped_duration")
+                        if cropped_duration:
+                            st.write(f"**Cropped Duration:**")
+                            st.write(f"⏱️ {cropped_duration:.1f}s")
+                            
+                            # Show speech segments count
+                            speech_segments = convo.get("speech_segments", [])
+                            if speech_segments:
+                                st.write(f"**Speech Segments:**")
+                                st.write(f"🗣️ {len(speech_segments)} segments")
+                    
+                    with col2:
+                        # Display conversation transcript with new format
+                        transcript = convo.get("transcript", [])
+                        if transcript:
+                            st.write("**Conversation:**")
+                            conversation_text = ""
+                            for segment in transcript:
+                                speaker = segment.get("speaker", "Unknown")
+                                text = segment.get("text", "")
+                                start_time = segment.get("start", 0.0)
+                                end_time = segment.get("end", 0.0)
+                                
+                                # Format timing if available
+                                timing_info = ""
+                                if start_time > 0 or end_time > 0:
+                                    timing_info = f" [{start_time:.1f}s - {end_time:.1f}s]"
+                                
+                                conversation_text += f"<b>{speaker}</b>{timing_info}: {text}<br><br>"
+                            
+                            # Display in a scrollable container with max height
+                            st.markdown(
+                                f'<div class="conversation-box">{conversation_text}</div>',
+                                unsafe_allow_html=True
+                            )
+                        
+                        # Smart audio display logic
+                        audio_path = convo.get("audio_path")
+                        cropped_audio_path = convo.get("cropped_audio_path")
+                        
+                        if audio_path:
+                            # Determine which audio to show
+                            if debug_mode:
+                                # Debug mode: always show original
+                                selected_audio_path = audio_path
+                                audio_label = "🔧 **Original Audio** (Debug Mode)"
+                            elif cropped_audio_path:
+                                # Normal mode: prefer cropped if available
+                                selected_audio_path = cropped_audio_path
+                                audio_label = "🎵 **Cropped Audio** (Silence Removed)"
+                            else:
+                                # Fallback: show original if no cropped version
+                                selected_audio_path = audio_path
+                                audio_label = "🎵 **Original Audio** (No cropped version available)"
+                            
+                            # Display audio with label
+                            st.write(audio_label)
+                            audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}"
+                            st.audio(audio_url, format="audio/wav")
+                            
+                            # Show additional info in debug mode or when both versions exist
+                            if debug_mode and cropped_audio_path:
+                                st.caption(f"💡 Cropped version available: {cropped_audio_path}")
+                            elif not debug_mode and cropped_audio_path:
+                                st.caption(f"💡 Enable debug mode to hear original with silence")
 
-            st.divider()
+                    st.divider()
+        else:
+            # Old format - single list of conversations
+            for convo in conversations:
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    # Format timestamp for better readability
+                    ts = datetime.fromtimestamp(convo['timestamp'])
+                    st.write(f"**Timestamp:**")
+                    st.write(ts.strftime('%Y-%m-%d %H:%M:%S'))
+                    
+                    # Show client_id with better formatting
+                    client_id = convo.get('client_id', 'N/A')
+                    if client_id.startswith('client_'):
+                        st.write(f"**Client ID:**")
+                        st.write(f"`{client_id}`")
+                    else:
+                        st.write(f"**User ID:**")
+                        st.write(f"👤 `{client_id}`")
+                    
+                    # Show Audio UUID
+                    audio_uuid = convo.get("audio_uuid", "N/A")
+                    st.write(f"**Audio UUID:**")
+                    st.code(audio_uuid, language=None)
+                    
+                    # Show identified speakers
+                    speakers = convo.get("speakers_identified", [])
+                    if speakers:
+                        st.write(f"**Speakers:**")
+                        for speaker in speakers:
+                            st.write(f"🎤 `{speaker}`")
+                
+                with col2:
+                    # Display conversation transcript with new format
+                    transcript = convo.get("transcript", [])
+                    if transcript:
+                        st.write("**Conversation:**")
+                        conversation_text = ""
+                        for segment in transcript:
+                            speaker = segment.get("speaker", "Unknown")
+                            text = segment.get("text", "")
+                            start_time = segment.get("start", 0.0)
+                            end_time = segment.get("end", 0.0)
+                            
+                            # Format timing if available
+                            timing_info = ""
+                            if start_time > 0 or end_time > 0:
+                                timing_info = f" [{start_time:.1f}s - {end_time:.1f}s]"
+                            
+                            conversation_text += f"<b>{speaker}</b>{timing_info}: {text}<br><br>"
+                        
+                        # Display in a scrollable container with max height
+                        st.markdown(
+                            f'<div class="conversation-box">{conversation_text}</div>',
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        # Fallback for old format
+                        old_transcript = convo.get("transcription", "No transcript available.")
+                        st.text_area("Transcription", old_transcript, height=150, disabled=True, key=f"transcript_{convo['_id']}")
+                    
+                    # Smart audio display logic (same as above)
+                    audio_path = convo.get("audio_path")
+                    cropped_audio_path = convo.get("cropped_audio_path")
+                    
+                    if audio_path:
+                        # Determine which audio to show
+                        if debug_mode:
+                            # Debug mode: always show original
+                            selected_audio_path = audio_path
+                            audio_label = "🔧 **Original Audio** (Debug Mode)"
+                        elif cropped_audio_path:
+                            # Normal mode: prefer cropped if available
+                            selected_audio_path = cropped_audio_path
+                            audio_label = "🎵 **Cropped Audio** (Silence Removed)"
+                        else:
+                            # Fallback: show original if no cropped version
+                            selected_audio_path = audio_path
+                            audio_label = "🎵 **Original Audio** (No cropped version available)"
+                        
+                        # Display audio with label
+                        st.write(audio_label)
+                        audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}"
+                        st.audio(audio_url, format="audio/wav")
+                        
+                        # Show additional info in debug mode or when both versions exist
+                        if debug_mode and cropped_audio_path:
+                            st.caption(f"💡 Cropped version available: {cropped_audio_path}")
+                        elif not debug_mode and cropped_audio_path:
+                            st.caption(f"💡 Enable debug mode to hear original with silence")
+
+                st.divider()
     elif conversations is not None:
         st.info("No conversations found. The backend is connected but the database might be empty.")
 
@@ -250,7 +433,7 @@ with tab_mem:
     # User selection for memories
     col1, col2 = st.columns([2, 1])
     with col1:
-        user_id_input = st.text_input("User ID (leave empty to view memories for all users):", 
+        user_id_input = st.text_input("Enter username to view memories:", 
                                     value=default_user,
                                     placeholder="e.g., john_doe, alice123")
     with col2:
@@ -269,11 +452,10 @@ with tab_mem:
         memories = get_data(f"/api/memories?user_id={user_id_input.strip()}")
         st.info(f"Showing memories for user: **{user_id_input.strip()}**")
     else:
-        # Show all users' memories or implement a different endpoint
-        st.info("Showing memories for all users (this may require backend modification)")
-        # For now, let's show a message about needing a specific user
+        # Show instruction to enter a username
         memories = None
-        st.warning("Please enter a specific User ID to view memories. The backend requires a user_id parameter.")
+        st.info("👆 Please enter a username above to view their memories.")
+        st.markdown("💡 **Tip:** You can find existing usernames in the 'User Management' tab.")
 
     if memories:
         df = pd.DataFrame(memories)

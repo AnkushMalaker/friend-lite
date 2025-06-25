@@ -249,7 +249,7 @@ name = "asr-services"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "easy-audio-interfaces", extra = ["local-audio"] },
+    { name = "easy-audio-interfaces" },
     { name = "fastapi" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-12-asr-services-parakeet'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
@@ -283,7 +283,7 @@ parakeet = [
 
 [package.metadata]
 requires-dist = [
-    { name = "easy-audio-interfaces", extras = ["local-audio"], git = "https://github.com/AnkushMalaker/python-audio-interfaces.git?branch=upgrade-to-wyoming" },
+    { name = "easy-audio-interfaces", specifier = ">=0.4.2" },
     { name = "fastapi", specifier = ">=0.115.12" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "omi-sdk", specifier = ">=0.1.4" },
@@ -1073,23 +1073,20 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf57
 
 [[package]]
 name = "easy-audio-interfaces"
-version = "0.2.4"
-source = { git = "https://github.com/AnkushMalaker/python-audio-interfaces.git?branch=upgrade-to-wyoming#ba35b130b7fa2703f7c98bcf15cb12642d809bfa" }
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
     { name = "opuslib" },
-    { name = "pydub" },
     { name = "rich" },
-    { name = "samplerate" },
     { name = "scipy" },
-    { name = "types-pyaudio" },
+    { name = "soxr" },
     { name = "websockets" },
     { name = "wyoming" },
 ]
-
-[package.optional-dependencies]
-local-audio = [
-    { name = "pyaudio" },
+sdist = { url = "https://files.pythonhosted.org/packages/aa/7f/44cf3b4054204c0673fcf0e0155190ddbe65335fdefd376a464ed4e4b7a0/easy_audio_interfaces-0.4.2.tar.gz", hash = "sha256:e52d2f8373a6b00beb43ef1cbac54ba26ddc7a1cb2e8e372a41945ea0f358373", size = 36218, upload_time = "2025-06-24T16:29:48.689Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/69/3d/836c525132d19429d0f4f3d190bf3329fc35883a5122cc6b123e1230ad25/easy_audio_interfaces-0.4.2-py3-none-any.whl", hash = "sha256:0a9d93b2b784fb30fc587058ba2046be68a3e8ee30ff61fedb28caa52957b45d", size = 42294, upload_time = "2025-06-24T16:29:47.535Z" },
 ]
 
 [[package]]
@@ -3095,7 +3092,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.5.1.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/93/a201a12d3ec1caa8c6ac34c1c2f9eeb696b886f0c36ff23c638b46603bd0/nvidia_cudnn_cu12-9.5.1.17-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:9fd4584468533c61873e5fda8ca41bac3a38bcb2d12350830c69b0a96a7e4def", size = 570523509, upload_time = "2024-10-25T19:53:03.148Z" },
@@ -3108,7 +3105,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/37/c50d2b2f2c07e146776389e3080f4faf70bcc4fa6e19d65bb54ca174ebc3/nvidia_cufft_cu12-11.3.0.4-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d16079550df460376455cba121db6564089176d9bac9e4f360493ca4741b22a6", size = 200164144, upload_time = "2024-11-20T17:40:58.288Z" },
@@ -3144,9 +3141,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
-    { name = "nvidia-cusparse-cu12" },
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/93/17/dbe1aa865e4fdc7b6d4d0dd308fdd5aaab60f939abfc0ea1954eac4fb113/nvidia_cusolver_cu12-11.7.1.2-py3-none-manylinux2014_aarch64.whl", hash = "sha256:0ce237ef60acde1efc457335a2ddadfd7610b892d94efee7b776c64bb1cac9e0", size = 157833628, upload_time = "2024-10-01T17:05:05.591Z" },
@@ -3161,7 +3158,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/eb/eb/6681efd0aa7df96b4f8067b3ce7246833dd36830bb4cec8896182773db7d/nvidia_cusparse_cu12-12.5.4.2-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d25b62fb18751758fe3c93a4a08eff08effedfe4edf1c6bb5afd0890fe88f887", size = 216451147, upload_time = "2024-11-20T17:44:18.055Z" },
@@ -3865,22 +3862,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyaudio"
-version = "0.2.14"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/26/1d/8878c7752febb0f6716a7e1a52cb92ac98871c5aa522cba181878091607c/PyAudio-0.2.14.tar.gz", hash = "sha256:78dfff3879b4994d1f4fc6485646a57755c6ee3c19647a491f790a0895bd2f87", size = 47066, upload_time = "2023-11-07T07:11:48.806Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/90/1553487277e6aa25c0b7c2c38709cdd2b49e11c66c0b25c6e8b7b6638c72/PyAudio-0.2.14-cp310-cp310-win32.whl", hash = "sha256:126065b5e82a1c03ba16e7c0404d8f54e17368836e7d2d92427358ad44fefe61", size = 144624, upload_time = "2023-11-07T07:11:33.599Z" },
-    { url = "https://files.pythonhosted.org/packages/27/bc/719d140ee63cf4b0725016531d36743a797ffdbab85e8536922902c9349a/PyAudio-0.2.14-cp310-cp310-win_amd64.whl", hash = "sha256:2a166fc88d435a2779810dd2678354adc33499e9d4d7f937f28b20cc55893e83", size = 164069, upload_time = "2023-11-07T07:11:35.439Z" },
-    { url = "https://files.pythonhosted.org/packages/7b/f0/b0eab89eafa70a86b7b566a4df2f94c7880a2d483aa8de1c77d335335b5b/PyAudio-0.2.14-cp311-cp311-win32.whl", hash = "sha256:506b32a595f8693811682ab4b127602d404df7dfc453b499c91a80d0f7bad289", size = 144624, upload_time = "2023-11-07T07:11:36.94Z" },
-    { url = "https://files.pythonhosted.org/packages/82/d8/f043c854aad450a76e476b0cf9cda1956419e1dacf1062eb9df3c0055abe/PyAudio-0.2.14-cp311-cp311-win_amd64.whl", hash = "sha256:bbeb01d36a2f472ae5ee5e1451cacc42112986abe622f735bb870a5db77cf903", size = 164070, upload_time = "2023-11-07T07:11:38.579Z" },
-    { url = "https://files.pythonhosted.org/packages/8d/45/8d2b76e8f6db783f9326c1305f3f816d4a12c8eda5edc6a2e1d03c097c3b/PyAudio-0.2.14-cp312-cp312-win32.whl", hash = "sha256:5fce4bcdd2e0e8c063d835dbe2860dac46437506af509353c7f8114d4bacbd5b", size = 144750, upload_time = "2023-11-07T07:11:40.142Z" },
-    { url = "https://files.pythonhosted.org/packages/b0/6a/d25812e5f79f06285767ec607b39149d02aa3b31d50c2269768f48768930/PyAudio-0.2.14-cp312-cp312-win_amd64.whl", hash = "sha256:12f2f1ba04e06ff95d80700a78967897a489c05e093e3bffa05a84ed9c0a7fa3", size = 164126, upload_time = "2023-11-07T07:11:41.539Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/77/66cd37111a87c1589b63524f3d3c848011d21ca97828422c7fde7665ff0d/PyAudio-0.2.14-cp313-cp313-win32.whl", hash = "sha256:95328285b4dab57ea8c52a4a996cb52be6d629353315be5bfda403d15932a497", size = 150982, upload_time = "2024-11-20T19:12:12.404Z" },
-    { url = "https://files.pythonhosted.org/packages/a5/8b/7f9a061c1cc2b230f9ac02a6003fcd14c85ce1828013aecbaf45aa988d20/PyAudio-0.2.14-cp313-cp313-win_amd64.whl", hash = "sha256:692d8c1446f52ed2662120bcd9ddcb5aa2b71f38bda31e58b19fb4672fffba69", size = 173655, upload_time = "2024-11-20T19:12:13.616Z" },
-]
-
-[[package]]
 name = "pybind11"
 version = "2.13.6"
 source = { registry = "https://pypi.org/simple" }
@@ -4083,7 +4064,7 @@ name = "pyobjc-framework-cocoa"
 version = "10.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
+    { name = "pyobjc-core", marker = "sys_platform != 'linux' or extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/39/41/4f09a5e9a6769b4dafb293ea597ed693cc0def0e07867ad0a42664f530b6/pyobjc_framework_cocoa-10.3.2.tar.gz", hash = "sha256:673968e5435845bef969bfe374f31a1a6dc660c98608d2b84d5cae6eafa5c39d", size = 4942530, upload_time = "2024-11-30T15:30:27.244Z" }
 wheels = [
@@ -4099,8 +4080,8 @@ name = "pyobjc-framework-corebluetooth"
 version = "10.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'linux' or extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'linux' or extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/13/ca/35d205c3e153e7bc59a417560a45e27a2410439e6f78390f97c1a996c922/pyobjc_framework_corebluetooth-10.3.2.tar.gz", hash = "sha256:c0a077bc3a2466271efa382c1e024630bc43cc6f9ab8f3f97431ad08b1ad52bb", size = 50622, upload_time = "2024-11-30T15:32:18.741Z" }
 wheels = [
@@ -4116,8 +4097,8 @@ name = "pyobjc-framework-libdispatch"
 version = "10.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'linux' or extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'linux' or extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4d/12/a908f3f94952c8c9e3d6e6bd425613a79692e7d400557ede047992439edc/pyobjc_framework_libdispatch-10.3.2.tar.gz", hash = "sha256:e9f4311fbf8df602852557a98d2a64f37a9d363acf4d75634120251bbc7b7304", size = 45132, upload_time = "2024-11-30T17:09:47.135Z" }
 wheels = [
@@ -4614,20 +4595,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/40/ad/2b113098e69c985a3d8fbda4b902778eae4a35b7d5188859b4a63d30c161/safetensors-0.5.3-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:37f1521be045e56fc2b54c606d4455573e717b2d887c579ee1dbba5f868ece04", size = 643147, upload_time = "2025-02-26T09:15:11.185Z" },
     { url = "https://files.pythonhosted.org/packages/0a/0c/95aeb51d4246bd9a3242d3d8349c1112b4ee7611a4b40f0c5c93b05f001d/safetensors-0.5.3-cp38-abi3-win32.whl", hash = "sha256:cfc0ec0846dcf6763b0ed3d1846ff36008c6e7290683b61616c4b040f6a54ace", size = 296677, upload_time = "2025-02-26T09:15:16.554Z" },
     { url = "https://files.pythonhosted.org/packages/69/e2/b011c38e5394c4c18fb5500778a55ec43ad6106126e74723ffaee246f56e/safetensors-0.5.3-cp38-abi3-win_amd64.whl", hash = "sha256:836cbbc320b47e80acd40e44c8682db0e8ad7123209f69b093def21ec7cafd11", size = 308878, upload_time = "2025-02-26T09:15:14.99Z" },
-]
-
-[[package]]
-name = "samplerate"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cffi" },
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-12-asr-services-parakeet'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/da/9c/6a13fbc59b1ceaef194a53d3aeafa983057133fb13660c423854184eafa7/samplerate-0.1.0.tar.gz", hash = "sha256:75ef725e6cd9c4545569caf4c47147beab7b53b2c36e5122e8c285d348f88847", size = 4044998, upload_time = "2017-02-24T00:01:56.505Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/3c/4c1aa376332d18e708dcc3289e4dbdd2c508bcac1b8eb1b35b73092fa00f/samplerate-0.1.0-py2.py3-none-any.whl", hash = "sha256:f55e5c9d0a8ba3c82a53b7d9c34a2d145439c61166a7f310efaec88f2781b8f8", size = 4028658, upload_time = "2017-02-24T00:01:44.947Z" },
 ]
 
 [[package]]
@@ -5416,7 +5383,7 @@ name = "triton"
 version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "setuptools" },
+    { name = "setuptools", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8d/a9/549e51e9b1b2c9b854fd761a1d23df0ba2fbc60bd0c13b489ffa518cfcb7/triton-3.3.1-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b74db445b1c562844d3cfad6e9679c72e93fdfb1a90a24052b03bb5c49d1242e", size = 155600257, upload_time = "2025-05-29T23:39:36.085Z" },
@@ -5451,15 +5418,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c5/8c/7d682431efca5fd290017663ea4588bf6f2c6aad085c7f108c5dbc316e70/typer-0.16.0.tar.gz", hash = "sha256:af377ffaee1dbe37ae9440cb4e8f11686ea5ce4e9bae01b84ae7c63b87f1dd3b", size = 102625, upload_time = "2025-05-26T14:30:31.824Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/42/3efaf858001d2c2913de7f354563e3a3a2f0decae3efe98427125a8f441e/typer-0.16.0-py3-none-any.whl", hash = "sha256:1f79bed11d4d02d4310e3c1b7ba594183bcedb0ac73b27a9e5f28f6fb5b98855", size = 46317, upload_time = "2025-05-26T14:30:30.523Z" },
-]
-
-[[package]]
-name = "types-pyaudio"
-version = "0.2.16.20240516"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b7/f0/e5b856f1cdbb0d3ac23906b855e0e3804e22970dcb5b5eb8afff29a8e4b7/types-pyaudio-0.2.16.20240516.tar.gz", hash = "sha256:f1c419ccc78b00d26c6c1ae4fcb17f7e4f08af2c2b9b73b12fcbc4a4ffa3a2c7", size = 5072, upload_time = "2024-05-16T02:21:11.945Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/78/d6/71cd013ca966947ae2e748ad578fab835db8ddc4abd7b7ad455b9e547613/types_pyaudio-0.2.16.20240516-py3-none-any.whl", hash = "sha256:40063f13ae15a422cbd4a2a783653eb3e1091bdd23fc7ab8ca3abc21ad0d13f8", size = 4079, upload_time = "2024-05-16T02:21:10.906Z" },
 ]
 
 [[package]]
@@ -5692,7 +5650,7 @@ name = "winrt-windows-devices-bluetooth"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "winrt-runtime", marker = "python_full_version >= '3.12' or (extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
+    { name = "winrt-runtime", marker = "(python_full_version >= '3.12' and sys_platform != 'linux') or (python_full_version >= '3.12' and extra == 'group-12-asr-services-demo') or (python_full_version >= '3.12' and extra != 'group-12-asr-services-parakeet') or (python_full_version < '3.12' and extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c7/3a/64b2b8efe27fe4acb3a2da03a6687a2414d1c97465f212a3337415ca42ad/winrt_windows_devices_bluetooth-2.3.0.tar.gz", hash = "sha256:a1204b71c369a0399ec15d9a7b7c67990dd74504e486b839bf81825bd381a837", size = 21092, upload_time = "2024-10-20T04:15:34.033Z" }
 wheels = [
@@ -5715,7 +5673,7 @@ name = "winrt-windows-devices-bluetooth-advertisement"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "winrt-runtime", marker = "python_full_version >= '3.12' or (extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
+    { name = "winrt-runtime", marker = "(python_full_version >= '3.12' and sys_platform != 'linux') or (python_full_version >= '3.12' and extra == 'group-12-asr-services-demo') or (python_full_version >= '3.12' and extra != 'group-12-asr-services-parakeet') or (python_full_version < '3.12' and extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b4/9f/0f7393800a7d5907f0935a8c088937ca0d3eb3f131d8173e81a94f6a76ed/winrt_windows_devices_bluetooth_advertisement-2.3.0.tar.gz", hash = "sha256:c8adbec690b765ca70337c35efec9910b0937a40a0a242184ea295367137f81c", size = 13686, upload_time = "2024-10-20T04:15:34.834Z" }
 wheels = [
@@ -5738,7 +5696,7 @@ name = "winrt-windows-devices-bluetooth-genericattributeprofile"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "winrt-runtime", marker = "python_full_version >= '3.12' or (extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
+    { name = "winrt-runtime", marker = "(python_full_version >= '3.12' and sys_platform != 'linux') or (python_full_version >= '3.12' and extra == 'group-12-asr-services-demo') or (python_full_version >= '3.12' and extra != 'group-12-asr-services-parakeet') or (python_full_version < '3.12' and extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/56/99/f1b517fc04244728eebf5f16c70d181ccc32e70e9a1655c7460ccd18755e/winrt_windows_devices_bluetooth_genericattributeprofile-2.3.0.tar.gz", hash = "sha256:f40f94bf2f7243848dc10e39cfde76c9044727a05e7e5dfb8cb7f062f3fd3dda", size = 33686, upload_time = "2024-10-20T04:15:36.29Z" }
 wheels = [
@@ -5761,7 +5719,7 @@ name = "winrt-windows-devices-enumeration"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "winrt-runtime", marker = "python_full_version >= '3.12' or (extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
+    { name = "winrt-runtime", marker = "(python_full_version >= '3.12' and sys_platform != 'linux') or (python_full_version >= '3.12' and extra == 'group-12-asr-services-demo') or (python_full_version >= '3.12' and extra != 'group-12-asr-services-parakeet') or (python_full_version < '3.12' and extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5f/74/aed7249ee138db3bc425913d3c0a0c7db42bdc97b0d2bf5da134cfc919cf/winrt_windows_devices_enumeration-2.3.0.tar.gz", hash = "sha256:a14078aac41432781acb0c950fcdcdeb096e2f80f7591a3d46435f30221fc3eb", size = 19943, upload_time = "2024-10-20T04:15:39.876Z" }
 wheels = [
@@ -5784,7 +5742,7 @@ name = "winrt-windows-foundation"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "winrt-runtime", marker = "python_full_version >= '3.12' or (extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
+    { name = "winrt-runtime", marker = "(python_full_version >= '3.12' and sys_platform != 'linux') or (python_full_version >= '3.12' and extra == 'group-12-asr-services-demo') or (python_full_version >= '3.12' and extra != 'group-12-asr-services-parakeet') or (python_full_version < '3.12' and extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/55/7f/93fd748713622d999c5ae71fe66441c6d63b7b826285555e68807481222c/winrt_windows_foundation-2.3.0.tar.gz", hash = "sha256:c5766f011c8debbe89b460af4a97d026ca252144e62d7278c9c79c5581ea0c02", size = 22594, upload_time = "2024-10-20T04:16:09.773Z" }
 wheels = [
@@ -5807,7 +5765,7 @@ name = "winrt-windows-foundation-collections"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "winrt-runtime", marker = "python_full_version >= '3.12' or (extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
+    { name = "winrt-runtime", marker = "(python_full_version >= '3.12' and sys_platform != 'linux') or (python_full_version >= '3.12' and extra == 'group-12-asr-services-demo') or (python_full_version >= '3.12' and extra != 'group-12-asr-services-parakeet') or (python_full_version < '3.12' and extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/59/fc/a8687fb0095471b0db29f6c921a8eb971f55ab79e1ccb5bcd01bf1b4baba/winrt_windows_foundation_collections-2.3.0.tar.gz", hash = "sha256:15c997fd6b64ef0400a619319ea3c6851c9c24e31d51b6448ba9bac3616d25a0", size = 12932, upload_time = "2024-10-20T04:16:10.555Z" }
 wheels = [
@@ -5830,7 +5788,7 @@ name = "winrt-windows-storage-streams"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "winrt-runtime", marker = "python_full_version >= '3.12' or (extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
+    { name = "winrt-runtime", marker = "(python_full_version >= '3.12' and sys_platform != 'linux') or (python_full_version >= '3.12' and extra == 'group-12-asr-services-demo') or (python_full_version >= '3.12' and extra != 'group-12-asr-services-parakeet') or (python_full_version < '3.12' and extra == 'group-12-asr-services-demo' and extra == 'group-12-asr-services-parakeet')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0c/07/5872ee6f9615a58820379ade122b28ff46b4227eee2232a22083a0ce7516/winrt_windows_storage_streams-2.3.0.tar.gz", hash = "sha256:d2c010beeb1dd7c135ed67ecfaea13440474a7c469e2e9aa2852db27d2063d44", size = 23581, upload_time = "2024-10-20T04:18:05.084Z" }
 wheels = [

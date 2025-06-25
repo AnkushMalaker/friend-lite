@@ -13,12 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Dependency manifest first for cache‑friendly installs
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --compile-bytecode --group parakeet
+    uv sync --no-install-project --group parakeet
 
-# Add source and install project itself
-COPY . .
-# RUN --mount=type=cache,target=/root/.cache/uv \
-#     uv sync --compile-bytecode --group parakeet
+# Should prepare the .venv for use :)
 
 #########################  runtime #################################
 FROM python:3.12-slim-bookworm AS runtime
@@ -28,6 +25,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 build-essential portaudio19-dev && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app /app
+COPY . .
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8765

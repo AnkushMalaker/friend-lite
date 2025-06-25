@@ -1,0 +1,25 @@
+services:
+  havpe-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${TCP_PORT:-8989}:8989"
+    environment:
+      # Connect to backend running on host (adjust as needed)
+      - WS_URL=${WS_URL:-ws://host.docker.internal:8000/ws_pcm}
+      - TCP_PORT=${TCP_PORT:-8989}
+      # - VERBOSE=${VERBOSE:-1}
+      - DEBUG=${DEBUG:-0}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "netstat", "-an", "|", "grep", "8989"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    command: ["uv", "run", "python3", "main.py"] 
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./audio_chunks:/app/audio_chunks
