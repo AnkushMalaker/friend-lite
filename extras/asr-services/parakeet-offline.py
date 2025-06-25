@@ -492,25 +492,18 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         self, chunk: AudioChunk
     ) -> None:
         """Buffer audio samples and process VAD with exactly 512 samples at a time."""
-        # Add new samples to buffer
+        # 1. accumulate samples
         chunk_array = _chunk_to_numpy_float(chunk)
         self._vad_sample_buffer = np.concatenate([self._vad_sample_buffer, chunk_array])
 
-        # Write debug file once per chunk (not per VAD iteration)
-        await self._write_debug_file(chunk)
-
-        # Process complete 512-sample chunks
+        # 2. feed VAD in fixed 512-sample blocks
         while len(self._vad_sample_buffer) >= self._vad_buffer_size:
-            # Extract exactly 512 samples
-            samples_to_process = self._vad_sample_buffer[: self._vad_buffer_size]
+            samples = self._vad_sample_buffer[: self._vad_buffer_size]
+            await self._process_vad_samples(samples)
+            self._vad_sample_buffer = self._vad_sample_buffer[self._vad_buffer_size:]
 
-            # Process with VAD
-            await self._process_vad_samples(samples_to_process)
-
-            # Remove processed samples from buffer
-            self._vad_sample_buffer = self._vad_sample_buffer[self._vad_buffer_size :]
-
-        # If we're recording, accumulate the original chunk once per chunk
+        # 3. do these exactly once per *original* chunk
+        await self._write_debug_file(chunk)
         if self._recording:
             self._speech_buf.append(chunk)
 
