@@ -464,8 +464,14 @@ with tab_mem:
 
     # Get memories based on user selection
     if user_id_input.strip():
-        memories = get_data(f"/api/memories?user_id={user_id_input.strip()}")
+        memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}")
         st.info(f"Showing memories for user: **{user_id_input.strip()}**")
+        
+        # Handle the API response format with "results" wrapper
+        if memories_response and isinstance(memories_response, dict) and "results" in memories_response:
+            memories = memories_response["results"]
+        else:
+            memories = memories_response
     else:
         # Show instruction to enter a username
         memories = None
@@ -479,21 +485,33 @@ with tab_mem:
         if "created_at" in df.columns:
                 df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Reorder and rename columns for clarity
+        # Reorder and rename columns for clarity - handle both "memory" and "text" fields
         display_cols = {
             "id": "Memory ID",
-            "text": "Memory",
             "created_at": "Created At"
         }
+        
+        # Check which memory field exists and add it to display columns
+        if "memory" in df.columns:
+            display_cols["memory"] = "Memory"
+        elif "text" in df.columns:
+            display_cols["text"] = "Memory"
         
         # Filter for columns that exist in the dataframe
         cols_to_display = [col for col in display_cols.keys() if col in df.columns]
         
-        st.dataframe(
-            df[cols_to_display].rename(columns=display_cols),
-            use_container_width=True,
-            hide_index=True
-        )
+        if cols_to_display:
+            st.dataframe(
+                df[cols_to_display].rename(columns=display_cols),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Show additional details
+            st.caption(f"📊 Found **{len(memories)}** memories for user **{user_id_input.strip()}**")
+        else:
+            st.error("⚠️ Unexpected memory data format - missing expected fields")
+            st.write("Debug info - Available columns:", list(df.columns))
 
     elif memories is not None:
         st.info("No memories found for this user.")
