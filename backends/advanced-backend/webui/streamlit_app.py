@@ -195,6 +195,52 @@ with st.sidebar:
     
     st.divider()
     
+    # Close Conversation Section
+    st.header("🔒 Close Conversation")
+    with st.expander("Active Clients & Close Conversation", expanded=True):
+        # Get active clients
+        active_clients_data = get_data("/api/active_clients")
+        
+        if active_clients_data and active_clients_data.get("clients"):
+            clients = active_clients_data["clients"]
+            
+            # Show active clients with conversation status
+            for client_id, client_info in clients.items():
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    if client_info.get("has_active_conversation", False):
+                        st.write(f"🟢 **{client_id}** (Active conversation)")
+                        if client_info.get("current_audio_uuid"):
+                            st.caption(f"UUID: {client_info['current_audio_uuid'][:8]}...")
+                    else:
+                        st.write(f"⚪ **{client_id}** (No active conversation)")
+                
+                with col2:
+                    if client_info.get("has_active_conversation", False):
+                        close_btn = st.button(
+                            "🔒 Close",
+                            key=f"close_{client_id}",
+                            help=f"Close current conversation for {client_id}",
+                            type="secondary"
+                        )
+                        
+                        if close_btn:
+                            result = post_data("/api/close_conversation", {"client_id": client_id})
+                            if result:
+                                st.success(f"✅ Conversation closed for {client_id}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Failed to close conversation for {client_id}")
+                    else:
+                        st.caption("No active conversation")
+            
+            st.info(f"💡 **Total active clients:** {active_clients_data.get('active_clients_count', 0)}")
+        else:
+            st.info("No active clients found")
+    
+    st.divider()
+    
     # Configuration Info  
     with st.expander("Configuration"):
         health_data = get_system_health()
@@ -890,6 +936,60 @@ with tab_users:
 
 with tab_manage:
     st.header("Conversation Management")
+    
+    st.subheader("🔒 Close Current Conversation")
+    st.write("Close the current active conversation for any connected client.")
+    
+    # Get active clients for the dropdown
+    active_clients_data = get_data("/api/active_clients")
+    
+    if active_clients_data and active_clients_data.get("clients"):
+        clients = active_clients_data["clients"]
+        
+        # Filter to only clients with active conversations
+        active_conversations = {
+            client_id: client_info 
+            for client_id, client_info in clients.items() 
+            if client_info.get("has_active_conversation", False)
+        }
+        
+        if active_conversations:
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                selected_client = st.selectbox(
+                    "Select client to close conversation:",
+                    options=list(active_conversations.keys()),
+                    format_func=lambda x: f"{x} (UUID: {active_conversations[x].get('current_audio_uuid', 'N/A')[:8]}...)"
+                )
+            
+            with col2:
+                st.write("")  # Spacer
+                close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
+            
+            if close_conversation_btn and selected_client:
+                result = post_data("/api/close_conversation", {"client_id": selected_client})
+                if result:
+                    st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
+                    st.info(f"📋 {result.get('message', 'Conversation closed')}")
+                    time.sleep(1)  # Brief pause before refresh
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to close conversation for client '{selected_client}'")
+        else:
+            st.info("🔍 No clients with active conversations found")
+            
+        # Show all clients status
+        with st.expander("All Connected Clients Status"):
+            for client_id, client_info in clients.items():
+                status_icon = "🟢" if client_info.get("has_active_conversation", False) else "⚪"
+                st.write(f"{status_icon} **{client_id}** - {'Active conversation' if client_info.get('has_active_conversation', False) else 'No active conversation'}")
+                if client_info.get("current_audio_uuid"):
+                    st.caption(f"   Audio UUID: {client_info['current_audio_uuid']}")
+    else:
+        st.info("🔍 No active clients found")
+    
+    st.divider()
     
     st.subheader("Add Speaker to Conversation")
     st.write("Add speakers to conversations even if they haven't spoken yet.")
