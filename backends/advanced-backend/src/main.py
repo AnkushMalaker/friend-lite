@@ -26,7 +26,6 @@ from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from memory import get_memory_service, init_memory_config, shutdown_memory_service
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder  # OmiSDK
 from pydantic import BaseModel
@@ -37,6 +36,7 @@ from wyoming.info import Describe
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 import speaker_client as speaker_recognition
+from memory import get_memory_service, init_memory_config, shutdown_memory_service
 
 # Check if speaker service is available
 SPEAKER_SERVICE_AVAILABLE = speaker_recognition.speaker_recognition is not None
@@ -57,11 +57,7 @@ audio_logger = logging.getLogger("audio_processing")
 
 # Conditional Deepgram import
 try:
-    from deepgram import (
-        DeepgramClient,
-        FileSource,
-        PrerecordedOptions,
-    )
+    from deepgram import DeepgramClient, FileSource, PrerecordedOptions
     DEEPGRAM_AVAILABLE = True
 except ImportError:
     DEEPGRAM_AVAILABLE = False
@@ -89,7 +85,7 @@ SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
 # Conversation timeout configuration
-NEW_CONVERSATION_TIMEOUT_MINUTES = int(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "10"))
+NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
 # Audio cropping configuration
 AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
@@ -533,12 +529,9 @@ class TranscriptionManager:
                             # Update transcript time for conversation timeout tracking
                             if client_id in active_clients:
                                 active_clients[client_id].last_transcript_time = time.time()
-                            
-                            # Queue memory processing
-                            if client_id in active_clients:
-                                await active_clients[client_id].memory_queue.put((transcript_text, client_id, audio_uuid))
-                            else:
-                                audio_logger.warning(f"Client {client_id} not found for memory processing")
+                                # Collect transcript for end-of-conversation memory processing
+                                active_clients[client_id].conversation_transcripts.append(transcript_text)
+                                audio_logger.info(f"Added transcript to conversation collection: '{transcript_text}'")
                     
                     elif VoiceStarted.is_type(event.type):
                         audio_logger.info(f"VoiceStarted event received for {audio_uuid}")
@@ -600,6 +593,9 @@ class ClientState:
         # Speech segment tracking for audio cropping
         self.speech_segments: Dict[str, List[Tuple[float, float]]] = {}  # audio_uuid -> [(start, end), ...]
         self.current_speech_start: Dict[str, Optional[float]] = {}  # audio_uuid -> start_time
+        
+        # Conversation transcript collection for end-of-conversation memory processing
+        self.conversation_transcripts: List[str] = []  # Collect all transcripts for this conversation
         
         # Tasks for this client
         self.saver_task: Optional[asyncio.Task] = None
@@ -664,6 +660,7 @@ class ClientState:
         # Clean up any remaining speech segment tracking
         self.speech_segments.clear()
         self.current_speech_start.clear()
+        self.conversation_transcripts.clear()  # Clear conversation transcripts
             
         audio_logger.info(f"Client {self.client_id} disconnected and cleaned up")
     
@@ -686,6 +683,24 @@ class ClientState:
             current_path = self.file_sink._file_path.name if hasattr(self.file_sink, '_file_path') else None
             
             audio_logger.info(f"🔒 Closing conversation {current_uuid}, file: {current_path}")
+            
+            # Process memory at end of conversation if we have transcripts
+            if self.conversation_transcripts and current_uuid:
+                full_conversation = " ".join(self.conversation_transcripts)
+                audio_logger.info(f"💭 Processing memory for conversation {current_uuid} with {len(self.conversation_transcripts)} transcript segments")
+                audio_logger.info(f"💭 Full conversation text: {full_conversation[:200]}...")  # Log first 200 chars
+                
+                try:
+                    success = memory_service.add_memory(full_conversation, self.client_id, current_uuid)
+                    if success:
+                        audio_logger.info(f"✅ Successfully added conversation memory for {current_uuid}")
+                    else:
+                        audio_logger.error(f"❌ Failed to add conversation memory for {current_uuid}")
+                except Exception as e:
+                    audio_logger.error(f"❌ Error adding conversation memory for {current_uuid}: {e}")
+            else:
+                audio_logger.info(f"ℹ️ No transcripts to process for memory in conversation {current_uuid}")
+            
             await self.file_sink.close()
             self.file_sink = None
             
@@ -732,6 +747,7 @@ class ClientState:
         self.current_audio_uuid = None
         self.conversation_start_time = time.time()
         self.last_transcript_time = None
+        self.conversation_transcripts.clear()  # Clear collected transcripts for new conversation
         
         audio_logger.info(f"Client {self.client_id}: Started new conversation due to {NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout")
     
@@ -816,7 +832,7 @@ class ClientState:
             audio_logger.error(f"Error in transcription processor for client {self.client_id}: {e}", exc_info=True)
     
     async def _memory_processor(self):
-        """Per-client memory processor - handles memory.add operations in background."""
+        """Per-client memory processor - currently unused as memory processing happens at conversation end."""
         try:
             while self.connected:
                 transcript, client_id, audio_uuid = await self.memory_queue.get()
@@ -824,13 +840,9 @@ class ClientState:
                 if transcript is None or client_id is None or audio_uuid is None:  # Disconnect signal
                     break
                 
-                # Process memory using the memory service
-                try:
-                    success = memory_service.add_memory(transcript, client_id, audio_uuid)
-                    if not success:
-                        audio_logger.error(f"Failed to add memory for {audio_uuid}")
-                except Exception as e:
-                    audio_logger.error(f"Error adding memory for {audio_uuid}: {e}")
+                # Memory processing now happens at conversation end, so this is effectively a no-op
+                # Keeping the processor running to avoid breaking the queue system
+                audio_logger.debug(f"Memory processor received item but processing is now done at conversation end")
                         
         except Exception as e:
             audio_logger.error(f"Error in memory processor for client {self.client_id}: {e}", exc_info=True)
