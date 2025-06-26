@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import random
 from datetime import datetime
 
 import pandas as pd
@@ -221,15 +222,29 @@ tab_convos, tab_mem, tab_users, tab_manage = st.tabs(["Conversations", "Memories
 with tab_convos:
     st.header("Latest Conversations")
     
+    # Initialize session state for refresh tracking
+    if 'refresh_timestamp' not in st.session_state:
+        st.session_state.refresh_timestamp = 0
+    
     # Add debug mode toggle
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("Refresh Conversations"):
+            st.session_state.refresh_timestamp = int(time.time())
+            st.session_state.refresh_random = random.randint(1000, 9999)
             st.rerun()
     with col2:
         debug_mode = st.checkbox("🔧 Debug Mode", 
                                 help="Show original audio files instead of cropped versions",
                                 key="debug_mode")
+
+    # Generate cache-busting parameter based on session state
+    if st.session_state.refresh_timestamp > 0:
+        random_component = getattr(st.session_state, 'refresh_random', 0)
+        cache_buster = f"?t={st.session_state.refresh_timestamp}&r={random_component}"
+        st.info("🔄 Audio files refreshed - cache cleared for latest versions")
+    else:
+        cache_buster = ""
 
     conversations = get_data("/api/conversations")
 
@@ -318,9 +333,9 @@ with tab_convos:
                                 selected_audio_path = audio_path
                                 audio_label = "🎵 **Original Audio** (No cropped version available)"
                             
-                            # Display audio with label
+                            # Display audio with label and cache-busting
                             st.write(audio_label)
-                            audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}"
+                            audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
                             st.audio(audio_url, format="audio/wav")
                             
                             # Show additional info in debug mode or when both versions exist
@@ -409,9 +424,9 @@ with tab_convos:
                             selected_audio_path = audio_path
                             audio_label = "🎵 **Original Audio** (No cropped version available)"
                         
-                        # Display audio with label
+                        # Display audio with label and cache-busting
                         st.write(audio_label)
-                        audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}"
+                        audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
                         st.audio(audio_url, format="audio/wav")
                         
                         # Show additional info in debug mode or when both versions exist
