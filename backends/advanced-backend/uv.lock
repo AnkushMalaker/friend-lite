@@ -39,7 +39,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "easy-audio-interfaces", specifier = ">=0.5" },
     { name = "fastapi", specifier = ">=0.115.12" },
-    { name = "mem0ai", specifier = ">=0.1.97" },
+    { name = "mem0ai", specifier = ">=0.1.111" },
     { name = "motor", specifier = ">=3.7.1" },
     { name = "ollama", specifier = ">=0.4.8" },
     { name = "omi-sdk", specifier = ">=0.1.5" },
@@ -853,7 +853,7 @@ wheels = [
 
 [[package]]
 name = "mem0ai"
-version = "0.1.106"
+version = "0.1.111"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openai" },
@@ -863,9 +863,9 @@ dependencies = [
     { name = "qdrant-client" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/f3/5a5bd30e452c79078ac4d85e567674089fc526d8e2e3c5d62414a91f835a/mem0ai-0.1.106.tar.gz", hash = "sha256:4a38195d7783e05d1f7a026c73440e58cd6391c282ca77221172acd3e3470c49", size = 100803 }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/93/ff302f96e02b5ac80a1ad18b94617985296f78aee212f86d83cba1c2a1a5/mem0ai-0.1.111.tar.gz", hash = "sha256:cc4b1a20cd4fd3b980cca4fd9f77ee4c9cff81b92e6f4d30014fd900dce59bba", size = 108299 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/66/29/3e44b620c915b7116e2685ade8f60311307b4b349249818d1e440b11bfad/mem0ai-0.1.106-py3-none-any.whl", hash = "sha256:65751efa4752959c1565526ae63a03829a1d5166410380bd9739e5dabadcf592", size = 156712 },
+    { url = "https://files.pythonhosted.org/packages/2a/f5/185c88df177d0d9ae1226cc1ae75a2b2480280521a5c7690f1ca6a54b6af/mem0ai-0.1.111-py3-none-any.whl", hash = "sha256:53e8ce3551ffe1454b6e28ba90a8a88907280a9052edfeb872241662a4707f14", size = 168161 },
 ]
 
 [[package]]

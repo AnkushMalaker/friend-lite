@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "easy-audio-interfaces>=0.5",
     "fastapi>=0.115.12",
-    "mem0ai>=0.1.97",
+    "mem0ai>=0.1.111",
     "motor>=3.7.1",
     "ollama>=0.4.8",
     "omi-sdk>=0.1.5",
