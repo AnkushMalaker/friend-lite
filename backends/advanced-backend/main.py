@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import ollama  # Ollama python client
+import speaker_client as speaker_recognition
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
@@ -36,8 +37,6 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe
 from wyoming.vad import VoiceStarted, VoiceStopped
-
-import speaker_client as speaker_recognition
 
 # Check if speaker service is available
 SPEAKER_SERVICE_AVAILABLE = speaker_recognition.speaker_recognition is not None
@@ -61,11 +60,7 @@ audio_logger = logging.getLogger("audio_processing")
 
 # Conditional Deepgram import
 try:
-    from deepgram import (
-        DeepgramClient,
-        FileSource,
-        PrerecordedOptions,
-    )
+    from deepgram import DeepgramClient, FileSource, PrerecordedOptions
     DEEPGRAM_AVAILABLE = True
 except ImportError:
     DEEPGRAM_AVAILABLE = False
@@ -365,6 +360,7 @@ def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bo
                 "app_id": MEM0_APP_ID,
             },
         )
+        logger.info(f"Added memory to store: {transcript}, client_id: {client_id}, audio_uuid: {audio_uuid}")
         return True
     except Exception as e:
         # Log to stderr since we're in a separate process
@@ -900,6 +896,7 @@ class ClientState:
         try:
             while self.connected:
                 transcript, client_id, audio_uuid = await self.memory_queue.get()
+                logger.info(f"Memory processor got transcript: {transcript}, client_id: {client_id}, audio_uuid: {audio_uuid}")
                 
                 if transcript is None or client_id is None or audio_uuid is None:  # Disconnect signal
                     break
@@ -1776,6 +1773,67 @@ async def health_check():
 async def readiness_check():
     """Simple readiness check for container orchestration."""
     return JSONResponse(content={"status": "ready", "timestamp": int(time.time())}, status_code=200)
+
+
+@app.post("/api/close_conversation")
+async def close_current_conversation(client_id: str):
+    """Close the current conversation for a specific client."""
+    if client_id not in active_clients:
+        return JSONResponse(
+            content={"error": f"Client '{client_id}' not found or not connected"},
+            status_code=404
+        )
+    
+    client_state = active_clients[client_id]
+    if not client_state.connected:
+        return JSONResponse(
+            content={"error": f"Client '{client_id}' is not connected"},
+            status_code=400
+        )
+    
+    try:
+        # Close the current conversation
+        await client_state._close_current_conversation()
+        
+        # Reset conversation state but keep client connected
+        client_state.current_audio_uuid = None
+        client_state.conversation_start_time = time.time()
+        client_state.last_transcript_time = None
+        
+        logger.info(f"Manually closed conversation for client {client_id}")
+        
+        return JSONResponse(content={
+            "message": f"Successfully closed current conversation for client '{client_id}'",
+            "client_id": client_id,
+            "timestamp": int(time.time())
+        })
+    
+    except Exception as e:
+        logger.error(f"Error closing conversation for client {client_id}: {e}")
+        return JSONResponse(
+            content={"error": f"Failed to close conversation: {str(e)}"},
+            status_code=500
+        )
+
+
+@app.get("/api/active_clients")
+async def get_active_clients():
+    """Get list of currently active/connected clients."""
+    client_info = {}
+    
+    for client_id, client_state in active_clients.items():
+        client_info[client_id] = {
+            "connected": client_state.connected,
+            "current_audio_uuid": client_state.current_audio_uuid,
+            "conversation_start_time": client_state.conversation_start_time,
+            "last_transcript_time": client_state.last_transcript_time,
+            "has_active_conversation": client_state.current_audio_uuid is not None
+        }
+    
+    return JSONResponse(content={
+        "active_clients_count": len(active_clients),
+        "clients": client_info
+    })
 
 
 @app.get("/api/debug/speech_segments")
