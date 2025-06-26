@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder  # OmiSDK
 from pydantic import BaseModel
+from typing import List, Dict, Any
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
@@ -689,15 +690,24 @@ class ClientState:
                 full_conversation = " ".join(self.conversation_transcripts)
                 audio_logger.info(f"💭 Processing memory for conversation {current_uuid} with {len(self.conversation_transcripts)} transcript segments")
                 audio_logger.info(f"💭 Full conversation text: {full_conversation[:200]}...")  # Log first 200 chars
-                
+                 
                 try:
+                    # Add general memory
                     success = memory_service.add_memory(full_conversation, self.client_id, current_uuid)
                     if success:
                         audio_logger.info(f"✅ Successfully added conversation memory for {current_uuid}")
                     else:
                         audio_logger.error(f"❌ Failed to add conversation memory for {current_uuid}")
+                    
+                    # Extract and store action items from the full conversation
+                    action_item_count = memory_service.extract_and_store_action_items(full_conversation, self.client_id, current_uuid)
+                    if action_item_count > 0:
+                        audio_logger.info(f"🎯 Extracted {action_item_count} action items from conversation {current_uuid}")
+                    else:
+                        audio_logger.info(f"ℹ️ No action items found in conversation {current_uuid}")
+                        
                 except Exception as e:
-                    audio_logger.error(f"❌ Error adding conversation memory for {current_uuid}: {e}")
+                    audio_logger.error(f"❌ Error processing memory and action items for {current_uuid}: {e}")
             else:
                 audio_logger.info(f"ℹ️ No transcripts to process for memory in conversation {current_uuid}")
             
@@ -1290,6 +1300,16 @@ class SpeakerIdentificationRequest(BaseModel):
     start_time: Optional[float] = None
     end_time: Optional[float] = None
 
+class ActionItemUpdateRequest(BaseModel):
+    status: str  # "open", "in_progress", "completed", "cancelled"
+
+class ActionItemCreateRequest(BaseModel):
+    description: str
+    assignee: Optional[str] = "unassigned"
+    due_date: Optional[str] = "not_specified"
+    priority: Optional[str] = "medium"
+    context: Optional[str] = ""
+
 @app.post("/api/speakers/enroll")
 async def enroll_speaker(request: SpeakerEnrollmentRequest):
     """
@@ -1518,6 +1538,280 @@ async def identify_speaker_from_file(request: SpeakerIdentificationRequest):
             content={"error": f"Internal server error: {str(e)}"}
         )
 
+@app.get("/api/action-items")
+async def get_action_items(user_id: str, status: Optional[str] = None, limit: int = 50):
+    """Get action items for a user with optional status filtering."""
+    try:
+        action_items = memory_service.get_action_items(user_id=user_id, limit=limit, status_filter=status)
+        return JSONResponse(content={
+            "action_items": action_items,
+            "count": len(action_items),
+            "user_id": user_id,
+            "status_filter": status
+        })
+    except Exception as e:
+        audio_logger.error(f"Error fetching action items for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": "Failed to fetch action items"}
+        )
+
+
+@app.get("/api/action-items/search")
+async def search_action_items(user_id: str, query: str, limit: int = 20):
+    """Search action items by text query."""
+    try:
+        action_items = memory_service.search_action_items(query=query, user_id=user_id, limit=limit)
+        return JSONResponse(content={
+            "action_items": action_items,
+            "count": len(action_items),
+            "query": query,
+            "user_id": user_id
+        })
+    except Exception as e:
+        audio_logger.error(f"Error searching action items for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to search action items"}
+        )
+
+
+@app.post("/api/action-items")
+async def create_action_item(user_id: str, request: ActionItemCreateRequest):
+    """Manually create a new action item."""
+    try:
+        # Create action item data structure
+        action_item = {
+            "description": request.description,
+            "assignee": request.assignee,
+            "due_date": request.due_date,
+            "priority": request.priority,
+            "status": "open",
+            "context": request.context,
+            "created_at": int(time.time()),
+            "source": "manual_creation",
+            "id": f"manual_{user_id}_{int(time.time())}"
+        }
+        
+        # Store in Mem0
+        assert memory_service.memory is not None, "Memory service not initialized"
+        success = memory_service.memory.add(
+            f"Action Item: {request.description}",
+            user_id=user_id,
+            metadata={
+                "type": "action_item",
+                "source": "manual_creation",
+                "timestamp": int(time.time()),
+                "action_item_data": action_item,
+                "organization_id": "friend-lite-org",
+                "project_id": "audio-conversations",
+                "app_id": "omi-backend",
+            },
+            infer=False
+        )
+        
+        if success:
+            return JSONResponse(content={
+                "message": "Action item created successfully",
+                "action_item": action_item
+            })
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to create action item"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error creating action item for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to create action item"}
+        )
+
+
+@app.put("/api/action-items/{memory_id}")
+async def update_action_item_status(memory_id: str, request: ActionItemUpdateRequest):
+    """Update the status of an action item."""
+    try:
+        # Validate status
+        valid_statuses = ["open", "in_progress", "completed", "cancelled"]
+        if request.status not in valid_statuses:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}
+            )
+        
+        success = memory_service.update_action_item_status(memory_id, request.status)
+        
+        if success:
+            return JSONResponse(content={
+                "message": f"Action item status updated to {request.status}",
+                "memory_id": memory_id,
+                "new_status": request.status
+            })
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Action item not found"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error updating action item {memory_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to update action item"}
+        )
+
+
+@app.delete("/api/action-items/{memory_id}")
+async def delete_action_item(memory_id: str):
+    """Delete an action item."""
+    try:
+        success = memory_service.delete_action_item(memory_id)
+        
+        if success:
+            return JSONResponse(content={
+                "message": "Action item deleted successfully",
+                "memory_id": memory_id
+            })
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Action item not found"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error deleting action item {memory_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to delete action item"}
+        )
+
+
+@app.get("/api/action-items/stats")
+async def get_action_item_stats(user_id: str):
+    """Get action item statistics for a user."""
+    try:
+        # Get all action items
+        all_items = memory_service.get_action_items(user_id=user_id, limit=1000)
+        
+        # Calculate statistics
+        stats = {
+            "total": len(all_items),
+            "open": 0,
+            "in_progress": 0,
+            "completed": 0,
+            "cancelled": 0,
+            "overdue": 0,
+            "by_priority": {"high": 0, "medium": 0, "low": 0, "not_specified": 0},
+            "by_assignee": {}
+        }
+        
+        current_time = time.time()
+        
+        for item in all_items:
+            status = item.get('status', 'open')
+            priority = item.get('priority', 'not_specified')
+            assignee = item.get('assignee', 'unassigned')
+            
+            # Count by status
+            if status in stats:
+                stats[status] += 1
+            
+            # Count by priority
+            if priority in stats["by_priority"]:
+                stats["by_priority"][priority] += 1
+            
+            # Count by assignee
+            if assignee not in stats["by_assignee"]:
+                stats["by_assignee"][assignee] = 0
+            stats["by_assignee"][assignee] += 1
+            
+            # Check for overdue items (if due_date is specified and in the past)
+            due_date_str = item.get('due_date')
+            if due_date_str and due_date_str != 'not_specified' and status in ['open', 'in_progress']:
+                # Simple date checking - assumes ISO format or common formats
+                try:
+                    if 'tomorrow' in due_date_str.lower() or 'today' in due_date_str.lower():
+                        # These would need more sophisticated parsing
+                        pass
+                    elif any(word in due_date_str.lower() for word in ['yesterday', 'last week', 'ago']):
+                        stats["overdue"] += 1
+                except:
+                    pass
+        
+        return JSONResponse(content={
+            "user_id": user_id,
+            "statistics": stats
+        })
+        
+    except Exception as e:
+        audio_logger.error(f"Error getting action item stats for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to get action item statistics"}
+        )
+
+
+@app.post("/api/conversations/{audio_uuid}/extract-action-items")
+async def extract_action_items_from_conversation(audio_uuid: str):
+    """Manually trigger action item extraction for a specific conversation."""
+    try:
+        # Get the conversation from MongoDB
+        conversation = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not conversation:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Conversation not found"}
+            )
+        
+        # Build full transcript from segments
+        transcript_segments = conversation.get("transcript", [])
+        if not transcript_segments:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No transcript available for this conversation"}
+            )
+        
+        # Combine all transcript segments into one text
+        full_transcript = " ".join([
+            segment.get("text", "") for segment in transcript_segments
+            if isinstance(segment, dict) and segment.get("text")
+        ])
+        
+        if not full_transcript.strip():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Empty transcript for this conversation"}
+            )
+        
+        client_id = conversation.get("client_id")
+        if not client_id:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No client_id found for this conversation"}
+            )
+        
+        # Extract action items
+        action_item_count = memory_service.extract_and_store_action_items(
+            full_transcript, client_id, audio_uuid
+        )
+        
+        return JSONResponse(content={
+            "message": f"Extracted {action_item_count} action items from conversation",
+            "audio_uuid": audio_uuid,
+            "action_items_extracted": action_item_count,
+            "transcript_length": len(full_transcript)
+        })
+        
+    except Exception as e:
+        audio_logger.error(f"Error extracting action items from conversation {audio_uuid}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to extract action items"}
+        )
+
+
 @app.get("/health")
 async def health_check():
     """Comprehensive health check for all services."""
@@ -1532,7 +1826,9 @@ async def health_check():
             "asr_uri": OFFLINE_ASR_TCP_URI,
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
-            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES
+            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
+            "action_items_enabled": True,
+            "audio_cropping_enabled": AUDIO_CROPPING_ENABLED
         }
     }
     
