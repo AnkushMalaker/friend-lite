@@ -3,5 +3,4 @@
 !Dockerfile
 !pyproject.toml
 !README.md
-!main.py
-!speaker_client.py
+!src
