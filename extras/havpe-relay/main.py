@@ -17,6 +17,7 @@ from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces import RollingFileSink
 from easy_audio_interfaces.network.network_interfaces import TCPServer, SocketClient
+from wyoming.client import AsyncClient
 
 DEFAULT_PORT = 8989
 SAMP_RATE = 16000
