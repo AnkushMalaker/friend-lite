@@ -29,4 +29,4 @@ COPY . .
 
 
 # Run the application
-CMD ["uv", "run", "python3", "main.py"]
+CMD ["uv", "run", "python3", "src/main.py"]

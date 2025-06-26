@@ -12,7 +12,6 @@
 import asyncio
 import concurrent.futures
 import logging
-import multiprocessing
 import os
 import time
 import uuid
@@ -27,7 +26,7 @@ from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from mem0 import Memory  # mem0 core
+from memory import get_memory_service, init_memory_config, shutdown_memory_service
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder  # OmiSDK
 from pydantic import BaseModel
@@ -49,10 +48,7 @@ SPEAKER_SERVICE_AVAILABLE = speaker_recognition.speaker_recognition is not None
 # Load environment variables first
 load_dotenv()
 
-# Configure Mem0 telemetry based on environment variable
-# Set default to False for privacy unless explicitly enabled
-if not os.getenv("MEM0_TELEMETRY"):
-    os.environ["MEM0_TELEMETRY"] = "False"
+# Mem0 telemetry configuration is now handled in the memory module
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -124,41 +120,12 @@ if USE_DEEPGRAM:
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 
-# Mem0 organization configuration
-MEM0_ORGANIZATION_ID = os.getenv("MEM0_ORGANIZATION_ID", "friend-lite-org")
-MEM0_PROJECT_ID = os.getenv("MEM0_PROJECT_ID", "audio-conversations")
-MEM0_APP_ID = os.getenv("MEM0_APP_ID", "omi-backend")
-
-# Mem0 Configuration
-MEM0_CONFIG = {
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": "llama3.1:latest",
-            "ollama_base_url": OLLAMA_BASE_URL,
-            "temperature": 0,
-            "max_tokens": 2000,
-        },
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": "nomic-embed-text:latest",
-            "embedding_dims": 768,
-            "ollama_base_url": OLLAMA_BASE_URL,
-        },
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "collection_name": "omi_memories",
-            "embedding_model_dims": 768,
-            "host": QDRANT_BASE_URL,
-            "port": 6333,
-        },
-    },
-    "custom_prompt": "Extract meaningful preferences, facts, and experiences from the conversation. Focus on personal information, habits, and contextual details that would be useful for future interactions.",
-}
+# Memory configuration is now handled in the memory module
+# Initialize it with our Ollama and Qdrant URLs
+init_memory_config(
+    ollama_base_url=OLLAMA_BASE_URL,
+    qdrant_base_url=QDRANT_BASE_URL,
+)
 
 # Thread pool executors
 _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -166,8 +133,8 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="opus_io",
 )
 
-# Initialize mem0 and ollama client
-memory = Memory.from_config(MEM0_CONFIG)
+# Initialize memory service and ollama client
+memory_service = get_memory_service()
 ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
 
 ###############################################################################
@@ -331,54 +298,7 @@ async def _open_file_sink_properly(sink):
     return sink
 
 
-# Global variable to hold the memory instance in each worker process
-_process_memory = None
-
-def _init_process_memory():
-    """Initialize memory instance once per worker process."""
-    global _process_memory
-    if _process_memory is None:
-        _process_memory = Memory.from_config(MEM0_CONFIG)
-    return _process_memory
-
-
-def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bool:
-    """
-    Function to add memory in a separate process.
-    This function will be pickled and run in a process pool.
-    Uses a persistent memory instance per process.
-    """
-    try:
-        # Get or create the persistent memory instance for this process
-        process_memory = _init_process_memory()
-        process_memory.add(
-            transcript,
-            user_id=client_id,
-            metadata={
-                "source": "offline_streaming",
-                "audio_uuid": audio_uuid,
-                "timestamp": int(time.time()),
-                "conversation_context": "audio_transcription",
-                "device_type": "audio_recording",
-                "organization_id": MEM0_ORGANIZATION_ID,
-                "project_id": MEM0_PROJECT_ID,
-                "app_id": MEM0_APP_ID,
-            },
-        )
-        return True
-    except Exception as e:
-        # Log to stderr since we're in a separate process
-        import sys
-        print(f"Error in memory process for {audio_uuid}: {e}", file=sys.stderr)
-        return False
-
-
-# Process pool executor with initializer for heavy memory operations
-_MEMORY_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
-    max_workers=2,  # Keep this low to avoid overwhelming the system
-    initializer=_init_process_memory,  # Initialize memory once per process
-    mp_context=multiprocessing.get_context('spawn')  # Use spawn instead of fork to avoid threading issues
-)
+# Memory processing is now handled by the memory service module
 
 # Speaker recognition queue and worker
 SPKR_QUEUE: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
@@ -904,20 +824,10 @@ class ClientState:
                 if transcript is None or client_id is None or audio_uuid is None:  # Disconnect signal
                     break
                 
-                # Process memory in background (this is the slow operation)
-                # Run in separate process to completely isolate heavy ML operations
+                # Process memory using the memory service
                 try:
-                    loop = asyncio.get_running_loop()
-                    success = await loop.run_in_executor(
-                        _MEMORY_PROCESS_EXECUTOR,
-                        _add_memory_to_store,
-                        transcript,
-                        client_id,
-                        audio_uuid
-                    )
-                    if success:
-                        audio_logger.info(f"Added transcript for {audio_uuid} to mem0 (client: {client_id}).")
-                    else:
+                    success = await memory_service.add_memory_async(transcript, client_id, audio_uuid)
+                    if not success:
                         audio_logger.error(f"Failed to add memory for {audio_uuid}")
                 except Exception as e:
                     audio_logger.error(f"Error adding memory for {audio_uuid}: {e}")
@@ -975,9 +885,9 @@ async def lifespan(app: FastAPI):
         for client_id in list(active_clients.keys()):
             await cleanup_client_state(client_id)
         
-        # Shutdown process pool executor
-        _MEMORY_PROCESS_EXECUTOR.shutdown(wait=True)
-        audio_logger.info("Memory process pool shut down.")
+        # Shutdown memory service
+        await shutdown_memory_service()
+        audio_logger.info("Memory service shut down.")
         
         audio_logger.info("Shutdown complete.")
 
@@ -1216,17 +1126,9 @@ async def delete_user(user_id: str, delete_conversations: bool = False, delete_m
             deleted_data["conversations_deleted"] = conversations_result.deleted_count
         
         if delete_memories:
-            # Delete all memories for this user from mem0
+            # Delete all memories for this user using the memory service
             try:
-                # Get all memories for the user first to count them
-                user_memories = memory.get_all(user_id=user_id)
-                memory_count = len(user_memories) if user_memories else 0
-                
-                # Delete all memories for this user using the proper mem0 API
-                if memory_count > 0:
-                    memory.delete_all(user_id=user_id)
-                    audio_logger.info(f"Deleted {memory_count} memories for user {user_id}")
-                
+                memory_count = await memory_service.delete_all_user_memories(user_id)
                 deleted_data["memories_deleted"] = memory_count
             except Exception as mem_error:
                 audio_logger.error(f"Error deleting memories for user {user_id}: {mem_error}")
@@ -1263,10 +1165,7 @@ async def delete_user(user_id: str, delete_conversations: bool = False, delete_m
 async def get_memories(user_id: str, limit: int = 100):
     """Retrieves memories from the mem0 store with optional filtering."""
     try:
-        all_memories = memory.get_all(
-            user_id=user_id,
-            limit=limit,
-        )
+        all_memories = await memory_service.get_all_memories(user_id=user_id, limit=limit)
         return JSONResponse(content=all_memories)
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)
@@ -1279,11 +1178,7 @@ async def get_memories(user_id: str, limit: int = 100):
 async def search_memories(user_id: str, query: str, limit: int = 10):
     """Search memories using semantic similarity for better retrieval."""
     try:
-        relevant_memories = memory.search(
-            query=query,
-            user_id=user_id,
-            limit=limit,
-        )
+        relevant_memories = await memory_service.search_memories(query=query, user_id=user_id, limit=limit)
         return JSONResponse(content=relevant_memories)
     except Exception as e:
         audio_logger.error(f"Error searching memories: {e}", exc_info=True)
@@ -1296,7 +1191,7 @@ async def search_memories(user_id: str, query: str, limit: int = 10):
 async def delete_memory(memory_id: str):
     """Delete a specific memory by ID."""
     try:
-        memory.delete(memory_id=memory_id)
+        await memory_service.delete_memory(memory_id=memory_id)
         return JSONResponse(
             content={"message": f"Memory {memory_id} deleted successfully"}
         )
@@ -1689,27 +1584,34 @@ async def health_check():
     
     # Check mem0 (depends on Ollama and Qdrant)
     try:
-        # Run initialization in executor with timeout
-        loop = asyncio.get_running_loop()
-        await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: Memory.from_config(MEM0_CONFIG)),
+        # Test memory service connection with timeout
+        test_success = await asyncio.wait_for(
+            memory_service.test_connection(),
             timeout=10.0
         )
-        health_status["services"]["mem0"] = {
-            "status": "✅ Connected",
-            "healthy": True,
-            "critical": False
-        }
+        if test_success:
+            health_status["services"]["mem0"] = {
+                "status": "✅ Connected",
+                "healthy": True,
+                "critical": False
+            }
+        else:
+            health_status["services"]["mem0"] = {
+                "status": "⚠️ Connection Test Failed",
+                "healthy": False,
+                "critical": False
+            }
+            overall_healthy = False
     except asyncio.TimeoutError:
         health_status["services"]["mem0"] = {
-            "status": "⚠️ Initialization Timeout (10s) - Depends on Ollama/Qdrant",
+            "status": "⚠️ Connection Test Timeout (10s) - Depends on Ollama/Qdrant",
             "healthy": False,
             "critical": False
         }
         overall_healthy = False
     except Exception as e:
         health_status["services"]["mem0"] = {
-            "status": f"⚠️ Initialization Failed: {str(e)} - Check Ollama/Qdrant services",
+            "status": f"⚠️ Connection Test Failed: {str(e)} - Check Ollama/Qdrant services",
             "healthy": False,
             "critical": False
         }
