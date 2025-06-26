@@ -77,6 +77,7 @@ db = mongo_client.get_default_database("friend-lite")
 chunks_col = db["audio_chunks"]
 users_col = db["users"]
 speakers_col = db["speakers"]  # New collection for speaker management
+action_items_col = db["action_items"]  # New collection for action items
 
 # Audio Configuration
 OMI_SAMPLE_RATE = 16_000  # Hz
@@ -133,6 +134,10 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # Initialize memory service and ollama client
 memory_service = get_memory_service()
 ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+
+# Initialize action items service
+from action_items_service import ActionItemsService
+action_items_service = ActionItemsService(action_items_col, ollama_client)
 
 ###############################################################################
 # AUDIO PROCESSING FUNCTIONS
@@ -699,8 +704,8 @@ class ClientState:
                     else:
                         audio_logger.error(f"❌ Failed to add conversation memory for {current_uuid}")
                     
-                    # Extract and store action items from the full conversation
-                    action_item_count = memory_service.extract_and_store_action_items(full_conversation, self.client_id, current_uuid)
+                    # Extract and store action items from the full conversation using new MongoDB service
+                    action_item_count = await action_items_service.extract_and_store_action_items(full_conversation, self.client_id, current_uuid)
                     if action_item_count > 0:
                         audio_logger.info(f"🎯 Extracted {action_item_count} action items from conversation {current_uuid}")
                     else:
@@ -1542,7 +1547,7 @@ async def identify_speaker_from_file(request: SpeakerIdentificationRequest):
 async def get_action_items(user_id: str, status: Optional[str] = None, limit: int = 50):
     """Get action items for a user with optional status filtering."""
     try:
-        action_items = memory_service.get_action_items(user_id=user_id, limit=limit, status_filter=status)
+        action_items = await action_items_service.get_action_items(user_id=user_id, limit=limit, status_filter=status)
         return JSONResponse(content={
             "action_items": action_items,
             "count": len(action_items),
@@ -1561,7 +1566,7 @@ async def get_action_items(user_id: str, status: Optional[str] = None, limit: in
 async def search_action_items(user_id: str, query: str, limit: int = 20):
     """Search action items by text query."""
     try:
-        action_items = memory_service.search_action_items(query=query, user_id=user_id, limit=limit)
+        action_items = await action_items_service.search_action_items(query=query, user_id=user_id, limit=limit)
         return JSONResponse(content={
             "action_items": action_items,
             "count": len(action_items),
@@ -1580,37 +1585,17 @@ async def search_action_items(user_id: str, query: str, limit: int = 20):
 async def create_action_item(user_id: str, request: ActionItemCreateRequest):
     """Manually create a new action item."""
     try:
-        # Create action item data structure
-        action_item = {
-            "description": request.description,
-            "assignee": request.assignee,
-            "due_date": request.due_date,
-            "priority": request.priority,
-            "status": "open",
-            "context": request.context,
-            "created_at": int(time.time()),
-            "source": "manual_creation",
-            "id": f"manual_{user_id}_{int(time.time())}"
-        }
-        
-        # Store in Mem0
-        assert memory_service.memory is not None, "Memory service not initialized"
-        success = memory_service.memory.add(
-            f"Action Item: {request.description}",
+        # Create action item using new MongoDB service
+        action_item = await action_items_service.create_action_item(
             user_id=user_id,
-            metadata={
-                "type": "action_item",
-                "source": "manual_creation",
-                "timestamp": int(time.time()),
-                "action_item_data": action_item,
-                "organization_id": "friend-lite-org",
-                "project_id": "audio-conversations",
-                "app_id": "omi-backend",
-            },
-            infer=False
+            description=request.description,
+            assignee=request.assignee,
+            due_date=request.due_date,
+            priority=request.priority,
+            context=request.context
         )
         
-        if success:
+        if action_item:
             return JSONResponse(content={
                 "message": "Action item created successfully",
                 "action_item": action_item
@@ -1629,8 +1614,8 @@ async def create_action_item(user_id: str, request: ActionItemCreateRequest):
         )
 
 
-@app.put("/api/action-items/{memory_id}")
-async def update_action_item_status(memory_id: str, request: ActionItemUpdateRequest):
+@app.put("/api/action-items/{action_item_id}")
+async def update_action_item_status(action_item_id: str, request: ActionItemUpdateRequest):
     """Update the status of an action item."""
     try:
         # Validate status
@@ -1641,12 +1626,12 @@ async def update_action_item_status(memory_id: str, request: ActionItemUpdateReq
                 content={"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}
             )
         
-        success = memory_service.update_action_item_status(memory_id, request.status)
+        success = await action_items_service.update_action_item_status(action_item_id, request.status)
         
         if success:
             return JSONResponse(content={
                 "message": f"Action item status updated to {request.status}",
-                "memory_id": memory_id,
+                "action_item_id": action_item_id,
                 "new_status": request.status
             })
         else:
@@ -1656,23 +1641,23 @@ async def update_action_item_status(memory_id: str, request: ActionItemUpdateReq
             )
             
     except Exception as e:
-        audio_logger.error(f"Error updating action item {memory_id}: {e}")
+        audio_logger.error(f"Error updating action item {action_item_id}: {e}")
         return JSONResponse(
             status_code=500,
             content={"error": "Failed to update action item"}
         )
 
 
-@app.delete("/api/action-items/{memory_id}")
-async def delete_action_item(memory_id: str):
+@app.delete("/api/action-items/{action_item_id}")
+async def delete_action_item(action_item_id: str):
     """Delete an action item."""
     try:
-        success = memory_service.delete_action_item(memory_id)
+        success = await action_items_service.delete_action_item(action_item_id)
         
         if success:
             return JSONResponse(content={
                 "message": "Action item deleted successfully",
-                "memory_id": memory_id
+                "action_item_id": action_item_id
             })
         else:
             return JSONResponse(
@@ -1681,7 +1666,7 @@ async def delete_action_item(memory_id: str):
             )
             
     except Exception as e:
-        audio_logger.error(f"Error deleting action item {memory_id}: {e}")
+        audio_logger.error(f"Error deleting action item {action_item_id}: {e}")
         return JSONResponse(
             status_code=500,
             content={"error": "Failed to delete action item"}
@@ -1692,53 +1677,8 @@ async def delete_action_item(memory_id: str):
 async def get_action_item_stats(user_id: str):
     """Get action item statistics for a user."""
     try:
-        # Get all action items
-        all_items = memory_service.get_action_items(user_id=user_id, limit=1000)
-        
-        # Calculate statistics
-        stats = {
-            "total": len(all_items),
-            "open": 0,
-            "in_progress": 0,
-            "completed": 0,
-            "cancelled": 0,
-            "overdue": 0,
-            "by_priority": {"high": 0, "medium": 0, "low": 0, "not_specified": 0},
-            "by_assignee": {}
-        }
-        
-        current_time = time.time()
-        
-        for item in all_items:
-            status = item.get('status', 'open')
-            priority = item.get('priority', 'not_specified')
-            assignee = item.get('assignee', 'unassigned')
-            
-            # Count by status
-            if status in stats:
-                stats[status] += 1
-            
-            # Count by priority
-            if priority in stats["by_priority"]:
-                stats["by_priority"][priority] += 1
-            
-            # Count by assignee
-            if assignee not in stats["by_assignee"]:
-                stats["by_assignee"][assignee] = 0
-            stats["by_assignee"][assignee] += 1
-            
-            # Check for overdue items (if due_date is specified and in the past)
-            due_date_str = item.get('due_date')
-            if due_date_str and due_date_str != 'not_specified' and status in ['open', 'in_progress']:
-                # Simple date checking - assumes ISO format or common formats
-                try:
-                    if 'tomorrow' in due_date_str.lower() or 'today' in due_date_str.lower():
-                        # These would need more sophisticated parsing
-                        pass
-                    elif any(word in due_date_str.lower() for word in ['yesterday', 'last week', 'ago']):
-                        stats["overdue"] += 1
-                except:
-                    pass
+        # Get statistics using new MongoDB service
+        stats = await action_items_service.get_action_item_stats(user_id=user_id)
         
         return JSONResponse(content={
             "user_id": user_id,
@@ -1792,8 +1732,8 @@ async def extract_action_items_from_conversation(audio_uuid: str):
                 content={"error": "No client_id found for this conversation"}
             )
         
-        # Extract action items
-        action_item_count = memory_service.extract_and_store_action_items(
+        # Extract action items using new MongoDB service
+        action_item_count = await action_items_service.extract_and_store_action_items(
             full_transcript, client_id, audio_uuid
         )
         
