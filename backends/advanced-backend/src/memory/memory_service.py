@@ -2,20 +2,15 @@
 
 This module provides:
 - Memory configuration and initialization
-- Background memory processing with process pool
 - Memory operations (add, get, search, delete)
-- Process-safe memory handling
 """
 
-import asyncio
-import concurrent.futures
 import logging
-import multiprocessing
 import os
 import time
-from typing import List, Optional
+from typing import Optional
 
-from mem0 import AsyncMemory
+from mem0 import Memory
 
 # Configure Mem0 telemetry based on environment variable
 # Set default to False for privacy unless explicitly enabled
@@ -99,15 +94,15 @@ def init_memory_config(
     return MEM0_CONFIG
 
 
-async def _init_process_memory():
+def _init_process_memory():
     """Initialize memory instance once per worker process."""
     global _process_memory
     if _process_memory is None:
-        _process_memory = await AsyncMemory.from_config(MEM0_CONFIG)
+        _process_memory = Memory.from_config(MEM0_CONFIG)
     return _process_memory
 
 
-async def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bool:
+def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bool:
     """
     Function to add memory in a separate process.
     This function will be pickled and run in a process pool.
@@ -115,8 +110,8 @@ async def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str)
     """
     try:
         # Get or create the persistent memory instance for this process
-        process_memory = await _init_process_memory()
-        await process_memory.add(
+        process_memory = _init_process_memory()
+        process_memory.add(
             transcript,
             user_id=client_id,
             metadata={
@@ -143,94 +138,109 @@ class MemoryService:
         self.memory = None
         self._initialized = False
     
-    async def initialize(self):
+    def initialize(self):
         """Initialize the memory service."""
         if self._initialized:
             return
         
         try:
             # Initialize main memory instance
-            self.memory = await AsyncMemory.from_config(MEM0_CONFIG)
+            self.memory = Memory.from_config(MEM0_CONFIG)
             self._initialized = True
             memory_logger.info("Memory service initialized successfully")
             
         except Exception as e:
             memory_logger.error(f"Failed to initialize memory service: {e}")
             raise
-    
-    async def add_memory_async(self, transcript: str, client_id: str, audio_uuid: str) -> bool:
+
+    # def add_memory_async(self, transcript: str, client_id: str, audio_uuid: str) -> bool:
+    #     """Add memory in background process (non-blocking)."""
+    #     if not self._initialized:
+    #         self.initialize()
+        
+    #     try:
+    #         success = _add_memory_to_store(transcript, client_id, audio_uuid)
+            
+    #         if success:
+    #             memory_logger.info(f"Added transcript for {audio_uuid} to mem0 (client: {client_id})")
+    #         else:
+    #             memory_logger.error(f"Failed to add memory for {audio_uuid}")
+            
+    #         return success
+            
+    #     except Exception as e:
+    #         memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
+    #         return False
+    def add_memory(self, transcript: str, client_id: str, audio_uuid: str) -> bool:
         """Add memory in background process (non-blocking)."""
         if not self._initialized:
-            await self.initialize()
+            self.initialize()
         
         try:
-            success = await _add_memory_to_store(transcript, client_id, audio_uuid)
-            
+            success = _add_memory_to_store(transcript, client_id, audio_uuid)
             if success:
                 memory_logger.info(f"Added transcript for {audio_uuid} to mem0 (client: {client_id})")
             else:
                 memory_logger.error(f"Failed to add memory for {audio_uuid}")
-            
             return success
-            
         except Exception as e:
             memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
             return False
     
-    async def get_all_memories(self, user_id: str, limit: int = 100) -> dict:
+    def get_all_memories(self, user_id: str, limit: int = 100) -> dict:
         """Get all memories for a user."""
         if not self._initialized:
-            await self.initialize()
+            self.initialize()
         
         assert self.memory is not None, "Memory service not initialized"
         try:
-            memories = await self.memory.get_all(user_id=user_id, limit=limit)
+            memories = self.memory.get_all(user_id=user_id, limit=limit)
             return memories
         except Exception as e:
             memory_logger.error(f"Error fetching memories for user {user_id}: {e}")
             raise
     
-    async def search_memories(self, query: str, user_id: str, limit: int = 10) -> dict:
+    def search_memories(self, query: str, user_id: str, limit: int = 10) -> dict:
         """Search memories using semantic similarity."""
         if not self._initialized:
-            await self.initialize()
+            self.initialize()
         
         assert self.memory is not None, "Memory service not initialized"
         try:
-            memories = await self.memory.search(query=query, user_id=user_id, limit=limit)
+            memories = self.memory.search(query=query, user_id=user_id, limit=limit)
             return memories
         except Exception as e:
             memory_logger.error(f"Error searching memories for user {user_id}: {e}")
             raise
     
-    async def delete_memory(self, memory_id: str) -> bool:
+    def delete_memory(self, memory_id: str) -> bool:
         """Delete a specific memory by ID."""
         if not self._initialized:
-            await self.initialize()
+            self.initialize()
         
         assert self.memory is not None, "Memory service not initialized"
         try:
-            await self.memory.delete(memory_id=memory_id)
+            self.memory.delete(memory_id=memory_id)
             memory_logger.info(f"Deleted memory {memory_id}")
             return True
         except Exception as e:
             memory_logger.error(f"Error deleting memory {memory_id}: {e}")
             raise
     
-    async def delete_all_user_memories(self, user_id: str) -> int:
+    def delete_all_user_memories(self, user_id: str) -> int:
         """Delete all memories for a user and return count of deleted memories."""
         if not self._initialized:
-            await self.initialize()
+            self.initialize()
         
         try:
             assert self.memory is not None, "Memory service not initialized"
             # Get all memories first to count them
-            user_memories = await self.memory.get_all(user_id=user_id)
+            user_memories = self.memory.get_all(user_id=user_id)
             memory_count = len(user_memories) if user_memories else 0
             
             # Delete all memories for this user
             if memory_count > 0:
-                await self.memory.delete_all(user_id=user_id)
+                self.memory.delete_all(user_id=user_id)
                 memory_logger.info(f"Deleted {memory_count} memories for user {user_id}")
             
             return memory_count
@@ -239,17 +249,17 @@ class MemoryService:
             memory_logger.error(f"Error deleting memories for user {user_id}: {e}")
             raise
     
-    async def test_connection(self) -> bool:
+    def test_connection(self) -> bool:
         """Test memory service connection."""
         try:
             if not self._initialized:
-                await self.initialize()
+                self.initialize()
             return True
         except Exception as e:
             memory_logger.error(f"Memory service connection test failed: {e}")
             return False
     
-    async def shutdown(self):
+    def shutdown(self):
         """Shutdown the memory service."""
         self._initialized = False
         memory_logger.info("Memory service shut down")
@@ -264,9 +274,9 @@ def get_memory_service() -> MemoryService:
     return _memory_service
 
 
-async def shutdown_memory_service():
+def shutdown_memory_service():
     """Shutdown the global memory service."""
     global _memory_service
     if _memory_service:
-        await _memory_service.shutdown()
+        _memory_service.shutdown()
         _memory_service = None 

@@ -826,7 +826,7 @@ class ClientState:
                 
                 # Process memory using the memory service
                 try:
-                    success = await memory_service.add_memory_async(transcript, client_id, audio_uuid)
+                    success = memory_service.add_memory(transcript, client_id, audio_uuid)
                     if not success:
                         audio_logger.error(f"Failed to add memory for {audio_uuid}")
                 except Exception as e:
@@ -886,7 +886,7 @@ async def lifespan(app: FastAPI):
             await cleanup_client_state(client_id)
         
         # Shutdown memory service
-        await shutdown_memory_service()
+        shutdown_memory_service()
         audio_logger.info("Memory service shut down.")
         
         audio_logger.info("Shutdown complete.")
@@ -1128,7 +1128,7 @@ async def delete_user(user_id: str, delete_conversations: bool = False, delete_m
         if delete_memories:
             # Delete all memories for this user using the memory service
             try:
-                memory_count = await memory_service.delete_all_user_memories(user_id)
+                memory_count = memory_service.delete_all_user_memories(user_id)
                 deleted_data["memories_deleted"] = memory_count
             except Exception as mem_error:
                 audio_logger.error(f"Error deleting memories for user {user_id}: {mem_error}")
@@ -1165,7 +1165,7 @@ async def delete_user(user_id: str, delete_conversations: bool = False, delete_m
 async def get_memories(user_id: str, limit: int = 100):
     """Retrieves memories from the mem0 store with optional filtering."""
     try:
-        all_memories = await memory_service.get_all_memories(user_id=user_id, limit=limit)
+        all_memories = memory_service.get_all_memories(user_id=user_id, limit=limit)
         return JSONResponse(content=all_memories)
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)
@@ -1178,7 +1178,7 @@ async def get_memories(user_id: str, limit: int = 100):
 async def search_memories(user_id: str, query: str, limit: int = 10):
     """Search memories using semantic similarity for better retrieval."""
     try:
-        relevant_memories = await memory_service.search_memories(query=query, user_id=user_id, limit=limit)
+        relevant_memories = memory_service.search_memories(query=query, user_id=user_id, limit=limit)
         return JSONResponse(content=relevant_memories)
     except Exception as e:
         audio_logger.error(f"Error searching memories: {e}", exc_info=True)
@@ -1191,7 +1191,7 @@ async def search_memories(user_id: str, query: str, limit: int = 10):
 async def delete_memory(memory_id: str):
     """Delete a specific memory by ID."""
     try:
-        await memory_service.delete_memory(memory_id=memory_id)
+        memory_service.delete_memory(memory_id=memory_id)
         return JSONResponse(
             content={"message": f"Memory {memory_id} deleted successfully"}
         )
@@ -1585,10 +1585,7 @@ async def health_check():
     # Check mem0 (depends on Ollama and Qdrant)
     try:
         # Test memory service connection with timeout
-        test_success = await asyncio.wait_for(
-            memory_service.test_connection(),
-            timeout=10.0
-        )
+        test_success = memory_service.test_connection()
         if test_success:
             health_status["services"]["mem0"] = {
                 "status": "✅ Connected",
