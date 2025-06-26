@@ -1,250 +1,297 @@
 #!/usr/bin/env python3
 """
-TCP-to-WebSocket Relay for ESPHome Voice-PE
-
-• Listens on TCP port 8989 for ESP32 connections
-• Converts 32-bit PCM to 16-bit PCM audio format using easy-audio-interfaces
-• Forwards audio data to WebSocket /ws_pcm endpoint on port 8000
-• Handles reconnections and audio format parameters
+- Listens on PORT (default 8989) for ESP32 client
+- Decodes ESP32 audio to 16-bit mono with shift
+- Saves audio to rolling file sink
+- Forwards audio to backend
 """
 
 import argparse
 import asyncio
 import logging
-import os
-import signal
-import time
-from datetime import datetime
+import pathlib
+from typing import Optional
 
-import websockets
-from pathlib import Path
+import numpy as np
 from wyoming.audio import AudioChunk
-from easy_audio_interfaces.filesystem import LocalFileSink
 
-DEFAULT_TCP_PORT = 8989
-DEFAULT_WS_URL = "ws://host.docker.internal:8000/ws_pcm"
+from easy_audio_interfaces import RollingFileSink
+from easy_audio_interfaces.network.network_interfaces import TCPServer, SocketClient
 
-DEBUG_DIR = Path("./audio_chunks")
-DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_PORT = 8989
+SAMP_RATE = 16000
+CHANNELS = 1
+SAMP_WIDTH = 2  # bytes (16-bit)
+RECONNECT_DELAY = 5  # seconds
 
-DEBUG = os.getenv("DEBUG", "0") == "1"
-
-# Chunk duration in seconds
-CHUNK_DURATION_SECONDS = 10
-
-# ESP32 audio format (from Voice-PE)
-ESP32_SAMPLE_RATE = 16000
-ESP32_CHANNELS = 1
-ESP32_SAMPLE_WIDTH = 2  # 16-bit (2 bytes per sample)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-class TCPToWSRelay:
-    def __init__(self, tcp_port: int, ws_url: str):
-        self.tcp_port = tcp_port
-        self.ws_url = ws_url
-        self.running = True
-        self.shutdown_event = asyncio.Event()
-        
-        # Audio sink management
-        self.sink = None
-        self.sink_converted = None  # No longer used but kept for compatibility
-        self.chunk_start_time = None
-        self.current_chunk_samples = 0
-        self.chunk_counter = 0
+class ESP32TCPServer(TCPServer):
+    """
+    A TCP server for ESP32 devices streaming 32-bit stereo audio.
 
-    async def _create_new_sinks(self):
-        """Create new audio sinks with timestamped filenames."""
-        if self.sink:
-            await self.sink.close()
-        # if self.sink_converted:
-        #     await self.sink_converted.close()
-            
-        if DEBUG:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.chunk_counter += 1
-            
-            # Create new input sink (16-bit - no conversion needed)
-            input_filename = f"relay_input_{timestamp}_chunk{self.chunk_counter:03d}.wav"
-            self.sink = LocalFileSink(
-                DEBUG_DIR / input_filename,
-                sample_rate=ESP32_SAMPLE_RATE,
-                channels=ESP32_CHANNELS,
-                sample_width=ESP32_SAMPLE_WIDTH,
+    Handles the specific format used by ESPHome voice_assistant component:
+    - 32-bit little-endian samples (S32_LE)
+    - 2 channels (stereo, left/right interleaved)
+    - 16kHz sample rate
+    - Channel 0 (left) contains processed voice
+    - Channel 1 (right) is unused/muted
+
+    The server extracts the left channel and converts from 32-bit to 16-bit
+    following the official Home Assistant approach.
+    """
+
+    def __init__(self, *args, **kwargs):
+        # Set default parameters for ESP32 Voice Kit
+        kwargs.setdefault("sample_rate", 16000)
+        kwargs.setdefault("channels", 2)
+        kwargs.setdefault("sample_width", 4)  # 32-bit = 4 bytes
+        super().__init__(*args, **kwargs)
+
+    async def read(self) -> Optional[AudioChunk]:
+        """
+        Read audio data from the ESP32 TCP client.
+
+        Converts 32-bit stereo data to 16-bit mono by:
+        1. Reading raw 32-bit little-endian data
+        2. Reshaping to stereo pairs
+        3. Extracting left channel (channel 0)
+        4. Converting from 32-bit to 16-bit by right-shifting 16 bits
+
+        Returns:
+            AudioChunk with 16-bit mono audio, or None if no data/connection closed
+        """
+        # Get the raw audio chunk from the parent class
+        chunk = await super().read()
+        if chunk is None:
+            return None
+
+        raw_data = chunk.audio
+
+        # Handle empty data
+        if len(raw_data) == 0:
+            return None
+
+        # Ensure we have complete 32-bit samples (multiple of 8 bytes for stereo)
+        if len(raw_data) % 8 != 0:
+            logger.warning(
+                f"Received incomplete audio frame: {len(raw_data)} bytes, truncating to nearest complete frame"
             )
-            await self.sink.open()
-            
-            logging.info(f"Created new audio chunk file: {input_filename}")
-        else:
-            self.sink = None
-            self.sink_converted = None  # No longer used
-            
-        # Reset chunk timing
-        self.chunk_start_time = time.time()
-        self.current_chunk_samples = 0
-
-    async def _check_chunk_rotation(self, samples_written: int):
-        """Check if we need to rotate to a new chunk file based on 10-second duration."""
-        if not DEBUG:
-            return
-            
-        self.current_chunk_samples += samples_written
-        
-        # Calculate elapsed time based on samples written
-        elapsed_samples = self.current_chunk_samples
-        elapsed_seconds = elapsed_samples / ESP32_SAMPLE_RATE
-        
-        if elapsed_seconds >= CHUNK_DURATION_SECONDS:
-            logging.info(f"Rotating audio chunk after {elapsed_seconds:.2f} seconds")
-            await self._create_new_sinks()
-
-    async def handle_tcp_client(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ):
-        client_addr = writer.get_extra_info("peername")
-        logging.info(f"TCP client connected from {client_addr}")
-
-        # Initialize first chunk
-        await self._create_new_sinks()
+            raw_data = raw_data[: len(raw_data) - (len(raw_data) % 8)]
 
         try:
-            ws_url_with_params = f"{self.ws_url}?user_id=havpe"
-            logging.info(f"WebSocket URL with params: {ws_url_with_params}")
+            # Official Home Assistant approach:
+            # 1. Parse as 32-bit little-endian integers
+            pcm32 = np.frombuffer(raw_data, dtype="<i4")  # 32-bit little-endian
 
-            async with websockets.connect(
-                ws_url_with_params, max_size=None
-            ) as websocket:
-                logging.info(f"WebSocket connected to {ws_url_with_params}")
+            # 2. Reshape to stereo pairs and extract left channel (channel 0)
+            pcm32 = pcm32.reshape(-1, 2)[:, 0]  # Take LEFT channel only
 
-                try:
-                    while self.running and not self.shutdown_event.is_set():
-                        # Read data from TCP client (ESP32) with timeout
-                        try:
-                            data = await asyncio.wait_for(
-                                reader.read(4096), timeout=1.0
-                            )
-                            if self.sink:
-                                chunk = AudioChunk(
-                                    audio=data,
-                                    rate=ESP32_SAMPLE_RATE,
-                                    channels=ESP32_CHANNELS,
-                                    width=ESP32_SAMPLE_WIDTH,
-                                )
-                                await self.sink.write(chunk)
-                                
-                                # Calculate samples written for rotation check
-                                samples_in_chunk = len(data) // (ESP32_SAMPLE_WIDTH * ESP32_CHANNELS)
-                                await self._check_chunk_rotation(samples_in_chunk)
-                        except asyncio.TimeoutError:
-                            continue  # Check shutdown event and running flag
+            # 3. Convert from 32-bit to 16-bit by dropping padding and lower bits
+            pcm16 = (pcm32 >> 16).astype(np.int16)  # Right shift 16 bits
 
-                        if not data:
-                            logging.info("TCP client disconnected")
-                            break
+            # Convert back to bytes
+            audio_bytes = pcm16.tobytes()
 
-                        # Forward audio data directly to WebSocket (no conversion needed)
-                        await websocket.send(data)
-                        logging.debug(f"Relayed {len(data)} bytes directly from TCP to WebSocket")
+            return AudioChunk(
+                audio=audio_bytes,
+                rate=self._sample_rate,
+                channels=1,  # Output is mono (left channel only)
+                width=2,  # 16-bit = 2 bytes
+            )
 
-
-                except websockets.exceptions.ConnectionClosed:
-                    logging.warning("WebSocket connection closed")
-                except asyncio.CancelledError:
-                    logging.info("TCP client handler cancelled")
-                    return
-                except Exception as e:
-                    logging.error(f"Error in relay loop: {e}")
-
-        except websockets.exceptions.InvalidURI:
-            logging.error(f"Invalid WebSocket URL: {ws_url_with_params}")
-        except ConnectionRefusedError:
-            logging.error(f"Could not connect to WebSocket server at {self.ws_url}")
         except Exception as e:
-            logging.error(f"Error connecting to WebSocket: {e}")
-        finally:
-            # Clean up audio sinks
-            if self.sink:
-                await self.sink.close()
+            logger.error(f"Error processing ESP32 audio data: {e}")
+            return None
 
-            writer.close()
-            await writer.wait_closed()
-            logging.info(f"TCP client {client_addr} disconnected")
 
-    async def start_server(self):
-        logging.info(f"Starting TCP-to-WebSocket relay on port {self.tcp_port}")
-        server = await asyncio.start_server(
-            self.handle_tcp_client, "0.0.0.0", self.tcp_port
-        )
-
-        addr = server.sockets[0].getsockname()
-        logging.info(f"TCP-to-WebSocket relay listening on {addr[0]}:{addr[1]}")
-        logging.info(f"Will forward to WebSocket: {self.ws_url}")
-
-        logging.info(f"Audio format: {ESP32_CHANNELS}-channel {ESP32_SAMPLE_WIDTH*8}-bit PCM (direct forwarding)")
-
+async def ensure_socket_connection(socket_client: SocketClient) -> bool:
+    """Ensure socket client is connected, with retry logic."""
+    while True:
         try:
-            async with server:
-                # Wait for shutdown event instead of serve_forever
-                await self.shutdown_event.wait()
-        finally:
-            logging.info("Server shutting down...")
+            logger.info("Attempting to connect to socket...")
+            await socket_client.open()
+            logger.info("Socket connection established")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to socket: {e}")
+            logger.info(f"Retrying in {RECONNECT_DELAY} seconds...")
+            await asyncio.sleep(RECONNECT_DELAY)
 
-    def stop(self):
-        self.running = False
-        self.shutdown_event.set()
+
+async def send_with_retry(socket_client: SocketClient, chunk: AudioChunk) -> bool:
+    """Send chunk with retry logic."""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            await socket_client.write(chunk)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to send chunk (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                await ensure_socket_connection(socket_client)
+            else:
+                logger.error("Failed to send chunk after all retries")
+                return False
+    return False
+
+
+
+
+
+async def process_esp32_audio(
+    esp32_server: ESP32TCPServer, 
+    socket_client: Optional[SocketClient] = None,
+    asr_client: Optional[AsyncClient] = None,
+    file_sink: Optional[RollingFileSink] = None
+):
+    """Process audio chunks from ESP32 server, save to file sink and send to ASR client."""
+    if (not socket_client) and (not asr_client):
+        raise ValueError("Either socket_client or asr_client must be provided")
+    
+    if socket_client:
+        await ensure_socket_connection(socket_client)
+
+    try:
+        logger.info("Starting to process ESP32 audio for ASR and file saving...")
+        chunk_count = 0
+        failed_sends = 0
+        
+        async for chunk in esp32_server:
+            chunk_count += 1
+            if chunk_count % 10 == 1:  # Log every 10th chunk
+                logger.info(
+                    f"Received chunk {chunk_count} from ESP32, size: {len(chunk.audio)} bytes"
+                )
+
+            # Write to rolling file sink
+            if file_sink:
+                try:
+                    await file_sink.write(chunk)
+                except Exception as e:
+                    logger.warning(f"Failed to write to file sink: {e}")
+
+            # Send to backend
+            if socket_client:
+                success = await send_with_retry(socket_client, chunk)
+                if not success:
+                    failed_sends += 1
+                    if failed_sends > 10:
+                        logger.error("Too many failed sends, reconnecting...")
+                        await ensure_socket_connection(socket_client)
+                        failed_sends = 0
+                else:
+                    failed_sends = 0
+
+            # Send to ASR
+            # await asr_client.write_event(chunk.event())
+    except asyncio.CancelledError:
+        logger.info("ESP32 audio processor cancelled")
+        raise
+    except Exception as e:
+        logger.error(f"Error in ESP32 audio processor: {e}")
+        raise
+
+
+async def run_audio_processor(args, esp32_file_sink):
+    """Run the audio processor with reconnect logic."""
+    while True:
+        try:
+            # Create ESP32 TCP server with automatic I²S swap detection
+            esp32_server = ESP32TCPServer(
+                host=args.host,
+                port=args.port,
+                sample_rate=SAMP_RATE,
+                channels=CHANNELS,
+                sample_width=4,
+            )
+
+            socket_client = SocketClient(uri="ws://host.docker.internal:8000/ws_pcm?user_id=havpe")
+
+            # Start ESP32 server
+            async with esp32_server:
+                logger.info(f"ESP32 server listening on {args.host}:{args.port}")
+                logger.info("Starting audio recording and processing...")
+
+                # Start audio processing task
+                await process_esp32_audio(
+                    esp32_server,
+                    socket_client,
+                    asr_client=None,
+                    file_sink=esp32_file_sink
+                )
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted – stopping")
+            break
+        except Exception as e:
+            logger.error(f"Audio processor error: {e}")
+            logger.info(f"Restarting in {RECONNECT_DELAY} seconds...")
+            await asyncio.sleep(RECONNECT_DELAY)
 
 
 async def main():
-    # Get defaults from environment variables
-    tcp_port_default = int(os.getenv("TCP_PORT", DEFAULT_TCP_PORT))
-    ws_url_default = os.getenv("WS_URL", DEFAULT_WS_URL)
-
-    parser = argparse.ArgumentParser(
-        description="TCP-to-WebSocket relay for ESP32 audio with format conversion"
-    )
+    parser = argparse.ArgumentParser(description="TCP WAV recorder with ESP32 I²S swap detection")
     parser.add_argument(
-        "--tcp-port",
+        "--port",
         type=int,
-        default=tcp_port_default,
-        help=f"TCP port to listen on (default: {tcp_port_default}, env: TCP_PORT)",
+        default=DEFAULT_PORT,
+        help="TCP port to listen on for ESP32 (default 8989)",
     )
     parser.add_argument(
-        "--ws-url",
-        default=ws_url_default,
-        help=f"WebSocket URL to forward to (default: {ws_url_default}, env: WS_URL)",
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host address to bind to (default 0.0.0.0)",
     )
+    parser.add_argument(
+        "--segment-duration",
+        type=int,
+        default=5,
+        help="Duration of each audio segment in seconds (default 5)",
+    )
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="-v: INFO, -vv: DEBUG")
+    parser.add_argument("--debug-audio", action="store_true", help="Debug audio recording")
     args = parser.parse_args()
 
-    # Setup logging
-    loglevel = logging.INFO
-    logging.basicConfig(
-        format="%(asctime)s  %(levelname)s  %(message)s", level=loglevel
-    )
+    loglevel = logging.WARNING - (10 * min(args.verbose, 2))
+    logging.basicConfig(format="%(asctime)s  %(levelname)s  %(message)s", level=loglevel)
 
-    logging.info(f"TCP_PORT: {tcp_port_default}")
-    logging.info(f"WS_URL: {ws_url_default}")
+    # Create recordings directory
+    recordings = pathlib.Path("recordings")
+    recordings.mkdir(exist_ok=True)
 
-    # Create relay
-    relay = TCPToWSRelay(args.tcp_port, args.ws_url)
+    if args.debug_audio:
+        esp32_recordings = pathlib.Path("recordings/esp32_raw")
+        esp32_recordings.mkdir(exist_ok=True, parents=True)
 
-    # Handle graceful shutdown
-    def signal_handler():
-        logging.info("Received shutdown signal")
-        relay.stop()
 
-    # Use asyncio signal handling for better integration
-    loop = asyncio.get_running_loop()
-    for sig in [signal.SIGINT, signal.SIGTERM]:
-        loop.add_signal_handler(sig, signal_handler)
+    # Create rolling file sink for ESP32 data
+    if args.debug_audio:
+        logger.info("Debug audio recording enabled")
+        esp32_file_sink = RollingFileSink(
+            directory=esp32_recordings,
+            prefix="esp32_raw",
+            segment_duration_seconds=args.segment_duration,
+            sample_rate=SAMP_RATE,
+            channels=CHANNELS,
+            sample_width=SAMP_WIDTH,
+        )
+        await esp32_file_sink.open()
+    else:
+        logger.info("Debug audio recording disabled")
+        esp32_file_sink = None
 
     try:
-        await relay.start_server()
+        await run_audio_processor(args, esp32_file_sink)
     except KeyboardInterrupt:
-        logging.info("KeyboardInterrupt received, shutting down...")
-        relay.stop()
+        logger.info("Interrupted – shutting down")
     except Exception as e:
-        logging.error(f"Server error: {e}")
+        logger.error(f"Fatal error: {e}")
     finally:
-        logging.info("Shutdown complete")
+        logger.info("Recording session ended")
 
 
 if __name__ == "__main__":
