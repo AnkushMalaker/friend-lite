@@ -75,3 +75,25 @@ For production deployments, use a more secure network configuration:
    ```
 
 Replace `your-domain.com` with your actual domain name.
+
+
+# URL to put
+The URL you need to put in the APP is any backend that accepts OPUS audio in bytes.
+Currently, there are two backends provided in this repository:
+1. `backends/simple-backend` - This is good for getting started, it simply saves the audio from the app into the backend - you can listen to it and verify if everything sounds good.
+2. `backends/advanced-backend` - This is a more "complete" backend that provides the essentials. A database (mongodb) to store transcripts, a STT (speech to text) connection to transform the audio to transcripts, an LLM connection via ollama to store "memories" from transcripts, etc. 
+
+Once you start them (instructions should be in their respective readme), you need to do one of two things:
+1. Directly put the local/public IP of the machine where you're hosting the backend. 
+2. Expose the IP via something like ngrok/cloudflare over https 
+For example with ngrok, do:
+`ngrok http 8000`  
+(or if you did docker compose up, you can go to "http://machine-ip:4040/status). This will give you a URL. 
+You need to paste 
+
+`<THAT URL>/ws`
+
+into the app.
+;_;
+Yeah its ugly 
+
