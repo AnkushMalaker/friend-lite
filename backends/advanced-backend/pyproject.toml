@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "easy-audio-interfaces>=0.5",
+    "easy-audio-interfaces>=0.5.1",
     "fastapi>=0.115.12",
     "mem0ai>=0.1.111",
     "motor>=3.7.1",
@@ -27,6 +27,10 @@ dev = [
 ]
 webui = [
     "streamlit>=1.45.1",
+]
+tests = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
 ]
 
 
