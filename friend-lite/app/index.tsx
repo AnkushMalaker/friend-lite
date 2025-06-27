@@ -29,7 +29,7 @@ export default function App() {
   const omiConnection = useRef(new OmiConnection()).current;
 
   // Filter state
-  const [showOnlyOmi, setShowOnlyOmi] = useState(true);
+  const [showOnlyOmi, setShowOnlyOmi] = useState(false);
 
   // State for remembering the last connected device
   const [lastKnownDeviceId, setLastKnownDeviceId] = useState<string | null>(null);
@@ -406,7 +406,7 @@ export default function App() {
             canScan={canScan}
           />
 
-          {filteredDevices.length > 0 && !deviceConnection.connectedDeviceId && !isAttemptingAutoReconnect && (
+          {scannedDevices.length > 0 && !deviceConnection.connectedDeviceId && !isAttemptingAutoReconnect && (
             <View style={styles.section}>
               <View style={styles.sectionHeaderWithFilter}>
                 <Text style={styles.sectionTitle}>Found Devices</Text>
@@ -421,20 +421,31 @@ export default function App() {
                   />
                 </View>
               </View>
-              <FlatList
-                data={filteredDevices}
-                renderItem={({ item }) => (
-                  <DeviceListItem
-                    device={item}
-                    onConnect={deviceConnection.connectToDevice}
-                    onDisconnect={deviceConnection.disconnectFromDevice}
-                    isConnecting={deviceConnection.isConnecting}
-                    connectedDeviceId={deviceConnection.connectedDeviceId}
-                  />
-                )}
-                keyExtractor={(item) => item.id}
-                style={{ maxHeight: 200 }}
-              />
+              {filteredDevices.length > 0 ? (
+                <FlatList
+                  data={filteredDevices}
+                  renderItem={({ item }) => (
+                    <DeviceListItem
+                      device={item}
+                      onConnect={deviceConnection.connectToDevice}
+                      onDisconnect={deviceConnection.disconnectFromDevice}
+                      isConnecting={deviceConnection.isConnecting}
+                      connectedDeviceId={deviceConnection.connectedDeviceId}
+                    />
+                  )}
+                  keyExtractor={(item) => item.id}
+                  style={{ maxHeight: 200 }}
+                />
+              ) : (
+                <View style={styles.noDevicesContainer}>
+                  <Text style={styles.noDevicesText}>
+                    {showOnlyOmi 
+                      ? `No OMI/Friend devices found. ${scannedDevices.length} other device(s) hidden by filter.`
+                      : 'No devices found.'
+                    }
+                  </Text>
+                </View>
+              )}
             </View>
           )}
           
@@ -613,5 +624,15 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 14,
     fontWeight: '600',
+  },
+  noDevicesContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  noDevicesText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 });
