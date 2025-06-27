@@ -30,26 +30,60 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
+    - name: Debug - Check directory structure
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Contents of current directory:"
+        ls -la
+        echo "Contents of friend-lite directory:"
+        ls -la friend-lite/ || echo "friend-lite directory not found"
+        echo "Contents of friend-lite/android directory:"
+        ls -la friend-lite/android/ || echo "friend-lite/android directory not found"
+
     - name: Install dependencies
       working-directory: ./friend-lite
       run: npm ci
 
     - name: Create debug keystore (if not exists)
-      working-directory: ./friend-lite/android/app
       run: |
-        if [ ! -f debug.keystore ]; then
-          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        echo "Checking if friend-lite/android/app directory exists..."
+        if [ -d "friend-lite/android/app" ]; then
+          cd friend-lite/android/app
+          echo "Current directory: $(pwd)"
+          echo "Contents: $(ls -la)"
+          if [ ! -f debug.keystore ]; then
+            echo "Creating debug keystore..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            echo "Debug keystore created successfully"
+          else
+            echo "Debug keystore already exists, skipping creation"
+          fi
         else
-          echo "Debug keystore already exists, skipping creation"
+          echo "Error: friend-lite/android/app directory not found!"
+          exit 1
         fi
 
     - name: Make gradlew executable
-      working-directory: ./friend-lite/android
-      run: chmod +x ./gradlew
+      run: |
+        if [ -f "friend-lite/android/gradlew" ]; then
+          chmod +x friend-lite/android/gradlew
+          echo "Made gradlew executable"
+        else
+          echo "Error: gradlew not found at friend-lite/android/gradlew"
+          exit 1
+        fi
 
     - name: Build APK
-      working-directory: ./friend-lite/android
-      run: ./gradlew assembleRelease
+      run: |
+        if [ -d "friend-lite/android" ]; then
+          cd friend-lite/android
+          echo "Building APK from directory: $(pwd)"
+          ./gradlew assembleRelease
+        else
+          echo "Error: friend-lite/android directory not found!"
+          exit 1
+        fi
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
