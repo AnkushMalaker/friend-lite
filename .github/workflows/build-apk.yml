@@ -34,10 +34,14 @@ jobs:
       working-directory: ./friend-lite
       run: npm ci
 
-    - name: Create debug keystore
+    - name: Create debug keystore (if not exists)
       working-directory: ./friend-lite/android/app
       run: |
-        keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        if [ ! -f debug.keystore ]; then
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        else
+          echo "Debug keystore already exists, skipping creation"
+        fi
 
     - name: Make gradlew executable
       working-directory: ./friend-lite/android
