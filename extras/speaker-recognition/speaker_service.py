@@ -1,375 +1,338 @@
 #!/usr/bin/env python3
-"""
-Speaker Recognition Service
-
-A standalone FastAPI service for speaker diarization, enrollment, and identification.
-This service handles the heavy GPU computations separately from the main backend.
-"""
-
 import asyncio
+import json
 import logging
 import os
-import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from tempfile import NamedTemporaryFile
+from typing import Dict, List, Optional
 
-import faiss
+import faiss  # type: ignore
 import numpy as np
 import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from pyannote.audio import Audio, Pipeline
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
 from pyannote.core import Segment
-from pydantic import BaseModel
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# -----------------------------------------------------------------------------
+# Configuration ----------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+class Settings:
+    def __init__(self):
+        self.hf_token = os.getenv("HF_TOKEN")
+        self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.85"))
+        self.index_path = Path("data/faiss.index")
+        self.speakers_json = Path("data/speakers.json")
+
+auth = Settings()
+
+# -----------------------------------------------------------------------------
+# Logging ----------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("speaker_service")
 
-# Configuration
-HF_TOKEN = os.getenv("HF_TOKEN")  # Hugging Face token for gated models
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.85"))
+# -----------------------------------------------------------------------------
+# Device & models --------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-# Initialize device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-log.info(f"Using device: {device}")
+log.info("Using device: %s", device)
 
-# Initialize models
-try:
-    diar = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        use_auth_token=HF_TOKEN,
-    ).to(device)
-    log.info("Diarization pipeline loaded successfully")
-except Exception as e:
-    log.warning(f"Failed to load diarization pipeline: {e}")
-    diar = None
+diar = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=auth.hf_token).to(device)
+log.info("pyannote diarization pipeline loaded ✔")
+    
+embedder = PretrainedSpeakerEmbedding("speechbrain/spkrec-ecapa-voxceleb", device=device)
+EMB_DIM = embedder.dimension
+log.info("SpeechBrain ECAPA embedder loaded ✔ (dim=%d)", EMB_DIM)
 
-try:
-    embedding_model = PretrainedSpeakerEmbedding(
-        "speechbrain/spkrec-ecapa-voxceleb",
-        device=device
-    )
-    log.info("Embedding model loaded successfully")
-except Exception as e:
-    log.warning(f"Failed to load embedding model: {e}")
-    embedding_model = None
+audio_loader = Audio(sample_rate=16000, mono="downmix")
 
-try:
-    audio_loader = Audio(sample_rate=16000, mono="downmix")
-    log.info("Audio loader initialized successfully")
-except Exception as e:
-    log.warning(f"Failed to initialize audio loader: {e}")
-    audio_loader = None
+# -----------------------------------------------------------------------------
+# FAISS index & persistence ----------------------------------------------------
+# -----------------------------------------------------------------------------
 
-# Speaker database
-EMB_DIM = embedding_model.dimension if embedding_model else 512
-index = faiss.IndexFlatIP(EMB_DIM)
-enrolled_speakers: List[Dict] = []
+# Build HNSW index (approximate, but 10–50× faster than FlatIP once N > 10 k)
+index: faiss.IndexHNSWFlat = faiss.IndexHNSWFlat(EMB_DIM, 32)  # efConstruction=32 by default
+index.hnsw.efSearch = 128
 
-log.info(f"Speaker recognition service initialized with embedding dimension: {EMB_DIM}")
+speakers: Dict[str, Dict] = {}  # speaker_id -> {name, embedding, faiss_index}
 
-# Pydantic models
-class SpeakerEnrollmentRequest(BaseModel):
+if auth.index_path.exists():
+    index = faiss.read_index(str(auth.index_path))  # type: ignore[arg-type]
+    log.info("Loaded FAISS index from disk (%s)", auth.index_path)
+if auth.speakers_json.exists():
+    speakers = json.loads(auth.speakers_json.read_text())
+    log.info("Loaded %d enrolled speakers", len(speakers))
+
+# -----------------------------------------------------------------------------
+# Helper utils -----------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+def _normalize(emb: np.ndarray) -> np.ndarray:
+    return emb / np.linalg.norm(emb, axis=-1, keepdims=True)
+
+
+@torch.inference_mode()
+def _embed(waveform: torch.Tensor) -> np.ndarray:  # (1, T)
+    emb = embedder(waveform.to(device))
+    if isinstance(emb, torch.Tensor):
+        emb = emb.cpu().numpy()
+    return _normalize(emb)
+
+
+def _save_state() -> None:
+    faiss.write_index(index, str(auth.index_path))  # type: ignore[arg-type]
+    auth.speakers_json.write_text(json.dumps(speakers))
+
+
+# -----------------------------------------------------------------------------
+# Pydantic request/response Schemas -------------------------------------------
+# -----------------------------------------------------------------------------
+
+class EnrollBody(BaseModel):
     speaker_id: str
     speaker_name: str
-    audio_file_path: Optional[str] = None
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
+    audio_path: Optional[str] = None
+    start: Optional[float] = None
+    end: Optional[float] = None
 
-class SpeakerIdentificationRequest(BaseModel):
-    audio_file_path: str
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
 
-class DiarizationRequest(BaseModel):
-    audio_file_path: str
+class IdentifyBody(BaseModel):
+    audio_path: str
+    start: Optional[float] = None
+    end: Optional[float] = None
 
-class DiarizationResponse(BaseModel):
-    segments: List[Dict]
-    speakers_identified: List[str]
-    speaker_embeddings: Dict[str, List[float]]
 
-# FastAPI app
-app = FastAPI(
-    title="Speaker Recognition Service",
-    description="Speaker diarization, enrollment, and identification service",
-    version="0.1.0"
-)
+class VerifyBody(BaseModel):
+    speaker_id: str
+    audio_path: str
+    start: Optional[float] = None
+    end: Optional[float] = None
 
-# Helper functions
-def normalize_embedding(embedding: np.ndarray) -> np.ndarray:
-    """L2 normalize embedding for cosine similarity."""
-    return embedding / np.linalg.norm(embedding, axis=-1, keepdims=True)
 
-def enroll_speaker(speaker_id: str, speaker_name: str, audio_file: str, 
-                  start_time: Optional[float] = None, end_time: Optional[float] = None) -> bool:
-    """Enroll a new speaker from an audio file."""
-    if not audio_loader or not embedding_model:
-        log.error("Audio loader or embedding model not available")
-        return False
+class DiarizeBody(BaseModel):
+    audio_path: str
+
+
+# -----------------------------------------------------------------------------
+# FastAPI app ------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+app = FastAPI(title="Speaker-ID Service", version="0.3.0")
+
+# -----------------------------------------------------------------------------
+# Core functions ----------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+def _load_wave(path: str, start: Optional[float], end: Optional[float]):
+    if start is not None and end is not None:
+        seg = Segment(start, end)
+        wav, _ = audio_loader.crop(path, seg)
+    else:
+        wav, _ = audio_loader(path)
+    return wav.unsqueeze(0)  # (1, 1, T)
+
+
+def _add_speaker(speaker_id: str, name: str, embedding: np.ndarray) -> tuple[bool, str]:
+    """Add or update speaker. Returns (is_update, message)"""
+    is_update = speaker_id in speakers
+    faiss_idx = index.ntotal  # Current index before adding
+    
+    if is_update:
+        # Update existing speaker
+        old_faiss_idx = speakers[speaker_id]["faiss_index"]
+        speakers[speaker_id] = {
+            "name": name, 
+            "embedding": embedding.tolist(),
+            "faiss_index": faiss_idx
+        }
+        # Add new embedding to index (we'll rebuild index to remove old one later)
+        index.add(embedding.reshape(1, -1).astype(np.float32))
         
-    try:
-        # Load audio
-        if start_time is not None and end_time is not None:
-            segment = Segment(start_time, end_time)
-            waveform, _ = audio_loader.crop(audio_file, segment)
-        else:
-            waveform, _ = audio_loader(audio_file)
-        
-        # Extract embedding
-        waveform = waveform.unsqueeze(0)  # Add batch dimension
-        embedding = embedding_model(waveform)
-        embedding = normalize_embedding(embedding)
-        
-        # Check if speaker already exists
-        for existing_speaker in enrolled_speakers:
-            if existing_speaker["id"] == speaker_id:
-                log.info(f"Updating existing speaker: {speaker_id}")
-                existing_speaker["name"] = speaker_name
-                existing_speaker["embedding"] = embedding[0]
-                
-                # Rebuild FAISS index
-                global index
-                index = faiss.IndexFlatIP(EMB_DIM)
-                if enrolled_speakers:
-                    embeddings = np.vstack([spk["embedding"] for spk in enrolled_speakers])
-                    index.add(embeddings.astype(np.float32))
-                return True
-        
+        # Rebuild index without the old embedding
+        _rebuild_faiss_index()
+        return True, f"Updated existing speaker '{speaker_id}'"
+    else:
         # Add new speaker
-        enrolled_speakers.append({
-            "id": speaker_id,
-            "name": speaker_name,
-            "embedding": embedding[0]
-        })
-        
-        # Add to FAISS index
-        index.add(embedding.astype(np.float32))
-        
-        log.info(f"Successfully enrolled speaker: {speaker_id} ({speaker_name})")
-        return True
-        
-    except Exception as e:
-        log.error(f"Failed to enroll speaker {speaker_id}: {e}")
-        return False
+        speakers[speaker_id] = {
+            "name": name, 
+            "embedding": embedding.tolist(),
+            "faiss_index": faiss_idx
+        }
+        index.add(embedding.reshape(1, -1).astype(np.float32))
+        return False, f"Enrolled new speaker '{speaker_id}'"
 
-def identify_speaker(embedding: np.ndarray) -> Optional[str]:
-    """Identify a speaker from their embedding."""
-    if len(enrolled_speakers) == 0:
-        return None
-    
-    # Ensure embedding is 2D and normalized
-    if embedding.ndim == 1:
-        embedding = embedding.reshape(1, -1)
-    embedding = normalize_embedding(embedding)
-    
-    # Search in FAISS index
-    similarities, indices = index.search(embedding.astype(np.float32), 1)
-    
-    if similarities[0, 0] > SIMILARITY_THRESHOLD:
-        speaker_idx = indices[0, 0]
-        if speaker_idx < len(enrolled_speakers):
-            return enrolled_speakers[speaker_idx]["id"]
-    
-    return None
 
-# API Routes
+def _rebuild_faiss_index():
+    """Rebuild FAISS index from current speakers dict"""
+    global index
+    index = faiss.IndexHNSWFlat(EMB_DIM, 32)
+    index.hnsw.efSearch = 128
+    
+    # Sort speakers by their current faiss_index to maintain order
+    sorted_speakers = sorted(speakers.items(), key=lambda x: x[1]["faiss_index"])
+    
+    if sorted_speakers:
+        embeddings = []
+        for i, (speaker_id, speaker_data) in enumerate(sorted_speakers):
+            embeddings.append(np.array(speaker_data["embedding"]))
+            # Update faiss_index to new position
+            speakers[speaker_id]["faiss_index"] = i
+        
+        all_embs = np.stack(embeddings).astype(np.float32)
+        index.add(all_embs)
+
+
+# -----------------------------------------------------------------------------
+# Endpoints --------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
 @app.get("/health")
-async def health_check():
-    """Health check endpoint."""
+async def health():
     return {
-        "status": "healthy",
+        "status": "ok",
         "device": str(device),
-        "models_loaded": {
-            "diarization": diar is not None,
-            "embedding": embedding_model is not None,
-            "audio_loader": audio_loader is not None
-        },
-        "enrolled_speakers": len(enrolled_speakers)
+        "speakers": len(speakers),
     }
 
+
 @app.post("/enroll")
-async def enroll_speaker_endpoint(request: SpeakerEnrollmentRequest):
-    """Enroll a new speaker."""
-    if not request.audio_file_path:
-        raise HTTPException(status_code=400, detail="audio_file_path is required")
-    
-    success = enroll_speaker(
-        request.speaker_id,
-        request.speaker_name,
-        request.audio_file_path,
-        request.start_time,
-        request.end_time
-    )
-    
-    if success:
-        return {"success": True, "message": f"Speaker {request.speaker_id} enrolled successfully"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to enroll speaker")
+async def enroll(body: EnrollBody):
+    if not body.audio_path:
+        raise HTTPException(400, detail="audio_path required")
+
+    wav = _load_wave(body.audio_path, body.start, body.end)
+    loop = asyncio.get_running_loop()
+    emb = await loop.run_in_executor(None, _embed, wav)  # (1,1088) or (1,192)
+
+    is_update, message = _add_speaker(body.speaker_id, body.speaker_name, emb[0])
+    _save_state()
+    return {
+        "success": True, 
+        "speaker_id": body.speaker_id, 
+        "updated": is_update,
+        "message": message
+    }
+
 
 @app.post("/enroll/upload")
-async def enroll_speaker_upload(
-    speaker_id: str,
-    speaker_name: str,
-    audio_file: UploadFile = File(...),
-    start_time: Optional[float] = None,
-    end_time: Optional[float] = None
-):
-    """Enroll a speaker from uploaded audio file."""
-    # Save uploaded file temporarily
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-        content = await audio_file.read()
-        tmp_file.write(content)
-        tmp_file_path = tmp_file.name
-    
+async def enroll_upload(speaker_id: str, speaker_name: str, file: UploadFile = File(...)):
+    with NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
     try:
-        success = enroll_speaker(speaker_id, speaker_name, tmp_file_path, start_time, end_time)
-        if success:
-            return {"success": True, "message": f"Speaker {speaker_id} enrolled successfully"}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to enroll speaker")
+        body = EnrollBody(speaker_id=speaker_id, speaker_name=speaker_name, audio_path=tmp_path)
+        return await enroll(body)
     finally:
-        # Clean up temporary file
-        Path(tmp_file_path).unlink(missing_ok=True)
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@app.post("/identify/upload")
+async def identify_upload(file: UploadFile = File(...)):
+    with NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+    try:
+        body = IdentifyBody(audio_path=tmp_path)
+        return await identify(body)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
 
 @app.post("/identify")
-async def identify_speaker_endpoint(request: SpeakerIdentificationRequest):
-    """Identify a speaker from audio."""
-    if not audio_loader or not embedding_model:
-        raise HTTPException(status_code=503, detail="Audio processing models not available")
+async def identify(body: IdentifyBody):
+    # Check if any speakers are enrolled
+    if not speakers:
+        return {"identified": False, "score": 0.0, "message": "No speakers enrolled"}
     
-    try:
-        # Load audio
-        if request.start_time is not None and request.end_time is not None:
-            segment = Segment(request.start_time, request.end_time)
-            waveform, _ = audio_loader.crop(request.audio_file_path, segment)
-        else:
-            waveform, _ = audio_loader(request.audio_file_path)
-        
-        # Extract embedding
-        waveform = waveform.unsqueeze(0)
-        embedding = embedding_model(waveform)
-        embedding = normalize_embedding(embedding)
-        
-        # Identify speaker
-        identified_speaker = identify_speaker(embedding[0])
-        
-        if identified_speaker:
-            # Get speaker info
-            speaker_info = next((s for s in enrolled_speakers if s["id"] == identified_speaker), None)
-            return {
-                "identified": True,
-                "speaker_id": identified_speaker,
-                "speaker_info": speaker_info
-            }
-        else:
-            return {"identified": False}
-            
-    except Exception as e:
-        log.error(f"Error identifying speaker: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to identify speaker: {str(e)}")
+    wav = _load_wave(body.audio_path, body.start, body.end)
+    emb = await asyncio.get_running_loop().run_in_executor(None, _embed, wav)
+
+    sims, idxs = index.search(emb.astype(np.float32), 1)  # type: ignore
+    best_sim, best_idx = float(sims[0, 0]), int(idxs[0, 0])
+    
+    # Find speaker by faiss index
+    speaker_found = None
+    for speaker_id, speaker_data in speakers.items():
+        if speaker_data["faiss_index"] == best_idx:
+            speaker_found = {"id": speaker_id, "name": speaker_data["name"]}
+            break
+    
+    if not speaker_found:
+        log.error(f"No speaker found for faiss index {best_idx}")
+        return {"identified": False, "score": best_sim, "message": "Index out of sync - please restart service"}
+    
+    if best_sim < auth.similarity_threshold:
+        return {"identified": False, "score": best_sim}
+    
+    return {"identified": True, "speaker": speaker_found, "score": best_sim}
+
+
+@app.post("/verify")
+async def verify(body: VerifyBody):
+    wav = _load_wave(body.audio_path, body.start, body.end)
+    emb = await asyncio.get_running_loop().run_in_executor(None, _embed, wav)
+
+    # find speaker 
+    if body.speaker_id not in speakers:
+        raise HTTPException(404, f"speaker_id {body.speaker_id} not enrolled")
+
+    spk_emb = np.array(speakers[body.speaker_id]["embedding"])
+    score = float(np.dot(_normalize(emb[0]), _normalize(spk_emb)))
+    return {"match": score >= auth.similarity_threshold, "score": score}
+
 
 @app.post("/diarize")
-async def diarize_audio(request: DiarizationRequest) -> DiarizationResponse:
-    """Perform speaker diarization on audio file."""
-    if not diar or not audio_loader or not embedding_model:
-        raise HTTPException(status_code=503, detail="Diarization models not available")
-    
-    try:
-        # Run diarization
-        def run_diarization(file_path: str):
-            return diar(file_path)
-        
-        loop = asyncio.get_running_loop()
-        diar_result = await loop.run_in_executor(None, run_diarization, request.audio_file_path)
+async def diarize(body: DiarizeBody):
+    if diar is None:
+        raise HTTPException(503, "Diarization model not loaded")
 
-        # Collect segments
-        segments = []
-        for turn, _, speaker in diar_result.itertracks(yield_label=True):
-            segments.append({
-                "speaker": speaker,
-                "start": float(turn.start),
-                "end": float(turn.end),
-                "verified_speaker": None
-            })
+    diar_out = await asyncio.get_running_loop().run_in_executor(None, diar, body.audio_path)
 
-        # Extract embeddings and identify speakers
-        speaker_embeddings = {}
-        speakers_identified = set()
-        
-        for spk in diar_result.labels():
-            try:
-                # Get longest segment for this speaker
-                speaker_timeline = diar_result.label_timeline(spk)
-                longest_segment = max(speaker_timeline, key=lambda x: x.duration)
-                
-                # Extract embedding
-                waveform, _ = audio_loader.crop(request.audio_file_path, longest_segment)
-                waveform = waveform.unsqueeze(0)
-                embedding = embedding_model(waveform)
-                embedding = normalize_embedding(embedding)
-                speaker_embeddings[spk] = embedding[0]
-                
-                # Identify speaker
-                identified_speaker = identify_speaker(embedding[0])
-                if not identified_speaker:
-                    identified_speaker = f"unknown_speaker_{len(enrolled_speakers) + hash(str(embedding[0][:4])) % 1000}"
-                
-                speakers_identified.add(identified_speaker)
-                
-                # Update segments
-                for seg in segments:
-                    if seg["speaker"] == spk:
-                        seg["verified_speaker"] = identified_speaker
-                        
-            except Exception as e:
-                log.error(f"Failed to process speaker {spk}: {e}")
-                for seg in segments:
-                    if seg["speaker"] == spk:
-                        seg["verified_speaker"] = f"speaker_{spk}"
-                speakers_identified.add(f"speaker_{spk}")
+    segments = [
+        {"speaker": label, "start": float(seg.start), "end": float(seg.end)}
+        for seg, _, label in diar_out.itertracks(yield_label=True)
+    ]
+    return {"segments": segments}
 
-        return DiarizationResponse(
-            segments=segments,
-            speakers_identified=list(speakers_identified),
-            speaker_embeddings={spk: emb.tolist() for spk, emb in speaker_embeddings.items()}
-        )
-        
-    except Exception as e:
-        log.error(f"Error during diarization: {e}")
-        raise HTTPException(status_code=500, detail=f"Diarization failed: {str(e)}")
 
 @app.get("/speakers")
 async def list_speakers():
-    """List all enrolled speakers."""
-    return {
-        "speakers": [{"id": spk["id"], "name": spk["name"]} for spk in enrolled_speakers],
-        "count": len(enrolled_speakers)
-    }
+    return {"speakers": speakers}
+
+
+@app.post("/speakers/reset")
+async def reset_speakers():
+    global speakers, index
+    speakers = {}
+    index = faiss.IndexHNSWFlat(EMB_DIM, 32)
+    index.hnsw.efSearch = 128
+    _save_state()
+    return {"reset": True, "message": "All speakers cleared"}
+
 
 @app.delete("/speakers/{speaker_id}")
-async def remove_speaker(speaker_id: str):
-    """Remove an enrolled speaker."""
-    global enrolled_speakers, index
+async def delete_speaker(speaker_id: str):
+    global speakers, index
+
+    if speaker_id not in speakers:
+        raise HTTPException(404, "speaker not found")
+
+    # Remove speaker
+    speakers.pop(speaker_id)
     
-    original_count = len(enrolled_speakers)
-    enrolled_speakers = [spk for spk in enrolled_speakers if spk["id"] != speaker_id]
-    removed = len(enrolled_speakers) < original_count
-    
-    if removed:
-        # Rebuild FAISS index
-        index = faiss.IndexFlatIP(EMB_DIM)
-        if enrolled_speakers:
-            embeddings = np.vstack([spk["embedding"] for spk in enrolled_speakers])
-            index.add(embeddings.astype(np.float32))
-        
-        log.info(f"Removed speaker: {speaker_id}")
-        return {"success": True, "message": f"Speaker {speaker_id} removed"}
-    else:
-        raise HTTPException(status_code=404, detail=f"Speaker {speaker_id} not found")
+    # Rebuild index without that speaker
+    _rebuild_faiss_index()
+    _save_state()
+    return {"deleted": True}
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info") 
+
+    uvicorn.run("speaker_service:app", host="0.0.0.0", port=8001, reload=False) 
