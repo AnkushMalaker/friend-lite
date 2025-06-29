@@ -12,3 +12,6 @@ backends/examples/example-satellite/*
 **/audio_chunks/*
 **/mongo_data/*
 .cursor/*
+.locks
+blobs
+transcription_results.csv

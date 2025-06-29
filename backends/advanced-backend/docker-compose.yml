@@ -33,7 +33,7 @@ services:
       - "8501:8501"
     environment:
       - BACKEND_API_URL=http://friend-backend:8000
-      - BACKEND_PUBLIC_URL=http://friend-backend:8000
+      - BACKEND_PUBLIC_URL=http://localhost:8000
     depends_on:
       friend-backend:
         condition: service_healthy
@@ -110,4 +110,8 @@ services:
     command: "http friend-backend:8000 --url=intelligent-hypervisor.ngrok.app"
     depends_on:
       - friend-backend
-
+volumes:
+  ollama_data:
+    driver: local
+  mongo_data:
+    driver: local
