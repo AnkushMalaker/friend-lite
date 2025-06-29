@@ -20,10 +20,10 @@ RUN uv sync --no-dev
 
 # Copy application code
 COPY speaker_service.py ./
-COPY client.py ./
+# COPY client.py ./
 
 # Create directories
-RUN mkdir -p /app/audio_chunks /app/debug /models
+RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
 
 # Set environment variables
 ENV HF_HOME=/models

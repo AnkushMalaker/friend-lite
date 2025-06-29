@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Dict, List, Optional
+from typing import Optional
 
 import faiss  # type: ignore
 import numpy as np
@@ -23,7 +23,7 @@ from pyannote.core import Segment
 class Settings:
     def __init__(self):
         self.hf_token = os.getenv("HF_TOKEN")
-        self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.85"))
+        self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.25"))
         self.index_path = Path("data/faiss.index")
         self.speakers_json = Path("data/speakers.json")
 
@@ -60,14 +60,24 @@ audio_loader = Audio(sample_rate=16000, mono="downmix")
 index: faiss.IndexHNSWFlat = faiss.IndexHNSWFlat(EMB_DIM, 32)  # efConstruction=32 by default
 index.hnsw.efSearch = 128
 
-speakers: Dict[str, Dict] = {}  # speaker_id -> {name, embedding, faiss_index}
+speakers: dict[str, dict] = {}  # speaker_id -> {name, embedding, faiss_index}
 
 if auth.index_path.exists():
     index = faiss.read_index(str(auth.index_path))  # type: ignore[arg-type]
     log.info("Loaded FAISS index from disk (%s)", auth.index_path)
 if auth.speakers_json.exists():
-    speakers = json.loads(auth.speakers_json.read_text())
-    log.info("Loaded %d enrolled speakers", len(speakers))
+    try:
+        loaded_speakers = json.loads(auth.speakers_json.read_text())
+        # Ensure speakers is a dict (not list from old format)
+        if isinstance(loaded_speakers, dict):
+            speakers = loaded_speakers
+        else:
+            log.warning("Old format detected - resetting speakers database")
+            speakers = {}
+        log.info("Loaded %d enrolled speakers", len(speakers))
+    except Exception as e:
+        log.error(f"Error loading speakers: {e} - resetting to empty")
+        speakers = {}
 
 # -----------------------------------------------------------------------------
 # Helper utils -----------------------------------------------------------------
@@ -141,30 +151,20 @@ def _load_wave(path: str, start: Optional[float], end: Optional[float]):
 def _add_speaker(speaker_id: str, name: str, embedding: np.ndarray) -> tuple[bool, str]:
     """Add or update speaker. Returns (is_update, message)"""
     is_update = speaker_id in speakers
-    faiss_idx = index.ntotal  # Current index before adding
+    
+    # Store speaker data (without faiss_index for now)
+    speakers[speaker_id] = {
+        "name": name, 
+        "embedding": embedding.tolist(),
+        "faiss_index": 0  # Will be set by rebuild
+    }
+    
+    # Always rebuild index to maintain consistency
+    _rebuild_faiss_index()
     
     if is_update:
-        # Update existing speaker
-        old_faiss_idx = speakers[speaker_id]["faiss_index"]
-        speakers[speaker_id] = {
-            "name": name, 
-            "embedding": embedding.tolist(),
-            "faiss_index": faiss_idx
-        }
-        # Add new embedding to index (we'll rebuild index to remove old one later)
-        index.add(embedding.reshape(1, -1).astype(np.float32))
-        
-        # Rebuild index without the old embedding
-        _rebuild_faiss_index()
         return True, f"Updated existing speaker '{speaker_id}'"
     else:
-        # Add new speaker
-        speakers[speaker_id] = {
-            "name": name, 
-            "embedding": embedding.tolist(),
-            "faiss_index": faiss_idx
-        }
-        index.add(embedding.reshape(1, -1).astype(np.float32))
         return False, f"Enrolled new speaker '{speaker_id}'"
 
 
@@ -175,6 +175,7 @@ def _rebuild_faiss_index():
     index.hnsw.efSearch = 128
     
     # Sort speakers by their current faiss_index to maintain order
+    # sorted_speakers = sorted(speakers.items())
     sorted_speakers = sorted(speakers.items(), key=lambda x: x[1]["faiss_index"])
     
     if sorted_speakers:
@@ -255,6 +256,9 @@ async def identify(body: IdentifyBody):
 
     sims, idxs = index.search(emb.astype(np.float32), 1)  # type: ignore
     best_sim, best_idx = float(sims[0, 0]), int(idxs[0, 0])
+    log.info(f"Sims: {sims}")
+    log.info(f"Idxs: {idxs}")
+    log.info(f"Best similarity: {best_sim}, best index: {best_idx}")
     
     # Find speaker by faiss index
     speaker_found = None
