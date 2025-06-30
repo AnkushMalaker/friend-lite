@@ -12,7 +12,6 @@
 import asyncio
 import concurrent.futures
 import logging
-import multiprocessing
 import os
 import time
 import uuid
@@ -31,10 +30,10 @@ from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from mem0 import Memory  # mem0 core
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder  # OmiSDK
 from pydantic import BaseModel
+from typing import List, Dict, Any
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
@@ -42,7 +41,7 @@ from wyoming.info import Describe
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 import speaker_client as speaker_recognition
-from utils import get_mem0_client
+from memory import get_memory_service, init_memory_config, shutdown_memory_service
 
 # Check if speaker service is available
 SPEAKER_SERVICE_AVAILABLE = speaker_recognition.speaker_recognition is not None
@@ -54,10 +53,7 @@ SPEAKER_SERVICE_AVAILABLE = speaker_recognition.speaker_recognition is not None
 # Load environment variables first
 load_dotenv()
 
-# Configure Mem0 telemetry based on environment variable
-# Set default to False for privacy unless explicitly enabled
-if not os.getenv("MEM0_TELEMETRY"):
-    os.environ["MEM0_TELEMETRY"] = "False"
+# Mem0 telemetry configuration is now handled in the memory module
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -66,11 +62,7 @@ audio_logger = logging.getLogger("audio_processing")
 
 # Conditional Deepgram import
 try:
-    from deepgram import (
-        DeepgramClient,
-        FileSource,
-        PrerecordedOptions,
-    )
+    from deepgram import DeepgramClient, FileSource, PrerecordedOptions
     DEEPGRAM_AVAILABLE = True
     logger.info("Deepgram avaialable")
 except ImportError:
@@ -90,6 +82,7 @@ db = mongo_client.get_default_database("friend-lite")
 chunks_col = db["audio_chunks"]
 users_col = db["users"]
 speakers_col = db["speakers"]  # New collection for speaker management
+action_items_col = db["action_items"]  # New collection for action items
 
 # Audio Configuration
 OMI_SAMPLE_RATE = 16_000  # Hz
@@ -99,7 +92,7 @@ SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
 # Conversation timeout configuration
-NEW_CONVERSATION_TIMEOUT_MINUTES = int(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "10"))
+NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
 # Audio cropping configuration
 AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
@@ -132,14 +125,12 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_CHOICE = os.getenv("LLM_CHOICE", "gpt-4o-mini")
 
-# Mem0 organization configuration
-MEM0_ORGANIZATION_ID = os.getenv("MEM0_ORGANIZATION_ID", "friend-lite-org")
-MEM0_PROJECT_ID = os.getenv("MEM0_PROJECT_ID", "audio-conversations")
-MEM0_APP_ID = os.getenv("MEM0_APP_ID", "omi-backend")
-
-# Mem0 Configuration
-QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
-
+# Memory configuration is now handled in the memory module
+# Initialize it with our Ollama and Qdrant URLs
+init_memory_config(
+    ollama_base_url=OLLAMA_BASE_URL,
+    qdrant_base_url=QDRANT_BASE_URL,
+)
 
 # Thread pool executors
 _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -147,17 +138,13 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="opus_io",
 )
 
-# Initialize mem0 and ollama client
-memory = get_mem0_client()
+# Initialize memory service and ollama client
+memory_service = get_memory_service()
+ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
 
-if LLM_PROVIDER == 'ollama':
-    ollama_client = ollama.Client(host=LLM_BASE_URL)
-elif LLM_PROVIDER == 'openai':
-    openai_client = openai.OpenAI(api_key=LLM_API_KEY) 
-# elif LLM_PROVIDER == 'openrouter':
-#     openrouter_client = OpenRouter(api_key=LLM_API_KEY)
-else:
-    raise ValueError(f"Invalid LLM provider: {LLM_PROVIDER}")
+# Initialize action items service
+from action_items_service import ActionItemsService
+action_items_service = ActionItemsService(action_items_col, ollama_client)
 
 ###############################################################################
 # AUDIO PROCESSING FUNCTIONS
@@ -320,54 +307,7 @@ async def _open_file_sink_properly(sink):
     return sink
 
 
-# Global variable to hold the memory instance in each worker process
-_process_memory = None
-
-def _init_process_memory():
-    """Initialize memory instance once per worker process."""
-    global _process_memory
-    if _process_memory is None:
-        _process_memory = memory
-    return _process_memory
-
-
-def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bool:
-    """
-    Function to add memory in a separate process.
-    This function will be pickled and run in a process pool.
-    Uses a persistent memory instance per process.
-    """
-    try:
-        # Get or create the persistent memory instance for this process
-        process_memory = _init_process_memory()
-        process_memory.add(
-            transcript,
-            user_id=client_id,
-            metadata={
-                "source": "offline_streaming",
-                "audio_uuid": audio_uuid,
-                "timestamp": int(time.time()),
-                "conversation_context": "audio_transcription",
-                "device_type": "audio_recording",
-                "organization_id": MEM0_ORGANIZATION_ID,
-                "project_id": MEM0_PROJECT_ID,
-                "app_id": MEM0_APP_ID,
-            },
-        )
-        return True
-    except Exception as e:
-        # Log to stderr since we're in a separate process
-        import sys
-        print(f"Error in memory process for {audio_uuid}: {e}", file=sys.stderr)
-        return False
-
-
-# Process pool executor with initializer for heavy memory operations
-_MEMORY_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
-    max_workers=2,  # Keep this low to avoid overwhelming the system
-    initializer=_init_process_memory,  # Initialize memory once per process
-    mp_context=multiprocessing.get_context('spawn')  # Use spawn instead of fork to avoid threading issues
-)
+# Memory processing is now handled by the memory service module
 
 # Speaker recognition queue and worker
 SPKR_QUEUE: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
@@ -602,12 +542,9 @@ class TranscriptionManager:
                             # Update transcript time for conversation timeout tracking
                             if client_id in active_clients:
                                 active_clients[client_id].last_transcript_time = time.time()
-                            
-                            # Queue memory processing
-                            if client_id in active_clients:
-                                await active_clients[client_id].memory_queue.put((transcript_text, client_id, audio_uuid))
-                            else:
-                                audio_logger.warning(f"Client {client_id} not found for memory processing")
+                                # Collect transcript for end-of-conversation memory processing
+                                active_clients[client_id].conversation_transcripts.append(transcript_text)
+                                audio_logger.info(f"Added transcript to conversation collection: '{transcript_text}'")
                     
                     elif VoiceStarted.is_type(event.type):
                         audio_logger.info(f"VoiceStarted event received for {audio_uuid}")
@@ -669,6 +606,9 @@ class ClientState:
         # Speech segment tracking for audio cropping
         self.speech_segments: Dict[str, List[Tuple[float, float]]] = {}  # audio_uuid -> [(start, end), ...]
         self.current_speech_start: Dict[str, Optional[float]] = {}  # audio_uuid -> start_time
+        
+        # Conversation transcript collection for end-of-conversation memory processing
+        self.conversation_transcripts: List[str] = []  # Collect all transcripts for this conversation
         
         # Tasks for this client
         self.saver_task: Optional[asyncio.Task] = None
@@ -733,6 +673,7 @@ class ClientState:
         # Clean up any remaining speech segment tracking
         self.speech_segments.clear()
         self.current_speech_start.clear()
+        self.conversation_transcripts.clear()  # Clear conversation transcripts
             
         audio_logger.info(f"Client {self.client_id} disconnected and cleaned up")
     
@@ -755,6 +696,33 @@ class ClientState:
             current_path = self.file_sink._file_path.name if hasattr(self.file_sink, '_file_path') else None
             
             audio_logger.info(f"🔒 Closing conversation {current_uuid}, file: {current_path}")
+            
+            # Process memory at end of conversation if we have transcripts
+            if self.conversation_transcripts and current_uuid:
+                full_conversation = " ".join(self.conversation_transcripts)
+                audio_logger.info(f"💭 Processing memory for conversation {current_uuid} with {len(self.conversation_transcripts)} transcript segments")
+                audio_logger.info(f"💭 Full conversation text: {full_conversation[:200]}...")  # Log first 200 chars
+                 
+                try:
+                    # Add general memory
+                    success = memory_service.add_memory(full_conversation, self.client_id, current_uuid)
+                    if success:
+                        audio_logger.info(f"✅ Successfully added conversation memory for {current_uuid}")
+                    else:
+                        audio_logger.error(f"❌ Failed to add conversation memory for {current_uuid}")
+                    
+                    # Extract and store action items from the full conversation using new MongoDB service
+                    action_item_count = await action_items_service.extract_and_store_action_items(full_conversation, self.client_id, current_uuid)
+                    if action_item_count > 0:
+                        audio_logger.info(f"🎯 Extracted {action_item_count} action items from conversation {current_uuid}")
+                    else:
+                        audio_logger.info(f"ℹ️ No action items found in conversation {current_uuid}")
+                        
+                except Exception as e:
+                    audio_logger.error(f"❌ Error processing memory and action items for {current_uuid}: {e}")
+            else:
+                audio_logger.info(f"ℹ️ No transcripts to process for memory in conversation {current_uuid}")
+            
             await self.file_sink.close()
             self.file_sink = None
             
@@ -801,6 +769,7 @@ class ClientState:
         self.current_audio_uuid = None
         self.conversation_start_time = time.time()
         self.last_transcript_time = None
+        self.conversation_transcripts.clear()  # Clear collected transcripts for new conversation
         
         audio_logger.info(f"Client {self.client_id}: Started new conversation due to {NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout")
     
@@ -885,7 +854,7 @@ class ClientState:
             audio_logger.error(f"Error in transcription processor for client {self.client_id}: {e}", exc_info=True)
     
     async def _memory_processor(self):
-        """Per-client memory processor - handles memory.add operations in background."""
+        """Per-client memory processor - currently unused as memory processing happens at conversation end."""
         try:
             while self.connected:
                 transcript, client_id, audio_uuid = await self.memory_queue.get()
@@ -893,23 +862,9 @@ class ClientState:
                 if transcript is None or client_id is None or audio_uuid is None:  # Disconnect signal
                     break
                 
-                # Process memory in background (this is the slow operation)
-                # Run in separate process to completely isolate heavy ML operations
-                try:
-                    loop = asyncio.get_running_loop()
-                    success = await loop.run_in_executor(
-                        _MEMORY_PROCESS_EXECUTOR,
-                        _add_memory_to_store,
-                        transcript,
-                        client_id,
-                        audio_uuid
-                    )
-                    if success:
-                        audio_logger.info(f"Added transcript for {audio_uuid} to mem0 (client: {client_id}).")
-                    else:
-                        audio_logger.error(f"Failed to add memory for {audio_uuid}")
-                except Exception as e:
-                    audio_logger.error(f"Error adding memory for {audio_uuid}: {e}")
+                # Memory processing now happens at conversation end, so this is effectively a no-op
+                # Keeping the processor running to avoid breaking the queue system
+                audio_logger.debug(f"Memory processor received item but processing is now done at conversation end")
                         
         except Exception as e:
             audio_logger.error(f"Error in memory processor for client {self.client_id}: {e}", exc_info=True)
@@ -964,9 +919,9 @@ async def lifespan(app: FastAPI):
         for client_id in list(active_clients.keys()):
             await cleanup_client_state(client_id)
         
-        # Shutdown process pool executor
-        _MEMORY_PROCESS_EXECUTOR.shutdown(wait=True)
-        audio_logger.info("Memory process pool shut down.")
+        # Shutdown memory service
+        shutdown_memory_service()
+        audio_logger.info("Memory service shut down.")
         
         audio_logger.info("Shutdown complete.")
 
@@ -1206,17 +1161,9 @@ async def delete_user(user_id: str, delete_conversations: bool = False, delete_m
             deleted_data["conversations_deleted"] = conversations_result.deleted_count
         
         if delete_memories:
-            # Delete all memories for this user from mem0
+            # Delete all memories for this user using the memory service
             try:
-                # Get all memories for the user first to count them
-                user_memories = memory.get_all(user_id=user_id)
-                memory_count = len(user_memories) if user_memories else 0
-                
-                # Delete all memories for this user using the proper mem0 API
-                if memory_count > 0:
-                    memory.delete_all(user_id=user_id)
-                    audio_logger.info(f"Deleted {memory_count} memories for user {user_id}")
-                
+                memory_count = memory_service.delete_all_user_memories(user_id)
                 deleted_data["memories_deleted"] = memory_count
             except Exception as mem_error:
                 audio_logger.error(f"Error deleting memories for user {user_id}: {mem_error}")
@@ -1253,10 +1200,7 @@ async def delete_user(user_id: str, delete_conversations: bool = False, delete_m
 async def get_memories(user_id: str, limit: int = 100):
     """Retrieves memories from the mem0 store with optional filtering."""
     try:
-        all_memories = memory.get_all(
-            user_id=user_id,
-            limit=limit,
-        )
+        all_memories = memory_service.get_all_memories(user_id=user_id, limit=limit)
         return JSONResponse(content=all_memories)
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)
@@ -1269,11 +1213,7 @@ async def get_memories(user_id: str, limit: int = 100):
 async def search_memories(user_id: str, query: str, limit: int = 10):
     """Search memories using semantic similarity for better retrieval."""
     try:
-        relevant_memories = memory.search(
-            query=query,
-            user_id=user_id,
-            limit=limit,
-        )
+        relevant_memories = memory_service.search_memories(query=query, user_id=user_id, limit=limit)
         return JSONResponse(content=relevant_memories)
     except Exception as e:
         audio_logger.error(f"Error searching memories: {e}", exc_info=True)
@@ -1286,7 +1226,7 @@ async def search_memories(user_id: str, query: str, limit: int = 10):
 async def delete_memory(memory_id: str):
     """Delete a specific memory by ID."""
     try:
-        memory.delete(memory_id=memory_id)
+        memory_service.delete_memory(memory_id=memory_id)
         return JSONResponse(
             content={"message": f"Memory {memory_id} deleted successfully"}
         )
@@ -1372,6 +1312,16 @@ class SpeakerIdentificationRequest(BaseModel):
     audio_file_path: str
     start_time: Optional[float] = None
     end_time: Optional[float] = None
+
+class ActionItemUpdateRequest(BaseModel):
+    status: str  # "open", "in_progress", "completed", "cancelled"
+
+class ActionItemCreateRequest(BaseModel):
+    description: str
+    assignee: Optional[str] = "unassigned"
+    due_date: Optional[str] = "not_specified"
+    priority: Optional[str] = "medium"
+    context: Optional[str] = ""
 
 @app.post("/api/speakers/enroll")
 async def enroll_speaker(request: SpeakerEnrollmentRequest):
@@ -1601,6 +1551,215 @@ async def identify_speaker_from_file(request: SpeakerIdentificationRequest):
             content={"error": f"Internal server error: {str(e)}"}
         )
 
+@app.get("/api/action-items")
+async def get_action_items(user_id: str, status: Optional[str] = None, limit: int = 50):
+    """Get action items for a user with optional status filtering."""
+    try:
+        action_items = await action_items_service.get_action_items(user_id=user_id, limit=limit, status_filter=status)
+        return JSONResponse(content={
+            "action_items": action_items,
+            "count": len(action_items),
+            "user_id": user_id,
+            "status_filter": status
+        })
+    except Exception as e:
+        audio_logger.error(f"Error fetching action items for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": "Failed to fetch action items"}
+        )
+
+
+@app.get("/api/action-items/search")
+async def search_action_items(user_id: str, query: str, limit: int = 20):
+    """Search action items by text query."""
+    try:
+        action_items = await action_items_service.search_action_items(query=query, user_id=user_id, limit=limit)
+        return JSONResponse(content={
+            "action_items": action_items,
+            "count": len(action_items),
+            "query": query,
+            "user_id": user_id
+        })
+    except Exception as e:
+        audio_logger.error(f"Error searching action items for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to search action items"}
+        )
+
+
+@app.post("/api/action-items")
+async def create_action_item(user_id: str, request: ActionItemCreateRequest):
+    """Manually create a new action item."""
+    try:
+        # Create action item using new MongoDB service
+        action_item = await action_items_service.create_action_item(
+            user_id=user_id,
+            description=request.description,
+            assignee=request.assignee,
+            due_date=request.due_date,
+            priority=request.priority,
+            context=request.context
+        )
+        
+        if action_item:
+            return JSONResponse(content={
+                "message": "Action item created successfully",
+                "action_item": action_item
+            })
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to create action item"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error creating action item for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to create action item"}
+        )
+
+
+@app.put("/api/action-items/{action_item_id}")
+async def update_action_item_status(action_item_id: str, request: ActionItemUpdateRequest):
+    """Update the status of an action item."""
+    try:
+        # Validate status
+        valid_statuses = ["open", "in_progress", "completed", "cancelled"]
+        if request.status not in valid_statuses:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}
+            )
+        
+        success = await action_items_service.update_action_item_status(action_item_id, request.status)
+        
+        if success:
+            return JSONResponse(content={
+                "message": f"Action item status updated to {request.status}",
+                "action_item_id": action_item_id,
+                "new_status": request.status
+            })
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Action item not found"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error updating action item {action_item_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to update action item"}
+        )
+
+
+@app.delete("/api/action-items/{action_item_id}")
+async def delete_action_item(action_item_id: str):
+    """Delete an action item."""
+    try:
+        success = await action_items_service.delete_action_item(action_item_id)
+        
+        if success:
+            return JSONResponse(content={
+                "message": "Action item deleted successfully",
+                "action_item_id": action_item_id
+            })
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Action item not found"}
+            )
+            
+    except Exception as e:
+        audio_logger.error(f"Error deleting action item {action_item_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to delete action item"}
+        )
+
+
+@app.get("/api/action-items/stats")
+async def get_action_item_stats(user_id: str):
+    """Get action item statistics for a user."""
+    try:
+        # Get statistics using new MongoDB service
+        stats = await action_items_service.get_action_item_stats(user_id=user_id)
+        
+        return JSONResponse(content={
+            "user_id": user_id,
+            "statistics": stats
+        })
+        
+    except Exception as e:
+        audio_logger.error(f"Error getting action item stats for user {user_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to get action item statistics"}
+        )
+
+
+@app.post("/api/conversations/{audio_uuid}/extract-action-items")
+async def extract_action_items_from_conversation(audio_uuid: str):
+    """Manually trigger action item extraction for a specific conversation."""
+    try:
+        # Get the conversation from MongoDB
+        conversation = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not conversation:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Conversation not found"}
+            )
+        
+        # Build full transcript from segments
+        transcript_segments = conversation.get("transcript", [])
+        if not transcript_segments:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No transcript available for this conversation"}
+            )
+        
+        # Combine all transcript segments into one text
+        full_transcript = " ".join([
+            segment.get("text", "") for segment in transcript_segments
+            if isinstance(segment, dict) and segment.get("text")
+        ])
+        
+        if not full_transcript.strip():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Empty transcript for this conversation"}
+            )
+        
+        client_id = conversation.get("client_id")
+        if not client_id:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No client_id found for this conversation"}
+            )
+        
+        # Extract action items using new MongoDB service
+        action_item_count = await action_items_service.extract_and_store_action_items(
+            full_transcript, client_id, audio_uuid
+        )
+        
+        return JSONResponse(content={
+            "message": f"Extracted {action_item_count} action items from conversation",
+            "audio_uuid": audio_uuid,
+            "action_items_extracted": action_item_count,
+            "transcript_length": len(full_transcript)
+        })
+        
+    except Exception as e:
+        audio_logger.error(f"Error extracting action items from conversation {audio_uuid}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to extract action items"}
+        )
+
+
 @app.get("/health")
 async def health_check():
     """Comprehensive health check for all services."""
@@ -1615,7 +1774,9 @@ async def health_check():
             "asr_uri": OFFLINE_ASR_TCP_URI,
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
-            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES
+            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
+            "action_items_enabled": True,
+            "audio_cropping_enabled": AUDIO_CROPPING_ENABLED
         }
     }
     
@@ -1680,27 +1841,31 @@ async def health_check():
     
     # Check mem0 (depends on Ollama and Qdrant)
     try:
-        # Run initialization in executor with timeout
-        loop = asyncio.get_running_loop()
-        await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: memory),
-            timeout=10.0
-        )
-        health_status["services"]["mem0"] = {
-            "status": "✅ Connected",
-            "healthy": True,
-            "critical": False
-        }
+        # Test memory service connection with timeout
+        test_success = memory_service.test_connection()
+        if test_success:
+            health_status["services"]["mem0"] = {
+                "status": "✅ Connected",
+                "healthy": True,
+                "critical": False
+            }
+        else:
+            health_status["services"]["mem0"] = {
+                "status": "⚠️ Connection Test Failed",
+                "healthy": False,
+                "critical": False
+            }
+            overall_healthy = False
     except asyncio.TimeoutError:
         health_status["services"]["mem0"] = {
-            "status": "⚠️ Initialization Timeout (10s) - Depends on Ollama/Qdrant",
+            "status": "⚠️ Connection Test Timeout (10s) - Depends on Ollama/Qdrant",
             "healthy": False,
             "critical": False
         }
         overall_healthy = False
     except Exception as e:
         health_status["services"]["mem0"] = {
-            "status": f"⚠️ Initialization Failed: {str(e)} - Check Ollama/Qdrant services",
+            "status": f"⚠️ Connection Test Failed: {str(e)} - Check Ollama/Qdrant services",
             "healthy": False,
             "critical": False
         }
@@ -1767,6 +1932,68 @@ async def health_check():
 async def readiness_check():
     """Simple readiness check for container orchestration."""
     return JSONResponse(content={"status": "ready", "timestamp": int(time.time())}, status_code=200)
+
+@app.post("/api/close_conversation")
+async def close_current_conversation(client_id: str):
+    """Close the current conversation for a specific client."""
+    if client_id not in active_clients:
+        return JSONResponse(
+            content={"error": f"Client '{client_id}' not found or not connected"},
+            status_code=404
+        )
+    
+    client_state = active_clients[client_id]
+    if not client_state.connected:
+        return JSONResponse(
+            content={"error": f"Client '{client_id}' is not connected"},
+            status_code=400
+        )
+    
+    try:
+        # Close the current conversation
+        await client_state._close_current_conversation()
+        
+        # Reset conversation state but keep client connected
+        client_state.current_audio_uuid = None
+        client_state.conversation_start_time = time.time()
+        client_state.last_transcript_time = None
+        
+        logger.info(f"Manually closed conversation for client {client_id}")
+        
+        return JSONResponse(content={
+            "message": f"Successfully closed current conversation for client '{client_id}'",
+            "client_id": client_id,
+            "timestamp": int(time.time())
+        })
+    
+    except Exception as e:
+        logger.error(f"Error closing conversation for client {client_id}: {e}")
+        return JSONResponse(
+            content={"error": f"Failed to close conversation: {str(e)}"},
+            status_code=500
+        )
+
+
+@app.get("/api/active_clients")
+async def get_active_clients():
+    """Get list of currently active/connected clients."""
+    client_info = {}
+    
+    for client_id, client_state in active_clients.items():
+        client_info[client_id] = {
+            "connected": client_state.connected,
+            "current_audio_uuid": client_state.current_audio_uuid,
+            "conversation_start_time": client_state.conversation_start_time,
+            "last_transcript_time": client_state.last_transcript_time,
+            "has_active_conversation": client_state.current_audio_uuid is not None
+        }
+    
+    return JSONResponse(content={
+        "active_clients_count": len(active_clients),
+        "clients": client_info
+    })
+
+
 
 
 @app.get("/api/debug/speech_segments")

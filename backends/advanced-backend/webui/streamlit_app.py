@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import random
 from datetime import datetime
 
 import pandas as pd
@@ -194,6 +195,52 @@ with st.sidebar:
     
     st.divider()
     
+    # Close Conversation Section
+    st.header("🔒 Close Conversation")
+    with st.expander("Active Clients & Close Conversation", expanded=True):
+        # Get active clients
+        active_clients_data = get_data("/api/active_clients")
+        
+        if active_clients_data and active_clients_data.get("clients"):
+            clients = active_clients_data["clients"]
+            
+            # Show active clients with conversation status
+            for client_id, client_info in clients.items():
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    if client_info.get("has_active_conversation", False):
+                        st.write(f"🟢 **{client_id}** (Active conversation)")
+                        if client_info.get("current_audio_uuid"):
+                            st.caption(f"UUID: {client_info['current_audio_uuid'][:8]}...")
+                    else:
+                        st.write(f"⚪ **{client_id}** (No active conversation)")
+                
+                with col2:
+                    if client_info.get("has_active_conversation", False):
+                        close_btn = st.button(
+                            "🔒 Close",
+                            key=f"close_{client_id}",
+                            help=f"Close current conversation for {client_id}",
+                            type="secondary"
+                        )
+                        
+                        if close_btn:
+                            result = post_data("/api/close_conversation", {"client_id": client_id})
+                            if result:
+                                st.success(f"✅ Conversation closed for {client_id}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Failed to close conversation for {client_id}")
+                    else:
+                        st.caption("No active conversation")
+            
+            st.info(f"💡 **Total active clients:** {active_clients_data.get('active_clients_count', 0)}")
+        else:
+            st.info("No active clients found")
+    
+    st.divider()
+    
     # Configuration Info  
     with st.expander("Configuration"):
         health_data = get_system_health()
@@ -221,15 +268,29 @@ tab_convos, tab_mem, tab_users, tab_manage = st.tabs(["Conversations", "Memories
 with tab_convos:
     st.header("Latest Conversations")
     
+    # Initialize session state for refresh tracking
+    if 'refresh_timestamp' not in st.session_state:
+        st.session_state.refresh_timestamp = 0
+    
     # Add debug mode toggle
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("Refresh Conversations"):
+            st.session_state.refresh_timestamp = int(time.time())
+            st.session_state.refresh_random = random.randint(1000, 9999)
             st.rerun()
     with col2:
         debug_mode = st.checkbox("🔧 Debug Mode", 
                                 help="Show original audio files instead of cropped versions",
                                 key="debug_mode")
+
+    # Generate cache-busting parameter based on session state
+    if st.session_state.refresh_timestamp > 0:
+        random_component = getattr(st.session_state, 'refresh_random', 0)
+        cache_buster = f"?t={st.session_state.refresh_timestamp}&r={random_component}"
+        st.info("🔄 Audio files refreshed - cache cleared for latest versions")
+    else:
+        cache_buster = ""
 
     conversations = get_data("/api/conversations")
 
@@ -318,9 +379,9 @@ with tab_convos:
                                 selected_audio_path = audio_path
                                 audio_label = "🎵 **Original Audio** (No cropped version available)"
                             
-                            # Display audio with label
+                            # Display audio with label and cache-busting
                             st.write(audio_label)
-                            audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}"
+                            audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
                             st.audio(audio_url, format="audio/wav")
                             
                             # Show additional info in debug mode or when both versions exist
@@ -409,9 +470,9 @@ with tab_convos:
                             selected_audio_path = audio_path
                             audio_label = "🎵 **Original Audio** (No cropped version available)"
                         
-                        # Display audio with label
+                        # Display audio with label and cache-busting
                         st.write(audio_label)
-                        audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}"
+                        audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
                         st.audio(audio_url, format="audio/wav")
                         
                         # Show additional info in debug mode or when both versions exist
@@ -425,20 +486,20 @@ with tab_convos:
         st.info("No conversations found. The backend is connected but the database might be empty.")
 
 with tab_mem:
-    st.header("Discovered Memories")
+    st.header("Memories & Action Items")
     
     # Use session state for selected user if available
     default_user = st.session_state.get('selected_user', '')
     
-    # User selection for memories
+    # User selection for memories and action items
     col1, col2 = st.columns([2, 1])
     with col1:
-        user_id_input = st.text_input("Enter username to view memories:", 
+        user_id_input = st.text_input("Enter username to view memories & action items:", 
                                     value=default_user,
                                     placeholder="e.g., john_doe, alice123")
     with col2:
         st.write("")  # Spacer
-        refresh_mem_btn = st.button("Refresh Memories", key="refresh_memories")
+        refresh_mem_btn = st.button("Load Data", key="refresh_memories")
     
     # Clear the session state after using it
     if 'selected_user' in st.session_state:
@@ -447,41 +508,285 @@ with tab_mem:
     if refresh_mem_btn:
         st.rerun()
 
-    # Get memories based on user selection
+    # Get memories and action items based on user selection
     if user_id_input.strip():
-        memories = get_data(f"/api/memories?user_id={user_id_input.strip()}")
-        st.info(f"Showing memories for user: **{user_id_input.strip()}**")
+        st.info(f"Showing data for user: **{user_id_input.strip()}**")
+        
+        # Load both memories and action items
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            with st.spinner("Loading memories..."):
+                memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}")
+        
+        with col2:
+            with st.spinner("Loading action items..."):
+                action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}")
+        
+        # Handle the API response format with "results" wrapper for memories
+        if memories_response and isinstance(memories_response, dict) and "results" in memories_response:
+            memories = memories_response["results"]
+        else:
+            memories = memories_response
+            
+        # Handle action items response
+        if action_items_response and isinstance(action_items_response, dict) and "action_items" in action_items_response:
+            action_items = action_items_response["action_items"]
+        else:
+            action_items = action_items_response if action_items_response else []
     else:
         # Show instruction to enter a username
         memories = None
-        st.info("👆 Please enter a username above to view their memories.")
+        action_items = None
+        st.info("👆 Please enter a username above to view their memories and action items.")
         st.markdown("💡 **Tip:** You can find existing usernames in the 'User Management' tab.")
 
-    if memories:
-        df = pd.DataFrame(memories)
+    # Display Memories Section
+    if memories is not None:
+        st.subheader("🧠 Discovered Memories")
         
-        # Make the dataframe more readable
-        if "created_at" in df.columns:
-                df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        if memories:
+            df = pd.DataFrame(memories)
+            
+            # Make the dataframe more readable
+            if "created_at" in df.columns:
+                    df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Reorder and rename columns for clarity
-        display_cols = {
-            "id": "Memory ID",
-            "text": "Memory",
-            "created_at": "Created At"
-        }
+            # Reorder and rename columns for clarity - handle both "memory" and "text" fields
+            display_cols = {
+                "id": "Memory ID",
+                "created_at": "Created At"
+            }
+            
+            # Check which memory field exists and add it to display columns
+            if "memory" in df.columns:
+                display_cols["memory"] = "Memory"
+            elif "text" in df.columns:
+                display_cols["text"] = "Memory"
+            
+            # Filter for columns that exist in the dataframe
+            cols_to_display = [col for col in display_cols.keys() if col in df.columns]
+            
+            if cols_to_display:
+                st.dataframe(
+                    df[cols_to_display].rename(columns=display_cols),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Show additional details
+                st.caption(f"📊 Found **{len(memories)}** memories for user **{user_id_input.strip()}**")
+            else:
+                st.error("⚠️ Unexpected memory data format - missing expected fields")
+                st.write("Debug info - Available columns:", list(df.columns))
+        else:
+            st.info("No memories found for this user.")
+    
+    # Display Action Items Section
+    if action_items is not None:
+        st.subheader("🎯 Action Items")
         
-        # Filter for columns that exist in the dataframe
-        cols_to_display = [col for col in display_cols.keys() if col in df.columns]
-        
-        st.dataframe(
-            df[cols_to_display].rename(columns=display_cols),
-            use_container_width=True,
-            hide_index=True
-        )
-
-    elif memories is not None:
-        st.info("No memories found for this user.")
+        if action_items:
+            # Status filter for action items
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                status_filter = st.selectbox(
+                    "Filter by status:",
+                    options=["All", "open", "in_progress", "completed", "cancelled"],
+                    index=0,
+                    key="action_items_filter"
+                )
+            with col2:
+                show_stats = st.button("📊 Show Stats", key="show_action_stats")
+            with col3:
+                # Manual action item creation button
+                if st.button("➕ Add Item", key="add_action_item"):
+                    st.session_state['show_add_action_item'] = True
+            
+            # Filter action items by status
+            if status_filter != "All":
+                filtered_items = [item for item in action_items if item.get('status') == status_filter]
+            else:
+                filtered_items = action_items
+            
+            # Show statistics if requested
+            if show_stats:
+                stats_response = get_data(f"/api/action-items/stats?user_id={user_id_input.strip()}")
+                if stats_response and "statistics" in stats_response:
+                    stats = stats_response["statistics"]
+                    
+                    # Display stats in columns
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total", stats["total"])
+                        st.metric("Open", stats["open"])
+                    with col2:
+                        st.metric("In Progress", stats["in_progress"])
+                        st.metric("Completed", stats["completed"])
+                    with col3:
+                        st.metric("Cancelled", stats["cancelled"])
+                        st.metric("Overdue", stats.get("overdue", 0))
+                    with col4:
+                        st.write("**By Priority:**")
+                        for priority, count in stats.get("by_priority", {}).items():
+                            if count > 0:
+                                st.write(f"• {priority.title()}: {count}")
+                    
+                    # Assignee breakdown
+                    if stats.get("by_assignee"):
+                        st.write("**By Assignee:**")
+                        assignee_df = pd.DataFrame(list(stats["by_assignee"].items()), columns=["Assignee", "Count"])
+                        st.dataframe(assignee_df, hide_index=True, use_container_width=True)
+            
+            # Manual action item creation form
+            if st.session_state.get('show_add_action_item', False):
+                with st.expander("➕ Create New Action Item", expanded=True):
+                    with st.form("create_action_item"):
+                        description = st.text_input("Description*:", placeholder="e.g., Send quarterly report to management")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            assignee = st.text_input("Assignee:", placeholder="e.g., john_doe", value="unassigned")
+                            priority = st.selectbox("Priority:", options=["high", "medium", "low", "not_specified"], index=1)
+                        with col2:
+                            due_date = st.text_input("Due Date:", placeholder="e.g., Friday, 2024-01-15", value="not_specified")
+                            context = st.text_input("Context:", placeholder="e.g., Mentioned in team meeting")
+                        
+                        submitted = st.form_submit_button("Create Action Item")
+                        
+                        if submitted:
+                            if description.strip():
+                                create_data = {
+                                    "description": description.strip(),
+                                    "assignee": assignee.strip() if assignee.strip() else "unassigned",
+                                    "due_date": due_date.strip() if due_date.strip() else "not_specified",
+                                    "priority": priority,
+                                    "context": context.strip()
+                                }
+                                
+                                try:
+                                    response = requests.post(
+                                        f"{BACKEND_API_URL}/api/action-items",
+                                        params={"user_id": user_id_input.strip()},
+                                        json=create_data
+                                    )
+                                    response.raise_for_status()
+                                    result = response.json()
+                                    st.success(f"✅ Action item created: {result['action_item']['description']}")
+                                    st.session_state['show_add_action_item'] = False
+                                    st.rerun()
+                                except requests.exceptions.RequestException as e:
+                                    st.error(f"Error creating action item: {e}")
+                            else:
+                                st.error("Please enter a description for the action item")
+                    
+                    if st.button("❌ Cancel", key="cancel_add_action"):
+                        st.session_state['show_add_action_item'] = False
+                        st.rerun()
+            
+            # Display action items
+            if filtered_items:
+                st.write(f"**Showing {len(filtered_items)} action items** (filtered by: {status_filter})")
+                
+                for i, item in enumerate(filtered_items):
+                    with st.container():
+                        # Create columns for action item display
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        
+                        with col1:
+                            # Description with status badge
+                            status = item.get('status', 'open')
+                            status_emoji = {
+                                'open': '🔵',
+                                'in_progress': '🟡', 
+                                'completed': '✅',
+                                'cancelled': '❌'
+                            }.get(status, '🔵')
+                            
+                            st.write(f"**{status_emoji} {item.get('description', 'No description')}**")
+                            
+                            # Additional details
+                            details = []
+                            if item.get('assignee') and item.get('assignee') != 'unassigned':
+                                details.append(f"👤 {item['assignee']}")
+                            if item.get('due_date') and item.get('due_date') != 'not_specified':
+                                details.append(f"📅 {item['due_date']}")
+                            if item.get('priority') and item.get('priority') != 'not_specified':
+                                priority_emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}.get(item['priority'], '⚪')
+                                details.append(f"{priority_emoji} {item['priority']}")
+                            if item.get('context'):
+                                details.append(f"💭 {item['context']}")
+                            
+                            if details:
+                                st.caption(" | ".join(details))
+                            
+                            # Creation info
+                            created_at = item.get('created_at')
+                            if created_at:
+                                try:
+                                    if isinstance(created_at, (int, float)):
+                                        created_time = datetime.fromtimestamp(created_at)
+                                    else:
+                                        created_time = pd.to_datetime(created_at)
+                                    st.caption(f"Created: {created_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                                except:
+                                    st.caption(f"Created: {created_at}")
+                        
+                        with col2:
+                            # Status update
+                            new_status = st.selectbox(
+                                "Status:",
+                                options=["open", "in_progress", "completed", "cancelled"],
+                                index=["open", "in_progress", "completed", "cancelled"].index(status),
+                                key=f"status_{i}_{item.get('memory_id', i)}"
+                            )
+                            
+                            if new_status != status:
+                                if st.button("Update", key=f"update_{i}_{item.get('memory_id', i)}"):
+                                    memory_id = item.get('memory_id')
+                                    if memory_id:
+                                        try:
+                                            response = requests.put(
+                                                f"{BACKEND_API_URL}/api/action-items/{memory_id}",
+                                                json={"status": new_status}
+                                            )
+                                            response.raise_for_status()
+                                            st.success(f"Status updated to {new_status}")
+                                            st.rerun()
+                                        except requests.exceptions.RequestException as e:
+                                            st.error(f"Error updating status: {e}")
+                                    else:
+                                        st.error("No memory ID found for this action item")
+                        
+                        with col3:
+                            # Delete button
+                            if st.button("🗑️ Delete", key=f"delete_{i}_{item.get('memory_id', i)}", type="secondary"):
+                                memory_id = item.get('memory_id')
+                                if memory_id:
+                                    try:
+                                        response = requests.delete(f"{BACKEND_API_URL}/api/action-items/{memory_id}")
+                                        response.raise_for_status()
+                                        st.success("Action item deleted")
+                                        st.rerun()
+                                    except requests.exceptions.RequestException as e:
+                                        st.error(f"Error deleting action item: {e}")
+                                else:
+                                    st.error("No memory ID found for this action item")
+                        
+                        st.divider()
+                
+                st.caption(f"💡 **Tip:** Action items are automatically extracted from conversations at the end of each session")
+            else:
+                if status_filter == "All":
+                    st.info("No action items found for this user.")
+                else:
+                    st.info(f"No action items found with status '{status_filter}' for this user.")
+        else:
+            st.info("No action items found for this user.")
+            
+            # Show option to create manual action item even when none exist
+            if user_id_input.strip() and st.button("➕ Create First Action Item", key="create_first_item"):
+                st.session_state['show_add_action_item'] = True
+                st.rerun()
 
 with tab_users:
     st.header("User Management")
@@ -631,6 +936,60 @@ with tab_users:
 
 with tab_manage:
     st.header("Conversation Management")
+    
+    st.subheader("🔒 Close Current Conversation")
+    st.write("Close the current active conversation for any connected client.")
+    
+    # Get active clients for the dropdown
+    active_clients_data = get_data("/api/active_clients")
+    
+    if active_clients_data and active_clients_data.get("clients"):
+        clients = active_clients_data["clients"]
+        
+        # Filter to only clients with active conversations
+        active_conversations = {
+            client_id: client_info 
+            for client_id, client_info in clients.items() 
+            if client_info.get("has_active_conversation", False)
+        }
+        
+        if active_conversations:
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                selected_client = st.selectbox(
+                    "Select client to close conversation:",
+                    options=list(active_conversations.keys()),
+                    format_func=lambda x: f"{x} (UUID: {active_conversations[x].get('current_audio_uuid', 'N/A')[:8]}...)"
+                )
+            
+            with col2:
+                st.write("")  # Spacer
+                close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
+            
+            if close_conversation_btn and selected_client:
+                result = post_data("/api/close_conversation", {"client_id": selected_client})
+                if result:
+                    st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
+                    st.info(f"📋 {result.get('message', 'Conversation closed')}")
+                    time.sleep(1)  # Brief pause before refresh
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to close conversation for client '{selected_client}'")
+        else:
+            st.info("🔍 No clients with active conversations found")
+            
+        # Show all clients status
+        with st.expander("All Connected Clients Status"):
+            for client_id, client_info in clients.items():
+                status_icon = "🟢" if client_info.get("has_active_conversation", False) else "⚪"
+                st.write(f"{status_icon} **{client_id}** - {'Active conversation' if client_info.get('has_active_conversation', False) else 'No active conversation'}")
+                if client_info.get("current_audio_uuid"):
+                    st.caption(f"   Audio UUID: {client_info['current_audio_uuid']}")
+    else:
+        st.info("🔍 No active clients found")
+    
+    st.divider()
     
     st.subheader("Add Speaker to Conversation")
     st.write("Add speakers to conversations even if they haven't spoken yet.")

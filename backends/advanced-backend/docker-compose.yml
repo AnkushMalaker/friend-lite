@@ -30,8 +30,8 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - BACKEND_API_URL=http://omi-lite:8000
-      - BACKEND_PUBLIC_URL=http://localhost:8000
+      - BACKEND_API_URL=http://friend-backend:8000
+      - BACKEND_PUBLIC_URL=http://friend-backend:8000
     depends_on:
       omi-lite:
         condition: service_healthy
@@ -105,56 +105,13 @@ services:
       - "27017:27017"
     volumes:
       - ./mongo_data:/data/db
-    networks:
-      - omi-network
-  # ngrok:
-  #   image: ngrok/ngrok:latest
-  #   ports:
-  #     - "4040:4040" # Ngrok web interface
-  #   environment:
-  #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-  #   command: "http omi-lite:8000 --url=${NGROK_URL}"
-  #   depends_on:
-  #     - omi-lite
-  #   networks:
-  #     - omi-network
+  ngrok:
+    image: ngrok/ngrok:latest
+    ports:
+      - "4040:4040" # Ngrok web interface
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    command: "http friend-backend:8000 --url=intelligent-hypervisor.ngrok.app"
+    depends_on:
+      - friend-backend
 
-  # neo4j:
-  #     image: neo4j:latest
-  #     container_name: neo4j-lite
-  #     volumes:
-  #         - neo4j_data:/data
-  #         - neo4j_logs:/logs
-  #         - neo4j_config:/config
-  #         # - ./plugins:/plugins
-  #     env_file:
-  #       - .env
-  #     environment:
-  #       # - NEO4J_AUTH=neo4j/taketheredpillNe0
-  #       - NEO4J_server_memory_heap_initial__size=1G
-  #       - NEO4J_server_memory_heap_max__size=2G
-  #       - NEO4J_server_memory_pagecache_size=1G
-  #       - NEO4J_apoc_export_file_enabled=true
-  #       - NEO4J_apoc_import_file_enabled=true
-  #       - NEO4J_apoc_import_file_use__neo4j__config=true
-  #       # - NEO4J_dbms_security_procedures_unrestricted=apoc.*
-  #       - NEO4J_PLUGINS=["apoc"]
-  #     ports:
-  #       - "7474:7474"
-  #       - "7687:7687"
-  #     restart: always
-  #     networks:
-  #       - omi-network
-  #     healthcheck:
-  #       test: ["CMD", "curl", "-f", "http://localhost:7687"]
-  #       interval: 30s
-  #       timeout: 10s
-  #       retries: 5
-
-volumes:
-  ollama_data:
-
-networks: 
-  omi-network:
-    driver: bridge
-    external: true

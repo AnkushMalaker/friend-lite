@@ -30,4 +30,4 @@ COPY . .
 
 
 # Run the application
-CMD ["uv", "run", "python3", "main.py", "--port", "8000"]
+CMD ["uv", "run", "python3", "src/main.py"]
