@@ -1,43 +1,78 @@
+#!/usr/bin/env python3
+"""
+ASR client using Wyoming protocol.
+Captures audio from microphone and sends to ASR service for transcription.
+"""
+
+import argparse
 import asyncio
 import logging
 
 from easy_audio_interfaces.extras.local_audio import InputMicStream
-from wyoming.audio import AudioChunk
+from wyoming.asr import Transcribe, Transcript
+from wyoming.audio import AudioStart
 from wyoming.client import AsyncTcpClient
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
-URI = "ws://192.168.0.110:8080/"
-URI = "tcp://localhost:8765/"
+SAMP_RATE = 16000
+CHANNELS = 1
+SAMP_WIDTH = 2  # bytes (16-bit)
 
 
 async def main():
-    print(f"Connecting to {URI}")
-    async with AsyncTcpClient.from_uri(URI) as client:
-        print("Connected")
-        async def mic():
-            async with InputMicStream(chunk_size=512) as stream:
-                while True:
-                    data = await stream.read()
-                    await client.write_event(
-                        AudioChunk(
-                            audio=data.raw_data, # type: ignore
-                            width=2,
-                            rate=16_000,
-                            channels=1,
-                        ).event()
-                    )
-                    logger.debug(f"Sent audio chunk: {len(data.raw_data)} bytes")
-                    await asyncio.sleep(0.01)
+    ap = argparse.ArgumentParser(description="ASR client using Wyoming protocol")
+    ap.add_argument(
+        "--asr-url",
+        type=str,
+        default="tcp://192.168.0.110:8765",
+        help="ASR service URL (default: tcp://192.168.0.110:8765)",
+    )
+    ap.add_argument("-v", "--verbose", action="count", default=0, help="-v: INFO, -vv: DEBUG")
+    args = ap.parse_args()
 
-        async def captions():
+    loglevel = logging.WARNING - (10 * min(args.verbose, 2))
+    logging.basicConfig(format="%(asctime)s  %(levelname)s  %(message)s", level=loglevel)
+
+    print(f"Connecting to ASR service: {args.asr_url}")
+    async with AsyncTcpClient.from_uri(args.asr_url) as client:
+        print("Connected to ASR service")
+        
+        # Initialize ASR session
+        await client.write_event(Transcribe().event())
+        await client.write_event(
+            AudioStart(rate=SAMP_RATE, width=SAMP_WIDTH, channels=CHANNELS).event()
+        )
+
+        async def mic():
+            try:
+                async with InputMicStream(chunk_size=512) as stream:
+                    logger.info("Starting microphone capture...")
+                    while True:
+                        data = await stream.read()
+                        await client.write_event(data.event())
+                        logger.debug(f"Sent audio chunk: {len(data.audio)} bytes")
+                        await asyncio.sleep(0.01)
+            except KeyboardInterrupt:
+                logger.info("Stopping microphone capture...")
+                raise
+
+        async def transcriptions():
             while True:
                 event = await client.read_event()
                 if event is None:
                     break
-                print(f"Received event: {event}")
+                if Transcript.is_type(event.type):
+                    transcript = Transcript.from_event(event)
+                    print(f"Transcript: {transcript.text}")
+                else:
+                    logger.debug(f"Received event: {event}")
 
-        await asyncio.gather(mic(), captions())
+        try:
+            await asyncio.gather(mic(), transcriptions())
+        except KeyboardInterrupt:
+            print("\nStopping ASR client...")
 
-asyncio.run(main())
+
+if __name__ == "__main__":
+    asyncio.run(main())
