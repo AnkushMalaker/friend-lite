@@ -12,3 +12,4 @@ backends/examples/example-satellite/*
 **/audio_chunks/*
 **/mongo_data/*
 .cursor/*
+**/speaker_data/**
