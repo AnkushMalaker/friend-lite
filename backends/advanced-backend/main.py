@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import ollama  # Ollama python client
+import openai
+# import openrouter
+
+
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
@@ -38,6 +42,7 @@ from wyoming.info import Describe
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 import speaker_client as speaker_recognition
+from utils import get_mem0_client
 
 # Check if speaker service is available
 SPEAKER_SERVICE_AVAILABLE = speaker_recognition.speaker_recognition is not None
@@ -67,6 +72,7 @@ try:
         PrerecordedOptions,
     )
     DEEPGRAM_AVAILABLE = True
+    logger.info("Deepgram avaialable")
 except ImportError:
     DEEPGRAM_AVAILABLE = False
     logger.warning("Deepgram SDK not available. Install with: pip install deepgram-sdk")
@@ -121,8 +127,10 @@ if USE_DEEPGRAM:
     USE_DEEPGRAM = False
 
 # Ollama & Qdrant Configuration
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ollama:11434")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+LLM_API_KEY = os.getenv("LLM_API_KEY")
+LLM_CHOICE = os.getenv("LLM_CHOICE", "gpt-4o-mini")
 
 # Mem0 organization configuration
 MEM0_ORGANIZATION_ID = os.getenv("MEM0_ORGANIZATION_ID", "friend-lite-org")
@@ -130,35 +138,8 @@ MEM0_PROJECT_ID = os.getenv("MEM0_PROJECT_ID", "audio-conversations")
 MEM0_APP_ID = os.getenv("MEM0_APP_ID", "omi-backend")
 
 # Mem0 Configuration
-MEM0_CONFIG = {
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": "llama3.1:latest",
-            "ollama_base_url": OLLAMA_BASE_URL,
-            "temperature": 0,
-            "max_tokens": 2000,
-        },
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": "nomic-embed-text:latest",
-            "embedding_dims": 768,
-            "ollama_base_url": OLLAMA_BASE_URL,
-        },
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "collection_name": "omi_memories",
-            "embedding_model_dims": 768,
-            "host": QDRANT_BASE_URL,
-            "port": 6333,
-        },
-    },
-    "custom_prompt": "Extract meaningful preferences, facts, and experiences from the conversation. Focus on personal information, habits, and contextual details that would be useful for future interactions.",
-}
+QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
+
 
 # Thread pool executors
 _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -167,8 +148,16 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 # Initialize mem0 and ollama client
-memory = Memory.from_config(MEM0_CONFIG)
-ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+memory = get_mem0_client()
+
+if LLM_PROVIDER == 'ollama':
+    ollama_client = ollama.Client(host=LLM_BASE_URL)
+elif LLM_PROVIDER == 'openai':
+    openai_client = openai.OpenAI(api_key=LLM_API_KEY) 
+# elif LLM_PROVIDER == 'openrouter':
+#     openrouter_client = OpenRouter(api_key=LLM_API_KEY)
+else:
+    raise ValueError(f"Invalid LLM provider: {LLM_PROVIDER}")
 
 ###############################################################################
 # AUDIO PROCESSING FUNCTIONS
@@ -338,7 +327,7 @@ def _init_process_memory():
     """Initialize memory instance once per worker process."""
     global _process_memory
     if _process_memory is None:
-        _process_memory = Memory.from_config(MEM0_CONFIG)
+        _process_memory = memory
     return _process_memory
 
 
@@ -990,6 +979,7 @@ app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
+    audio_logger.info(f"WebSocket connection hit")
     await ws.accept()
 
     # Use user_id if provided, otherwise generate a random client_id
@@ -1620,8 +1610,8 @@ async def health_check():
         "services": {},
         "config": {
             "mongodb_uri": MONGODB_URI,
-            "ollama_url": OLLAMA_BASE_URL,
-            "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
+            "llm_url": LLM_BASE_URL if LLM_BASE_URL else "Not configured",
+            "qdrant_url": f"http://{QDRANT_BASE_URL}:6333" if QDRANT_BASE_URL else "Not configured",
             "asr_uri": OFFLINE_ASR_TCP_URI,
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
@@ -1666,6 +1656,7 @@ async def health_check():
             timeout=8.0
         )
         model_count = len(models.get('models', []))
+        print(f"model_count: {model_count}")
         health_status["services"]["ollama"] = {
             "status": "✅ Connected",
             "healthy": True,
@@ -1692,7 +1683,7 @@ async def health_check():
         # Run initialization in executor with timeout
         loop = asyncio.get_running_loop()
         await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: Memory.from_config(MEM0_CONFIG)),
+            loop.run_in_executor(None, lambda: memory),
             timeout=10.0
         )
         health_status["services"]["mem0"] = {

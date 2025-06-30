@@ -1,7 +1,8 @@
-*
+
 !.python-version
 !Dockerfile
 !pyproject.toml
 !README.md
 !main.py
+!utils.py
 !speaker_client.py

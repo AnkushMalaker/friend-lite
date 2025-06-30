@@ -1,5 +1,5 @@
 services:
-  friend-backend:
+  omi-lite:
     build:
       context: .
       dockerfile: Dockerfile
@@ -7,12 +7,8 @@ services:
       - "8000:8000"
     volumes:
       - ./audio_chunks:/app/audio_chunks
-    environment:
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - HF_TOKEN=${HF_TOKEN}
-      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
+    env_file:
+      - .env
     depends_on:
       qdrant:
         condition: service_started
@@ -24,6 +20,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      - omi-network
   
   streamlit:
     build:
@@ -32,10 +30,10 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - BACKEND_API_URL=http://friend-backend:8000
+      - BACKEND_API_URL=http://omi-lite:8000
       - BACKEND_PUBLIC_URL=http://localhost:8000
     depends_on:
-      friend-backend:
+      omi-lite:
         condition: service_healthy
       mongo:
         condition: service_started
@@ -43,6 +41,8 @@ services:
         condition: service_started
     volumes:
       - ./webui:/app
+    networks:
+      - omi-network
 
   # speaker-recognition:
   #   build:
@@ -81,13 +81,16 @@ services:
   #     - "11434:11434"
   #   volumes:
   #     - ollama_data:/root/.ollama
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   networks:
+  #     - omi-network
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -97,16 +100,61 @@ services:
       - ./qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
   mongo:
     image: mongo:4.4.18
+    container_name: mongo
     ports:
       - "27017:27017"
     volumes:
       - ./mongo_data:/data/db
+    networks:
+      - omi-network
   # ngrok:
   #   image: ngrok/ngrok:latest
   #   ports:
   #     - "4040:4040" # Ngrok web interface
   #   environment:
   #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-  #   command: "http friend-backend:8000 --url=square-feline-partly.ngrok-free.app"
+  #   command: "http omi-lite:8000 --url=${NGROK_URL}"
   #   depends_on:
-  #     - friend-backend
+  #     - omi-lite
+  #   networks:
+  #     - omi-network
+
+  # neo4j:
+  #     image: neo4j:latest
+  #     container_name: neo4j-lite
+  #     volumes:
+  #         - neo4j_data:/data
+  #         - neo4j_logs:/logs
+  #         - neo4j_config:/config
+  #         # - ./plugins:/plugins
+  #     env_file:
+  #       - .env
+  #     environment:
+  #       # - NEO4J_AUTH=neo4j/taketheredpillNe0
+  #       - NEO4J_server_memory_heap_initial__size=1G
+  #       - NEO4J_server_memory_heap_max__size=2G
+  #       - NEO4J_server_memory_pagecache_size=1G
+  #       - NEO4J_apoc_export_file_enabled=true
+  #       - NEO4J_apoc_import_file_enabled=true
+  #       - NEO4J_apoc_import_file_use__neo4j__config=true
+  #       # - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+  #       - NEO4J_PLUGINS=["apoc"]
+  #     ports:
+  #       - "7474:7474"
+  #       - "7687:7687"
+  #     restart: always
+  #     networks:
+  #       - omi-network
+  #     healthcheck:
+  #       test: ["CMD", "curl", "-f", "http://localhost:7687"]
+  #       interval: 30s
+  #       timeout: 10s
+  #       retries: 5
+
+volumes:
+  ollama_data:
+
+networks: 
+  omi-network:
+    driver: bridge
+    external: true

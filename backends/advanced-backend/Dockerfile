@@ -22,6 +22,7 @@ COPY pyproject.toml .
 # Install dependencies using uv
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync
+    #  && uv sync --group deepgram
 
 
 # Copy application code
@@ -29,4 +30,4 @@ COPY . .
 
 
 # Run the application
-CMD ["uv", "run", "python3", "main.py"]
+CMD ["uv", "run", "python3", "main.py", "--port", "8000"]
