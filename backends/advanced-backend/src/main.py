@@ -330,21 +330,6 @@ def _new_local_file_sink(file_path):
     return sink
 
 
-async def _open_file_sink_properly(sink):
-    """Open a file sink and ensure all wave parameters are set correctly."""
-    await sink.open()
-    # Ensure compression type is set immediately after opening
-    if hasattr(sink, "_file_handle") and sink._file_handle:
-        # Re-set parameters in the correct order to ensure they stick
-        sink._file_handle.setnchannels(int(OMI_CHANNELS))
-        sink._file_handle.setsampwidth(int(OMI_SAMPLE_WIDTH))
-        sink._file_handle.setframerate(int(OMI_SAMPLE_RATE))
-    return sink
-
-
-# Memory processing is now handled by the memory service module
-
-
 class ChunkRepo:
     """Async helpers for the audio_chunks collection."""
 
@@ -1020,14 +1005,7 @@ class ClientState:
                         f"Creating file sink with: rate={int(OMI_SAMPLE_RATE)}, channels={int(OMI_CHANNELS)}, width={int(OMI_SAMPLE_WIDTH)}"
                     )
                     self.file_sink = _new_local_file_sink(f"{CHUNK_DIR}/{wav_filename}")
-                    try:
-                        await _open_file_sink_properly(self.file_sink)
-                        audio_logger.info(
-                            f"File sink opened successfully for {wav_filename}"
-                        )
-                    except Exception as e:
-                        audio_logger.error(f"Failed to open file sink: {e}")
-                        raise
+                    await self.file_sink.open()
 
                     await chunk_repo.create_chunk(
                         audio_uuid=self.current_audio_uuid,
