@@ -17,16 +17,27 @@ dependencies = [
     "python-multipart>=0.0.6",
     "pydantic>=2.0.0",
     "soundfile>=0.12",
+    "easy-audio-interfaces[local-audio]>=0.5.1",
+    "pydantic-settings>=2.10.1",
 ]
 
 [dependency-groups]
+cpu = ["faiss-cpu>=1.8"]
+gpu = ["faiss-gpu>=1.7"]
 dev = [
     "black>=25.1.0",
     "isort>=6.0.1",
 ]
-gpu = [
-    "faiss-gpu>=1.8",
-]
 
+[tool.uv]
+# dev & cpu are installed automatically
+default-groups = ["dev", "cpu"]
+# cpu and gpu can never coexist
+conflicts = [
+    [
+        { group = "cpu" },
+        { group = "gpu" },
+    ],
+]
 [tool.isort]
 profile = "black" 

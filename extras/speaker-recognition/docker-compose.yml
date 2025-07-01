@@ -11,15 +11,15 @@ services:
       - ./model_cache:/models
       - ./audio_chunks:/app/audio_chunks
       - ./debug:/app/debug
-      # Share audio chunks with advanced-backend
-      - ../../backends/advanced-backend/audio_chunks:/app/shared_audio_chunks
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      # Persist speaker database (faiss.index + speakers.json)
+      - ./speaker_data:/app/data
+    # deploy:
+        #   resources:
+        #     reservations:
+        #       devices:
+        #         - driver: nvidia
+        #           count: all
+        #           capabilities: [gpu]
     environment:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
