@@ -245,6 +245,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             # Clear the VAD sample buffer
             self._vad_sample_buffer = np.array([], dtype=np.float32)
             logger.debug("VAD iterator soft reset.")
+        self._resampler.reset()
 
     async def _write_debug_file(self, event: AudioChunk) -> None:
         """Logic to create debug files"""
