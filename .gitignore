@@ -1,6 +1,7 @@
 **/__pycache__
 *.wav
 **/*.env
+!**/.env.template
 example/*
 **/node_modules/*
 **/ollama-data/*
