@@ -14,8 +14,8 @@ dependencies = [
   "fastapi>=0.115.12",
   "uvicorn>=0.34.2",
   "silero-vad>=5.1.2",
-  "wyoming>=1.6.1",
-  "easy-audio-interfaces>=0.4.2",
+  "wyoming>=1.7.0",
+  "easy-audio-interfaces>=0.6.0",
 ]
 
 [tool.uv]

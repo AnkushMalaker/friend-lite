@@ -57,7 +57,7 @@ audio_logger = logging.getLogger("audio_processing")
 
 # Conditional Deepgram import
 try:
-    from deepgram import DeepgramClient, FileSource, PrerecordedOptions # type: ignore
+    from deepgram import DeepgramClient, FileSource, PrerecordedOptions  # type: ignore
 
     DEEPGRAM_AVAILABLE = True
 except ImportError:
@@ -148,7 +148,6 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # Initialize memory service, speaker service, and ollama client
 memory_service = get_memory_service()
 ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
-
 
 ###############################################################################
 # AUDIO PROCESSING FUNCTIONS
@@ -1197,10 +1196,8 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
     await ws.accept()
 
     # Use user_id if provided, otherwise generate a random client_id
-    client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(
-        f"Client {client_id}: WebSocket connection accepted (user_id: {user_id})."
-    )
+    client_id = user_id if user_id else f"client_{str(uuid.uuid4())}"
+    audio_logger.info(f"Client {client_id}: WebSocket connection accepted (user_id: {user_id}).")
     decoder = OmiOpusDecoder()
     _decode_packet = partial(decoder.decode_packet, strip_header=False)
 
