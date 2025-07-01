@@ -33,7 +33,7 @@ from wyoming.audio import AudioChunk, AudioStart
 from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
-from debug_utils import memory_debug
+# from debug_utils import memory_debug
 from memory import get_memory_service, init_memory_config, shutdown_memory_service
 from metrics import (
     get_metrics_collector,
@@ -870,32 +870,33 @@ class ClientState:
 
                 # Log debug information
                 processing_time_ms = (time.time() - start_time) * 1000
-                memory_debug.log_memory_processing(
-                    user_id=self.client_id,
-                    audio_uuid=current_uuid,
-                    transcript_text=full_conversation,
-                    memories_created=memories_created,
-                    action_items_created=action_items_created,
-                    processing_success=processing_success,
-                    error_message=error_message,
-                    processing_time_ms=processing_time_ms,
-                )
+                # memory_debug.log_memory_processing(
+                #     user_id=self.client_id,
+                #     audio_uuid=current_uuid,
+                #     transcript_text=full_conversation,
+                #     memories_created=memories_created,
+                #     action_items_created=action_items_created,
+                #     processing_success=processing_success,
+                #     error_message=error_message,
+                #     processing_time_ms=processing_time_ms,
+                # )
             else:
                 audio_logger.info(
                     f"ℹ️ No transcripts to process for memory in conversation {current_uuid}"
                 )
                 # Log empty processing for debug
                 if current_uuid:
-                    memory_debug.log_memory_processing(
-                        user_id=self.client_id,
-                        audio_uuid=current_uuid,
-                        transcript_text="",
-                        memories_created=[],
-                        action_items_created=[],
-                        processing_success=True,
-                        error_message="No transcripts available for processing",
-                        processing_time_ms=0,
-                    )
+                    pass
+                    # memory_debug.log_memory_processing(
+                    #     user_id=self.client_id,
+                    #     audio_uuid=current_uuid,
+                    #     transcript_text="",
+                    #     memories_created=[],
+                    #     action_items_created=[],
+                    #     processing_success=True,
+                    #     error_message="No transcripts available for processing",
+                    #     processing_time_ms=0,
+                    # )
 
             await self.file_sink.close()
 
@@ -1903,19 +1904,20 @@ async def debug_memory_processing(
 ):
     """Get debug information about memory processing operations."""
     try:
-        debug_entries = memory_debug.get_debug_entries(
-            user_id=user_id, limit=limit, since_timestamp=since_timestamp
-        )
+        # debug_entries = memory_debug.get_debug_entries(
+        #     user_id=user_id, limit=limit, since_timestamp=since_timestamp
+        # )
 
-        return JSONResponse(
-            content={
-                "debug_entries": debug_entries,
-                "total_entries": len(debug_entries),
-                "user_filter": user_id,
-                "limit": limit,
-                "since_timestamp": since_timestamp,
-            }
-        )
+        pass
+        # return JSONResponse(
+        #     content={
+        #         "debug_entries": debug_entries,
+        #         "total_entries": len(debug_entries),
+        #         "user_filter": user_id,
+        #         "limit": limit,
+        #         "since_timestamp": since_timestamp,
+        #     }
+        # )
 
     except Exception as e:
         audio_logger.error(f"Error getting memory processing debug info: {e}")
@@ -1928,9 +1930,10 @@ async def debug_memory_processing(
 async def debug_memory_processing_stats(user_id: Optional[str] = None):
     """Get statistics about memory processing operations."""
     try:
-        stats = memory_debug.get_debug_stats(user_id=user_id)
+        # stats = memory_debug.get_debug_stats(user_id=user_id)
 
-        return JSONResponse(content={"user_id": user_id, "statistics": stats})
+        pass
+        # return JSONResponse(content={"user_id": user_id, "statistics": stats})
 
     except Exception as e:
         audio_logger.error(f"Error getting memory processing stats: {e}")
