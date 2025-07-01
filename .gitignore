@@ -1,6 +1,7 @@
 **/__pycache__
 *.wav
 **/*.env
+!**/.env.template
 example/*
 **/node_modules/*
 **/ollama-data/*
@@ -13,3 +14,4 @@ backends/examples/example-satellite/*
 **/mongo_data/*
 .cursor/*
 **/speaker_data/**
+**/.venv/*
