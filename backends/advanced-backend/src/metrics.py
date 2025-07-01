@@ -2,11 +2,11 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Set
-from collections import defaultdict, deque
+from typing import Dict, List, Optional
+from collections import deque
 import os
 
 
@@ -72,7 +72,7 @@ class SystemMetrics:
 class MetricsCollector:
     """Central metrics collection and reporting system"""
     
-    def __init__(self, debug_dir: str = "./debug_metrics"):
+    def __init__(self, debug_dir: str | Path):
         self.debug_dir = Path(debug_dir)
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         
@@ -105,7 +105,7 @@ class MetricsCollector:
             return
             
         self._running = True
-        self._report_task = asyncio.create_task(self._daily_report_loop())
+        self._report_task = asyncio.create_task(self._periodic_report_loop())
         metrics_logger.info("Metrics collection started")
     
     async def stop(self):
@@ -232,16 +232,14 @@ class MetricsCollector:
             self.metrics.audio.memory_storage_failures += 1
     
     # Report Generation
-    async def _daily_report_loop(self):
-        """Run daily report generation loop"""
+    async def _periodic_report_loop(self):
+        """Run periodic report generation loop (every 30 minutes)"""
         while self._running:
             try:
-                # Calculate time until next 24-hour mark
-                now = datetime.now()
-                next_report = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                sleep_seconds = (next_report - now).total_seconds()
+                # Wait 30 minutes between reports
+                sleep_seconds = 30 * 60  # 30 minutes in seconds
                 
-                metrics_logger.info(f"Next metrics report in {sleep_seconds/3600:.1f} hours at {next_report}")
+                metrics_logger.info(f"Next metrics report in {sleep_seconds/60:.0f} minutes")
                 
                 await asyncio.sleep(sleep_seconds)
                 await self._generate_report()
@@ -249,11 +247,11 @@ class MetricsCollector:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                metrics_logger.error(f"Error in daily report loop: {e}")
-                await asyncio.sleep(3600)  # Wait 1 hour before retry
+                metrics_logger.error(f"Error in periodic report loop: {e}")
+                await asyncio.sleep(1800)  # Wait 30 minutes before retry
     
     async def _generate_report(self):
-        """Generate and save 24-hour metrics report"""
+        """Generate and save periodic metrics report"""
         try:
             report_time = datetime.now()
             system_uptime = time.time() - self.metrics.system_start_time
@@ -300,7 +298,7 @@ class MetricsCollector:
                     "generated_at": report_time.isoformat(),
                     "system_start_time": datetime.fromtimestamp(self.metrics.system_start_time).isoformat(),
                     "system_uptime_hours": round(system_uptime / 3600, 2),
-                    "report_period_hours": 24.0 if self.metrics.last_report_time else round(system_uptime / 3600, 2)
+                    "report_period_hours": round((time.time() - self.metrics.last_report_time) / 3600, 2) if self.metrics.last_report_time else round(system_uptime / 3600, 2)
                 },
                 "uptime_metrics": {
                     "system_uptime_vs_recording_time": {
@@ -331,7 +329,7 @@ class MetricsCollector:
             
             self.metrics.last_report_time = time.time()
             
-            metrics_logger.info(f"24-hour metrics report saved: {filepath}")
+            metrics_logger.info(f"Metrics report saved: {filepath}")
             metrics_logger.info(f"System uptime: {system_uptime/3600:.1f}h, Recording: {total_recording_time/3600:.1f}h, Voice activity: {total_voice_activity/3600:.1f}h")
             
         except Exception as e:
