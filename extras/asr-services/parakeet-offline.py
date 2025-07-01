@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO)
 # --------------------------------------------------------------------------- #
 SAMPLING_RATE = 16_000
 CHUNK_SAMPLES = 512  # Silero requirement (32 ms @ 16 kHz)
-MAX_SPEECH_SECS = 30  # Max duration of a speech segment
+MAX_SPEECH_SECS = 120  # Max duration of a speech segment
 MIN_SPEECH_SECS = 0.5  # Min duration for transcription
 
 
@@ -176,7 +176,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             self._vad_model = None
             self._vad_iterator = None
 
-        self._speech_buf: list[AudioChunk] = []
+        self._chunk_sequence: list[AudioChunk] = []
         self._recording = False
 
         # Non-VAD mode: collect everything from AudioStart to AudioStop
@@ -278,16 +278,16 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
     async def _process_without_vad(self, chunk: AudioChunk) -> None:
         """Process audio chunk without VAD - collect everything from start to stop."""
         if self._collecting_audio:
-            self._speech_buf.append(chunk)
+            self._chunk_sequence.append(chunk)
 
             # Safety check: if speech buffer gets too long, force transcription
-            speech_duration = sum(c.seconds for c in self._speech_buf)
+            speech_duration = sum(c.seconds for c in self._chunk_sequence)
             if speech_duration >= MAX_SPEECH_SECS:
                 logger.warning(
                     f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription."
                 )
-                await self._transcribe_and_send(self._speech_buf)
-                self._speech_buf.clear()
+                await self._transcribe_and_send(self._chunk_sequence)
+                self._chunk_sequence.clear()
 
     async def _transcribe_and_send(self, speech: Sequence[AudioChunk]) -> None:
         """Transcribe speech and send Wyoming transcript event."""
@@ -353,11 +353,11 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             # Reset for new transcription request
             self._recording = False
             self._collecting_audio = False
-            if len(self._speech_buf) > 0:
+            if len(self._chunk_sequence) > 0:
                 logger.warning(
-                    f"Clearing speech buffer of {len(self._speech_buf)} chunks"
+                    f"Clearing speech buffer of {len(self._chunk_sequence)} chunks"
                 )
-            self._speech_buf.clear()
+            self._chunk_sequence.clear()
             self.soft_reset()
             return True
         elif AudioStart.is_type(event.type):
@@ -366,7 +366,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             if not self._vad_enabled:
                 # In non-VAD mode, start collecting all audio
                 self._collecting_audio = True
-                self._speech_buf.clear()
+                self._chunk_sequence.clear()
                 logger.info("Started collecting audio (VAD disabled)")
             return True
         elif AudioChunk.is_type(event.type):
@@ -385,26 +385,26 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 # VAD mode: transcribe any remaining speech if we were recording
                 if (
                     self._recording
-                    and len(self._speech_buf) >= MIN_SPEECH_SECS * SAMPLING_RATE
+                    and len(self._chunk_sequence) >= MIN_SPEECH_SECS * SAMPLING_RATE
                 ):
                     logger.info("Audio stream ended. Transcribing remaining speech.")
-                    await self._transcribe_and_send(self._speech_buf)
+                    await self._transcribe_and_send(self._chunk_sequence)
             else:
                 # Non-VAD mode: transcribe the entire collected audio
-                if self._collecting_audio and self._speech_buf:
-                    speech_duration = sum(chunk.seconds for chunk in self._speech_buf)
+                if self._collecting_audio and self._chunk_sequence:
+                    speech_duration = sum(chunk.seconds for chunk in self._chunk_sequence)
                     logger.info(
                         f"Audio stream ended. Transcribing entire segment (duration: {speech_duration:.2f}s)"
                     )
                     if speech_duration >= MIN_SPEECH_SECS:
-                        await self._transcribe_and_send(self._speech_buf)
+                        await self._transcribe_and_send(self._chunk_sequence)
                     else:
                         logger.info(
                             "Audio segment too short for transcription. Discarding."
                         )
 
             # Reset state
-            self._speech_buf.clear()
+            self._chunk_sequence.clear()
             self._recording = False
             self._collecting_audio = False
             self.soft_reset()
@@ -474,18 +474,18 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 self._recording = False
                 await self.write_event(VoiceStopped().event())
 
-                speech_duration = sum(chunk.seconds for chunk in self._speech_buf)
+                speech_duration = sum(chunk.seconds for chunk in self._chunk_sequence)
                 logger.info(
                     f"VAD end detected. Speech duration: {speech_duration:.2f}s"
                 )
 
                 if speech_duration >= MIN_SPEECH_SECS:
-                    await self._transcribe_and_send(self._speech_buf)
+                    await self._transcribe_and_send(self._chunk_sequence)
                 else:
                     logger.info("Speech too short for transcription. Discarding.")
 
                 # Clear buffer and reset
-                self._speech_buf.clear()
+                self._chunk_sequence.clear()
                 self.soft_reset()
 
     async def _buffer_and_process_vad(
@@ -505,16 +505,16 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         # 3. do these exactly once per *original* chunk
         await self._write_debug_file(chunk)
         if self._recording:
-            self._speech_buf.append(chunk)
+            self._chunk_sequence.append(chunk)
 
             # Safety check: if speech buffer gets too long, force transcription
-            speech_duration = sum(c.seconds for c in self._speech_buf)
+            speech_duration = sum(c.seconds for c in self._chunk_sequence)
             if speech_duration >= MAX_SPEECH_SECS:
                 logger.warning(
                     f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription."
                 )
-                await self._transcribe_and_send(self._speech_buf)
-                self._speech_buf.clear()
+                await self._transcribe_and_send(self._chunk_sequence)
+                self._chunk_sequence.clear()
                 self._recording = False
                 self.soft_reset()
 
