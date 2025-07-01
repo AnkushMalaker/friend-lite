@@ -20,6 +20,7 @@ from typing import Sequence, cast
 import nemo.collections.asr as nemo_asr
 import numpy as np
 import torch
+from easy_audio_interfaces.audio_interfaces import ResamplingBlock
 from easy_audio_interfaces.filesystem import LocalFileSink
 from silero_vad import VADIterator, load_silero_vad
 from wyoming.asr import Transcribe, Transcript
@@ -33,13 +34,17 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # --------------------------------------------------------------------------- #
-SAMPLING_RATE = 16_000
+PARAKEET_SAMPLING_RATE = VAD_SAMPLING_RATE = 16_000
 CHUNK_SAMPLES = 512  # Silero requirement (32 ms @ 16 kHz)
 MAX_SPEECH_SECS = 120  # Max duration of a speech segment
 MIN_SPEECH_SECS = 0.5  # Min duration for transcription
 
 
 def _chunk_to_numpy_float(chunk: AudioChunk) -> np.ndarray:
+    if chunk.channels != 1:
+        raise ValueError(f"Unsupported channels: {chunk.channels}")
+    if chunk.rate != PARAKEET_SAMPLING_RATE:
+        raise ValueError(f"Unsupported sampling rate: {chunk.rate}")
     if chunk.width == 2:
         logger.debug(f"Converting chunk to float32")
         return (
@@ -66,7 +71,7 @@ class SharedTranscriber:
             nemo_asr.models.ASRModel,
             nemo_asr.models.ASRModel.from_pretrained(model_name=model_name),
         )
-        self._rate = SAMPLING_RATE
+        self._rate = PARAKEET_SAMPLING_RATE
         self._model_name = model_name
         self._lock = asyncio.Lock()
 
@@ -168,7 +173,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             self._vad_model = load_silero_vad(onnx=True)
             self._vad_iterator = VADIterator(
                 model=self._vad_model,
-                sampling_rate=SAMPLING_RATE,
+                sampling_rate=VAD_SAMPLING_RATE,
                 threshold=0.4,  # VAD sensitivity
                 min_silence_duration_ms=1000,  # Minimum silence duration in ms
             )
@@ -203,6 +208,10 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
         self._current_debug_file_path = None
         self._DEBUG_LENGTH = 30  # seconds
         self._cur_seg_duration = 0
+        self._resampler = ResamplingBlock(
+            resample_rate=PARAKEET_SAMPLING_RATE,
+            resample_channels=1,
+        )
 
     def _init_csv_file(self) -> None:
         """Initialize CSV file with headers if it doesn't exist."""
@@ -236,6 +245,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
             # Clear the VAD sample buffer
             self._vad_sample_buffer = np.array([], dtype=np.float32)
             logger.debug("VAD iterator soft reset.")
+        self._resampler.reset()
 
     async def _write_debug_file(self, event: AudioChunk) -> None:
         """Logic to create debug files"""
@@ -267,13 +277,14 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
 
     async def _process_audio_chunk(self, chunk: AudioChunk) -> None:
         """Process audio chunk with VAD and transcription."""
-        if self._vad_enabled:
-            # VAD-enabled mode: use VAD to detect speech segments
-            await self._buffer_and_process_vad(chunk)
-        else:
-            # VAD-disabled mode: collect all audio from start to stop
-            await self._write_debug_file(chunk)
-            await self._process_without_vad(chunk)
+        async for chonk in self._resampler.process_chunk(chunk):
+            if self._vad_enabled:
+                # VAD-enabled mode: use VAD to detect speech segments
+                await self._buffer_and_process_vad(chonk)
+            else:
+                # VAD-disabled mode: collect all audio from start to stop
+                await self._write_debug_file(chonk)
+                await self._process_without_vad(chonk)
 
     async def _process_without_vad(self, chunk: AudioChunk) -> None:
         """Process audio chunk without VAD - collect everything from start to stop."""
@@ -385,7 +396,7 @@ class ParakeetTranscriptionHandler(AsyncEventHandler):
                 # VAD mode: transcribe any remaining speech if we were recording
                 if (
                     self._recording
-                    and len(self._chunk_sequence) >= MIN_SPEECH_SECS * SAMPLING_RATE
+                    and len(self._chunk_sequence) >= MIN_SPEECH_SECS * PARAKEET_SAMPLING_RATE
                 ):
                     logger.info("Audio stream ended. Transcribing remaining speech.")
                     await self._transcribe_and_send(self._chunk_sequence)
