@@ -60,6 +60,7 @@ audio_logger = logging.getLogger("audio_processing")
 try:
     from deepgram import DeepgramClient, FileSource, PrerecordedOptions
     DEEPGRAM_AVAILABLE = True
+    logger.info("✅ Deepgram SDK available")
 except ImportError:
     DEEPGRAM_AVAILABLE = False
     logger.warning("Deepgram SDK not available. Install with: pip install deepgram-sdk")
@@ -931,7 +932,8 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
 
     # Use user_id if provided, otherwise generate a random client_id
     client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(f"Client {client_id}: WebSocket connection accepted (user_id: {user_id}).")
+    audio_logger.info(f"🔌 WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
+    
     decoder = OmiOpusDecoder()
     _decode_packet = partial(decoder.decode_packet, strip_header=False)
     
@@ -939,14 +941,22 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
     client_state = await create_client_state(client_id)
 
     try:
+        packet_count = 0
+        total_bytes = 0
         while True:
             packet = await ws.receive_bytes()
+            packet_count += 1
+            total_bytes += len(packet)
+            
+            start_time = time.time()
             loop = asyncio.get_running_loop()
             pcm_data = await loop.run_in_executor(
                 _DEC_IO_EXECUTOR, _decode_packet, packet
             )
+            decode_time = time.time() - start_time
+            
             if pcm_data:
-                audio_logger.debug(f"Received {len(pcm_data)} bytes of PCM data")
+                audio_logger.debug(f"🎵 Decoded packet #{packet_count}: {len(packet)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)")
                 chunk = AudioChunk(
                     audio=pcm_data,
                     rate=OMI_SAMPLE_RATE,
@@ -955,11 +965,15 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
                     timestamp=int(time.time()),
                 )
                 await client_state.chunk_queue.put(chunk)
+                
+                # Log every 100th packet to avoid spam
+                if packet_count % 100 == 0:
+                    audio_logger.info(f"📊 Processed {packet_count} packets ({total_bytes} bytes total) for client {client_id}")
 
     except WebSocketDisconnect:
-        audio_logger.info(f"Client {client_id}: WebSocket disconnected.")
+        audio_logger.info(f"🔌 WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}")
     except Exception as e:
-        audio_logger.error(f"Client {client_id}: An error occurred: {e}", exc_info=True)
+        audio_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
         # Clean up client state
         await cleanup_client_state(client_id)
@@ -972,15 +986,21 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
     
     # Use user_id if provided, otherwise generate a random client_id
     client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(f"Client {client_id}: WebSocket connection accepted (user_id: {user_id}).")
+    audio_logger.info(f"🔌 PCM WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
     
     # Create client state and start processing
     client_state = await create_client_state(client_id)
 
     try:
+        packet_count = 0
+        total_bytes = 0
         while True:
             packet = await ws.receive_bytes()
+            packet_count += 1
+            total_bytes += len(packet)
+            
             if packet:
+                audio_logger.debug(f"🎵 Received PCM packet #{packet_count}: {len(packet)} bytes")
                 chunk = AudioChunk(
                     audio=packet,
                     rate=16000,
@@ -989,10 +1009,15 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
                     timestamp=int(time.time()),
                 )
                 await client_state.chunk_queue.put(chunk)
+                
+                # Log every 100th packet to avoid spam
+                if packet_count % 100 == 0:
+                    audio_logger.info(f"📊 Processed {packet_count} PCM packets ({total_bytes} bytes total) for client {client_id}")
+                        
     except WebSocketDisconnect:
-        audio_logger.info(f"Client {client_id}: WebSocket disconnected.")
+        audio_logger.info(f"🔌 PCM WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}")
     except Exception as e:
-        audio_logger.error(f"Client {client_id}: An error occurred: {e}", exc_info=True)
+        audio_logger.error(f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
         # Clean up client state
         await cleanup_client_state(client_id)

@@ -3,6 +3,7 @@ import os
 import time
 import random
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -11,29 +12,57 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Create logs directory for Streamlit app
+LOGS_DIR = Path("./logs")
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Configure comprehensive logging for Streamlit app
+logging.basicConfig(
+    level=logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOGS_DIR / 'streamlit.log')
+    ]
+)
+
+logger = logging.getLogger("streamlit-ui")
+logger.info("🚀 Starting Friend-Lite Streamlit Dashboard")
 
 # ---- Configuration ---- #
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://192.168.0.110:8000")
 # For browser-accessible URLs (audio files), use localhost instead of Docker service name
 BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
 
+logger.info(f"🔧 Configuration loaded - Backend API: {BACKEND_API_URL}, Public URL: {BACKEND_PUBLIC_URL}")
+
 # ---- Health Check Functions ---- #
 @st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too many requests
 def get_system_health():
     """Get comprehensive system health from backend."""
+    logger.info("🏥 Performing system health check")
+    start_time = time.time()
+    
     try:
         # First try the simple readiness check with shorter timeout
+        logger.debug("🔍 Checking backend readiness...")
         response = requests.get(f"{BACKEND_API_URL}/readiness", timeout=5)
         if response.status_code == 200:
+            logger.info("✅ Backend readiness check passed")
             # Backend is responding, now try the full health check with longer timeout
             try:
+                logger.debug("🔍 Performing full health check...")
                 health_response = requests.get(f"{BACKEND_API_URL}/health", timeout=30)
                 if health_response.status_code == 200:
-                    return health_response.json()
+                    health_data = health_response.json()
+                    duration = time.time() - start_time
+                    logger.info(f"✅ Full health check completed in {duration:.3f}s")
+                    logger.debug(f"Health data: {health_data}")
+                    return health_data
                 else:
                     # Health check failed but backend is responsive
+                    duration = time.time() - start_time
+                    logger.warning(f"⚠️ Health check failed with status {health_response.status_code} in {duration:.3f}s")
                     return {
                         "status": "partial",
                         "overall_healthy": False,
@@ -47,6 +76,8 @@ def get_system_health():
                     }
             except requests.exceptions.Timeout:
                 # Health check timed out but backend is responsive
+                duration = time.time() - start_time
+                logger.warning(f"⚠️ Health check timed out in {duration:.3f}s")
                 return {
                     "status": "partial",
                     "overall_healthy": False,
@@ -59,6 +90,8 @@ def get_system_health():
                     "error": "Health check timed out - external services may be unavailable"
                 }
             except Exception as e:
+                duration = time.time() - start_time
+                logger.error(f"❌ Health check error in {duration:.3f}s: {e}")
                 return {
                     "status": "partial",
                     "overall_healthy": False,
@@ -71,6 +104,8 @@ def get_system_health():
                     "error": str(e)
                 }
         else:
+            duration = time.time() - start_time
+            logger.error(f"❌ Backend readiness check failed with status {response.status_code} in {duration:.3f}s")
             return {
                 "status": "unhealthy",
                 "overall_healthy": False,
@@ -83,6 +118,8 @@ def get_system_health():
                 "error": "Backend API returned unexpected status code"
             }
     except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"❌ System health check failed in {duration:.3f}s: {e}")
         return {
             "status": "unhealthy", 
             "overall_healthy": False,
@@ -98,44 +135,68 @@ def get_system_health():
 # ---- Helper Functions ---- #
 def get_data(endpoint: str):
     """Helper function to get data from the backend API with retry logic."""
+    logger.debug(f"📡 GET request to endpoint: {endpoint}")
+    start_time = time.time()
+    
     max_retries = 3
     base_delay = 1
     
     for attempt in range(max_retries):
         try:
+            logger.debug(f"📡 Attempt {attempt + 1}/{max_retries} for GET {endpoint}")
             response = requests.get(f"{BACKEND_API_URL}{endpoint}")
             response.raise_for_status()
+            duration = time.time() - start_time
+            logger.info(f"✅ GET {endpoint} successful in {duration:.3f}s")
             return response.json()
         except requests.exceptions.RequestException as e:
+            duration = time.time() - start_time
             if attempt < max_retries - 1:
                 delay = base_delay * (2 ** attempt)
-                logger.warning(f"GET {endpoint} attempt {attempt + 1} failed, retrying in {delay}s: {str(e)}")
+                logger.warning(f"⚠️ GET {endpoint} attempt {attempt + 1} failed in {duration:.3f}s, retrying in {delay}s: {str(e)}")
                 time.sleep(delay)
                 continue
             else:
+                logger.error(f"❌ GET {endpoint} failed after {max_retries} attempts in {duration:.3f}s: {e}")
                 st.error(f"Could not connect to the backend at `{BACKEND_API_URL}`. Please ensure it's running. Error: {e}")
                 return None
 
 def post_data(endpoint: str, params: dict | None = None):
     """Helper function to post data to the backend API."""
+    logger.debug(f"📤 POST request to endpoint: {endpoint} with params: {params}")
+    start_time = time.time()
+    
     try:
         response = requests.post(f"{BACKEND_API_URL}{endpoint}", params=params)
         response.raise_for_status()
+        duration = time.time() - start_time
+        logger.info(f"✅ POST {endpoint} successful in {duration:.3f}s")
         return response.json()
     except requests.exceptions.RequestException as e:
+        duration = time.time() - start_time
+        logger.error(f"❌ POST {endpoint} failed in {duration:.3f}s: {e}")
         st.error(f"Error posting to backend: {e}")
         return None
 
 def delete_data(endpoint: str, params: dict | None = None):
     """Helper function to delete data from the backend API."""
+    logger.debug(f"🗑️ DELETE request to endpoint: {endpoint} with params: {params}")
+    start_time = time.time()
+    
     try:
         response = requests.delete(f"{BACKEND_API_URL}{endpoint}", params=params)
         response.raise_for_status()
+        duration = time.time() - start_time
+        logger.info(f"✅ DELETE {endpoint} successful in {duration:.3f}s")
         return response.json()
     except requests.exceptions.RequestException as e:
+        duration = time.time() - start_time
+        logger.error(f"❌ DELETE {endpoint} failed in {duration:.3f}s: {e}")
         st.error(f"Error deleting from backend: {e}")
         return None
 
+# ---- Streamlit App Configuration ---- #
+logger.info("🎨 Configuring Streamlit app...")
 st.set_page_config(
     page_title="Friend-Lite Dashboard", 
     layout="wide",
@@ -143,6 +204,7 @@ st.set_page_config(
 )
 
 st.title("Friend-Lite Dashboard")
+logger.info("📊 Dashboard initialized")
 
 # Inject custom CSS for conversation box using Streamlit theme variables
 st.markdown(
@@ -166,6 +228,7 @@ st.markdown(
 # ---- Sidebar with Health Checks ---- #
 with st.sidebar:
     st.header("🔍 System Health")
+    logger.debug("🔍 Loading system health sidebar...")
     
     with st.expander("Service Status", expanded=True):
         # Get system health from backend
@@ -174,22 +237,28 @@ with st.sidebar:
             
             if health_data.get("overall_healthy", False):
                 st.success(f"🟢 System Status: {health_data.get('status', 'Unknown').title()}")
+                logger.info("🟢 System health check passed")
             else:
                 st.error(f"🔴 System Status: {health_data.get('status', 'Unknown').title()}")
+                logger.warning(f"🔴 System health check failed: {health_data.get('error', 'Unknown error')}")
             
             # Show individual services
             services = health_data.get("services", {})
             for service_name, service_info in services.items():
                 status_text = service_info.get("status", "Unknown")
                 st.write(f"**{service_name.title()}:** {status_text}")
+                logger.debug(f"Service {service_name}: {status_text}")
                 
                 # Show additional info if available
                 if "models" in service_info:
                     st.caption(f"Models available: {service_info['models']}")
+                    logger.debug(f"Service {service_name} models: {service_info['models']}")
                 if "uri" in service_info:
                     st.caption(f"URI: {service_info['uri']}")
+                    logger.debug(f"Service {service_name} URI: {service_info['uri']}")
     
     if st.button("🔄 Refresh Health Check"):
+        logger.info("🔄 Manual health check refresh requested")
         st.cache_data.clear()
         st.rerun()
     
@@ -197,15 +266,21 @@ with st.sidebar:
     
     # Close Conversation Section
     st.header("🔒 Close Conversation")
+    logger.debug("🔒 Loading close conversation section...")
+    
     with st.expander("Active Clients & Close Conversation", expanded=True):
         # Get active clients
+        logger.debug("📡 Fetching active clients...")
         active_clients_data = get_data("/api/active_clients")
         
         if active_clients_data and active_clients_data.get("clients"):
             clients = active_clients_data["clients"]
+            logger.info(f"📊 Found {len(clients)} active clients")
             
             # Show active clients with conversation status
             for client_id, client_info in clients.items():
+                logger.debug(f"👤 Processing client: {client_id} - Active conversation: {client_info.get('has_active_conversation', False)}")
+                
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
@@ -213,8 +288,10 @@ with st.sidebar:
                         st.write(f"🟢 **{client_id}** (Active conversation)")
                         if client_info.get("current_audio_uuid"):
                             st.caption(f"UUID: {client_info['current_audio_uuid'][:8]}...")
+                            logger.debug(f"Client {client_id} has active conversation with UUID: {client_info['current_audio_uuid']}")
                     else:
                         st.write(f"⚪ **{client_id}** (No active conversation)")
+                        logger.debug(f"Client {client_id} has no active conversation")
                 
                 with col2:
                     if client_info.get("has_active_conversation", False):
@@ -226,23 +303,28 @@ with st.sidebar:
                         )
                         
                         if close_btn:
+                            logger.info(f"🔒 Closing conversation for client: {client_id}")
                             result = post_data("/api/close_conversation", {"client_id": client_id})
                             if result:
                                 st.success(f"✅ Conversation closed for {client_id}")
+                                logger.info(f"✅ Successfully closed conversation for {client_id}")
                                 st.rerun()
                             else:
                                 st.error(f"❌ Failed to close conversation for {client_id}")
+                                logger.error(f"❌ Failed to close conversation for {client_id}")
                     else:
                         st.caption("No active conversation")
             
             st.info(f"💡 **Total active clients:** {active_clients_data.get('active_clients_count', 0)}")
         else:
             st.info("No active clients found")
+            logger.info("📊 No active clients found")
     
     st.divider()
     
     # Configuration Info  
     with st.expander("Configuration"):
+        logger.debug("🔧 Loading configuration info...")
         health_data = get_system_health()
         config = health_data.get("config", {})
         
@@ -256,16 +338,20 @@ Qdrant URL: {config.get('qdrant_url', 'Unknown')}
 ASR URI: {config.get('asr_uri', 'Unknown')}
 Chunk Directory: {config.get('chunk_dir', 'Unknown')}
         """)
+        logger.debug(f"🔧 Configuration displayed - Backend API: {BACKEND_API_URL}")
 
 # Show warning if system is unhealthy
 health_data = get_system_health()
 if not health_data.get("overall_healthy", False):
     st.error("⚠️ Some critical services are unavailable. The dashboard may not function properly.")
+    logger.warning("⚠️ System is unhealthy - some services unavailable")
 
 # ---- Main Content ---- #
+logger.info("📋 Loading main dashboard tabs...")
 tab_convos, tab_mem, tab_users, tab_manage = st.tabs(["Conversations", "Memories", "User Management", "Conversation Management"])
 
 with tab_convos:
+    logger.debug("🗨️ Loading conversations tab...")
     st.header("Latest Conversations")
     
     # Initialize session state for refresh tracking
@@ -276,6 +362,7 @@ with tab_convos:
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("Refresh Conversations"):
+            logger.info("🔄 Manual conversation refresh requested")
             st.session_state.refresh_timestamp = int(time.time())
             st.session_state.refresh_random = random.randint(1000, 9999)
             st.rerun()
@@ -283,27 +370,37 @@ with tab_convos:
         debug_mode = st.checkbox("🔧 Debug Mode", 
                                 help="Show original audio files instead of cropped versions",
                                 key="debug_mode")
+        if debug_mode:
+            logger.debug("🔧 Debug mode enabled")
 
     # Generate cache-busting parameter based on session state
     if st.session_state.refresh_timestamp > 0:
         random_component = getattr(st.session_state, 'refresh_random', 0)
         cache_buster = f"?t={st.session_state.refresh_timestamp}&r={random_component}"
         st.info("🔄 Audio files refreshed - cache cleared for latest versions")
+        logger.info("🔄 Audio cache busting applied")
     else:
         cache_buster = ""
 
+    logger.debug("📡 Fetching conversations data...")
     conversations = get_data("/api/conversations")
 
     if conversations:
+        logger.info(f"📊 Loaded {len(conversations) if isinstance(conversations, list) else 'grouped'} conversations")
+        
         # Check if conversations is the new grouped format or old format
         if isinstance(conversations, dict) and "conversations" in conversations:
             # New grouped format
+            logger.debug("📊 Processing conversations in new grouped format")
             conversations_data = conversations["conversations"]
             
             for client_id, client_conversations in conversations_data.items():
+                logger.debug(f"👤 Processing conversations for client: {client_id} ({len(client_conversations)} conversations)")
                 st.subheader(f"👤 {client_id}")
                 
                 for convo in client_conversations:
+                    logger.debug(f"🗨️ Processing conversation: {convo.get('audio_uuid', 'unknown')}")
+                    
                     col1, col2 = st.columns([1, 4])
                     with col1:
                         # Format timestamp for better readability
@@ -322,6 +419,7 @@ with tab_convos:
                             st.write(f"**Speakers:**")
                             for speaker in speakers:
                                 st.write(f"🎤 `{speaker}`")
+                            logger.debug(f"🎤 Speakers identified: {speakers}")
                         
                         # Show audio duration info if available
                         cropped_duration = convo.get("cropped_duration")
@@ -334,11 +432,13 @@ with tab_convos:
                             if speech_segments:
                                 st.write(f"**Speech Segments:**")
                                 st.write(f"🗣️ {len(speech_segments)} segments")
+                                logger.debug(f"🗣️ Speech segments: {len(speech_segments)}")
                     
                     with col2:
                         # Display conversation transcript with new format
                         transcript = convo.get("transcript", [])
                         if transcript:
+                            logger.debug(f"📝 Displaying transcript with {len(transcript)} segments")
                             st.write("**Conversation:**")
                             conversation_text = ""
                             for segment in transcript:
@@ -370,19 +470,23 @@ with tab_convos:
                                 # Debug mode: always show original
                                 selected_audio_path = audio_path
                                 audio_label = "🔧 **Original Audio** (Debug Mode)"
+                                logger.debug(f"🔧 Debug mode: showing original audio: {audio_path}")
                             elif cropped_audio_path:
                                 # Normal mode: prefer cropped if available
                                 selected_audio_path = cropped_audio_path
                                 audio_label = "🎵 **Cropped Audio** (Silence Removed)"
+                                logger.debug(f"🎵 Normal mode: showing cropped audio: {cropped_audio_path}")
                             else:
                                 # Fallback: show original if no cropped version
                                 selected_audio_path = audio_path
                                 audio_label = "🎵 **Original Audio** (No cropped version available)"
+                                logger.debug(f"🎵 Fallback: showing original audio (no cropped version): {audio_path}")
                             
                             # Display audio with label and cache-busting
                             st.write(audio_label)
                             audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
                             st.audio(audio_url, format="audio/wav")
+                            logger.debug(f"🎵 Audio URL: {audio_url}")
                             
                             # Show additional info in debug mode or when both versions exist
                             if debug_mode and cropped_audio_path:
@@ -393,7 +497,10 @@ with tab_convos:
                     st.divider()
         else:
             # Old format - single list of conversations
+            logger.debug("📊 Processing conversations in old format")
             for convo in conversations:
+                logger.debug(f"🗨️ Processing conversation: {convo.get('audio_uuid', 'unknown')}")
+                
                 col1, col2 = st.columns([1, 4])
                 with col1:
                     # Format timestamp for better readability
@@ -421,11 +528,12 @@ with tab_convos:
                         st.write(f"**Speakers:**")
                         for speaker in speakers:
                             st.write(f"🎤 `{speaker}`")
-                
+                    
                 with col2:
                     # Display conversation transcript with new format
                     transcript = convo.get("transcript", [])
                     if transcript:
+                        logger.debug(f"📝 Displaying transcript with {len(transcript)} segments")
                         st.write("**Conversation:**")
                         conversation_text = ""
                         for segment in transcript:
@@ -461,19 +569,23 @@ with tab_convos:
                             # Debug mode: always show original
                             selected_audio_path = audio_path
                             audio_label = "🔧 **Original Audio** (Debug Mode)"
+                            logger.debug(f"🔧 Debug mode: showing original audio: {audio_path}")
                         elif cropped_audio_path:
                             # Normal mode: prefer cropped if available
                             selected_audio_path = cropped_audio_path
                             audio_label = "🎵 **Cropped Audio** (Silence Removed)"
+                            logger.debug(f"🎵 Normal mode: showing cropped audio: {cropped_audio_path}")
                         else:
                             # Fallback: show original if no cropped version
                             selected_audio_path = audio_path
                             audio_label = "🎵 **Original Audio** (No cropped version available)"
+                            logger.debug(f"🎵 Fallback: showing original audio (no cropped version): {audio_path}")
                         
                         # Display audio with label and cache-busting
                         st.write(audio_label)
                         audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
                         st.audio(audio_url, format="audio/wav")
+                        logger.debug(f"🎵 Audio URL: {audio_url}")
                         
                         # Show additional info in debug mode or when both versions exist
                         if debug_mode and cropped_audio_path:
@@ -484,8 +596,10 @@ with tab_convos:
                 st.divider()
     elif conversations is not None:
         st.info("No conversations found. The backend is connected but the database might be empty.")
+        logger.info("📊 No conversations found in database")
 
 with tab_mem:
+    logger.debug("🧠 Loading memories tab...")
     st.header("Memories & Action Items")
     
     # Use session state for selected user if available
@@ -506,10 +620,12 @@ with tab_mem:
         del st.session_state['selected_user']
 
     if refresh_mem_btn:
+        logger.info("🔄 Manual memories refresh requested")
         st.rerun()
 
     # Get memories and action items based on user selection
     if user_id_input.strip():
+        logger.info(f"🧠 Loading data for user: {user_id_input.strip()}")
         st.info(f"Showing data for user: **{user_id_input.strip()}**")
         
         # Load both memories and action items
@@ -517,35 +633,44 @@ with tab_mem:
         
         with col1:
             with st.spinner("Loading memories..."):
+                logger.debug(f"📡 Fetching memories for user: {user_id_input.strip()}")
                 memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}")
         
         with col2:
             with st.spinner("Loading action items..."):
+                logger.debug(f"📡 Fetching action items for user: {user_id_input.strip()}")
                 action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}")
         
         # Handle the API response format with "results" wrapper for memories
         if memories_response and isinstance(memories_response, dict) and "results" in memories_response:
             memories = memories_response["results"]
+            logger.debug(f"🧠 Memories response has 'results' wrapper, extracted {len(memories)} memories")
         else:
             memories = memories_response
+            logger.debug(f"🧠 Memories response format: {type(memories_response)}")
             
         # Handle action items response
         if action_items_response and isinstance(action_items_response, dict) and "action_items" in action_items_response:
             action_items = action_items_response["action_items"]
+            logger.debug(f"🎯 Action items response has 'action_items' wrapper, extracted {len(action_items)} items")
         else:
             action_items = action_items_response if action_items_response else []
+            logger.debug(f"🎯 Action items response format: {type(action_items_response)}")
     else:
         # Show instruction to enter a username
         memories = None
         action_items = None
+        logger.debug("👆 No user ID provided, showing instructions")
         st.info("👆 Please enter a username above to view their memories and action items.")
         st.markdown("💡 **Tip:** You can find existing usernames in the 'User Management' tab.")
 
     # Display Memories Section
     if memories is not None:
+        logger.debug("🧠 Displaying memories section...")
         st.subheader("🧠 Discovered Memories")
         
         if memories:
+            logger.info(f"🧠 Displaying {len(memories)} memories for user {user_id_input.strip()}")
             df = pd.DataFrame(memories)
             
             # Make the dataframe more readable
@@ -561,13 +686,16 @@ with tab_mem:
             # Check which memory field exists and add it to display columns
             if "memory" in df.columns:
                 display_cols["memory"] = "Memory"
+                logger.debug("🧠 Using 'memory' field for display")
             elif "text" in df.columns:
                 display_cols["text"] = "Memory"
+                logger.debug("🧠 Using 'text' field for display")
             
             # Filter for columns that exist in the dataframe
             cols_to_display = [col for col in display_cols.keys() if col in df.columns]
             
             if cols_to_display:
+                logger.debug(f"🧠 Displaying columns: {cols_to_display}")
                 st.dataframe(
                     df[cols_to_display].rename(columns=display_cols),
                     use_container_width=True,
@@ -577,16 +705,21 @@ with tab_mem:
                 # Show additional details
                 st.caption(f"📊 Found **{len(memories)}** memories for user **{user_id_input.strip()}**")
             else:
+                logger.error(f"⚠️ Unexpected memory data format - missing expected fields. Available columns: {list(df.columns)}")
                 st.error("⚠️ Unexpected memory data format - missing expected fields")
                 st.write("Debug info - Available columns:", list(df.columns))
         else:
+            logger.info(f"🧠 No memories found for user {user_id_input.strip()}")
             st.info("No memories found for this user.")
     
     # Display Action Items Section
     if action_items is not None:
+        logger.debug("🎯 Displaying action items section...")
         st.subheader("🎯 Action Items")
         
         if action_items:
+            logger.info(f"🎯 Displaying {len(action_items)} action items for user {user_id_input.strip()}")
+            
             # Status filter for action items
             col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
@@ -601,19 +734,24 @@ with tab_mem:
             with col3:
                 # Manual action item creation button
                 if st.button("➕ Add Item", key="add_action_item"):
+                    logger.info("➕ Manual action item creation requested")
                     st.session_state['show_add_action_item'] = True
             
             # Filter action items by status
             if status_filter != "All":
                 filtered_items = [item for item in action_items if item.get('status') == status_filter]
+                logger.debug(f"🎯 Filtered action items by status '{status_filter}': {len(filtered_items)} items")
             else:
                 filtered_items = action_items
+                logger.debug(f"🎯 Showing all action items: {len(filtered_items)} items")
             
             # Show statistics if requested
             if show_stats:
+                logger.info("📊 Action items statistics requested")
                 stats_response = get_data(f"/api/action-items/stats?user_id={user_id_input.strip()}")
                 if stats_response and "statistics" in stats_response:
                     stats = stats_response["statistics"]
+                    logger.debug(f"📊 Action items statistics: {stats}")
                     
                     # Display stats in columns
                     col1, col2, col3, col4 = st.columns(4)
@@ -637,9 +775,12 @@ with tab_mem:
                         st.write("**By Assignee:**")
                         assignee_df = pd.DataFrame(list(stats["by_assignee"].items()), columns=["Assignee", "Count"])
                         st.dataframe(assignee_df, hide_index=True, use_container_width=True)
+                else:
+                    logger.warning("📊 Action items statistics not available")
             
             # Manual action item creation form
             if st.session_state.get('show_add_action_item', False):
+                logger.debug("➕ Showing action item creation form")
                 with st.expander("➕ Create New Action Item", expanded=True):
                     with st.form("create_action_item"):
                         description = st.text_input("Description*:", placeholder="e.g., Send quarterly report to management")
@@ -654,6 +795,7 @@ with tab_mem:
                         submitted = st.form_submit_button("Create Action Item")
                         
                         if submitted:
+                            logger.info(f"➕ Creating action item for user {user_id_input.strip()}")
                             if description.strip():
                                 create_data = {
                                     "description": description.strip(),
@@ -664,6 +806,7 @@ with tab_mem:
                                 }
                                 
                                 try:
+                                    logger.debug(f"📤 Creating action item with data: {create_data}")
                                     response = requests.post(
                                         f"{BACKEND_API_URL}/api/action-items",
                                         params={"user_id": user_id_input.strip()},
@@ -672,22 +815,29 @@ with tab_mem:
                                     response.raise_for_status()
                                     result = response.json()
                                     st.success(f"✅ Action item created: {result['action_item']['description']}")
+                                    logger.info(f"✅ Action item created successfully: {result['action_item']['description']}")
                                     st.session_state['show_add_action_item'] = False
                                     st.rerun()
                                 except requests.exceptions.RequestException as e:
+                                    logger.error(f"❌ Error creating action item: {e}")
                                     st.error(f"Error creating action item: {e}")
                             else:
+                                logger.warning("⚠️ Action item creation attempted without description")
                                 st.error("Please enter a description for the action item")
                     
                     if st.button("❌ Cancel", key="cancel_add_action"):
+                        logger.debug("❌ Action item creation cancelled")
                         st.session_state['show_add_action_item'] = False
                         st.rerun()
             
             # Display action items
             if filtered_items:
+                logger.debug(f"🎯 Displaying {len(filtered_items)} filtered action items")
                 st.write(f"**Showing {len(filtered_items)} action items** (filtered by: {status_filter})")
                 
                 for i, item in enumerate(filtered_items):
+                    logger.debug(f"🎯 Processing action item {i+1}: {item.get('description', 'No description')[:50]}...")
+                    
                     with st.container():
                         # Create columns for action item display
                         col1, col2, col3 = st.columns([3, 1, 1])
@@ -744,6 +894,7 @@ with tab_mem:
                                 if st.button("Update", key=f"update_{i}_{item.get('memory_id', i)}"):
                                     memory_id = item.get('memory_id')
                                     if memory_id:
+                                        logger.info(f"🔄 Updating action item {memory_id} status from {status} to {new_status}")
                                         try:
                                             response = requests.put(
                                                 f"{BACKEND_API_URL}/api/action-items/{memory_id}",
@@ -751,10 +902,13 @@ with tab_mem:
                                             )
                                             response.raise_for_status()
                                             st.success(f"Status updated to {new_status}")
+                                            logger.info(f"✅ Action item status updated successfully")
                                             st.rerun()
                                         except requests.exceptions.RequestException as e:
+                                            logger.error(f"❌ Error updating action item status: {e}")
                                             st.error(f"Error updating status: {e}")
                                     else:
+                                        logger.error(f"❌ No memory ID found for action item")
                                         st.error("No memory ID found for this action item")
                         
                         with col3:
@@ -762,14 +916,18 @@ with tab_mem:
                             if st.button("🗑️ Delete", key=f"delete_{i}_{item.get('memory_id', i)}", type="secondary"):
                                 memory_id = item.get('memory_id')
                                 if memory_id:
+                                    logger.info(f"🗑️ Deleting action item {memory_id}")
                                     try:
                                         response = requests.delete(f"{BACKEND_API_URL}/api/action-items/{memory_id}")
                                         response.raise_for_status()
                                         st.success("Action item deleted")
+                                        logger.info(f"✅ Action item deleted successfully")
                                         st.rerun()
                                     except requests.exceptions.RequestException as e:
+                                        logger.error(f"❌ Error deleting action item: {e}")
                                         st.error(f"Error deleting action item: {e}")
                                 else:
+                                    logger.error(f"❌ No memory ID found for action item")
                                     st.error("No memory ID found for this action item")
                         
                         st.divider()
@@ -777,14 +935,18 @@ with tab_mem:
                 st.caption(f"💡 **Tip:** Action items are automatically extracted from conversations at the end of each session")
             else:
                 if status_filter == "All":
+                    logger.info(f"🎯 No action items found for user {user_id_input.strip()}")
                     st.info("No action items found for this user.")
                 else:
+                    logger.info(f"🎯 No action items found with status '{status_filter}' for user {user_id_input.strip()}")
                     st.info(f"No action items found with status '{status_filter}' for this user.")
         else:
+            logger.info(f"🎯 No action items found for user {user_id_input.strip()}")
             st.info("No action items found for this user.")
             
             # Show option to create manual action item even when none exist
             if user_id_input.strip() and st.button("➕ Create First Action Item", key="create_first_item"):
+                logger.info("➕ Creating first action item for user")
                 st.session_state['show_add_action_item'] = True
                 st.rerun()
 
