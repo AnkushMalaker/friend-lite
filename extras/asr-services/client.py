@@ -9,6 +9,7 @@ import asyncio
 import logging
 from pathlib import Path
 
+from easy_audio_interfaces.audio_interfaces import ResamplingBlock
 from easy_audio_interfaces.extras.local_audio import InputMicStream
 from easy_audio_interfaces.filesystem import LocalFileStreamer
 from wyoming.asr import Transcribe, Transcript
@@ -189,6 +190,17 @@ async def run_file_transcription(asr_url: str, file_path: str | Path, output_fil
     file_path = Path(file_path)
     if not file_path.exists():
         raise FileNotFoundError(f"Audio file not found: {file_path}")
+
+    send_start_time: float
+    send_end_time: float
+    TIMEOUT_SECONDS = 10
+
+    stop_event = asyncio.Event()
+
+    resampler = ResamplingBlock(
+        resample_rate=16000,
+        resample_channels=1
+    )
     
     print(f"Connecting to ASR service: {asr_url}")
     async with AsyncTcpClient.from_uri(asr_url) as client:
@@ -198,7 +210,7 @@ async def run_file_transcription(asr_url: str, file_path: str | Path, output_fil
         async with LocalFileStreamer(
             file_path=file_path,
             chunk_size_samples=512
-        ) as streamer:
+        ) as streamer, resampler:
             print(f"Loaded audio file: {file_path}")
             print(f"Sample rate: {streamer.sample_rate}, Channels: {streamer.channels}")
             
@@ -211,15 +223,22 @@ async def run_file_transcription(asr_url: str, file_path: str | Path, output_fil
                     channels=streamer.channels
                 ).event()
             )
+            send_start_time = asyncio.get_event_loop().time()
 
             async def file_reader():
+                nonlocal send_end_time
                 try:
                     logger.info(f"Starting file transcription: {file_path}")
                     async for chunk in streamer.iter_frames():
-                        await client.write_event(chunk.event())
-                        logger.debug(f"Sent audio chunk: {len(chunk.audio)} bytes")
-                        await asyncio.sleep(0)  # No delay to send audio as fast as possible
+                        async for c in resampler.process_chunk(chunk):
+                            await client.write_event(c.event())
+                            logger.debug(f"Sent audio chunk: {len(c.audio)} bytes")
+                            await asyncio.sleep(0)  # No delay to send audio as fast as possible
                     logger.info("Finished sending audio file")
+                    send_end_time = asyncio.get_event_loop().time()
+                    logger.info(f"Finished sending audio file in {send_end_time - send_start_time:.2f} seconds")
+                    await asyncio.sleep(TIMEOUT_SECONDS)
+                    stop_event.set()
                 except (KeyboardInterrupt, asyncio.CancelledError):
                     logger.info("Stopping file reader...")
                     return
@@ -228,14 +247,16 @@ async def run_file_transcription(asr_url: str, file_path: str | Path, output_fil
                     raise
 
             async def transcriptions():
+                nonlocal send_end_time
                 try:
-                    while True:
+                    while not stop_event.is_set():
                         event = await client.read_event()
                         if event is None:
                             break
                         if Transcript.is_type(event.type):
                             transcript = Transcript.from_event(event)
                             await write_transcript(transcript.text, output_file)
+                            logger.info(f"Transcript received in {asyncio.get_event_loop().time() - send_end_time:.2f} seconds")
                         else:
                             logger.debug(f"Received event: {event}")
                 except (KeyboardInterrupt, asyncio.CancelledError):
