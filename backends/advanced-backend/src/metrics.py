@@ -2,13 +2,11 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-from collections import deque
-import os
-
 
 # Configure metrics logger
 metrics_logger = logging.getLogger("metrics")
@@ -357,7 +355,7 @@ def get_metrics_collector() -> MetricsCollector:
     """Get the global metrics collector instance"""
     global _metrics_collector
     if _metrics_collector is None:
-        debug_dir = os.getenv("DEBUG_DIR", "./debug_metrics")
+        debug_dir = "/app/debug_dir" # this is only for docker right now
         _metrics_collector = MetricsCollector(debug_dir)
     return _metrics_collector
 
