@@ -15,6 +15,7 @@ dependencies = [
     "uvicorn>=0.34.2",
     "wyoming>=1.6.1",
     "aiohttp>=3.8.0",
+    "deepgram-sdk>=4.0.0"
 ]
 
 [dependency-groups]

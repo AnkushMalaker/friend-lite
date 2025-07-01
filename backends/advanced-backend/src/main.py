@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import ollama  # Ollama python client
+import openai
+# import openrouter
+
+
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
@@ -60,6 +64,7 @@ audio_logger = logging.getLogger("audio_processing")
 try:
     from deepgram import DeepgramClient, FileSource, PrerecordedOptions
     DEEPGRAM_AVAILABLE = True
+    logger.info("Deepgram avaialable")
 except ImportError:
     DEEPGRAM_AVAILABLE = False
     logger.warning("Deepgram SDK not available. Install with: pip install deepgram-sdk")
@@ -115,8 +120,10 @@ if USE_DEEPGRAM:
     USE_DEEPGRAM = False
 
 # Ollama & Qdrant Configuration
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ollama:11434")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+LLM_API_KEY = os.getenv("LLM_API_KEY")
+LLM_CHOICE = os.getenv("LLM_CHOICE", "gpt-4o-mini")
 
 # Memory configuration is now handled in the memory module
 # Initialize it with our Ollama and Qdrant URLs
@@ -927,6 +934,7 @@ app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
+    audio_logger.info(f"WebSocket connection hit")
     await ws.accept()
 
     # Use user_id if provided, otherwise generate a random client_id
@@ -1761,8 +1769,8 @@ async def health_check():
         "services": {},
         "config": {
             "mongodb_uri": MONGODB_URI,
-            "ollama_url": OLLAMA_BASE_URL,
-            "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
+            "llm_url": LLM_BASE_URL if LLM_BASE_URL else "Not configured",
+            "qdrant_url": f"http://{QDRANT_BASE_URL}:6333" if QDRANT_BASE_URL else "Not configured",
             "asr_uri": OFFLINE_ASR_TCP_URI,
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
@@ -1809,6 +1817,7 @@ async def health_check():
             timeout=8.0
         )
         model_count = len(models.get('models', []))
+        print(f"model_count: {model_count}")
         health_status["services"]["ollama"] = {
             "status": "✅ Connected",
             "healthy": True,

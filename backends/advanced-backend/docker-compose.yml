@@ -1,5 +1,5 @@
 services:
-  friend-backend:
+  omi-lite:
     build:
       context: .
       dockerfile: Dockerfile
@@ -7,12 +7,8 @@ services:
       - "8000:8000"
     volumes:
       - ./audio_chunks:/app/audio_chunks
-    environment:
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - HF_TOKEN=${HF_TOKEN}
-      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
+    env_file:
+      - .env
     depends_on:
       qdrant:
         condition: service_started
@@ -24,6 +20,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      - omi-network
   
   streamlit:
     build:
@@ -35,7 +33,7 @@ services:
       - BACKEND_API_URL=http://friend-backend:8000
       - BACKEND_PUBLIC_URL=http://friend-backend:8000
     depends_on:
-      friend-backend:
+      omi-lite:
         condition: service_healthy
       mongo:
         condition: service_started
@@ -43,6 +41,8 @@ services:
         condition: service_started
     volumes:
       - ./webui:/app
+    networks:
+      - omi-network
 
   # speaker-recognition:
   #   build:
@@ -81,13 +81,16 @@ services:
   #     - "11434:11434"
   #   volumes:
   #     - ollama_data:/root/.ollama
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   networks:
+  #     - omi-network
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -97,6 +100,7 @@ services:
       - ./qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
   mongo:
     image: mongo:4.4.18
+    container_name: mongo
     ports:
       - "27017:27017"
     volumes:
