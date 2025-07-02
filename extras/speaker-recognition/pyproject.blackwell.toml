@@ -17,6 +17,8 @@ dependencies = [
     "python-multipart>=0.0.6",
     "pydantic>=2.0.0",
     "soundfile>=0.12",
+    "pydantic-settings>=2.10.1",
+    "easy-audio-interfaces[local-audio]>=0.5.1",
 ]
 
 [dependency-groups]

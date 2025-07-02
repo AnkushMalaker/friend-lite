@@ -18,7 +18,8 @@ import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
+import re
 
 import ollama
 from dotenv import load_dotenv
@@ -40,6 +41,7 @@ from metrics import (
     start_metrics_collection,
     stop_metrics_collection,
 )
+from action_items_service import ActionItemsService
 
 ###############################################################################
 # SETUP
@@ -60,6 +62,7 @@ try:
     from deepgram import DeepgramClient, FileSource, PrerecordedOptions  # type: ignore
 
     DEEPGRAM_AVAILABLE = True
+    logger.info("✅ Deepgram SDK available")
 except ImportError:
     DEEPGRAM_AVAILABLE = False
     logger.warning("Deepgram SDK not available. Install with: pip install deepgram-sdk")
@@ -148,6 +151,8 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # Initialize memory service, speaker service, and ollama client
 memory_service = get_memory_service()
 ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+
+action_items_service = ActionItemsService(action_items_col, ollama_client)
 
 ###############################################################################
 # AUDIO PROCESSING FUNCTIONS
@@ -434,13 +439,14 @@ class ChunkRepo:
 class TranscriptionManager:
     """Manages transcription using either Deepgram or offline ASR service."""
 
-    def __init__(self):
+    def __init__(self, action_item_callback=None):
         self.client = None
         self._current_audio_uuid = None
         self._streaming = False
         self.use_deepgram = USE_DEEPGRAM
         self.deepgram_client = deepgram_client
         self._audio_buffer = []  # Buffer for Deepgram batch processing
+        self.action_item_callback = action_item_callback  # Callback to queue action items
 
     async def connect(self):
         """Establish connection to ASR service (only for offline ASR)."""
@@ -574,16 +580,16 @@ class TranscriptionManager:
                             }
 
                             # Store transcript segment in DB immediately
-                            await chunk_repo.add_transcript_segment(
-                                audio_uuid, transcript_segment
-                            )
-                            await chunk_repo.add_speaker(
-                                audio_uuid, f"speaker_{client_id}"
-                            )
-                            audio_logger.info(
-                                f"Added transcript segment for {audio_uuid} to DB."
-                            )
 
+                            await chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
+
+                            # Queue for action item processing using callback (async, non-blocking)
+                            if self.action_item_callback:
+                                await self.action_item_callback(transcript_text, client_id, audio_uuid)
+
+                            await chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
+                            audio_logger.info(f"Added transcript segment for {audio_uuid} to DB.")
+                            
                             # Update transcript time for conversation timeout tracking
                             if client_id in active_clients:
                                 active_clients[client_id].last_transcript_time = (
@@ -661,13 +667,10 @@ class ClientState:
 
         # Per-client queues
         self.chunk_queue = asyncio.Queue[Optional[AudioChunk]]()
-        self.transcription_queue = asyncio.Queue[
-            tuple[Optional[str], Optional[AudioChunk]]
-        ]()
-        self.memory_queue = asyncio.Queue[
-            tuple[Optional[str], Optional[str], Optional[str]]
-        ]()  # (transcript, client_id, audio_uuid)
-
+        self.transcription_queue = asyncio.Queue[Tuple[Optional[str], Optional[AudioChunk]]]()
+        self.memory_queue = asyncio.Queue[Tuple[Optional[str], Optional[str], Optional[str]]]()  # (transcript, client_id, audio_uuid)
+        self.action_item_queue = asyncio.Queue[Tuple[Optional[str], Optional[str], Optional[str]]]()  # (transcript_text, client_id, audio_uuid)
+        
         # Per-client file sink
         self.file_sink: Optional[LocalFileSink] = None
         self.current_audio_uuid: Optional[str] = None
@@ -696,7 +699,8 @@ class ClientState:
         self.saver_task: Optional[asyncio.Task] = None
         self.transcription_task: Optional[asyncio.Task] = None
         self.memory_task: Optional[asyncio.Task] = None
-
+        self.action_item_task: Optional[asyncio.Task] = None
+          
     def record_speech_start(self, audio_uuid: str, timestamp: float):
         """Record the start of a speech segment."""
         self.current_speech_start[audio_uuid] = timestamp
@@ -728,6 +732,7 @@ class ClientState:
         self.saver_task = asyncio.create_task(self._audio_saver())
         self.transcription_task = asyncio.create_task(self._transcription_processor())
         self.memory_task = asyncio.create_task(self._memory_processor())
+        self.action_item_task = asyncio.create_task(self._action_item_processor())
         audio_logger.info(f"Started processing tasks for client {self.client_id}")
 
     async def disconnect(self):
@@ -745,7 +750,8 @@ class ClientState:
         await self.chunk_queue.put(None)
         await self.transcription_queue.put((None, None))
         await self.memory_queue.put((None, None, None))
-
+        await self.action_item_queue.put((None, None, None))
+        
         # Wait for tasks to complete
         if self.saver_task:
             await self.saver_task
@@ -753,6 +759,8 @@ class ClientState:
             await self.transcription_task
         if self.memory_task:
             await self.memory_task
+        if self.action_item_task:
+            await self.action_item_task
 
         # Clean up transcription manager
         if self.transcription_manager:
@@ -1040,7 +1048,11 @@ class ClientState:
 
                 # Get or create transcription manager
                 if self.transcription_manager is None:
-                    self.transcription_manager = TranscriptionManager()
+                    # Create callback function to queue action items
+                    async def action_item_callback(transcript_text, client_id, audio_uuid):
+                        await self.action_item_queue.put((transcript_text, client_id, audio_uuid))
+                    
+                    self.transcription_manager = TranscriptionManager(action_item_callback=action_item_callback)
                     try:
                         await self.transcription_manager.connect()
                     except Exception as e:
@@ -1091,6 +1103,46 @@ class ClientState:
                 f"Error in memory processor for client {self.client_id}: {e}",
                 exc_info=True,
             )
+
+    async def _action_item_processor(self):
+        """
+        Processes transcript segments from the per-client action item queue.
+
+        For each transcript segment, this processor:
+        - Checks if the special keyphrase 'Simon says' (case-insensitive, as a phrase) appears in the text.
+          - If found, it replaces all occurrences of the keyphrase with 'Simon says' (canonical form) and extracts action items from the modified text.
+          - Logs the detection and extraction process for this special case.
+        - If the keyphrase is not found, it extracts action items from the original transcript text.
+        - All extraction is performed using the action_items_service.
+        - Logs the number of action items extracted or any errors encountered.
+        """
+        try:
+            while self.connected:
+                transcript_text, client_id, audio_uuid = await self.action_item_queue.get()
+                
+                if transcript_text is None or client_id is None or audio_uuid is None:  # Disconnect signal
+                    break
+                
+                # Check for the special keyphrase 'simon says' (case-insensitive, any spaces or dots)
+                keyphrase_pattern = re.compile(r'\bSimon says\b', re.IGNORECASE)
+                if keyphrase_pattern.search(transcript_text):
+                    # Remove all occurrences of the keyphrase
+                    modified_text = keyphrase_pattern.sub('Simon says', transcript_text)
+                    audio_logger.info(f"🔑 'simon says' keyphrase detected in transcript for {audio_uuid}. Extracting action items from: '{modified_text.strip()}'")
+                    try:
+                        action_item_count = await action_items_service.extract_and_store_action_items(
+                            modified_text.strip(), client_id, audio_uuid
+                        )
+                        if action_item_count > 0:
+                            audio_logger.info(f"🎯 Extracted {action_item_count} action items from 'simon says' transcript segment for {audio_uuid}")
+                        else:
+                            audio_logger.debug(f"ℹ️ No action items found in 'simon says' transcript segment for {audio_uuid}")
+                    except Exception as e:
+                        audio_logger.error(f"❌ Error processing 'simon says' action items for transcript segment in {audio_uuid}: {e}")
+                    continue  # Skip the normal extraction for this case
+                
+        except Exception as e:
+            audio_logger.error(f"Error in action item processor for client {self.client_id}: {e}", exc_info=True)
 
 
 # Initialize repository and global state
@@ -1175,7 +1227,8 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
 
     # Use user_id if provided, otherwise generate a random client_id
     client_id = user_id if user_id else f"client_{str(uuid.uuid4())}"
-    audio_logger.info(f"Client {client_id}: WebSocket connection accepted (user_id: {user_id}).")
+    audio_logger.info(f"🔌 WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
+    
     decoder = OmiOpusDecoder()
     _decode_packet = partial(decoder.decode_packet, strip_header=False)
 
@@ -1183,14 +1236,22 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
     client_state = await create_client_state(client_id)
 
     try:
+        packet_count = 0
+        total_bytes = 0
         while True:
             packet = await ws.receive_bytes()
+            packet_count += 1
+            total_bytes += len(packet)
+            
+            start_time = time.time()
             loop = asyncio.get_running_loop()
             pcm_data = await loop.run_in_executor(
                 _DEC_IO_EXECUTOR, _decode_packet, packet
             )
+            decode_time = time.time() - start_time
+            
             if pcm_data:
-                audio_logger.debug(f"Received {len(pcm_data)} bytes of PCM data")
+                audio_logger.debug(f"🎵 Decoded packet #{packet_count}: {len(packet)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)")
                 chunk = AudioChunk(
                     audio=pcm_data,
                     rate=OMI_SAMPLE_RATE,
@@ -1199,6 +1260,10 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
                     timestamp=int(time.time()),
                 )
                 await client_state.chunk_queue.put(chunk)
+                
+                # Log every 1000th packet to avoid spam
+                if packet_count % 1000 == 0:
+                    audio_logger.info(f"📊 Processed {packet_count} packets ({total_bytes} bytes total) for client {client_id}")
 
                 # Track audio chunk received in metrics
                 metrics_collector = get_metrics_collector()
@@ -1206,9 +1271,9 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
                 metrics_collector.record_client_activity(client_id)
 
     except WebSocketDisconnect:
-        audio_logger.info(f"Client {client_id}: WebSocket disconnected.")
+        audio_logger.info(f"🔌 WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}")
     except Exception as e:
-        audio_logger.error(f"Client {client_id}: An error occurred: {e}", exc_info=True)
+        audio_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
         # Clean up client state
         await cleanup_client_state(client_id)
@@ -1221,17 +1286,21 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
 
     # Use user_id if provided, otherwise generate a random client_id
     client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(
-        f"Client {client_id}: WebSocket connection accepted (user_id: {user_id})."
-    )
-
+    audio_logger.info(f"🔌 PCM WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
+    
     # Create client state and start processing
     client_state = await create_client_state(client_id)
 
     try:
+        packet_count = 0
+        total_bytes = 0
         while True:
             packet = await ws.receive_bytes()
+            packet_count += 1
+            total_bytes += len(packet)
+            
             if packet:
+                audio_logger.debug(f"🎵 Received PCM packet #{packet_count}: {len(packet)} bytes")
                 chunk = AudioChunk(
                     audio=packet,
                     rate=16000,
@@ -1240,15 +1309,20 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
                     timestamp=int(time.time()),
                 )
                 await client_state.chunk_queue.put(chunk)
+                
+                # Log every 1000th packet to avoid spam
+                if packet_count % 1000 == 0:
+                    audio_logger.info(f"📊 Processed {packet_count} PCM packets ({total_bytes} bytes total) for client {client_id}")
+                        
 
                 # Track audio chunk received in metrics
                 metrics_collector = get_metrics_collector()
                 metrics_collector.record_audio_chunk_received(client_id)
                 metrics_collector.record_client_activity(client_id)
     except WebSocketDisconnect:
-        audio_logger.info(f"Client {client_id}: WebSocket disconnected.")
+        audio_logger.info(f"🔌 PCM WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}")
     except Exception as e:
-        audio_logger.error(f"Client {client_id}: An error occurred: {e}", exc_info=True)
+        audio_logger.error(f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
         # Clean up client state
         await cleanup_client_state(client_id)

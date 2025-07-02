@@ -69,27 +69,33 @@ class ActionItemsService:
         """Extract action items from transcript using Ollama."""
         try:
             extraction_prompt = f"""
-            Analyze the following conversation transcript and extract action items.
-            
-            Look for:
-            - Tasks that someone commits to do ("I'll send the report", "I will call them")
-            - Requests made to others ("Can you review this", "Please schedule a meeting")
-            - Things that need to be done ("We need to fix the bug", "The document needs updating")
-            - Follow-up actions mentioned ("Let's schedule a follow-up", "We should contact them")
-            
-            For each action item found, provide:
-            - description: Clear description of what needs to be done
-            - assignee: Who should do it (use names from transcript, or "unassigned" if not clear)
-            - due_date: When it should be done (extract from transcript, or "not_specified")
-            - priority: Assess urgency from context (high/medium/low/not_specified)
-            - context: Brief context about when/why it was mentioned
-            
-            Return ONLY a JSON array of action items. If no action items found, return an empty array [].
-            
-            Transcript:
-            {transcript}
-            """
-            
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are an intelligent assistant that reads transcripts and extracts all potential action items, even informal or implied ones.
+
+Your output must be a **JSON array**, where action item includes:
+- description: A short summary of the task
+- assignee: Who should do it ("unassigned" if unclear)
+- due_date: When it should be done ("not_specified" if not mentioned)
+- priority: high / medium / low / not_specified
+- context: Why or how the task came up
+- tool: The name of the tool required, if any ("check_email", "check_calendar", "set_alarm"), or "none" if no tool is needed
+
+Rules:
+- Identify both explicit tasks and implied ones.
+- Suggest a tool only when the task obviously requires it or could be automated.
+- If it's a general human task with no clear automation, use `"none"` for tool.
+
+Return **only** a JSON array. No explanation or extra text.
+
+<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+Transcript:
+<start_transcript>
+{transcript}
+<end_transcript>
+<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+"""
             response = self.ollama_client.generate(
                 model="llama3.1:latest",
                 prompt=extraction_prompt,
@@ -119,6 +125,13 @@ class ActionItemsService:
                     "updated_at": int(time.time()),
                     "source": "transcript_extraction"
                 })
+                
+                # TODO: Handle all tools here, these can be imported from other files
+                # Handle set_alarm tool, this can be another llm call to mcp with description as input 
+                # Also handle sending notification via app or TTS
+                if item.get("tool") == "set_alarm":
+                    description = item.get("description", "")
+                    action_items_logger.info(f"Calling set alarm service with description: {description}")
             
             action_items_logger.info(f"Extracted {len(action_items)} action items from {audio_uuid}")
             return action_items
@@ -410,3 +423,37 @@ class ActionItemsService:
                 "by_assignee": {},
                 "recent_count": 0
             } 
+        
+
+
+# import pyperclip
+# transcript = "set an alarm for 10am"
+# extraction_prompt = f"""
+# <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+# You are an intelligent assistant that reads transcripts and extracts all potential action items, even informal or implied ones.
+
+# Your output must be a **JSON**, where action item includes:
+# - description: A short summary of the task
+# - assignee: Who should do it ("unassigned" if unclear)
+# - due_date: When it should be done ("not_specified" if not mentioned)
+# - priority: high / medium / low / not_specified
+# - context: Why or how the task came up
+# - tool: The name of the tool required, if any ("check_email", "check_calendar", "set_alarm"), or "none" if no tool is needed
+
+# Rules:
+# - Identify both explicit tasks and implied ones.
+# - Suggest a tool only when the task obviously requires it or could be automated.
+# - If it's a general human task with no clear automation, use `"none"` for tool.
+
+# Return **only** a JSON. No explanation or extra text.
+
+# <|eot_id|>
+# <|start_header_id|>user<|end_header_id|>
+# Transcript:
+# <start_transcript>
+# {transcript}
+# <end_transcript>
+# <|eot_id|>
+# <|start_header_id|>assistant<|end_header_id|>
+# """
+# pyperclip.copy(extraction_prompt)
