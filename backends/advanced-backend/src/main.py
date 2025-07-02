@@ -421,13 +421,14 @@ class ChunkRepo:
 class TranscriptionManager:
     """Manages transcription using either Deepgram or offline ASR service."""
 
-    def __init__(self):
+    def __init__(self, action_item_callback=None):
         self.client = None
         self._current_audio_uuid = None
         self._streaming = False
         self.use_deepgram = USE_DEEPGRAM
         self.deepgram_client = deepgram_client
         self._audio_buffer = []  # Buffer for Deepgram batch processing
+        self.action_item_callback = action_item_callback  # Callback to queue action items
 
     async def connect(self):
         """Establish connection to ASR service (only for offline ASR)."""
@@ -530,6 +531,11 @@ class TranscriptionManager:
                             
                             # Store transcript segment in DB immediately
                             await chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
+
+                            # Queue for action item processing using callback (async, non-blocking)
+                            if self.action_item_callback:
+                                await self.action_item_callback(transcript_text, client_id, audio_uuid)
+
                             await chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
                             audio_logger.info(f"Added transcript segment for {audio_uuid} to DB.")
                             
@@ -585,6 +591,7 @@ class ClientState:
         self.chunk_queue = asyncio.Queue[Optional[AudioChunk]]()
         self.transcription_queue = asyncio.Queue[Tuple[Optional[str], Optional[AudioChunk]]]()
         self.memory_queue = asyncio.Queue[Tuple[Optional[str], Optional[str], Optional[str]]]()  # (transcript, client_id, audio_uuid)
+        self.action_item_queue = asyncio.Queue[Tuple[Optional[str], Optional[str], Optional[str]]]()  # (transcript_text, client_id, audio_uuid)
         
         # Per-client file sink
         self.file_sink: Optional[LocalFileSink] = None
@@ -608,6 +615,7 @@ class ClientState:
         self.saver_task: Optional[asyncio.Task] = None
         self.transcription_task: Optional[asyncio.Task] = None
         self.memory_task: Optional[asyncio.Task] = None
+        self.action_item_task: Optional[asyncio.Task] = None
     
     def record_speech_start(self, audio_uuid: str, timestamp: float):
         """Record the start of a speech segment."""
@@ -633,6 +641,7 @@ class ClientState:
         self.saver_task = asyncio.create_task(self._audio_saver())
         self.transcription_task = asyncio.create_task(self._transcription_processor())
         self.memory_task = asyncio.create_task(self._memory_processor())
+        self.action_item_task = asyncio.create_task(self._action_item_processor())
         audio_logger.info(f"Started processing tasks for client {self.client_id}")
     
     async def disconnect(self):
@@ -650,6 +659,7 @@ class ClientState:
         await self.chunk_queue.put(None)
         await self.transcription_queue.put((None, None))
         await self.memory_queue.put((None, None, None))
+        await self.action_item_queue.put((None, None, None))
         
         # Wait for tasks to complete
         if self.saver_task:
@@ -658,6 +668,8 @@ class ClientState:
             await self.transcription_task
         if self.memory_task:
             await self.memory_task
+        if self.action_item_task:
+            await self.action_item_task
             
         # Clean up transcription manager
         if self.transcription_manager:
@@ -827,7 +839,11 @@ class ClientState:
                 
                 # Get or create transcription manager
                 if self.transcription_manager is None:
-                    self.transcription_manager = TranscriptionManager()
+                    # Create callback function to queue action items
+                    async def action_item_callback(transcript_text, client_id, audio_uuid):
+                        await self.action_item_queue.put((transcript_text, client_id, audio_uuid))
+                    
+                    self.transcription_manager = TranscriptionManager(action_item_callback=action_item_callback)
                     try:
                         await self.transcription_manager.connect()
                     except Exception as e:
@@ -862,6 +878,31 @@ class ClientState:
                         
         except Exception as e:
             audio_logger.error(f"Error in memory processor for client {self.client_id}: {e}", exc_info=True)
+
+    async def _action_item_processor(self):
+        """Per-client action item processor - checks individual transcript segments for action items."""
+        try:
+            while self.connected:
+                transcript_text, client_id, audio_uuid = await self.action_item_queue.get()
+                
+                if transcript_text is None or client_id is None or audio_uuid is None:  # Disconnect signal
+                    break
+                
+                # Process action item extraction for this transcript segment
+                try:
+                    action_item_count = await action_items_service.extract_and_store_action_items(
+                        transcript_text, client_id, audio_uuid
+                    )
+                    if action_item_count > 0:
+                        audio_logger.info(f"🎯 Extracted {action_item_count} action items from transcript segment for {audio_uuid}")
+                    else:
+                        audio_logger.debug(f"ℹ️ No action items found in transcript segment for {audio_uuid}")
+                        
+                except Exception as e:
+                    audio_logger.error(f"❌ Error processing action items for transcript segment in {audio_uuid}: {e}")
+                        
+        except Exception as e:
+            audio_logger.error(f"Error in action item processor for client {self.client_id}: {e}", exc_info=True)
 
 
 # Initialize repository and global state
@@ -966,8 +1007,8 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
                 )
                 await client_state.chunk_queue.put(chunk)
                 
-                # Log every 100th packet to avoid spam
-                if packet_count % 100 == 0:
+                # Log every 1000th packet to avoid spam
+                if packet_count % 1000 == 0:
                     audio_logger.info(f"📊 Processed {packet_count} packets ({total_bytes} bytes total) for client {client_id}")
 
     except WebSocketDisconnect:
