@@ -69,25 +69,32 @@ class ActionItemsService:
         """Extract action items from transcript using Ollama."""
         try:
             extraction_prompt = f"""
-            Analyze the following conversation transcript and extract action items.
-            
-            Look for:
-            - Tasks that someone commits to do ("I'll send the report", "I will call them")
-            - Requests made to others ("Can you review this", "Please schedule a meeting")
-            - Things that need to be done ("We need to fix the bug", "The document needs updating")
-            - Follow-up actions mentioned ("Let's schedule a follow-up", "We should contact them")
-            
-            For each action item found, provide:
-            - description: Clear description of what needs to be done
-            - assignee: Who should do it (use names from transcript, or "unassigned" if not clear)
-            - due_date: When it should be done (extract from transcript, or "not_specified")
-            - priority: Assess urgency from context (high/medium/low/not_specified)
-            - context: Brief context about when/why it was mentioned
-            
-            Return ONLY a JSON array of action items. If no action items found, return an empty array [].
-            
-            Transcript:
-            {transcript}
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are an AI that reads transcripts and extracts **all potential action items**, even informal or implied ones.
+An action item can be:
+- something the speaker intends to do,
+- something requested from others,
+- a task implied by context.
+
+Always interpret personal intent ("I need to...") as a valid action item unless clearly irrelevant.
+
+Output must be a JSON array with the following fields for each action item:
+- description: What needs to be done (concise and clear)
+- assignee: Who should do it (person from transcript or "unassigned")
+- due_date: When it should be done (from transcript, or "not_specified")
+- priority: high / medium / low / not_specified (based on urgency or importance)
+- context: Why or when the item came up in the conversation
+
+Return **only** a JSON array. If no items are found, return `[]`. Do not explain your answer.
+
+<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+Transcript:
+<start_transcript>
+{transcript}
+<end_transcript>
+<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
             """
             
             response = self.ollama_client.generate(
