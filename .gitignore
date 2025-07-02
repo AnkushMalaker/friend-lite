@@ -15,3 +15,7 @@ backends/examples/example-satellite/*
 .locks
 blobs
 transcription_results.csv
+**cache/*
+*.ckpt
+**/hub/*
+*.log

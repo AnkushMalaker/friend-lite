@@ -16,7 +16,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 COPY pyproject.blackwell.toml pyproject.toml
 
 # Install dependencies
-RUN uv sync --no-dev
+RUN uv sync
 
 # Copy application code
 COPY speaker_service.py ./
@@ -32,5 +32,7 @@ ENV PYTHONPATH=/app
 # Expose port
 EXPOSE 8001
 
+ENV PATH="/app/.venv/bin:$PATH"
+
 # Run the service
-CMD ["uv", "run", "python", "speaker_service.py"] 
+CMD ["python", "speaker_service.py"] 
