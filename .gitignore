@@ -1,6 +1,7 @@
 **/__pycache__
 *.wav
 **/*.env
+!**/.env.template
 example/*
 **/node_modules/*
 **/ollama-data/*
@@ -15,3 +16,5 @@ backends/examples/example-satellite/*
 .locks
 blobs
 transcription_results.csv
+**/speaker_data/**
+**/.venv/*
