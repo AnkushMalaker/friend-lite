@@ -28,5 +28,4 @@ COPY --from=builder /app /app
 COPY . .
 ENV PATH="/app/.venv/bin:$PATH"
 
-EXPOSE 8765
-CMD ["python", "parakeet-offline.py", "--port", "8765", "--disable-vad"]
+CMD ["python", "parakeet-offline.py", "--port", "8765"]
