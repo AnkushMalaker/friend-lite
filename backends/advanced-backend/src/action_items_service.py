@@ -70,22 +70,22 @@ class ActionItemsService:
         try:
             extraction_prompt = f"""
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are an AI that reads transcripts and extracts **all potential action items**, even informal or implied ones.
-An action item can be:
-- something the speaker intends to do,
-- something requested from others,
-- a task implied by context.
+You are an intelligent assistant that reads transcripts and extracts all potential action items, even informal or implied ones.
 
-Always interpret personal intent ("I need to...") as a valid action item unless clearly irrelevant.
+Your output must be a **JSON array**, where action item includes:
+- description: A short summary of the task
+- assignee: Who should do it ("unassigned" if unclear)
+- due_date: When it should be done ("not_specified" if not mentioned)
+- priority: high / medium / low / not_specified
+- context: Why or how the task came up
+- tool: The name of the tool required, if any ("check_email", "check_calendar", "set_alarm"), or "none" if no tool is needed
 
-Output must be a JSON array with the following fields for each action item:
-- description: What needs to be done (concise and clear)
-- assignee: Who should do it (person from transcript or "unassigned")
-- due_date: When it should be done (from transcript, or "not_specified")
-- priority: high / medium / low / not_specified (based on urgency or importance)
-- context: Why or when the item came up in the conversation
+Rules:
+- Identify both explicit tasks and implied ones.
+- Suggest a tool only when the task obviously requires it or could be automated.
+- If it's a general human task with no clear automation, use `"none"` for tool.
 
-Return **only** a JSON array. If no items are found, return `[]`. Do not explain your answer.
+Return **only** a JSON array. No explanation or extra text.
 
 <|eot_id|>
 <|start_header_id|>user<|end_header_id|>
@@ -95,8 +95,7 @@ Transcript:
 <end_transcript>
 <|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>
-            """
-            
+"""
             response = self.ollama_client.generate(
                 model="llama3.1:latest",
                 prompt=extraction_prompt,
@@ -126,6 +125,12 @@ Transcript:
                     "updated_at": int(time.time()),
                     "source": "transcript_extraction"
                 })
+                
+                # TODO: Handle all tools here, these can be imported from other files
+                # Handle set_alarm tool, this can be another llm call to mcp with description as input 
+                if item.get("tool") == "set_alarm":
+                    description = item.get("description", "")
+                    action_items_logger.info(f"Calling set alarm service with description: {description}")
             
             action_items_logger.info(f"Extracted {len(action_items)} action items from {audio_uuid}")
             return action_items
@@ -417,3 +422,37 @@ Transcript:
                 "by_assignee": {},
                 "recent_count": 0
             } 
+        
+
+
+# import pyperclip
+# transcript = "set an alarm for 10am"
+# extraction_prompt = f"""
+# <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+# You are an intelligent assistant that reads transcripts and extracts all potential action items, even informal or implied ones.
+
+# Your output must be a **JSON**, where action item includes:
+# - description: A short summary of the task
+# - assignee: Who should do it ("unassigned" if unclear)
+# - due_date: When it should be done ("not_specified" if not mentioned)
+# - priority: high / medium / low / not_specified
+# - context: Why or how the task came up
+# - tool: The name of the tool required, if any ("check_email", "check_calendar", "set_alarm"), or "none" if no tool is needed
+
+# Rules:
+# - Identify both explicit tasks and implied ones.
+# - Suggest a tool only when the task obviously requires it or could be automated.
+# - If it's a general human task with no clear automation, use `"none"` for tool.
+
+# Return **only** a JSON. No explanation or extra text.
+
+# <|eot_id|>
+# <|start_header_id|>user<|end_header_id|>
+# Transcript:
+# <start_transcript>
+# {transcript}
+# <end_transcript>
+# <|eot_id|>
+# <|start_header_id|>assistant<|end_header_id|>
+# """
+# pyperclip.copy(extraction_prompt)

@@ -18,7 +18,7 @@ import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 import re
 
 import ollama
