@@ -163,7 +163,7 @@ async def process_esp32_audio(
         async for chunk in esp32_server:
             chunk_count += 1
             if chunk_count % 10 == 1:  # Log every 10th chunk
-                logger.info(
+                logger.debug(
                     f"Received chunk {chunk_count} from ESP32, size: {len(chunk.audio)} bytes"
                 )
 
@@ -261,11 +261,11 @@ async def main():
     logging.basicConfig(format="%(asctime)s  %(levelname)s  %(message)s", level=loglevel)
 
     # Create recordings directory
-    recordings = pathlib.Path("recordings")
+    recordings = pathlib.Path("audio_chunks")
     recordings.mkdir(exist_ok=True)
 
     if args.debug_audio:
-        esp32_recordings = pathlib.Path("recordings/esp32_raw")
+        esp32_recordings = recordings / "esp32_raw"
         esp32_recordings.mkdir(exist_ok=True, parents=True)
 
 

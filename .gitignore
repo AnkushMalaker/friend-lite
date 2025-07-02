@@ -1,6 +1,7 @@
 **/__pycache__
 *.wav
 **/*.env
+!**/.env.template
 example/*
 **/node_modules/*
 **/ollama-data/*
@@ -19,3 +20,5 @@ transcription_results.csv
 *.ckpt
 **/hub/*
 *.log
+**/speaker_data/**
+**/.venv/*
