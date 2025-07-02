@@ -13,6 +13,7 @@ services:
       - "4040:4040" # Ngrok web interface
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    command: "http friend-backend:8000 --url=square-feline-partly.ngrok-free.app"
+      - NGROK_DOMAIN=${NGROK_DOMAIN}
+    command: "http friend-backend:8000 --domain=${NGROK_DOMAIN}"
     depends_on:
       - friend-backend
