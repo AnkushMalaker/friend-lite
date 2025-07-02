@@ -2,7 +2,7 @@ services:
   parakeet-asr:
     build:
       context: .
-      dockerfile: Dockerfile_Parakeet.blackwell
+      dockerfile: Dockerfile_Parakeet
     image: parakeet-asr:latest
     ports:
       - "8765:8765"
