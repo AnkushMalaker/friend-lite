@@ -20,7 +20,7 @@ RUN uv sync
 
 # Copy application code
 COPY speaker_service.py ./
-COPY client.py ./
+# COPY client.py ./
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /models
