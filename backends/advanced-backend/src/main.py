@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import Optional
+import re
 
 import ollama
 from dotenv import load_dotenv
@@ -40,6 +41,7 @@ from metrics import (
     start_metrics_collection,
     stop_metrics_collection,
 )
+from action_items_service import ActionItemsService
 
 ###############################################################################
 # SETUP
@@ -149,6 +151,8 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # Initialize memory service, speaker service, and ollama client
 memory_service = get_memory_service()
 ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+
+action_items_service = ActionItemsService(action_items_col, ollama_client)
 
 ###############################################################################
 # AUDIO PROCESSING FUNCTIONS
@@ -1101,7 +1105,17 @@ class ClientState:
             )
 
     async def _action_item_processor(self):
-        """Per-client action item processor - checks individual transcript segments for action items."""
+        """
+        Processes transcript segments from the per-client action item queue.
+
+        For each transcript segment, this processor:
+        - Checks if the special keyphrase 'Simon says' (case-insensitive, as a phrase) appears in the text.
+          - If found, it replaces all occurrences of the keyphrase with 'Simon says' (canonical form) and extracts action items from the modified text.
+          - Logs the detection and extraction process for this special case.
+        - If the keyphrase is not found, it extracts action items from the original transcript text.
+        - All extraction is performed using the action_items_service.
+        - Logs the number of action items extracted or any errors encountered.
+        """
         try:
             while self.connected:
                 transcript_text, client_id, audio_uuid = await self.action_item_queue.get()
@@ -1109,19 +1123,24 @@ class ClientState:
                 if transcript_text is None or client_id is None or audio_uuid is None:  # Disconnect signal
                     break
                 
-                # Process action item extraction for this transcript segment
-                try:
-                    action_item_count = await action_items_service.extract_and_store_action_items(
-                        transcript_text, client_id, audio_uuid
-                    )
-                    if action_item_count > 0:
-                        audio_logger.info(f"🎯 Extracted {action_item_count} action items from transcript segment for {audio_uuid}")
-                    else:
-                        audio_logger.debug(f"ℹ️ No action items found in transcript segment for {audio_uuid}")
-                        
-                except Exception as e:
-                    audio_logger.error(f"❌ Error processing action items for transcript segment in {audio_uuid}: {e}")
-                        
+                # Check for the special keyphrase 'simon says' (case-insensitive, any spaces or dots)
+                keyphrase_pattern = re.compile(r'\bSimon says\b', re.IGNORECASE)
+                if keyphrase_pattern.search(transcript_text):
+                    # Remove all occurrences of the keyphrase
+                    modified_text = keyphrase_pattern.sub('Simon says', transcript_text)
+                    audio_logger.info(f"🔑 'simon says' keyphrase detected in transcript for {audio_uuid}. Extracting action items from: '{modified_text.strip()}'")
+                    try:
+                        action_item_count = await action_items_service.extract_and_store_action_items(
+                            modified_text.strip(), client_id, audio_uuid
+                        )
+                        if action_item_count > 0:
+                            audio_logger.info(f"🎯 Extracted {action_item_count} action items from 'simon says' transcript segment for {audio_uuid}")
+                        else:
+                            audio_logger.debug(f"ℹ️ No action items found in 'simon says' transcript segment for {audio_uuid}")
+                    except Exception as e:
+                        audio_logger.error(f"❌ Error processing 'simon says' action items for transcript segment in {audio_uuid}: {e}")
+                    continue  # Skip the normal extraction for this case
+                
         except Exception as e:
             audio_logger.error(f"Error in action item processor for client {self.client_id}: {e}", exc_info=True)
 
