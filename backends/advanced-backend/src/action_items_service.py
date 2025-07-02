@@ -128,6 +128,7 @@ Transcript:
                 
                 # TODO: Handle all tools here, these can be imported from other files
                 # Handle set_alarm tool, this can be another llm call to mcp with description as input 
+                # Also handle sending notification via app or TTS
                 if item.get("tool") == "set_alarm":
                     description = item.get("description", "")
                     action_items_logger.info(f"Calling set alarm service with description: {description}")
