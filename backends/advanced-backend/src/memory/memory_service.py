@@ -104,6 +104,8 @@ def init_memory_config(
 ) -> dict:
     """Initialize and return memory configuration with optional overrides."""
     global MEM0_CONFIG, MEM0_ORGANIZATION_ID, MEM0_PROJECT_ID, MEM0_APP_ID
+
+    memory_logger.info(f"Initializing MemoryService with Qdrant URL: {qdrant_base_url} and Ollama base URL: {ollama_base_url}")
     
     if ollama_base_url:
         MEM0_CONFIG["llm"]["config"]["ollama_base_url"] = ollama_base_url
@@ -288,6 +290,8 @@ class MemoryService:
             return
         
         try:
+            # Log Qdrant and Ollama URLs
+            memory_logger.info(f"Initializing MemoryService with Qdrant URL: {MEM0_CONFIG['vector_store']['config']['host']} and Ollama base URL: {MEM0_CONFIG['llm']['config']['ollama_base_url']}")
             # Initialize main memory instance
             self.memory = Memory.from_config(MEM0_CONFIG)
             self._initialized = True
