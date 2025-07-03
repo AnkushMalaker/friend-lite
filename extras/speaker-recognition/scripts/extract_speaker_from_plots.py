@@ -5,15 +5,15 @@ WHEN TO USE THIS FILE:
 This tool is designed for extracting and labeling audio clips from speakers identified 
 in conversation transcripts. Use this when you have:
 
-1. A JSON file containing speaker segmentation data (from speaker recognition systems)
-2. The corresponding audio file of the conversation
-3. Need to extract clean audio clips of individual speakers for:
+1. An audio file of a conversation that needs speaker diarization
+2. Need to extract clean audio clips of individual speakers for:
    - Speaker enrollment/training data
    - Voice analysis
    - Creating speaker-specific datasets
    - Quality control of speaker identification
 
 FEATURES:
+- Automatic speaker diarization using pyannote.audio
 - Visual frequency plot showing speaker duration distribution
 - Interactive speaker selection by clicking on plot bars
 - Automatic extraction of 30-second continuous audio clips
@@ -22,9 +22,8 @@ FEATURES:
 - Batch processing capability
 
 INPUT REQUIREMENTS:
-- JSON file: Must contain 'segments' array with 'speaker', 'start', 'end' fields
-- Audio file: WAV, MP3, or M4A format matching the transcript
-- Optional: 'verified_speaker' field in JSON for corrected speaker labels
+- Audio file: WAV, MP3, or M4A format
+- The tool will automatically perform speaker diarization
 
 OUTPUT:
 - Labeled WAV files saved as: {label}_{speaker}_{timestamp}.wav
@@ -32,34 +31,86 @@ OUTPUT:
 
 USAGE:
 1. Run: python extract_speaker_from_plots.py
-2. Select JSON file with speaker segments
-3. Select corresponding audio file
-4. Choose output directory
+2. Select audio file for diarization
+3. Choose output directory
+4. Wait for diarization to complete
 5. Click on speaker bars in the plot to select speakers
 6. Generate and play audio clips
 7. Label and save the audio clips
 """
 
 import sys
-import json
 import random
 import os
+import json
+from datetime import datetime
 from collections import defaultdict
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QPushButton, QLabel, QLineEdit, 
-                            QFileDialog, QMessageBox, QDialog, QListWidget,
-                            QListWidgetItem, QInputDialog, QProgressBar,
+                            QFileDialog, QMessageBox, QProgressBar,
                             QTextEdit, QSplitter, QGroupBox, QGridLayout)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
 import pygame
 from pydub import AudioSegment
 import tempfile
 import pandas as pd
+
+# Import the diarization service
+from diarization_service import diarize_audio, DiarizationRequest, convert_to_json_format
+
+class DiarizationThread(QThread):
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    progress = pyqtSignal(str)
+    
+    def __init__(self, audio_path):
+        super().__init__()
+        self.audio_path = audio_path
+        
+    def run(self):
+        try:
+            self.progress.emit("Starting speaker diarization...")
+            request = DiarizationRequest(audio_file_path=self.audio_path)
+            
+            self.progress.emit("Processing audio segments...")
+            result = diarize_audio(request)
+            
+            self.progress.emit("Converting to JSON format...")
+            json_data = convert_to_json_format(result)
+            
+            # Save JSON data to file
+            self.progress.emit("Saving JSON data to file...")
+            self.save_json_data(json_data)
+            
+            self.finished.emit(json_data)
+            
+        except Exception as e:
+            self.error.emit(str(e))
+    
+    def save_json_data(self, json_data):
+        """Save JSON data to a file with timestamp"""
+        try:
+            # Create filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_name = os.path.splitext(os.path.basename(self.audio_path))[0]
+            json_filename = f"diarization_{base_name}_{timestamp}.json"
+            
+            # Save to the same directory as the audio file
+            json_path = os.path.join(os.path.dirname(self.audio_path), json_filename)
+            
+            # Save JSON data with pretty formatting
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"JSON data saved to: {json_path}")
+            
+        except Exception as e:
+            print(f"Error saving JSON data: {e}")
+            # Don't raise the exception to avoid stopping the diarization process
 
 class AudioPlayerThread(QThread):
     finished = pyqtSignal()
@@ -202,6 +253,7 @@ class SpeakerLabelingApp(QMainWindow):
         self.json_data = None
         self.current_speaker = None
         self.audio_thread = None
+        self.diarization_thread = None
         self.temp_audio_path = None
         
         self.init_ui()
@@ -219,24 +271,22 @@ class SpeakerLabelingApp(QMainWindow):
         controls_layout = QHBoxLayout()
         
         # File selection
-        file_group = QGroupBox("Data Files")
+        file_group = QGroupBox("Audio File")
         file_layout = QGridLayout(file_group)
         
-        self.json_path_label = QLabel("No JSON file selected")
         self.audio_path_label = QLabel("No audio file selected")
-        
-        json_btn = QPushButton("Select JSON File")
-        json_btn.clicked.connect(self.select_json_file)
         
         audio_btn = QPushButton("Select Audio File")
         audio_btn.clicked.connect(self.select_audio_file)
         
-        file_layout.addWidget(QLabel("JSON:"), 0, 0)
-        file_layout.addWidget(self.json_path_label, 0, 1)
-        file_layout.addWidget(json_btn, 0, 2)
-        file_layout.addWidget(QLabel("Audio:"), 1, 0)
-        file_layout.addWidget(self.audio_path_label, 1, 1)
-        file_layout.addWidget(audio_btn, 1, 2)
+        self.diarize_btn = QPushButton("Start Diarization")
+        self.diarize_btn.clicked.connect(self.start_diarization)
+        self.diarize_btn.setEnabled(False)
+        
+        file_layout.addWidget(QLabel("Audio:"), 0, 0)
+        file_layout.addWidget(self.audio_path_label, 0, 1)
+        file_layout.addWidget(audio_btn, 0, 2)
+        file_layout.addWidget(self.diarize_btn, 0, 3)
         
         controls_layout.addWidget(file_group)
         
@@ -346,25 +396,6 @@ class SpeakerLabelingApp(QMainWindow):
             self.log_text.verticalScrollBar().maximum()
         )
         
-    def select_json_file(self):
-        """Select JSON file with speaker segments"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select JSON File", "", "JSON Files (*.json)"
-        )
-        
-        if file_path:
-            try:
-                with open(file_path, 'r') as f:
-                    self.json_data = json.load(f)
-                
-                self.json_path_label.setText(os.path.basename(file_path))
-                self.plot_widget.update_plot(self.json_data)
-                self.log_message(f"Loaded JSON file: {os.path.basename(file_path)}")
-                self.statusBar().showMessage("JSON file loaded - Select audio file")
-                
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load JSON file: {str(e)}")
-                
     def select_audio_file(self):
         """Select audio file"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -374,8 +405,45 @@ class SpeakerLabelingApp(QMainWindow):
         if file_path:
             self.audio_path = file_path
             self.audio_path_label.setText(os.path.basename(file_path))
+            self.diarize_btn.setEnabled(True)
             self.log_message(f"Selected audio file: {os.path.basename(file_path)}")
-            self.statusBar().showMessage("Audio file selected - Click on a speaker bar to continue")
+            self.statusBar().showMessage("Audio file selected - Click 'Start Diarization' to begin")
+            
+    def start_diarization(self):
+        """Start the diarization process"""
+        if not hasattr(self, 'audio_path'):
+            return
+            
+        self.diarize_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        
+        self.diarization_thread = DiarizationThread(self.audio_path)
+        self.diarization_thread.finished.connect(self.on_diarization_finished)
+        self.diarization_thread.error.connect(self.on_diarization_error)
+        self.diarization_thread.progress.connect(self.log_message)
+        self.diarization_thread.start()
+        
+        self.log_message("Starting speaker diarization...")
+        self.statusBar().showMessage("Diarization in progress...")
+        
+    def on_diarization_finished(self, json_data):
+        """Handle diarization completion"""
+        self.json_data = json_data
+        self.plot_widget.update_plot(self.json_data)
+        self.progress_bar.setVisible(False)
+        self.diarize_btn.setEnabled(True)
+        
+        self.log_message("Diarization completed successfully!")
+        self.statusBar().showMessage("Diarization complete - Click on speaker bars to select")
+        
+    def on_diarization_error(self, error):
+        """Handle diarization error"""
+        self.progress_bar.setVisible(False)
+        self.diarize_btn.setEnabled(True)
+        QMessageBox.critical(self, "Diarization Error", f"Failed to perform diarization: {error}")
+        self.log_message(f"Diarization error: {error}")
+        self.statusBar().showMessage("Diarization failed")
             
     def select_output_dir(self):
         """Select output directory"""
@@ -397,7 +465,7 @@ class SpeakerLabelingApp(QMainWindow):
             self.statusBar().showMessage(f"Speaker '{speaker}' selected - Generate audio clip")
         else:
             self.generate_btn.setEnabled(False)
-            self.statusBar().showMessage("Please select both JSON and audio files")
+            self.statusBar().showMessage("Please complete diarization first")
             
     def find_continuous_segments(self, target_speaker, min_duration=30):
         """Find continuous segments for speaker"""
@@ -577,6 +645,10 @@ class SpeakerLabelingApp(QMainWindow):
         if self.audio_thread and self.audio_thread.isRunning():
             self.audio_thread.stop()
             self.audio_thread.wait(2000)  # Wait up to 2 seconds for clean shutdown
+            
+        if self.diarization_thread and self.diarization_thread.isRunning():
+            self.diarization_thread.terminate()
+            self.diarization_thread.wait(2000)  # Wait up to 2 seconds for clean shutdown
             
         if self.temp_audio_path and os.path.exists(self.temp_audio_path):
             try:

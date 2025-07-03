@@ -2,6 +2,8 @@
 """
 Live Audio Player with Speaker Tracking - PyQt5 Version
 Real-time audio playback with live speaker and timestamp updates
+
+Run the `extras/speaker-recognition/scripts/extract_speaker_from_plots.py` to get the JSON file.
 """
 
 import sys
