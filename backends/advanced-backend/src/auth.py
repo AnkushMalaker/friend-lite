@@ -20,9 +20,14 @@ SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "CHANGE_ME_IN_PRODUCTION")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
-# Validate required environment variables
-if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-    raise ValueError("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in environment variables")
+# Check if Google OAuth is available
+GOOGLE_OAUTH_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
+if GOOGLE_OAUTH_ENABLED:
+    print("✅ Google OAuth enabled")
+else:
+    print("⚠️ Google OAuth disabled - GOOGLE_CLIENT_ID and/or GOOGLE_CLIENT_SECRET not provided")
+    print("   Authentication will work with email/password only")
 
 
 class UserManager(BaseUserManager[User, str]):
@@ -53,8 +58,12 @@ async def get_user_manager(user_db=Depends(get_user_db)):
     yield UserManager(user_db)
 
 
-# Google OAuth client
-google_oauth_client = GoogleOAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)
+# Google OAuth client (only if enabled)
+google_oauth_client = None
+if GOOGLE_OAUTH_ENABLED:
+    assert GOOGLE_CLIENT_ID is not None
+    assert GOOGLE_CLIENT_SECRET is not None
+    google_oauth_client = GoogleOAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)
 
 
 # Transport configurations

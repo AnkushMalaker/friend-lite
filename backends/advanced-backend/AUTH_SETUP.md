@@ -2,18 +2,37 @@
 
 This backend now supports Google OAuth authentication using fastapi-users. Both HTTP and WebSocket endpoints are protected.
 
-## 🔧 Required Environment Variables
+## 🔧 Environment Variables
 
 Add these to your `.env` file:
 
 ```bash
 # Authentication Configuration (REQUIRED)
 AUTH_SECRET_KEY=your-super-secret-key-change-me-in-production
+
+# Google OAuth Configuration (OPTIONAL - for Google Sign-In)
 GOOGLE_CLIENT_ID=your-google-oauth-client-id
 GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
 ```
 
-## 🏗️ Google OAuth Setup
+### Authentication Modes
+
+**🔐 Local-Only Mode (Default)**
+- Works without Google OAuth credentials
+- Email/password authentication only
+- User registration via API endpoints
+- Set only `AUTH_SECRET_KEY`
+
+**🌐 Google OAuth Mode (Enhanced)**
+- Includes Google Sign-In option
+- Email/password authentication still available
+- Set `AUTH_SECRET_KEY`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`
+
+## 🏗️ Google OAuth Setup (Optional)
+
+**Skip this section if you only want local email/password authentication.**
+
+To enable Google Sign-In:
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select existing one
@@ -99,9 +118,27 @@ User data is stored in a new MongoDB collection called `fastapi_users` using Bea
 ## 🛠️ Development Notes
 
 - Set `AUTH_SECRET_KEY` to a secure random string in production
+- **Google OAuth is optional** - the system gracefully falls back to email/password only if `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` are not provided
 - For local development without HTTPS, you may need to set `cookie_secure=False` in `auth.py`
 - The authentication system runs alongside your existing motor-based MongoDB collections
 - User management is handled by fastapi-users, while your application data remains in the existing collections
+- The Streamlit UI automatically detects available authentication methods and adjusts the interface accordingly
+
+## 🧪 Quick Local Setup (No Google OAuth)
+
+For development or local-only deployment:
+
+```bash
+# Minimal .env configuration
+AUTH_SECRET_KEY=my-local-development-secret-key
+```
+
+This will:
+- ✅ Enable email/password authentication
+- ✅ Enable user registration 
+- ✅ Protect WebSocket and HTTP endpoints
+- ❌ Disable Google OAuth (no Google Sign-In button)
+- 🖥️ Streamlit UI shows only email/password option
 
 ## 🔧 Customization
 

@@ -41,6 +41,7 @@ from action_items_service import ActionItemsService
 
 # Import authentication components
 from auth import (
+    GOOGLE_OAUTH_ENABLED,
     SECRET_KEY,
     bearer_backend,
     cookie_backend,
@@ -1255,17 +1256,22 @@ app.include_router(
     prefix="/auth/jwt", 
     tags=["auth"],
 )
-app.include_router(
-    fastapi_users.get_oauth_router(
-        google_oauth_client, 
-        cookie_backend, 
-        SECRET_KEY,
-        associate_by_email=True,
-        is_verified_by_default=True,
-    ),
-    prefix="/auth/google",
-    tags=["auth"],
-)
+# Only include Google OAuth router if enabled
+if GOOGLE_OAUTH_ENABLED:
+    app.include_router(
+        fastapi_users.get_oauth_router(
+            google_oauth_client, 
+            cookie_backend, 
+            SECRET_KEY,
+            associate_by_email=True,
+            is_verified_by_default=True,
+        ),
+        prefix="/auth/google",
+        tags=["auth"],
+    )
+    logger.info("✅ Google OAuth routes enabled: /auth/google/login, /auth/google/callback")
+else:
+    logger.info("⚠️ Google OAuth routes disabled - missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET")
 app.include_router(
     fastapi_users.get_register_router(UserRead, UserCreate),
     prefix="/auth",
@@ -2068,6 +2074,26 @@ async def get_current_metrics():
     except Exception as e:
         audio_logger.error(f"Error getting current metrics: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/auth/config")
+async def get_auth_config():
+    """Get authentication configuration for UI."""
+    return {
+        "google_oauth_enabled": GOOGLE_OAUTH_ENABLED,
+        "auth_methods": {
+            "google_oauth": GOOGLE_OAUTH_ENABLED,
+            "email_password": True,
+            "registration": True
+        },
+        "endpoints": {
+            "google_login": "/auth/google/login" if GOOGLE_OAUTH_ENABLED else None,
+            "google_callback": "/auth/google/callback" if GOOGLE_OAUTH_ENABLED else None,
+            "jwt_login": "/auth/jwt/login",
+            "cookie_login": "/auth/cookie/login",
+            "register": "/auth/register"
+        }
+    }
 
 
 ###############################################################################
