@@ -49,6 +49,22 @@ def init_auth_state():
         st.session_state.auth_token = None
     if 'auth_method' not in st.session_state:
         st.session_state.auth_method = None
+    if 'auth_config' not in st.session_state:
+        st.session_state.auth_config = None
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_auth_config():
+    """Get authentication configuration from backend."""
+    try:
+        response = requests.get(f"{BACKEND_API_URL}/api/auth/config", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.warning(f"Failed to get auth config: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.warning(f"Error getting auth config: {e}")
+        return None
 
 def get_auth_headers():
     """Get authentication headers for API requests."""
@@ -181,6 +197,10 @@ def show_auth_sidebar():
     with st.sidebar:
         st.header("🔐 Authentication")
         
+        # Get auth configuration from backend
+        auth_config = get_auth_config()
+        google_oauth_enabled = auth_config.get('google_oauth_enabled', False) if auth_config else False
+        
         if st.session_state.get('authenticated', False):
             user_info = st.session_state.get('user_info', {})
             user_name = user_info.get('name', 'Unknown User')
@@ -197,39 +217,43 @@ def show_auth_sidebar():
             
             # Login options
             with st.expander("🔑 Login", expanded=True):
-                # Google OAuth login
-                st.write("**Option 1: Google Sign-In**")
-                google_login_url = f"{BACKEND_API_URL}/auth/google/login"
-                st.markdown(f'<a href="{google_login_url}" target="_blank">🌐 Login with Google</a>', unsafe_allow_html=True)
-                st.caption("Opens in new tab, then copy the token from the callback URL")
+                option_number = 1
                 
-                # Manual token input
-                with st.expander("Manual Token Entry"):
-                    manual_token = st.text_input("JWT Token:", type="password", help="Paste token from OAuth callback URL")
-                    if st.button("Submit Token"):
-                        if manual_token.strip():
-                            # Validate token
-                            headers = {'Authorization': f'Bearer {manual_token.strip()}'}
-                            try:
-                                response = requests.get(f"{BACKEND_API_URL}/api/users", headers=headers, timeout=5)
-                                if response.status_code == 200:
-                                    st.session_state.authenticated = True
-                                    st.session_state.auth_token = manual_token.strip()
-                                    st.session_state.auth_method = 'manual'
-                                    st.session_state.user_info = {'user_id': 'Unknown', 'email': 'Unknown', 'name': 'Manual Login'}
-                                    st.success("✅ Token validated successfully!")
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Invalid token")
-                            except Exception as e:
-                                st.error(f"❌ Error validating token: {e}")
-                        else:
-                            st.error("Please enter a token")
-                
-                st.divider()
+                # Google OAuth login (conditional)
+                if google_oauth_enabled:
+                    st.write(f"**Option {option_number}: Google Sign-In**")
+                    google_login_url = f"{BACKEND_API_URL}/auth/google/login"
+                    st.markdown(f'<a href="{google_login_url}" target="_blank">🌐 Login with Google</a>', unsafe_allow_html=True)
+                    st.caption("Opens in new tab, then copy the token from the callback URL")
+                    
+                    # Manual token input
+                    with st.expander("Manual Token Entry"):
+                        manual_token = st.text_input("JWT Token:", type="password", help="Paste token from OAuth callback URL")
+                        if st.button("Submit Token"):
+                            if manual_token.strip():
+                                # Validate token
+                                headers = {'Authorization': f'Bearer {manual_token.strip()}'}
+                                try:
+                                    response = requests.get(f"{BACKEND_API_URL}/api/users", headers=headers, timeout=5)
+                                    if response.status_code == 200:
+                                        st.session_state.authenticated = True
+                                        st.session_state.auth_token = manual_token.strip()
+                                        st.session_state.auth_method = 'manual'
+                                        st.session_state.user_info = {'user_id': 'Unknown', 'email': 'Unknown', 'name': 'Manual Login'}
+                                        st.success("✅ Token validated successfully!")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Invalid token")
+                                except Exception as e:
+                                    st.error(f"❌ Error validating token: {e}")
+                            else:
+                                st.error("Please enter a token")
+                    
+                    st.divider()
+                    option_number += 1
                 
                 # Email/Password login
-                st.write("**Option 2: Email & Password**")
+                st.write(f"**Option {option_number}: Email & Password**")
                 with st.form("login_form"):
                     email = st.text_input("Email:")
                     password = st.text_input("Password:", type="password")
@@ -251,7 +275,23 @@ def show_auth_sidebar():
             with st.expander("📝 New User Registration"):
                 st.info("New users can register using the backend API:")
                 st.code(f"POST {BACKEND_API_URL}/auth/register")
-                st.write("Or use Google Sign-In to automatically create an account")
+                if google_oauth_enabled:
+                    st.write("Or use Google Sign-In to automatically create an account")
+                else:
+                    st.caption("💡 Google OAuth is disabled - only email/password registration available")
+                    
+            # Show auth configuration status
+            if auth_config:
+                with st.expander("⚙️ Auth Configuration"):
+                    st.write("**Available Methods:**")
+                    st.write(f"• Google OAuth: {'✅ Enabled' if google_oauth_enabled else '❌ Disabled'}")
+                    st.write("• Email/Password: ✅ Enabled")
+                    st.write("• Registration: ✅ Enabled")
+                    
+                    if not google_oauth_enabled:
+                        st.caption("💡 To enable Google OAuth, set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend environment")
+            else:
+                st.caption("⚠️ Could not load auth configuration from backend")
 
 # ---- Health Check Functions ---- #
 @st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too many requests
