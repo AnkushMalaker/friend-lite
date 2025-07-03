@@ -15,6 +15,7 @@ dependencies = [
     "uvicorn>=0.34.2",
     "wyoming>=1.6.1",
     "aiohttp>=3.8.0",
+    "fastapi-users[beanie,oauth]>=14.0.1",
 ]
 
 [dependency-groups]
