@@ -49,6 +49,7 @@ from auth import (
     fastapi_users,
     google_oauth_client,
     optional_current_user,
+    websocket_auth,
 )
 
 # from debug_utils import memory_debug
@@ -1283,14 +1284,20 @@ app.include_router(
 async def ws_endpoint(
     ws: WebSocket, 
     user_id: Optional[str] = Query(None),
-    user: User = Depends(current_active_user)
+    token: Optional[str] = Query(None)
 ):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
+    # Authenticate user before accepting WebSocket connection
+    user = await websocket_auth(ws, token)
+    if not user:
+        await ws.close(code=1008, reason="Authentication required")
+        return
+    
     await ws.accept()
 
     # Use user_id if provided, otherwise generate a random client_id
     client_id = user_id if user_id else f"client_{str(uuid.uuid4())}"
-    audio_logger.info(f"🔌 WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
+    audio_logger.info(f"🔌 WebSocket connection accepted - Client: {client_id}, User: {user.email}, User ID: {user_id}")
     
     decoder = OmiOpusDecoder()
     _decode_packet = partial(decoder.decode_packet, strip_header=False)
@@ -1346,14 +1353,20 @@ async def ws_endpoint(
 async def ws_endpoint_pcm(
     ws: WebSocket, 
     user_id: Optional[str] = Query(None),
-    user: User = Depends(current_active_user)
+    token: Optional[str] = Query(None)
 ):
     """Accepts WebSocket connections, processes PCM audio per-client."""
+    # Authenticate user before accepting WebSocket connection
+    user = await websocket_auth(ws, token)
+    if not user:
+        await ws.close(code=1008, reason="Authentication required")
+        return
+    
     await ws.accept()
 
     # Use user_id if provided, otherwise generate a random client_id
     client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(f"🔌 PCM WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
+    audio_logger.info(f"🔌 PCM WebSocket connection accepted - Client: {client_id}, User: {user.email}, User ID: {user_id}")
     
     # Create client state and start processing
     client_state = await create_client_state(client_id)

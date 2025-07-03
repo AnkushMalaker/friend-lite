@@ -78,12 +78,16 @@ Both WebSocket endpoints now require authentication:
 
 **For browsers:** Authentication cookie is sent automatically with WebSocket connections.
 
-**For programmatic clients:** Include JWT token in query string or Authorization header:
+**For programmatic clients:** Include JWT token in query string:
 ```
 ws://localhost:8000/ws?token=your-jwt-token
-# OR
-ws://localhost:8000/ws (with Authorization: Bearer your-jwt-token header)
+ws://localhost:8000/ws_pcm?token=your-jwt-token
 ```
+
+**Authentication priority:**
+1. JWT token from `token` query parameter (if provided)
+2. JWT token from authentication cookie (for browsers)
+3. Connection rejected if neither is valid
 
 ### Protected HTTP Endpoints
 The following endpoints now require authentication:

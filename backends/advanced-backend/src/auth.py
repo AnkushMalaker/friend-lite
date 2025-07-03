@@ -103,4 +103,55 @@ fastapi_users = FastAPIUsers[User, str](
 
 # User dependency for protecting endpoints
 current_active_user = fastapi_users.current_user(active=True)
-optional_current_user = fastapi_users.current_user(optional=True) 
+optional_current_user = fastapi_users.current_user(optional=True)
+
+
+async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[User]:
+    """
+    WebSocket authentication that supports both cookie and token-based auth.
+    Returns None if authentication fails (allowing graceful handling).
+    
+    Args:
+        websocket: The WebSocket connection
+        token: Optional JWT token from query parameter
+    """
+    # Try to get user from JWT token in query parameter first
+    if token:
+        try:
+            strategy = get_jwt_strategy()
+            # Create a dummy user manager instance for token validation
+            user_db = await get_user_db().__anext__()
+            user_manager = UserManager(user_db)
+            user = await strategy.read_token(token, user_manager)
+            if user and user.is_active:
+                return user
+        except Exception:
+            pass  # Fall through to cookie auth
+    
+    # Try to get user from cookie
+    try:
+        # Extract cookies from WebSocket headers
+        cookie_header = None
+        for name, value in websocket.headers.items():
+            if name.lower() == b'cookie':
+                cookie_header = value.decode()
+                break
+        
+        if cookie_header:
+            # Parse cookies to find our auth cookie
+            import re
+            cookie_pattern = r'fastapiusersauth=([^;]+)'
+            match = re.search(cookie_pattern, cookie_header)
+            if match:
+                cookie_value = match.group(1)
+                strategy = get_jwt_strategy()
+                # Create a dummy user manager instance for token validation
+                user_db = await get_user_db().__anext__()
+                user_manager = UserManager(user_db)
+                user = await strategy.read_token(cookie_value, user_manager)
+                if user and user.is_active:
+                    return user
+    except Exception:
+        pass
+    
+    return None 
