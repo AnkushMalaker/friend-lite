@@ -13,18 +13,21 @@ import asyncio
 import concurrent.futures
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple
-import re
 
 import ollama
+
+# Import Beanie for user management
+from beanie import init_beanie
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -34,6 +37,19 @@ from wyoming.audio import AudioChunk, AudioStart
 from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
+from action_items_service import ActionItemsService
+
+# Import authentication components
+from auth import (
+    SECRET_KEY,
+    bearer_backend,
+    cookie_backend,
+    current_active_user,
+    fastapi_users,
+    google_oauth_client,
+    optional_current_user,
+)
+
 # from debug_utils import memory_debug
 from memory import get_memory_service, init_memory_config, shutdown_memory_service
 from metrics import (
@@ -41,7 +57,7 @@ from metrics import (
     start_metrics_collection,
     stop_metrics_collection,
 )
-from action_items_service import ActionItemsService
+from models import OAuthAccount, User, UserCreate, UserRead
 
 ###############################################################################
 # SETUP
@@ -49,8 +65,6 @@ from action_items_service import ActionItemsService
 
 # Load environment variables first
 load_dotenv()
-
-# Mem0 telemetry configuration is now handled in the memory module
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -831,7 +845,7 @@ class ClientState:
                         metrics_collector.record_memory_storage_result(True)
 
                         # Use the actual memory objects returned from mem0's add() method
-                        memory_results = memory_result.get("results", [])
+                        memory_results = memory_result.get("results", []) # type: ignore
                         memories_created = []
 
                         for mem in memory_results:
@@ -1186,6 +1200,17 @@ async def lifespan(app: FastAPI):
     # Startup
     audio_logger.info("Starting application...")
 
+    # Initialize Beanie for user management
+    try:
+        await init_beanie(
+            database=mongo_client.get_default_database("friend-lite"),
+            document_models=[User],
+        )
+        audio_logger.info("Beanie initialized for user management")
+    except Exception as e:
+        audio_logger.error(f"Failed to initialize Beanie: {e}")
+        raise
+
     # Start metrics collection
     await start_metrics_collection()
     audio_logger.info("Metrics collection started")
@@ -1219,9 +1244,41 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 
+# Add authentication routers
+app.include_router(
+    fastapi_users.get_auth_router(cookie_backend),
+    prefix="/auth/cookie",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_auth_router(bearer_backend),
+    prefix="/auth/jwt", 
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_oauth_router(
+        google_oauth_client, 
+        cookie_backend, 
+        SECRET_KEY,
+        associate_by_email=True,
+        is_verified_by_default=True,
+    ),
+    prefix="/auth/google",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="/auth",
+    tags=["auth"],
+)
+
 
 @app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
+async def ws_endpoint(
+    ws: WebSocket, 
+    user_id: Optional[str] = Query(None),
+    user: User = Depends(current_active_user)
+):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
     await ws.accept()
 
@@ -1280,7 +1337,11 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
 
 
 @app.websocket("/ws_pcm")
-async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
+async def ws_endpoint_pcm(
+    ws: WebSocket, 
+    user_id: Optional[str] = Query(None),
+    user: User = Depends(current_active_user)
+):
     """Accepts WebSocket connections, processes PCM audio per-client."""
     await ws.accept()
 
@@ -1447,7 +1508,10 @@ async def get_users():
 
 
 @app.post("/api/create_user")
-async def create_user(user_id: str):
+async def create_user(
+    user_id: str,
+    current_user: User = Depends(current_active_user)
+):
     """Creates a new user in the database."""
     try:
         # Check if user already exists
@@ -1473,7 +1537,10 @@ async def create_user(user_id: str):
 
 @app.delete("/api/delete_user")
 async def delete_user(
-    user_id: str, delete_conversations: bool = False, delete_memories: bool = False
+    user_id: str, 
+    delete_conversations: bool = False, 
+    delete_memories: bool = False,
+    current_user: User = Depends(current_active_user)
 ):
     """Deletes a user from the database with optional data cleanup."""
     try:
