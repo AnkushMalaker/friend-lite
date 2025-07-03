@@ -17,4 +17,12 @@ backends/examples/example-satellite/*
 blobs
 transcription_results.csv
 **/speaker_data/**
-**/.venv/*
+metrics_*.json
+*.ckpt
+refs/*
+*.log
+backends/advanced-backend/speaker_model_cache/hub
+backends/advanced-backend/output.json
+backends/advanced-backend/data/
+*.ipynb
+*.checkpoints

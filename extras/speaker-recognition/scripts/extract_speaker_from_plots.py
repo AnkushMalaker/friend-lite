@@ -60,7 +60,10 @@ import tempfile
 import pandas as pd
 
 # Import the diarization service
-from diarization_service import diarize_audio, DiarizationRequest, convert_to_json_format
+from diarization_service import (
+    diarize_audio, DiarizationRequest, convert_to_json_format,
+    load_enrolled_speakers, enrolled_speakers, identify_speaker
+)
 
 class DiarizationThread(QThread):
     finished = pyqtSignal(dict)
@@ -73,6 +76,14 @@ class DiarizationThread(QThread):
         
     def run(self):
         try:
+            self.progress.emit("Loading enrolled speakers...")
+            load_enrolled_speakers()  # Load the enrolled speakers database
+            
+            if enrolled_speakers:
+                self.progress.emit(f"Found {len(enrolled_speakers)} enrolled speakers")
+            else:
+                self.progress.emit("No enrolled speakers found - using generic labels")
+            
             self.progress.emit("Starting speaker diarization...")
             request = DiarizationRequest(audio_file_path=self.audio_path)
             
@@ -218,6 +229,7 @@ class FrequencyPlotWidget(QWidget):
         speaker_durations = defaultdict(float)
         
         for segment in json_data['segments']:
+            # Use verified_speaker (identified speaker) as the primary label
             speaker = segment.get('verified_speaker', segment['speaker'])
             duration = segment['end'] - segment['start']
             speaker_durations[speaker] += duration
@@ -255,6 +267,16 @@ class SpeakerLabelingApp(QMainWindow):
         self.audio_thread = None
         self.diarization_thread = None
         self.temp_audio_path = None
+        
+        # Load enrolled speakers on startup
+        try:
+            load_enrolled_speakers()
+            if enrolled_speakers:
+                print(f"Loaded {len(enrolled_speakers)} enrolled speakers: {[s['id'] for s in enrolled_speakers]}")
+            else:
+                print("No enrolled speakers found")
+        except Exception as e:
+            print(f"Error loading enrolled speakers: {e}")
         
         self.init_ui()
         
@@ -387,7 +409,8 @@ class SpeakerLabelingApp(QMainWindow):
         main_layout.addWidget(splitter)
         
         # Status bar
-        self.statusBar().showMessage("Ready - Select JSON and audio files to begin")
+        enrolled_count = len(enrolled_speakers) if enrolled_speakers else 0
+        self.statusBar().showMessage(f"Ready - {enrolled_count} enrolled speakers loaded - Select audio file to begin")
         
     def log_message(self, message):
         """Add message to log"""
@@ -434,7 +457,17 @@ class SpeakerLabelingApp(QMainWindow):
         self.progress_bar.setVisible(False)
         self.diarize_btn.setEnabled(True)
         
+        # Show speaker identification results
+        identified_speakers = json_data.get('speaker_identified', [])
+        enrolled_count = len([s for s in identified_speakers if not s.startswith('Unknown_speaker_') and not s.startswith('speaker_')])
+        unknown_count = len(identified_speakers) - enrolled_count
+        
         self.log_message("Diarization completed successfully!")
+        if enrolled_count > 0:
+            self.log_message(f"Identified {enrolled_count} enrolled speaker(s): {[s for s in identified_speakers if not s.startswith('Unknown_speaker_') and not s.startswith('speaker_')]}")
+        if unknown_count > 0:
+            self.log_message(f"Found {unknown_count} unidentified speaker(s)")
+        
         self.statusBar().showMessage("Diarization complete - Click on speaker bars to select")
         
     def on_diarization_error(self, error):

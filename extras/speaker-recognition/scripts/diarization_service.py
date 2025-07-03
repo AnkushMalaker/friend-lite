@@ -8,6 +8,8 @@ and speaker identification capabilities.
 # Standard library imports
 import os
 import logging
+import json
+import traceback
 from dataclasses import dataclass
 from typing import List, Dict, Set, Optional, Union
 
@@ -20,6 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pyannote.audio import Audio, Pipeline
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
+from pyannote.core import Segment
 
 # Configuration
 os.environ["HF_TOKEN"] = ""
@@ -57,6 +60,15 @@ class DiarizationResponse:
     speaker_embeddings: Dict[str, List[float]]
 
 
+@dataclass
+class SpeakerEnrollmentRequest:
+    speaker_id: str
+    speaker_name: str
+    audio_file_path: str
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+
+
 # Global model instances
 diar = None
 audio_loader = None
@@ -67,10 +79,13 @@ enrolled_speakers: List[Dict] = []
 EMB_DIM = 512  # Default dimension, will be updated when model loads
 index = faiss.IndexFlatIP(EMB_DIM)
 
+# Enrolled speakers path
+ENROLLED_SPEAKERS_PATH = "enrolled_speakers.json"
+
 
 def initialize_models():
     """Initialize all required models and components."""
-    global diar, audio_loader, embedding_model, EMB_DIM
+    global diar, audio_loader, embedding_model, EMB_DIM, index
     
     # Initialize diarization pipeline
     try:
@@ -89,6 +104,8 @@ def initialize_models():
             device=device
         )
         EMB_DIM = embedding_model.dimension
+        # Recreate FAISS index with correct dimension
+        index = faiss.IndexFlatIP(EMB_DIM)
         log.info("Speaker embedding model loaded successfully")
     except Exception as e:
         log.warning(f"Failed to load speaker embedding model: {e}")
@@ -105,30 +122,131 @@ def initialize_models():
     log.info(f"Speaker Recognition service initialized with embedding dimension: {EMB_DIM}")
 
 
-def normalize_embedding(embedding: torch.Tensor) -> torch.Tensor:
-    """Normalize speaker embedding vector.
-    
-    Args:
-        embedding: Raw embedding tensor
-        
-    Returns:
-        Normalized embedding tensor
-    """
-    return embedding / torch.norm(embedding, dim=1, keepdim=True)
+def normalize_embedding(embedding: np.ndarray) -> np.ndarray:
+    """Normalize speaker embedding vector (NumPy version)."""
+    return embedding / np.linalg.norm(embedding, axis=-1, keepdims=True)
 
 
-def identify_speaker(embedding: torch.Tensor) -> Optional[str]:
-    """Identify speaker from embedding.
+def save_enrolled_speakers(filepath: str = ENROLLED_SPEAKERS_PATH):
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            # Only save id, name, and embedding as list
+            json.dump([
+                {"id": s["id"], "name": s["name"], "embedding": s["embedding"].tolist()}
+                for s in enrolled_speakers
+            ], f, indent=2)
+        log.info(f"Enrolled speakers saved to {filepath}")
+    except Exception as e:
+        log.error(f"Failed to save enrolled speakers: {e}")
+
+
+def load_enrolled_speakers(filepath: str = ENROLLED_SPEAKERS_PATH):
+    global enrolled_speakers, index
+    try:
+        if not os.path.exists(filepath):
+            log.info(f"No enrolled speakers file found at {filepath}")
+            return
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            enrolled_speakers.clear()
+            for entry in data:
+                enrolled_speakers.append({
+                    "id": entry["id"],
+                    "name": entry["name"],
+                    "embedding": np.array(entry["embedding"], dtype=np.float32)
+                })
+            # Rebuild FAISS index
+            index = faiss.IndexFlatIP(EMB_DIM)
+            if enrolled_speakers:
+                embeddings = np.vstack([spk["embedding"] for spk in enrolled_speakers])
+                index.add(embeddings.astype(np.float32))
+        log.info(f"Loaded {len(enrolled_speakers)} enrolled speakers from {filepath}")
+    except Exception as e:
+        log.error(f"Failed to load enrolled speakers: {e}")
+
+
+def enroll_speaker(speaker_id: str, speaker_name: str, audio_file: str, start_time: Optional[float] = None, end_time: Optional[float] = None, save: bool = True) -> bool:
+    """Enroll a speaker from an audio file (optionally a segment)."""
+    global index, enrolled_speakers
+    if not audio_loader or not embedding_model:
+        log.error("Audio loader or embedding model not available")
+        return False
+
+    try:
+        if start_time is not None and end_time is not None:
+            segment = Segment(start_time, end_time)
+            waveform, _ = audio_loader.crop(audio_file, segment)
+        else:
+            waveform, _ = audio_loader(audio_file)
+
+        waveform = waveform.unsqueeze(0)
+        embedding = embedding_model(waveform)
+        # Ensure embedding is a numpy array
+        if hasattr(embedding, 'detach'):
+            embedding = embedding.detach().cpu().numpy()
+        embedding = normalize_embedding(embedding)
+
+        # Update existing speaker if present
+        for existing_speaker in enrolled_speakers:
+            if existing_speaker["id"] == speaker_id:
+                log.info(f"Updating existing speaker: {speaker_id}")
+                existing_speaker["name"] = speaker_name
+                existing_speaker["embedding"] = embedding[0]
+                # Rebuild FAISS index
+                index = faiss.IndexFlatIP(EMB_DIM)
+                if enrolled_speakers:
+                    embeddings = np.vstack([spk["embedding"] for spk in enrolled_speakers])
+                    index.add(embeddings.astype(np.float32))
+                if save:
+                    save_enrolled_speakers()
+                return True
+
+        # Add new speaker
+        enrolled_speakers.append({
+            "id": speaker_id,
+            "name": speaker_name,
+            "embedding": embedding[0]
+        })
+        index.add(embedding.astype(np.float32))
+        log.info(f"Successfully enrolled speaker: {speaker_id} ({speaker_name})")
+        if save:
+            save_enrolled_speakers()
+        return True
+
+    except Exception as e:
+        log.error(f"Failed to enroll speaker {speaker_id}: {e}")
+        traceback.print_exc()
+        return False
+
+
+def identify_speaker(embedding: np.ndarray) -> Optional[str]:
+    """Identify speaker from embedding using enrolled speakers and FAISS."""
+    if len(enrolled_speakers) == 0:
+        log.info("No enrolled speakers available for identification")
+        return None
     
-    Args:
-        embedding: Normalized speaker embedding
-        
-    Returns:
-        Speaker identifier or None if not recognized
-    """
-    # TODO: Implement actual speaker identification logic
-    # This would contain your actual speaker identification logic
-    # For now, return None to use the fallback naming
+    if embedding.ndim == 1:
+        embedding = embedding.reshape(1, -1)
+    embedding = normalize_embedding(embedding)
+    
+    log.info(f"Identifying speaker against {len(enrolled_speakers)} enrolled speakers")
+    similarities, indices = index.search(embedding.astype(np.float32), 1)
+    similarity_score = similarities[0, 0]
+    
+    log.info(f"Best similarity score: {similarity_score:.4f} (threshold: 0.15)")
+    
+    # Also show enrolled speaker names for debugging
+    enrolled_names = [spk["id"] for spk in enrolled_speakers]
+    log.info(f"Available enrolled speakers: {enrolled_names}")
+    
+    if similarity_score > 0.15:  # Lowered threshold for testing
+        speaker_idx = indices[0, 0]
+        if speaker_idx < len(enrolled_speakers):
+            identified_speaker = enrolled_speakers[speaker_idx]["id"]
+            log.info(f"Speaker identified as: {identified_speaker}")
+            return identified_speaker
+    
+    log.info("Speaker not identified (below threshold)")
     return None
 
 
@@ -178,14 +296,21 @@ def diarize_audio(request: DiarizationRequest) -> DiarizationResponse:
 
                 # Generate embedding
                 embedding = embedding_model(waveform)
+                # Ensure embedding is a numpy array
+                if hasattr(embedding, 'detach'):
+                    embedding = embedding.detach().cpu().numpy()
                 embedding = normalize_embedding(embedding)
                 speaker_embeddings[spk] = embedding[0]
 
                 # Identify speaker
-                identified_speaker = identify_speaker(embedding[0])
+                log.info(f"Processing speaker {spk} - attempting identification")
+                identified_speaker = identify_speaker(embedding)
 
                 if not identified_speaker:
-                    identified_speaker = f"Unknown_speaker_{len(enrolled_speakers) + hash(str(embedding[0][:4])) % 1000}"
+                    identified_speaker = f"Unknown_speaker_{len(enrolled_speakers) + hash(str(embedding[:4])) % 1000}"
+                    log.info(f"Speaker {spk} not identified, using fallback name: {identified_speaker}")
+                else:
+                    log.info(f"Speaker {spk} successfully identified as: {identified_speaker}")
 
                 speaker_identified.add(identified_speaker)
 
@@ -239,5 +364,22 @@ def convert_to_json_format(diarization_response: DiarizationResponse) -> dict:
     }
 
 
+def enroll_speaker_endpoint(request: SpeakerEnrollmentRequest):
+    if not request.audio_file_path:
+        raise HTTPException(status_code=400, detail="Audio file path is required")
+    success = enroll_speaker(
+        request.speaker_id,
+        request.speaker_name,
+        request.audio_file_path,
+        request.start_time,
+        request.end_time
+    )
+    if success:
+        return {"success": True, "message": f"Speaker {request.speaker_id} enrolled successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to enroll speaker")
+
+
 # Initialize models when module is imported
-initialize_models() 
+initialize_models()
+load_enrolled_speakers() 
