@@ -23,6 +23,10 @@ class User(BeanieBaseUser, Document):
     
     class Settings:
         name = "fastapi_users"  # Collection name in MongoDB
+        email_collation = {
+            "locale": "en", 
+            "strength": 2  # Case-insensitive comparison
+        }
 
 
 class UserRead(BaseUser[str]):
