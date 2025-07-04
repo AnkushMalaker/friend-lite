@@ -1,36 +1,54 @@
-# Advanced Omi Backend
+# Advanced Backend
 
-## Transcription Configuration
+An AI-powered backend service for real-time audio processing and transcription.
 
-This backend supports conditional transcription methods:
+## Features
 
-### 1. Deepgram API (Not Yet Implemented)
-When `DEEPGRAM_API_KEY` is provided, the system is designed to use Deepgram's cloud API for transcription. However, this feature is not yet implemented and will fall back to offline ASR with a warning.
+- Real-time audio transcription using offline ASR
+- Memory storage and retrieval
+- Action items extraction
+- Speaker enrollment and recognition
+- Web UI for monitoring and management
 
-### 2. Offline ASR (Current Implementation)
-The system uses the offline ASR service specified by `OFFLINE_ASR_TCP_URI`.
+## Quick Setup
 
-```bash
-export OFFLINE_ASR_TCP_URI="tcp://192.168.0.110:8765/"
-```
+1. **Clone and navigate to the backend:**
+   ```bash
+   cd backends/advanced-backend
+   ```
 
-## Environment Variables
+2. **Configure environment variables:**
+   Copy `.env.template` to `.env` and fill in the required values:
+   ```bash
+   cp .env.template .env
+   ```
 
-```bash
-# For future Deepgram implementation (currently not implemented)
-DEEPGRAM_API_KEY="your_api_key"
+3. **Start the service:**
+   ```bash
+   docker compose up --build -d
+   ```
 
-# Required for offline ASR (current implementation)
-OFFLINE_ASR_TCP_URI="tcp://192.168.0.110:8765/"
-```
+## Configuration
 
-The system automatically detects which transcription method to use based on the availability of `DEEPGRAM_API_KEY`, but currently always falls back to offline ASR.
+### Required Environment Variables
 
-# Setup
+- `OFFLINE_ASR_TCP_URI` - TCP URI for the offline ASR service (e.g., `tcp://192.168.0.110:8765/`)
 
-To setup the backend, you need to do the following:
-0. Clone the repository
-1. Change the directory to the backend,  
-`cd backends/advanced-backend`
-2. Fill out the .env variables as you require (check the .env.template for the required variables)
-3. Run the backend with `docker compose up --build -d`. This will take a couple minutes, be patient.
+### Optional Environment Variables
+
+- `DEEPGRAM_API_KEY` - For future Deepgram integration (not yet implemented)
+
+## Services
+
+The backend includes several services accessible via different endpoints:
+
+- **Main API** - Core functionality and endpoints
+- **Web UI** - Management interface accessible via browser
+- **Memory Service** - Storage and retrieval of conversation data
+- **Speaker Recognition** - Voice identification capabilities
+
+## Notes
+
+- The system currently uses offline ASR for transcription
+- Deepgram API integration is planned but not yet implemented
+- Initial startup may take a few minutes while services initialize

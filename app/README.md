@@ -1,7 +1,7 @@
 ## iOS Installation
 
 ### Method 1: Using Xcode (Development)
-1. Navigate to the `friend-lite` folder
+1. Navigate to the `app` folder
 2. Run prebuild command:
    ```bash
    npx expo prebuild --clean
@@ -15,7 +15,7 @@
 6. Build and run the app from Xcode
 
 ### Method 2: Using Expo CLI (Recommended)
-1. Navigate to the `friend-lite` folder
+1. Navigate to the `app` folder
 2. Clean and prebuild the project:
    ```bash
    npx expo prebuild --clean

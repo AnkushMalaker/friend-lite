@@ -47,7 +47,7 @@ Its a little complicated to turn that into PCM, which most Apps use.
 
 ## Core Components
 
-### 📱 Mobile App (`friend-lite/`)
+### 📱 Mobile App (`app/`)
 - **React Native app** for connecting to OMI devices via Bluetooth
 - Streams audio in OPUS format to selected backend
 - Cross-platform (iOS/Android) support
@@ -180,7 +180,7 @@ Both backends and ASR services use the **Wyoming protocol** for standardized com
 
 ## For Beginners
 1. Start with **Simple Backend** to understand the basics
-2. Use **friend-lite mobile app** to connect your OMI device
+2. Use **app mobile app** to connect your OMI device
 3. Examine saved audio chunks in `./audio_chunks/`
 
 ## For Production Use
