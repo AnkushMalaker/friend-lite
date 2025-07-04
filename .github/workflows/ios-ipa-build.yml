@@ -1,0 +1,81 @@
+name: iOS IPA Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: ./friend-lite
+    
+    steps:
+      - name: Setup repo
+        uses: actions/checkout@v4
+      
+      - name: Setup node
+        uses: actions/setup-node@v4.0.2
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: ./friend-lite/package-lock.json
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize EAS
+        run: eas init --force --non-interactive
+
+      - name: Build iOS IPA
+        run: eas build --platform ios --profile local --local --non-interactive --output ${{ github.workspace }}/app-release.ipa
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          echo "RELEASE_TAG=ios-v1.0.0-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=Friend Lite iOS $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.RELEASE_TAG }}
+          release_name: ${{ steps.tag.outputs.RELEASE_NAME }}
+          body: |
+            ## 🍎 iOS IPA Build
+            
+            **Built from commit:** ${{ github.sha }}
+            **Branch:** ${{ github.ref_name }}
+            **Build time:** ${{ steps.tag.outputs.BUILD_TIME }}
+            
+            For iOS Simulator testing!
+          draft: false
+          prerelease: true
+
+      - name: Upload iOS IPA to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/app-release.ipa
+          asset_name: friend-lite-ios.ipa
+          asset_content_type: application/octet-stream 

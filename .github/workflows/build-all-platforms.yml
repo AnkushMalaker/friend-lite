@@ -1,0 +1,193 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_android:
+        description: 'Build Android APK'
+        required: false
+        default: true
+        type: boolean
+      build_ios:
+        description: 'Build iOS IPA'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-android:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_android }}
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    defaults:
+      run:
+        working-directory: ./friend-lite
+    
+    steps:
+      - name: Setup repo
+        uses: actions/checkout@v4
+      
+      - name: Setup node
+        uses: actions/setup-node@v4.0.2
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: ./friend-lite/package-lock.json
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize EAS
+        run: eas init --force --non-interactive
+
+      - name: Build Android APK
+        run: eas build --platform android --profile local --local --output ${{ github.workspace }}/friend-lite-android.apk --non-interactive
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          echo "RELEASE_TAG=v1.0.0-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=Friend Lite Build $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.RELEASE_TAG }}
+          release_name: ${{ steps.tag.outputs.RELEASE_NAME }}
+          body: |
+            ## 🚀 Automated Build
+            
+            **Built from commit:** ${{ github.sha }}
+            **Branch:** ${{ github.ref_name }}
+            **Build time:** ${{ steps.tag.outputs.BUILD_TIME }}
+            
+            ### 📱 Downloads
+            - **Android APK**: Ready for installation on Android devices
+            
+            ### 🔧 Build Info
+            - Built with GitHub Actions
+            - Debug build (unsigned)
+            - Safe for testing and development
+          draft: false
+          prerelease: true
+
+      - name: Upload Android APK to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/friend-lite-android.apk
+          asset_name: friend-lite-android.apk
+          asset_content_type: application/vnd.android.package-archive
+
+  build-ios:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_ios }}
+    needs: build-android
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: ./friend-lite
+    
+    steps:
+      - name: Setup repo
+        uses: actions/checkout@v4
+      
+      - name: Setup node
+        uses: actions/setup-node@v4.0.2
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: ./friend-lite/package-lock.json
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize EAS
+        run: eas init --force --non-interactive
+
+      - name: Build iOS IPA
+        run: eas build --platform ios --profile local --local --non-interactive --output ${{ github.workspace }}/friend-lite-ios.ipa
+
+      - name: Upload iOS IPA to Existing Release
+        if: needs.build-android.result == 'success'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.build-android.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/friend-lite-ios.ipa
+          asset_name: friend-lite-ios.ipa
+          asset_content_type: application/octet-stream
+
+      - name: Generate iOS release info
+        if: needs.build-android.result != 'success'
+        id: ios_tag
+        run: |
+          echo "IOS_RELEASE_TAG=ios-v1.0.0-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+          echo "IOS_RELEASE_NAME=Friend Lite iOS $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "IOS_BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create iOS-only Release
+        if: needs.build-android.result != 'success'
+        id: create_ios_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.ios_tag.outputs.IOS_RELEASE_TAG }}
+          release_name: ${{ steps.ios_tag.outputs.IOS_RELEASE_NAME }}
+          body: |
+            ## 🍎 iOS IPA Build
+            
+            **Built from commit:** ${{ github.sha }}
+            **Branch:** ${{ github.ref_name }}
+            **Build time:** ${{ steps.ios_tag.outputs.IOS_BUILD_TIME }}
+            
+            For iOS Simulator testing!
+          draft: false
+          prerelease: true
+
+      - name: Upload iOS IPA to New Release
+        if: needs.build-android.result != 'success'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_ios_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/friend-lite-ios.ipa
+          asset_name: friend-lite-ios.ipa
+          asset_content_type: application/octet-stream 
