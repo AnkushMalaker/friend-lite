@@ -21,4 +21,13 @@ transcription_results.csv
 **/hub/*
 *.log
 **/speaker_data/**
+metrics_*.json
+*.ckpt
+refs/*
+*.log
+backends/advanced-backend/speaker_model_cache/hub
+backends/advanced-backend/output.json
+backends/advanced-backend/data/
+*.ipynb
+*.checkpoints
 **/.venv/*
