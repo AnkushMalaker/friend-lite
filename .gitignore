@@ -16,6 +16,10 @@ backends/examples/example-satellite/*
 .locks
 blobs
 transcription_results.csv
+**cache/*
+*.ckpt
+**/hub/*
+*.log
 **/speaker_data/**
 metrics_*.json
 *.ckpt
@@ -26,3 +30,4 @@ backends/advanced-backend/output.json
 backends/advanced-backend/data/
 *.ipynb
 *.checkpoints
+**/.venv/*
