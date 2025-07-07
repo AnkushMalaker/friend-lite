@@ -22,6 +22,7 @@ from typing import Optional, Tuple
 import re
 
 import ollama
+import openai
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
@@ -35,7 +36,8 @@ from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 # from debug_utils import memory_debug
-from memory import get_memory_service, init_memory_config, shutdown_memory_service
+from memory import get_memory_service, shutdown_memory_service
+# init_memory_config, 
 from metrics import (
     get_metrics_collector,
     start_metrics_collection,
@@ -131,14 +133,15 @@ if USE_DEEPGRAM:
 
 # Ollama & Qdrant Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 
 # Memory configuration is now handled in the memory module
 # Initialize it with our Ollama and Qdrant URLs
-init_memory_config(
-    ollama_base_url=OLLAMA_BASE_URL,
-    qdrant_base_url=QDRANT_BASE_URL,
-)
+# init_memory_config(
+#     ollama_base_url=OLLAMA_BASE_URL,
+#     qdrant_base_url=QDRANT_BASE_URL,
+# )
 
 # Speaker service configuration
 
@@ -150,9 +153,12 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 
 # Initialize memory service, speaker service, and ollama client
 memory_service = get_memory_service()
-ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+if os.getenv("LLM_PROVIDER") == "ollama":
+    llm_client = ollama.Client(host=OLLAMA_BASE_URL)
+elif os.getenv("LLM_PROVIDER") == "openai":
+    llm_client = openai.Client(api_key=os.getenv("LLM_API_KEY"))
 
-action_items_service = ActionItemsService(action_items_col, ollama_client)
+action_items_service = ActionItemsService(action_items_col, llm_client)
 
 ###############################################################################
 # AUDIO PROCESSING FUNCTIONS
@@ -1708,30 +1714,73 @@ async def health_check():
         overall_healthy = False
         critical_services_healthy = False
 
-    # Check Ollama (non-critical service - may not be running)
-    try:
-        # Run in executor to avoid blocking the main thread
-        loop = asyncio.get_running_loop()
-        models = await asyncio.wait_for(
-            loop.run_in_executor(None, ollama_client.list), timeout=8.0
-        )
-        model_count = len(models.get("models", []))
-        health_status["services"]["ollama"] = {
-            "status": "✅ Connected",
-            "healthy": True,
-            "models": model_count,
-            "critical": False,
-        }
-    except asyncio.TimeoutError:
-        health_status["services"]["ollama"] = {
-            "status": "⚠️ Connection Timeout (8s) - Service may not be running",
-            "healthy": False,
-            "critical": False,
-        }
-        overall_healthy = False
-    except Exception as e:
-        health_status["services"]["ollama"] = {
-            "status": f"⚠️ Connection Failed: {str(e)} - Service may not be running",
+    # Check LLM Service (Ollama or OpenAI)
+    llm_provider = os.getenv("LLM_PROVIDER")
+    health_status["services"]["llm"] = {
+        "status": "Unknown",
+        "healthy": False,
+        "critical": False,
+    }
+
+    if llm_provider == "ollama":
+        try:
+            loop = asyncio.get_running_loop()
+            models = await asyncio.wait_for(
+                loop.run_in_executor(None, llm_client.list), timeout=8.0
+            )
+            model_count = len(models.get("models", []))
+            health_status["services"]["llm"] = {
+                "status": "✅ Connected (Ollama)",
+                "healthy": True,
+                "models": model_count,
+                "critical": False,
+            }
+        except asyncio.TimeoutError:
+            health_status["services"]["llm"] = {
+                "status": "⚠️ Connection Timeout (8s) - Ollama service may not be running",
+                "healthy": False,
+                "critical": False,
+            }
+            overall_healthy = False
+        except Exception as e:
+            health_status["services"]["llm"] = {
+                "status": f"⚠️ Connection Failed (Ollama): {str(e)}",
+                "healthy": False,
+                "critical": False,
+            }
+            overall_healthy = False
+    elif llm_provider == "openai":
+        try:
+            loop = asyncio.get_running_loop()
+            # For OpenAI, a simple list models call or a dummy completion call can serve as a health check
+            # Using models.list() as it's a common way to check API connectivity
+            models = await asyncio.wait_for(
+                loop.run_in_executor(None, llm_client.models.list), timeout=8.0
+            )
+            model_count = len(models.data) # OpenAI returns models in .data
+            health_status["services"]["llm"] = {
+                "status": "✅ Connected (OpenAI)",
+                "healthy": True,
+                "models": model_count,
+                "critical": False,
+            }
+        except asyncio.TimeoutError:
+            health_status["services"]["llm"] = {
+                "status": "⚠️ Connection Timeout (8s) - OpenAI API may be unreachable",
+                "healthy": False,
+                "critical": False,
+            }
+            overall_healthy = False
+        except Exception as e:
+            health_status["services"]["llm"] = {
+                "status": f"⚠️ Connection Failed (OpenAI): {str(e)}",
+                "healthy": False,
+                "critical": False,
+            }
+            overall_healthy = False
+    else:
+        health_status["services"]["llm"] = {
+            "status": "⚠️ LLM_PROVIDER not specified or invalid",
             "healthy": False,
             "critical": False,
         }

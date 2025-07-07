@@ -8,6 +8,8 @@ services:
     volumes:
       - ./audio_chunks:/app/audio_chunks
       - ./debug_dir:/app/debug_dir
+    env_file:
+      - .env
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
@@ -108,7 +110,7 @@ services:
       - "4040:4040" # Ngrok web interface
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    command: "http friend-backend:8000 --url=intelligent-hypervisor.ngrok.app"
+    command: "http friend-backend:8000 --url=${NGROK_URL}"
     depends_on:
       - friend-backend
 volumes:
