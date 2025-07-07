@@ -13,7 +13,7 @@ import json
 from typing import Optional, List, Dict, Any
 
 from mem0 import Memory
-import ollama
+from .mem0_client import get_memory_client
 
 # Configure Mem0 telemetry based on environment variable
 # Set default to False for privacy unless explicitly enabled
@@ -32,105 +32,21 @@ MEM0_APP_ID = os.getenv("MEM0_APP_ID", "omi-backend")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 
-# Global memory configuration
-MEM0_CONFIG = {
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": "llama3.1:latest",
-            "ollama_base_url": OLLAMA_BASE_URL,
-            "temperature": 0,
-            "max_tokens": 2000,
-        },
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": "nomic-embed-text:latest",
-            "embedding_dims": 768,
-            "ollama_base_url": OLLAMA_BASE_URL,
-        },
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "collection_name": "omi_memories",
-            "embedding_model_dims": 768,
-            "host": QDRANT_BASE_URL,
-            "port": 6333,
-        },
-    },
-    "custom_prompt": "Extract action items from the conversation. Don't extract likes and dislikes.",
-}
 
 # Action item extraction configuration
-ACTION_ITEM_EXTRACTION_PROMPT = """
-You are an AI assistant specialized in extracting actionable tasks from meeting transcripts and conversations.
-
-Analyze the following conversation transcript and extract all action items, tasks, and commitments mentioned.
-
-For each action item you find, return a JSON object with these fields:
-- "description": A clear, specific description of the task
-- "assignee": The person responsible (use "unassigned" if not specified)
-- "due_date": The deadline if mentioned (use "not_specified" if not mentioned)
-- "priority": The urgency level ("high", "medium", "low", or "not_specified")
-- "status": Always set to "open" for new items
-- "context": A brief context about when/why this was mentioned
-
-Return ONLY a valid JSON array of action items. If no action items are found, return an empty array [].
-
-Examples of action items to look for:
-- "I'll send you the report by Friday"
-- "We need to schedule a follow-up meeting"
-- "Can you review the document before tomorrow?"
-- "Let's get that bug fixed"
-- "I'll call the client next week"
-
-Transcript:
-{transcript}
-"""
 
 # Global instances
 _memory_service = None
 _process_memory = None  # For worker processes
 
 
-def init_memory_config(
-    ollama_base_url: Optional[str] = None,
-    qdrant_base_url: Optional[str] = None,
-    organization_id: Optional[str] = None,
-    project_id: Optional[str] = None,
-    app_id: Optional[str] = None,
-) -> dict:
-    """Initialize and return memory configuration with optional overrides."""
-    global MEM0_CONFIG, MEM0_ORGANIZATION_ID, MEM0_PROJECT_ID, MEM0_APP_ID
-
-    memory_logger.info(f"Initializing MemoryService with Qdrant URL: {qdrant_base_url} and Ollama base URL: {ollama_base_url}")
-    
-    if ollama_base_url:
-        MEM0_CONFIG["llm"]["config"]["ollama_base_url"] = ollama_base_url
-        MEM0_CONFIG["embedder"]["config"]["ollama_base_url"] = ollama_base_url
-    
-    if qdrant_base_url:
-        MEM0_CONFIG["vector_store"]["config"]["host"] = qdrant_base_url
-    
-    if organization_id:
-        MEM0_ORGANIZATION_ID = organization_id
-    
-    if project_id:
-        MEM0_PROJECT_ID = project_id
-        
-    if app_id:
-        MEM0_APP_ID = app_id
-    
-    return MEM0_CONFIG
 
 
 def _init_process_memory():
     """Initialize memory instance once per worker process."""
     global _process_memory
     if _process_memory is None:
-        _process_memory = Memory.from_config(MEM0_CONFIG)
+        _process_memory = get_memory_client
     return _process_memory
 
 
@@ -163,118 +79,8 @@ def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bo
         return False
 
 
-def _extract_action_items_from_transcript(transcript: str, client_id: str, audio_uuid: str) -> List[Dict[str, Any]]:
-    """
-    Extract action items from transcript using Ollama.
-    This function will be used in the processing pipeline.
-    """
-    try:
-        # Get or create the persistent memory instance for this process
-        process_memory = _init_process_memory()
-        
-        # Initialize Ollama client with the same config as Mem0
-        ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
-        
-        # Format the prompt with the transcript
-        prompt = ACTION_ITEM_EXTRACTION_PROMPT.format(transcript=transcript)
-        
-        # Call Ollama to extract action items
-        response = ollama_client.chat(
-            model="llama3.1:latest",
-            messages=[
-                {"role": "system", "content": "You are an expert at extracting action items from conversations. Always return valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            options={
-                "temperature": 0.1,  # Low temperature for consistent extraction
-                "num_predict": 1000,  # Enough tokens for multiple action items
-            }
-        )
-        
-        # Parse the response
-        response_text = response['message']['content'].strip()
-        
-        # Try to parse JSON from the response
-        try:
-            # Clean up the response if it has markdown formatting
-            if response_text.startswith('```json'):
-                response_text = response_text.replace('```json', '').replace('```', '').strip()
-            elif response_text.startswith('```'):
-                response_text = response_text.replace('```', '').strip()
-            
-            action_items = json.loads(response_text)
-            
-            # Validate that we got a list
-            if not isinstance(action_items, list):
-                memory_logger.warning(f"Action item extraction returned non-list for {audio_uuid}: {type(action_items)}")
-                return []
-            
-            # Add metadata to each action item
-            for item in action_items:
-                if isinstance(item, dict):
-                    item.update({
-                        "audio_uuid": audio_uuid,
-                        "client_id": client_id,
-                        "created_at": int(time.time()),
-                        "source": "transcript_extraction",
-                        "id": f"action_{audio_uuid}_{len(action_items)}_{int(time.time())}"
-                    })
-            
-            memory_logger.info(f"Extracted {len(action_items)} action items from {audio_uuid}")
-            return action_items
-            
-        except json.JSONDecodeError as e:
-            memory_logger.error(f"Failed to parse action items JSON for {audio_uuid}: {e}")
-            memory_logger.error(f"Raw response: {response_text}")
-            return []
-            
-    except Exception as e:
-        memory_logger.error(f"Error extracting action items for {audio_uuid}: {e}")
-        return []
 
 
-def _add_action_items_to_store(action_items: List[Dict[str, Any]], client_id: str, audio_uuid: str) -> bool:
-    """
-    Store extracted action items in Mem0 with proper metadata.
-    """
-    try:
-        if not action_items:
-            return True  # Nothing to store, but not an error
-        
-        # Get or create the persistent memory instance for this process
-        process_memory = _init_process_memory()
-        
-        for item in action_items:
-            # Format the action item as a message for Mem0
-            action_text = f"Action Item: {item.get('description', 'No description')}"
-            if item.get('assignee') and item.get('assignee') != 'unassigned':
-                action_text += f" (Assigned to: {item['assignee']})"
-            if item.get('due_date') and item.get('due_date') != 'not_specified':
-                action_text += f" (Due: {item['due_date']})"
-            
-            # Store in Mem0 with infer=False to preserve exact content
-            process_memory.add(
-                action_text,
-                user_id=client_id,
-                metadata={
-                    "type": "action_item",
-                    "source": "transcript_extraction",
-                    "audio_uuid": audio_uuid,
-                    "timestamp": int(time.time()),
-                    "action_item_data": item,  # Store the full action item data
-                    "organization_id": MEM0_ORGANIZATION_ID,
-                    "project_id": MEM0_PROJECT_ID,
-                    "app_id": MEM0_APP_ID,
-                },
-                infer=False  # Don't let Mem0 modify our action items
-            )
-        
-        memory_logger.info(f"Stored {len(action_items)} action items for {audio_uuid}")
-        return True
-        
-    except Exception as e:
-        memory_logger.error(f"Error storing action items for {audio_uuid}: {e}")
-        return False
 
 
 class MemoryService:
@@ -290,10 +96,8 @@ class MemoryService:
             return
         
         try:
-            # Log Qdrant and Ollama URLs
-            memory_logger.info(f"Initializing MemoryService with Qdrant URL: {MEM0_CONFIG['vector_store']['config']['host']} and Ollama base URL: {MEM0_CONFIG['llm']['config']['ollama_base_url']}")
             # Initialize main memory instance
-            self.memory = Memory.from_config(MEM0_CONFIG)
+            self.memory = get_memory_client()
             self._initialized = True
             memory_logger.info("Memory service initialized successfully")
             
@@ -317,35 +121,6 @@ class MemoryService:
             memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
             return False
     
-    def extract_and_store_action_items(self, transcript: str, client_id: str, audio_uuid: str) -> int:
-        """
-        Extract action items from transcript and store them in Mem0.
-        Returns the number of action items extracted and stored.
-        """
-        if not self._initialized:
-            self.initialize()
-        
-        try:
-            # Extract action items from the transcript
-            action_items = _extract_action_items_from_transcript(transcript, client_id, audio_uuid)
-            
-            if not action_items:
-                memory_logger.info(f"No action items found in transcript for {audio_uuid}")
-                return 0
-            
-            # Store action items in Mem0
-            success = _add_action_items_to_store(action_items, client_id, audio_uuid)
-            
-            if success:
-                memory_logger.info(f"Successfully extracted and stored {len(action_items)} action items for {audio_uuid}")
-                return len(action_items)
-            else:
-                memory_logger.error(f"Failed to store action items for {audio_uuid}")
-                return 0
-                
-        except Exception as e:
-            memory_logger.error(f"Error extracting action items for {audio_uuid}: {e}")
-            return 0
     
     def get_action_items(self, user_id: str, limit: int = 50, status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
         """
