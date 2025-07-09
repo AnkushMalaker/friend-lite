@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from beanie import Document
+from beanie import Document, PydanticObjectId
 from fastapi_users.db import BaseOAuthAccount, BeanieBaseUser, BeanieUserDatabase
 from fastapi_users.schemas import BaseUser, BaseUserCreate, BaseUserUpdate
 from pydantic import Field
@@ -29,7 +29,7 @@ class User(BeanieBaseUser, Document):
         }
 
 
-class UserRead(BaseUser[str]):
+class UserRead(BaseUser[PydanticObjectId]):
     """Schema for reading user data."""
     display_name: Optional[str] = None
     profile_picture: Optional[str] = None
