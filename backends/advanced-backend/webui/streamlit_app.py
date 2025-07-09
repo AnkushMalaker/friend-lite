@@ -603,7 +603,7 @@ with st.sidebar:
     with st.expander("Active Clients & Close Conversation", expanded=True):
         # Get active clients
         logger.debug("📡 Fetching active clients...")
-        active_clients_data = get_data("/api/active_clients")
+        active_clients_data = get_data("/api/active_clients", require_auth=True)
         
         if active_clients_data and active_clients_data.get("clients"):
             clients = active_clients_data["clients"]
@@ -636,7 +636,7 @@ with st.sidebar:
                         
                         if close_btn:
                             logger.info(f"🔒 Closing conversation for client: {client_id}")
-                            result = post_data("/api/close_conversation", {"client_id": client_id})
+                            result = post_data("/api/close_conversation", params={"client_id": client_id}, require_auth=True)
                             if result:
                                 st.success(f"✅ Conversation closed for {client_id}")
                                 logger.info(f"✅ Successfully closed conversation for {client_id}")
@@ -722,7 +722,7 @@ with tab_convos:
         cache_buster = ""
 
     logger.debug("📡 Fetching conversations data...")
-    conversations = get_data("/api/conversations")
+    conversations = get_data("/api/conversations", require_auth=True)
 
     if conversations:
         logger.info(f"📊 Loaded {len(conversations) if isinstance(conversations, list) else 'grouped'} conversations")
@@ -973,12 +973,12 @@ with tab_mem:
         with col1:
             with st.spinner("Loading memories..."):
                 logger.debug(f"📡 Fetching memories for user: {user_id_input.strip()}")
-                memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}")
+                memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}", require_auth=True)
         
         with col2:
             with st.spinner("Loading action items..."):
                 logger.debug(f"📡 Fetching action items for user: {user_id_input.strip()}")
-                action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}")
+                action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}", require_auth=True)
         
         # Handle the API response format with "results" wrapper for memories
         if memories_response and isinstance(memories_response, dict) and "results" in memories_response:
@@ -1087,7 +1087,7 @@ with tab_mem:
             # Show statistics if requested
             if show_stats:
                 logger.info("📊 Action items statistics requested")
-                stats_response = get_data(f"/api/action-items/stats?user_id={user_id_input.strip()}")
+                stats_response = get_data(f"/api/action-items/stats?user_id={user_id_input.strip()}", require_auth=True)
                 if stats_response and "statistics" in stats_response:
                     stats = stats_response["statistics"]
                     logger.debug(f"📊 Action items statistics: {stats}")
@@ -1148,8 +1148,8 @@ with tab_mem:
                                     logger.debug(f"📤 Creating action item with data: {create_data}")
                                     response = requests.post(
                                         f"{BACKEND_API_URL}/api/action-items",
-                                        params={"user_id": user_id_input.strip()},
-                                        json=create_data
+                                        json=create_data,
+                                        headers=get_auth_headers()
                                     )
                                     response.raise_for_status()
                                     result = response.json()
@@ -1237,7 +1237,8 @@ with tab_mem:
                                         try:
                                             response = requests.put(
                                                 f"{BACKEND_API_URL}/api/action-items/{memory_id}",
-                                                json={"status": new_status}
+                                                json={"status": new_status},
+                                                headers=get_auth_headers()
                                             )
                                             response.raise_for_status()
                                             st.success(f"Status updated to {new_status}")
@@ -1257,7 +1258,7 @@ with tab_mem:
                                 if memory_id:
                                     logger.info(f"🗑️ Deleting action item {memory_id}")
                                     try:
-                                        response = requests.delete(f"{BACKEND_API_URL}/api/action-items/{memory_id}")
+                                        response = requests.delete(f"{BACKEND_API_URL}/api/action-items/{memory_id}", headers=get_auth_headers())
                                         response.raise_for_status()
                                         st.success("Action item deleted")
                                         logger.info(f"✅ Action item deleted successfully")
@@ -1294,22 +1295,22 @@ with tab_users:
     
     # Create User Section
     st.subheader("Create New User")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        new_user_id = st.text_input("New User ID:", placeholder="e.g., john_doe, alice123")
-    with col2:
-        st.write("")  # Spacer
-        create_user_btn = st.button("Create User", key="create_user")
+    with st.form("create_user_form"):
+        st.write("Create a new user with an email and a temporary password.")
+        new_user_email = st.text_input("New User Email:", placeholder="e.g., john.doe@example.com")
+        new_user_password = st.text_input("Temporary Password:", type="password", value="changeme")
+        create_user_submitted = st.form_submit_button("Create User")
 
-    if create_user_btn:
-        if new_user_id.strip():
-            # This endpoint requires authentication
-            result = post_data("/api/create_user", {"user_id": new_user_id.strip()}, require_auth=True)
-            if result:
-                st.success(f"User '{new_user_id.strip()}' created successfully!")
-                st.rerun()
-        else:
-            st.error("Please enter a valid User ID")
+        if create_user_submitted:
+            if new_user_email.strip() and new_user_password.strip():
+                create_data = {"email": new_user_email.strip(), "password": new_user_password.strip()}
+                # This endpoint requires authentication
+                result = post_data("/api/create_user", json_data=create_data, require_auth=True)
+                if result:
+                    st.success(f"User '{new_user_email.strip()}' created successfully!")
+                    st.rerun()
+            else:
+                st.error("Please provide both email and password.")
 
     st.divider()
 
@@ -1322,7 +1323,7 @@ with tab_users:
     if refresh_users_btn:
         st.rerun()
 
-    users = get_data("/api/users")
+    users = get_data("/api/users", require_auth=True)
     
     if users:
         st.write(f"**Total Users:** {len(users)}")
@@ -1476,7 +1477,7 @@ with tab_manage:
     st.write("Close the current active conversation for any connected client.")
     
     # Get active clients for the dropdown
-    active_clients_data = get_data("/api/active_clients")
+    active_clients_data = get_data("/api/active_clients", require_auth=True)
     
     if active_clients_data and active_clients_data.get("clients"):
         clients = active_clients_data["clients"]
@@ -1503,7 +1504,7 @@ with tab_manage:
                 close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
             
             if close_conversation_btn and selected_client:
-                result = post_data("/api/close_conversation", {"client_id": selected_client})
+                result = post_data("/api/close_conversation", params={"client_id": selected_client}, require_auth=True)
                 if result:
                     st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
                     st.info(f"📋 {result.get('message', 'Conversation closed')}")
@@ -1541,7 +1542,7 @@ with tab_manage:
     if add_speaker_btn:
         if audio_uuid_input.strip() and speaker_id_input.strip():
             result = post_data(f"/api/conversations/{audio_uuid_input.strip()}/speakers", 
-                             {"speaker_id": speaker_id_input.strip()})
+                             params={"speaker_id": speaker_id_input.strip()}, require_auth=True)
             if result:
                 st.success(f"Speaker '{speaker_id_input.strip()}' added to conversation!")
         else:
@@ -1578,7 +1579,8 @@ with tab_manage:
                 try:
                     response = requests.put(
                         f"{BACKEND_API_URL}/api/conversations/{update_audio_uuid.strip()}/transcript/{segment_index}",
-                        params=params
+                        params=params,
+                        headers=get_auth_headers()
                     )
                     response.raise_for_status()
                     result = response.json()
