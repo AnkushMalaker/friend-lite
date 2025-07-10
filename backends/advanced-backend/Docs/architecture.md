@@ -165,15 +165,19 @@ stateDiagram-v2
 ### Intelligence Services
 
 #### Action Items Service (`action_items_service.py`)
+- **User-Centric Storage**: Action items stored with database user_id (not client_id)
 - **LLM-Powered Extraction**: Uses Ollama for intelligent task identification
 - **Trigger Recognition**: Special "Simon says" keyphrase detection for explicit task creation
 - **Task Management**: Full CRUD operations with status tracking (open, in-progress, completed, cancelled)
+- **Client Metadata**: Client and user information stored for reference and debugging
 - **Context Preservation**: Links action items to original conversations and audio segments
 
 #### Memory Management (`memory/`)
+- **User-Centric Storage**: All memories keyed by database user_id (not client_id)
 - **Conversation Summarization**: Automatic memory extraction using mem0 framework
 - **Vector Storage**: Semantic memory search with Qdrant embeddings
-- **User Isolation**: Complete data separation between users
+- **Client Metadata**: Client information stored in memory metadata for reference
+- **User Isolation**: Complete data separation between users via user_id
 - **Temporal Memory**: Long-term conversation history with semantic retrieval
 
 #### Metrics System (`metrics.py`)
@@ -189,7 +193,8 @@ stateDiagram-v2
 - **User ID System**: 6-character alphanumeric user_id generation and validation
 - **Authentication Data**: Secure password hashing, email verification, dual login support
 - **Profile Management**: User preferences, display names, and permissions
-- **Data Ownership**: Conversation and memory association via user_id
+- **Client Registration**: Tracking of registered clients per user with device names
+- **Data Ownership**: All data (conversations, memories, action items) associated via user_id
 - **Client ID Generation**: Helper functions for `user_id-device_name` format
 
 #### Conversation Data Access (`ChunkRepo`)
@@ -275,10 +280,12 @@ graph LR
 
 ### Memory & Intelligence Processing
 1. **Conversation Completion**: End-of-session trigger for memory extraction
-2. **LLM Processing**: Ollama-based conversation summarization
-3. **Vector Storage**: Semantic embeddings stored in Qdrant
-4. **Action Item Analysis**: Automatic task detection with LLM processing
-5. **Search & Retrieval**: Semantic memory search capabilities
+2. **User Resolution**: Client-ID to database user mapping for proper data association
+3. **LLM Processing**: Ollama-based conversation summarization with user context
+4. **Vector Storage**: Semantic embeddings stored in Qdrant keyed by user_id
+5. **Action Item Analysis**: Automatic task detection with user-centric storage
+6. **Metadata Enhancement**: Client information and user email stored in metadata
+7. **Search & Retrieval**: User-scoped semantic memory search capabilities
 
 ### User Management & Security
 1. **Registration**: Admin-controlled user creation with email/password and auto-generated user_id
@@ -307,8 +314,8 @@ graph LR
 | User Management | Profile Only | Full CRUD |
 | System Administration | Health Check Only | Full Access |
 | Active Client Management | Own Clients Only | All Clients |
-| Memory Management | Own Memories Only | All Memories |
-| Action Items | Own Items Only | All Items |
+| Memory Management | Own Memories Only | All Memories (with client info) |
+| Action Items | Own Items Only | All Items (with client info) |
 
 ### Data Protection
 - **Encryption**: JWT token signing with configurable secret keys
