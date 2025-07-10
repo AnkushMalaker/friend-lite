@@ -1482,8 +1482,8 @@ async def ws_endpoint(
 
     await ws.accept()
 
-    # Generate proper client_id using user_id and device_name
-    client_id = generate_client_id(user.user_id, device_name)
+    # Generate proper client_id using user and device_name
+    client_id = generate_client_id(user, device_name)
     audio_logger.info(f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}")
 
     decoder = OmiOpusDecoder()
@@ -1555,8 +1555,8 @@ async def ws_endpoint_pcm(
 
     await ws.accept()
 
-    # Generate proper client_id using user_id and device_name
-    client_id = generate_client_id(user.user_id, device_name)
+    # Generate proper client_id using user and device_name
+    client_id = generate_client_id(user, device_name)
     audio_logger.info(
         f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
     )

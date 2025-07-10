@@ -2,7 +2,7 @@
 
 ## Overview
 
-Friend-Lite uses a comprehensive authentication system built on `fastapi-users` with support for multiple authentication methods including JWT tokens, cookies, and Google OAuth. The system provides secure user management with proper data isolation and role-based access control.
+Friend-Lite uses a comprehensive authentication system built on `fastapi-users` with support for multiple authentication methods including JWT tokens, cookies, and Google OAuth. The system provides secure user management with proper data isolation and role-based access control using MongoDB ObjectIds for user identification.
 
 ## Architecture Components
 
@@ -10,9 +10,6 @@ Friend-Lite uses a comprehensive authentication system built on `fastapi-users` 
 
 ```python
 class User(BeanieBaseUser, Document):
-    # Primary identifier - 6-character alphanumeric
-    user_id: str = Field(default_factory=generate_user_id)
-    
     # Standard fastapi-users fields
     email: str
     hashed_password: str
@@ -24,33 +21,38 @@ class User(BeanieBaseUser, Document):
     display_name: Optional[str] = None
     profile_picture: Optional[str] = None
     oauth_accounts: list[OAuthAccount] = []
+    
+    @property
+    def user_id(self) -> str:
+        """Return string representation of MongoDB ObjectId for backward compatibility."""
+        return str(self.id)
 ```
 
 **Key Features:**
-- **Dual Identity**: Users have both `email` and `user_id` for authentication
-- **user_id**: 6-character lowercase alphanumeric identifier (e.g., `abc123`)
-- **Email**: Standard email address for authentication
+- **Email-based Authentication**: Users authenticate using email addresses
+- **MongoDB ObjectId**: Uses MongoDB's native ObjectId as unique identifier
 - **MongoDB Integration**: Uses Beanie ODM for document storage
 - **OAuth Support**: Integrated Google OAuth account linking
+- **Backward Compatibility**: user_id property provides ObjectId as string
 
 ### 2. Authentication Manager (`auth.py`)
 
 ```python
 class UserManager(BaseUserManager[User, PydanticObjectId]):
     async def authenticate(self, credentials: dict) -> Optional[User]:
-        """Authenticate with either email or user_id"""
+        """Authenticate with email+password"""
         username = credentials.get("username")
-        # Supports both email and user_id authentication
+        # Email-based authentication only
         
-    async def get_by_email_or_user_id(self, identifier: str) -> Optional[User]:
-        """Get user by either email or 6-character user_id"""
+    async def get_by_email(self, email: str) -> Optional[User]:
+        """Get user by email address"""
 ```
 
 **Key Features:**
-- **Flexible Authentication**: Login with either email or user_id
-- **Auto-detection**: Automatically detects if identifier is user_id or email
+- **Email Authentication**: Login with email address only
 - **Password Management**: Secure password hashing and verification
-- **User Creation**: Auto-generates unique user_id if not provided
+- **Standard fastapi-users**: Uses standard user creation without custom IDs
+- **MongoDB ObjectId**: Relies on MongoDB's native unique ID generation
 
 ### 3. Authentication Backends
 
@@ -78,7 +80,7 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
 
 **Admin-Only Registration:**
 ```bash
-# Create user with auto-generated user_id
+# Create user with auto-generated MongoDB ObjectId
 curl -X POST "http://localhost:8000/api/create_user" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
@@ -88,21 +90,7 @@ curl -X POST "http://localhost:8000/api/create_user" \
     "display_name": "John Doe"
   }'
 
-# Response: {"user_id": "abc123", "email": "user@example.com", ...}
-```
-
-**User ID Specification:**
-```bash
-# Create user with specific user_id
-curl -X POST "http://localhost:8000/api/create_user" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "password": "userpass",
-    "user_id": "user01",
-    "display_name": "John Doe"
-  }'
+# Response: {"id": "507f1f77bcf86cd799439011", "email": "user@example.com", ...}
 ```
 
 ### 2. Authentication Methods
@@ -112,13 +100,6 @@ curl -X POST "http://localhost:8000/api/create_user" \
 curl -X POST "http://localhost:8000/auth/jwt/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=user@example.com&password=userpass"
-```
-
-#### User ID-based Login
-```bash
-curl -X POST "http://localhost:8000/auth/jwt/login" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=abc123&password=userpass"
 ```
 
 #### Google OAuth Login
@@ -142,22 +123,23 @@ const ws = new WebSocket('ws://localhost:8000/ws_pcm?device_name=phone');
 
 ## Client ID Management
 
-### Format: `user_id-device_name`
+### Format: `user_id_suffix-device_name`
 
 The system automatically generates client IDs by combining:
-- **user_id**: 6-character user identifier
+- **user_id_suffix**: Last 6 characters of MongoDB ObjectId
 - **device_name**: Sanitized device identifier
 
 **Examples:**
-- `abc123-phone` (user: abc123, device: phone)
-- `admin-desktop` (user: admin, device: desktop)
-- `user01-havpe` (user: user01, device: havpe)
+- `a39011-phone` (user ObjectId ending in a39011, device: phone)
+- `cd7994-desktop` (user ObjectId ending in cd7994, device: desktop)
+- `f86cd7-havpe` (user ObjectId ending in f86cd7, device: havpe)
 
 ### Benefits:
 - **User Association**: Clear mapping between clients and users
 - **Device Tracking**: Multiple devices per user
 - **Data Isolation**: Each user only accesses their own data
 - **Audit Trail**: Track activity by user and device
+- **Unique IDs**: MongoDB ObjectId ensures global uniqueness
 
 ## Security Features
 
@@ -172,7 +154,7 @@ The system automatically generates client IDs by combining:
 - **Secure Transport**: HTTPS recommended for production
 
 ### 3. Data Isolation
-- **User Scoping**: All data scoped to user_id
+- **User Scoping**: All data scoped to user's MongoDB ObjectId
 - **Client Filtering**: Users only see their own clients
 - **Admin Override**: Superusers can access all data
 
@@ -236,12 +218,11 @@ GOOGLE_CLIENT_SECRET=your-google-client-secret
 
 ### 1. Client Implementation
 ```python
-# Prefer user_id for programmatic access
-AUTH_USERNAME = "abc123"  # 6-character user_id
+# Use email for authentication
+AUTH_USERNAME = "user@example.com"  # Email address
 AUTH_PASSWORD = "secure_password"
 
-# Use single AUTH_USERNAME variable
-# System auto-detects if it's email or user_id
+# Use single AUTH_USERNAME variable for email authentication
 ```
 
 ### 2. Token Management
@@ -280,9 +261,9 @@ ADMIN_EMAIL=admin@yourdomain.com
 # Check credentials
 curl -X POST "http://localhost:8000/auth/jwt/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=test&password=test"
+  -d "username=user@example.com&password=test"
 
-# Verify user exists
+# Verify user exists by email
 # Check password is correct
 # Ensure user is active
 ```
@@ -317,35 +298,31 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/users/me
 
 ## Migration Guide
 
-### From Basic Auth to fastapi-users
+### From Custom user_id to Email-Only Authentication
 
 1. **Update Environment Variables**
    ```bash
    # Old
-   AUTH_EMAIL=user@example.com
-   AUTH_USER_ID=abc123
+   AUTH_USERNAME=abc123  # Custom user_id
    
    # New
-   AUTH_USERNAME=abc123  # Can be email or user_id
+   AUTH_USERNAME=user@example.com  # Email address only
    ```
 
 2. **Update Client Code**
    ```python
    # Old
-   username = AUTH_USER_ID if AUTH_USER_ID else AUTH_EMAIL
+   username = AUTH_USERNAME  # Could be email or user_id
    
    # New
-   username = AUTH_USERNAME
+   username = AUTH_USERNAME  # Email address only
    ```
 
 3. **Test Authentication**
    ```bash
-   # Verify both email and user_id work
+   # Only email authentication works now
    curl -X POST "http://localhost:8000/auth/jwt/login" \
      -d "username=user@example.com&password=pass"
-   
-   curl -X POST "http://localhost:8000/auth/jwt/login" \
-     -d "username=abc123&password=pass"
    ```
 
 ## Advanced Features
@@ -373,9 +350,9 @@ async def get_all_data(user: User = Depends(current_superuser)):
 ### 3. Multi-Device Support
 ```python
 # Single user, multiple devices
-# Client IDs: user123-phone, user123-tablet, user123-desktop
+# Client IDs: a39011-phone, cd7994-tablet, f86cd7-desktop
 # Separate conversation streams per device
 # Unified user dashboard
 ```
 
-This authentication system provides enterprise-grade security with developer-friendly APIs, supporting both simple email/password authentication and modern OAuth flows while maintaining proper data isolation and user management capabilities.
+This authentication system provides enterprise-grade security with developer-friendly APIs, supporting email/password authentication and modern OAuth flows while maintaining proper data isolation and user management capabilities using MongoDB's robust ObjectId system.

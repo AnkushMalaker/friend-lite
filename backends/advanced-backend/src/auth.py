@@ -17,7 +17,7 @@ from fastapi_users.password import PasswordHelper
 import re
 from httpx_oauth.clients.google import GoogleOAuth2
 import logging
-from users import User, UserCreate, get_user_db, get_user_by_user_id, generate_user_id
+from users import User, UserCreate, get_user_db
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -76,48 +76,25 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
             return value
         return PydanticObjectId(value)
 
-    async def get_by_email_or_user_id(self, identifier: str) -> Optional[User]:
+    async def get_by_email(self, email: str) -> Optional[User]:
         """
-        Get user by either email or user_id.
+        Get user by email address.
         
         Args:
-            identifier: Either email address or user_id
+            email: Email address
             
         Returns:
             User if found, None otherwise
         """
-        # Check if it looks like an email (contains @ symbol)
-        if '@' in identifier:
-            return await self.user_db.get_by_email(identifier)
-        else:
-            # Try to find by user_id first (for properly formatted user_ids)
-            user = await get_user_by_user_id(identifier)
-            if user:
-                return user
-            
-            # If not found, try to find by user_id field directly using the existing database connection
-            # This handles cases where user_id might not follow the 6-character rule (legacy users)
-            try:
-                # Use the existing database connection from the user_db
-                collection = self.user_db.collection
-                user_doc = await collection.find_one({"user_id": identifier})
-                if user_doc:
-                    # Convert to User object
-                    user = User.parse_obj(user_doc)
-                    return user
-                    
-            except Exception as e:
-                logger.warning(f"Failed to search for user by user_id field: {e}")
-                
-            return None
+        return await self.user_db.get_by_email(email)
 
     async def authenticate(self, credentials) -> Optional[User]:
         """
-        Authenticate user with either email+password or user_id+password.
+        Authenticate user with email+password.
         
         Args:
             credentials: OAuth2PasswordRequestForm with username and password
-                        'username' can be either email or user_id
+                        'username' should be email address
         
         Returns:
             User if authentication successful, None otherwise
@@ -133,7 +110,7 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         if not username or not password:
             return None
         
-        user = await self.get_by_email_or_user_id(username)
+        user = await self.get_by_email(username)
         if not user:
             return None
         
@@ -153,27 +130,24 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         return user
 
     async def create(self, user_create: UserCreate, safe: bool = True, request: Optional[Request] = None) -> User:
-        """Create user with auto-generated user_id if not provided."""
-        # Ensure user_id is set and unique
-        if not user_create.user_id:
-            # Generate unique user_id
-            max_attempts = 10
-            for _ in range(max_attempts):
-                candidate_user_id = generate_user_id()
-                existing_user = await get_user_by_user_id(candidate_user_id)
-                if not existing_user:
-                    user_create.user_id = candidate_user_id
-                    break
-            else:
-                raise ValueError("Could not generate unique user_id after multiple attempts")
-        else:
-            # Validate provided user_id is unique
-            existing_user = await get_user_by_user_id(user_create.user_id)
-            if existing_user:
-                raise ValueError(f"User ID '{user_create.user_id}' already exists")
+        """Create user using standard fastapi-users approach with proper superuser handling."""
+        # Call parent create method - MongoDB ObjectId will be auto-generated
+        user = await super().create(user_create, safe=safe, request=request)
         
-        # Call parent create method
-        return await super().create(user_create, safe=safe, request=request)
+        # Update user with superuser and verified status if needed
+        # This is required because the base implementation may not preserve these fields
+        update_needed = False
+        if user_create.is_superuser != user.is_superuser:
+            user.is_superuser = user_create.is_superuser
+            update_needed = True
+        if user_create.is_verified != user.is_verified:
+            user.is_verified = user_create.is_verified
+            update_needed = True
+        
+        if update_needed:
+            await user.save()
+        
+        return user
 
     async def on_after_register(self, user: User, request: Optional[Request] = None):
         """Called after a user registers."""
@@ -267,21 +241,18 @@ async def create_admin_user_if_needed():
         user_db_gen = get_user_db()
         user_db = await user_db_gen.__anext__()
         
-        # Check if admin user already exists (check both email and user_id)
-        existing_admin_email = await user_db.get_by_email(ADMIN_EMAIL)
-        existing_admin_user_id = await get_user_by_user_id(ADMIN_USERNAME)
+        # Check if admin user already exists by email
+        existing_admin = await user_db.get_by_email(ADMIN_EMAIL)
         
-        if existing_admin_email or existing_admin_user_id:
-            existing_user = existing_admin_email or existing_admin_user_id
-            print(f"✅ Admin user already exists: {existing_user.user_id} ({existing_user.email})")
+        if existing_admin:
+            print(f"✅ Admin user already exists: {existing_admin.user_id} ({existing_admin.email})")
             return
 
-        # Create admin user with specific user_id
+        # Create admin user
         user_manager_gen = get_user_manager(user_db)
         user_manager = await user_manager_gen.__anext__()
         
         admin_create = UserCreate(
-            user_id="admin1",  # Use a proper 6-character user_id
             email=ADMIN_EMAIL,
             password=ADMIN_PASSWORD,
             is_superuser=True,
