@@ -4,15 +4,10 @@ import random
 import string
 from typing import Optional
 
-from beanie import Document, PydanticObjectId, Indexed
+from beanie import Document, PydanticObjectId
 from fastapi_users.db import BaseOAuthAccount, BeanieBaseUser, BeanieUserDatabase
 from fastapi_users.schemas import BaseUser, BaseUserCreate, BaseUserUpdate
-from pydantic import Field, validator
-
-
-def generate_user_id() -> str:
-    """Generate a unique 6-character alphanumeric user ID."""
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+from pydantic import Field
 
 
 class OAuthAccount(BaseOAuthAccount):
@@ -23,22 +18,15 @@ class OAuthAccount(BaseOAuthAccount):
 class User(BeanieBaseUser, Document):
     """User model extending fastapi-users BeanieBaseUser with custom fields."""
     
-    # Primary identifier - 6-character alphanumeric
-    user_id: Indexed(str, unique=True) = Field(default_factory=generate_user_id)
-    
     # Custom fields for your application
     display_name: Optional[str] = None
     profile_picture: Optional[str] = None
     oauth_accounts: list[OAuthAccount] = Field(default_factory=list)
     
-    @validator('user_id')
-    def validate_user_id(cls, v):
-        """Validate user_id format: 6-character alphanumeric."""
-        if not v:
-            return generate_user_id()
-        if len(v) != 6 or not v.isalnum() or not v.islower():
-            raise ValueError('user_id must be 6 lowercase alphanumeric characters')
-        return v
+    @property
+    def user_id(self) -> str:
+        """Return string representation of MongoDB ObjectId for backward compatibility."""
+        return str(self.id)
     
     class Settings:
         name = "fastapi_users"  # Collection name in MongoDB
@@ -50,14 +38,12 @@ class User(BeanieBaseUser, Document):
 
 class UserRead(BaseUser[PydanticObjectId]):
     """Schema for reading user data."""
-    user_id: str
     display_name: Optional[str] = None
     profile_picture: Optional[str] = None
 
 
 class UserCreate(BaseUserCreate):
     """Schema for creating user data."""
-    user_id: Optional[str] = None  # Optional - will be auto-generated if not provided
     display_name: Optional[str] = None
 
 
@@ -72,27 +58,33 @@ async def get_user_db():
     yield BeanieUserDatabase(User, OAuthAccount)
 
 
-async def get_user_by_user_id(user_id: str) -> Optional[User]:
-    """Get user by user_id (for user_id+password authentication)."""
-    return await User.find_one(User.user_id == user_id)
+async def get_user_by_id(user_id: str) -> Optional[User]:
+    """Get user by MongoDB ObjectId string."""
+    try:
+        return await User.get(PydanticObjectId(user_id))
+    except Exception:
+        return None
 
 
-def generate_client_id(user_id: str, device_name: Optional[str] = None) -> str:
+def generate_client_id(user: User, device_name: Optional[str] = None) -> str:
     """
-    Generate a client_id in the format: user_id-device_suffix
+    Generate a client_id in the format: user_id_suffix-device_suffix
     
     Args:
-        user_id: The user's 6-character identifier
+        user: The User object
         device_name: Optional device name (e.g., 'havpe', 'phone', 'tablet')
     
     Returns:
-        client_id in format: user_id-device_suffix
+        client_id in format: user_id_suffix-device_suffix
     """
+    # Use last 6 characters of MongoDB ObjectId as user identifier
+    user_id_suffix = str(user.id)[-6:]
+    
     if device_name:
         # Sanitize device name: lowercase, alphanumeric + hyphens only, max 10 chars
         sanitized_device = ''.join(c for c in device_name.lower() if c.isalnum() or c == '-')[:10]
-        return f"{user_id}-{sanitized_device}"
+        return f"{user_id_suffix}-{sanitized_device}"
     else:
         # Generate random 4-character suffix if no device name provided
         suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
-        return f"{user_id}-{suffix}" 
+        return f"{user_id_suffix}-{suffix}" 
