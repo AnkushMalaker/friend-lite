@@ -15,28 +15,35 @@ DEFAULT_PORT = 8000
 DEFAULT_ENDPOINT = "/ws_pcm"
 
 
-def build_websocket_uri(host: str, port: int, endpoint: str, user_id: str | None = None) -> str:
-    """Build WebSocket URI with optional user_id parameter."""
+def build_websocket_uri(host: str, port: int, endpoint: str, token: str | None = None, device_name: str = "laptop") -> str:
+    """Build WebSocket URI with JWT token authentication."""
     base_uri = f"ws://{host}:{port}{endpoint}"
-    if user_id:
-        base_uri += f"?user_id={user_id}"
+    params = []
+    if token:
+        params.append(f"token={token}")
+    if device_name:
+        params.append(f"device_name={device_name}")
+    
+    if params:
+        base_uri += "?" + "&".join(params)
     return base_uri
 
 
 async def main():
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Laptop audio client for OMI backend")
+    parser = argparse.ArgumentParser(description="Laptop audio client for OMI backend with JWT authentication")
     parser.add_argument("--host", default=DEFAULT_HOST, help="WebSocket server host")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="WebSocket server port")
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT, help="WebSocket endpoint")
-    parser.add_argument("--user-id", help="User ID for audio session (optional)")
+    parser.add_argument("--token", required=True, help="JWT authentication token (required)")
+    parser.add_argument("--device-name", default="laptop", help="Device name for client identification")
     args = parser.parse_args()
     
     # Build WebSocket URI
-    ws_uri = build_websocket_uri(args.host, args.port, args.endpoint, args.user_id)
+    ws_uri = build_websocket_uri(args.host, args.port, args.endpoint, args.token, args.device_name)
     print(f"Connecting to {ws_uri}")
-    if args.user_id:
-        print(f"Using User ID: {args.user_id}")
+    print(f"Using device name: {args.device_name}")
+    print(f"Using JWT token: {args.token[:20]}...{args.token[-10:] if len(args.token) > 30 else args.token}")
     
     try:
         async with websockets.connect(ws_uri) as websocket:

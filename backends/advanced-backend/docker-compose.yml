@@ -18,6 +18,7 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - COOKIE_SECURE=${COOKIE_SECURE}
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
     depends_on:
       qdrant:
         condition: service_started
