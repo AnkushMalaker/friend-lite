@@ -130,9 +130,24 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         return user
 
     async def create(self, user_create: UserCreate, safe: bool = True, request: Optional[Request] = None) -> User:
-        """Create user using standard fastapi-users approach."""
+        """Create user using standard fastapi-users approach with proper superuser handling."""
         # Call parent create method - MongoDB ObjectId will be auto-generated
-        return await super().create(user_create, safe=safe, request=request)
+        user = await super().create(user_create, safe=safe, request=request)
+        
+        # Update user with superuser and verified status if needed
+        # This is required because the base implementation may not preserve these fields
+        update_needed = False
+        if user_create.is_superuser != user.is_superuser:
+            user.is_superuser = user_create.is_superuser
+            update_needed = True
+        if user_create.is_verified != user.is_verified:
+            user.is_verified = user_create.is_verified
+            update_needed = True
+        
+        if update_needed:
+            await user.save()
+        
+        return user
 
     async def on_after_register(self, user: User, request: Optional[Request] = None):
         """Called after a user registers."""
