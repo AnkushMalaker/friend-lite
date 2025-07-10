@@ -9,7 +9,7 @@
 
 """
 import logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 import asyncio
 import concurrent.futures
@@ -54,8 +54,8 @@ from auth import (
     fastapi_users,
     get_user_manager,
     google_oauth_client,
-    optional_current_user,
     websocket_auth,
+    ADMIN_EMAIL
 )
 
 from memory import get_memory_service, init_memory_config, shutdown_memory_service
@@ -64,7 +64,7 @@ from metrics import (
     start_metrics_collection,
     stop_metrics_collection,
 )
-from models import OAuthAccount, User, UserCreate, UserRead, get_user_db
+from users import User, UserCreate, get_user_db, generate_client_id
 
 ###############################################################################
 # SETUP
@@ -979,18 +979,14 @@ class ClientState:
                 )  # Log first 200 chars
 
                 start_time = time.time()
-                memories_created = []
-                action_items_created = []
-                processing_success = True
-                error_message = None
 
                 try:
                     # Track memory storage request
                     metrics_collector = get_metrics_collector()
                     metrics_collector.record_memory_storage_request()
 
-                    # Add general memory
-                    memory_result = memory_service.add_memory(
+                    # Add general memory with fallback handling
+                    memory_result = await memory_service.add_memory(
                         full_conversation, self.client_id, current_uuid
                     )
                     if memory_result:
@@ -998,55 +994,23 @@ class ClientState:
                             f"✅ Successfully added conversation memory for {current_uuid}"
                         )
                         metrics_collector.record_memory_storage_result(True)
-
-                        # Use the actual memory objects returned from mem0's add() method
-                        # Handle the memory result based on its type
-                        if isinstance(memory_result, dict):
-                            memory_results = memory_result.get("results", [])
-                            memories_created = []
-
-                            for mem in memory_results:  # type: ignore
-                                memory_text = mem.get("memory", "Memory text unavailable")
-                                memory_id = mem.get("id", "unknown")
-                                event = mem.get("event", "UNKNOWN")
-                                memories_created.append(
-                                    {
-                                        "id": memory_id,
-                                        "text": memory_text,
-                                        "event": event,
-                                    }
-                                )
-
-                            audio_logger.info(
-                                f"Created {len(memories_created)} memory objects: {[m['event'] for m in memories_created]}"
-                            )
-                        else:
-                            # Handle case where memory_result is not a dict (e.g., True)
-                            memories_created = [
-                                {
-                                    "id": "unknown",
-                                    "text": "Memory added successfully",
-                                    "event": "ADD",
-                                }
-                            ]
-                            audio_logger.info(f"Memory added successfully for {current_uuid}")
                     else:
-                        audio_logger.error(
-                            f"❌ Failed to add conversation memory for {current_uuid}"
+                        audio_logger.warning(
+                            f"⚠️ Memory service returned False for {current_uuid} - may have timed out"
                         )
                         metrics_collector.record_memory_storage_result(False)
-                        processing_success = False
-                        error_message = "Failed to add general memory"
 
                 except Exception as e:
                     audio_logger.error(
-                        f"❌ Error processing memory and action items for {current_uuid}: {e}"
+                        f"❌ Error processing memory for {current_uuid}: {e}"
                     )
-                    processing_success = False
-                    error_message = str(e)
+                    metrics_collector.record_memory_storage_result(False)
 
-                # Log debug information
+                # Log processing summary
                 processing_time_ms = (time.time() - start_time) * 1000
+                audio_logger.info(
+                    f"🔄 Completed memory processing for {current_uuid} in {processing_time_ms:.1f}ms"
+                )
             else:
                 audio_logger.info(
                     f"ℹ️ No transcripts to process for memory in conversation {current_uuid}"
@@ -1318,11 +1282,62 @@ class ClientState:
 chunk_repo = ChunkRepo(chunks_col)
 active_clients: dict[str, ClientState] = {}
 
+# Client-to-user mapping for reliable permission checking
+client_to_user_mapping: dict[str, str] = {}  # client_id -> user_id
 
-async def create_client_state(client_id: str) -> ClientState:
+
+def register_client_user_mapping(client_id: str, user_id: str):
+    """Register that a client belongs to a specific user."""
+    client_to_user_mapping[client_id] = user_id
+    audio_logger.debug(f"Registered client {client_id} for user {user_id}")
+
+
+def unregister_client_user_mapping(client_id: str):
+    """Unregister a client from user mapping."""
+    if client_id in client_to_user_mapping:
+        user_id = client_to_user_mapping.pop(client_id)
+        audio_logger.debug(f"Unregistered client {client_id} from user {user_id}")
+
+
+def get_user_clients(user_id: str) -> list[str]:
+    """Get all currently active client IDs that belong to a specific user."""
+    return [client_id for client_id, mapped_user_id in client_to_user_mapping.items() 
+            if mapped_user_id == user_id]
+
+
+# Client ownership tracking for database records
+# Since we're in development, we'll track all client-user relationships in memory
+# This will be populated when clients connect and persisted in database records
+all_client_user_mappings: dict[str, str] = {}  # client_id -> user_id (includes disconnected clients)
+
+
+def track_client_user_relationship(client_id: str, user_id: str):
+    """Track that a client belongs to a user (persists after disconnection for database queries)."""
+    all_client_user_mappings[client_id] = user_id
+
+
+def client_belongs_to_user(client_id: str, user_id: str) -> bool:
+    """Check if a client belongs to a specific user."""
+    return all_client_user_mappings.get(client_id) == user_id
+
+
+def get_user_clients_all(user_id: str) -> list[str]:
+    """Get all client IDs (active and inactive) that belong to a specific user."""
+    return [client_id for client_id, mapped_user_id in all_client_user_mappings.items() 
+            if mapped_user_id == user_id]
+
+
+async def create_client_state(client_id: str, user_id: str) -> ClientState:
     """Create and register a new client state."""
     client_state = ClientState(client_id)
     active_clients[client_id] = client_state
+    
+    # Register client-user mapping (for active clients)
+    register_client_user_mapping(client_id, user_id)
+    
+    # Also track in persistent mapping (for database queries)
+    track_client_user_relationship(client_id, user_id)
+    
     await client_state.start_processing()
 
     # Track client connection in metrics
@@ -1339,9 +1354,12 @@ async def cleanup_client_state(client_id: str):
         await client_state.disconnect()
         del active_clients[client_id]
 
-        # Track client disconnection in metrics
-        metrics_collector = get_metrics_collector()
-        metrics_collector.record_client_disconnection(client_id)
+    # Unregister client-user mapping
+    unregister_client_user_mapping(client_id)
+
+    # Track client disconnection in metrics
+    metrics_collector = get_metrics_collector()
+    metrics_collector.record_client_disconnection(client_id)
 
 
 ###############################################################################
@@ -1376,6 +1394,16 @@ async def lifespan(app: FastAPI):
     # Start metrics collection
     await start_metrics_collection()
     audio_logger.info("Metrics collection started")
+
+    # Pre-initialize memory service to avoid blocking during first use
+    try:
+        audio_logger.info("Pre-initializing memory service...")
+        await asyncio.wait_for(memory_service.initialize(), timeout=120)  # 2 minute timeout for startup
+        audio_logger.info("Memory service pre-initialized successfully")
+    except asyncio.TimeoutError:
+        audio_logger.warning("Memory service pre-initialization timed out - will initialize on first use")
+    except Exception as e:
+        audio_logger.warning(f"Memory service pre-initialization failed: {e} - will initialize on first use")
 
     audio_logger.info("Application ready - clients will have individual processing pipelines.")
 
@@ -1441,7 +1469,9 @@ else:
 
 @app.websocket("/ws")
 async def ws_endpoint(
-    ws: WebSocket, user_id: Optional[str] = Query(None), token: Optional[str] = Query(None)
+    ws: WebSocket,
+    token: Optional[str] = Query(None),
+    device_name: Optional[str] = Query(None),
 ):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
     # Authenticate user before accepting WebSocket connection
@@ -1452,15 +1482,15 @@ async def ws_endpoint(
 
     await ws.accept()
 
-    # Use user_id if provided, otherwise generate a random client_id
-    client_id = user_id if user_id else f"client_{str(uuid.uuid4())}"
-    audio_logger.info(f"🔌 WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
+    # Generate proper client_id using user_id and device_name
+    client_id = generate_client_id(user.user_id, device_name)
+    audio_logger.info(f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}")
 
     decoder = OmiOpusDecoder()
     _decode_packet = partial(decoder.decode_packet, strip_header=False)
 
     # Create client state and start processing
-    client_state = await create_client_state(client_id)
+    client_state = await create_client_state(client_id, user.user_id)
 
     try:
         packet_count = 0
@@ -1512,7 +1542,9 @@ async def ws_endpoint(
 
 @app.websocket("/ws_pcm")
 async def ws_endpoint_pcm(
-    ws: WebSocket, user_id: Optional[str] = Query(None), token: Optional[str] = Query(None)
+    ws: WebSocket, 
+    token: Optional[str] = Query(None),
+    device_name: Optional[str] = Query(None)
 ):
     """Accepts WebSocket connections, processes PCM audio per-client."""
     # Authenticate user before accepting WebSocket connection
@@ -1523,14 +1555,14 @@ async def ws_endpoint_pcm(
 
     await ws.accept()
 
-    # Use user_id if provided, otherwise generate a random client_id
-    client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
+    # Generate proper client_id using user_id and device_name
+    client_id = generate_client_id(user.user_id, device_name)
     audio_logger.info(
-        f"🔌 PCM WebSocket connection accepted - Client: {client_id}, User ID: {user_id}"
+        f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
     )
 
     # Create client state and start processing
-    client_state = await create_client_state(client_id)
+    client_state = await create_client_state(client_id, user.user_id)
 
     try:
         packet_count = 0
@@ -1577,10 +1609,15 @@ async def get_conversations(current_user: User = Depends(current_active_user)):
     """Get conversations. Admins see all conversations, users see only their own."""
     try:
         # Build query based on user permissions
-        query = {}
         if not current_user.is_superuser:
             # Regular users can only see their own conversations
-            query["client_id"] = str(current_user.id)
+            user_client_ids = get_user_clients_all(current_user.user_id)
+            if not user_client_ids:
+                # User has no clients, return empty result
+                return {"conversations": {}}
+            query = {"client_id": {"$in": user_client_ids}}
+        else:
+            query = {}
         
         # Get audio chunks and group by client_id
         cursor = chunks_col.find(query).sort("timestamp", -1)
@@ -1614,14 +1651,15 @@ async def get_conversations(current_user: User = Depends(current_active_user)):
 async def get_cropped_audio_info(audio_uuid: str, current_user: User = Depends(current_active_user)):
     """Get cropped audio information for a specific conversation. Users can only access their own conversations."""
     try:
-        # Build query with user restrictions
-        query = {"audio_uuid": audio_uuid}
-        if not current_user.is_superuser:
-            query["client_id"] = str(current_user.id)
-        
-        chunk = await chunks_col.find_one(query)
+        # Find the conversation first
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
         if not chunk:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        # Check ownership for non-admin users
+        if not current_user.is_superuser:
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         return {
             "audio_uuid": audio_uuid,
@@ -1641,14 +1679,15 @@ async def get_cropped_audio_info(audio_uuid: str, current_user: User = Depends(c
 async def reprocess_audio_cropping(audio_uuid: str, current_user: User = Depends(current_active_user)):
     """Trigger reprocessing of audio cropping for a specific conversation. Users can only reprocess their own conversations."""
     try:
-        # Build query with user restrictions
-        query = {"audio_uuid": audio_uuid}
-        if not current_user.is_superuser:
-            query["client_id"] = str(current_user.id)
-        
-        chunk = await chunks_col.find_one(query)
+        # Find the conversation first
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
         if not chunk:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        # Check ownership for non-admin users
+        if not current_user.is_superuser:
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         original_path = f"{CHUNK_DIR}/{chunk['audio_path']}"
         if not Path(original_path).exists():
@@ -1687,10 +1726,26 @@ async def reprocess_audio_cropping(audio_uuid: str, current_user: User = Depends
 async def get_users(current_user: User = Depends(current_superuser)):
     """Retrieves all users from the database. Admin-only endpoint."""
     try:
-        cursor = users_col.find()
+        # Query the correct collection that fastapi-users actually uses
+        fastapi_users_col = db["fastapi_users"]
+        cursor = fastapi_users_col.find()
         users = []
-        for doc in await cursor.to_list(length=100):
+        async for doc in cursor:
             doc["_id"] = str(doc["_id"])  # Convert ObjectId to string
+            
+            # Add user_id field for frontend compatibility
+            # Use display_name if available, otherwise email, otherwise fallback to _id
+            if doc.get("display_name"):
+                doc["user_id"] = doc["display_name"]
+            elif doc.get("email"):
+                # Use email prefix (before @) as user_id for better readability
+                doc["user_id"] = doc["email"].split("@")[0]
+            else:
+                doc["user_id"] = doc["_id"]
+            
+            # Remove hashed_password for security
+            if "hashed_password" in doc:
+                del doc["hashed_password"]
             users.append(doc)
         return JSONResponse(content=users)
     except Exception as e:
@@ -1750,15 +1805,44 @@ async def delete_user(
 ):
     """Deletes a user from the database with optional data cleanup."""
     try:
+        # Validate user_id format
+        if not user_id or user_id == "Unknown":
+            return JSONResponse(
+                status_code=400, 
+                content={"message": "Invalid user ID provided. Cannot delete user with ID 'Unknown'."}
+            )
+        
+        # Validate ObjectId format
+        try:
+            object_id = ObjectId(user_id)
+        except Exception:
+            return JSONResponse(
+                status_code=400, 
+                content={"message": f"Invalid user ID format: '{user_id}'. Must be a valid MongoDB ObjectId."}
+            )
+        
+        # Query the correct collection that fastapi-users actually uses
+        fastapi_users_col = db["fastapi_users"]
+        
         # Check if user exists
-        existing_user = await users_col.find_one({"_id": ObjectId(user_id)})
+        existing_user = await fastapi_users_col.find_one({"_id": object_id})
         if not existing_user:
             return JSONResponse(status_code=404, content={"message": f"User {user_id} not found"})
+        
+        # Prevent deletion of administrator user
+        user_email = existing_user.get("email", "")
+        is_superuser = existing_user.get("is_superuser", False)
+        
+        if is_superuser or user_email == ADMIN_EMAIL:
+            return JSONResponse(
+                status_code=403, 
+                content={"message": f"Cannot delete administrator user. Admin users are protected from deletion."}
+            )
 
         deleted_data = {}
 
-        # Delete user from users collection
-        user_result = await users_col.delete_one({"_id": ObjectId(user_id)})
+        # Delete user from fastapi_users collection
+        user_result = await fastapi_users_col.delete_one({"_id": object_id})
         deleted_data["user_deleted"] = user_result.deleted_count > 0
 
         if delete_conversations:
@@ -1769,7 +1853,9 @@ async def delete_user(
         if delete_memories:
             # Delete all memories for this user using the memory service
             try:
-                memory_count = memory_service.delete_all_user_memories(user_id)
+                memory_count = await asyncio.get_running_loop().run_in_executor(
+                    None, memory_service.delete_all_user_memories, user_id
+                )
                 deleted_data["memories_deleted"] = memory_count
             except Exception as mem_error:
                 audio_logger.error(f"Error deleting memories for user {user_id}: {mem_error}")
@@ -1805,9 +1891,11 @@ async def get_memories(current_user: User = Depends(current_active_user), user_i
             target_user_id = user_id
         else:
             # Regular users can only see their own memories
-            target_user_id = str(current_user.id)
+            target_user_id = current_user.user_id
         
-        all_memories = memory_service.get_all_memories(user_id=target_user_id, limit=limit)
+        all_memories = await asyncio.get_running_loop().run_in_executor(
+            None, memory_service.get_all_memories, target_user_id, limit
+        )
         return JSONResponse(content=all_memories)
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)
@@ -1824,10 +1912,10 @@ async def search_memories(query: str, current_user: User = Depends(current_activ
             target_user_id = user_id
         else:
             # Regular users can only search their own memories
-            target_user_id = str(current_user.id)
+            target_user_id = current_user.user_id
         
-        relevant_memories = memory_service.search_memories(
-            query=query, user_id=target_user_id, limit=limit
+        relevant_memories = await asyncio.get_running_loop().run_in_executor(
+            None, memory_service.search_memories, query, target_user_id, limit
         )
         return JSONResponse(content=relevant_memories)
     except Exception as e:
@@ -1839,7 +1927,9 @@ async def search_memories(query: str, current_user: User = Depends(current_activ
 async def delete_memory(memory_id: str):
     """Delete a specific memory by ID."""
     try:
-        memory_service.delete_memory(memory_id=memory_id)
+        await asyncio.get_running_loop().run_in_executor(
+            None, memory_service.delete_memory, memory_id
+        )
         return JSONResponse(content={"message": f"Memory {memory_id} deleted successfully"})
     except Exception as e:
         audio_logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
@@ -1850,11 +1940,15 @@ async def delete_memory(memory_id: str):
 async def add_speaker_to_conversation(audio_uuid: str, speaker_id: str, current_user: User = Depends(current_active_user)):
     """Add a speaker to the speakers_identified list for a conversation. Users can only modify their own conversations."""
     try:
-        # Check if user has permission to modify this conversation
+        # Find the conversation first
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not chunk:
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        # Check ownership for non-admin users
         if not current_user.is_superuser:
-            chunk = await chunks_col.find_one({"audio_uuid": audio_uuid, "client_id": str(current_user.id)})
-            if not chunk:
-                return JSONResponse(status_code=404, content={"error": "Conversation not found or access denied"})
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
         
         await chunk_repo.add_speaker(audio_uuid, speaker_id)
         return JSONResponse(
@@ -1876,11 +1970,16 @@ async def update_transcript_segment(
 ):
     """Update a specific transcript segment with speaker or timing information. Users can only modify their own conversations."""
     try:
-        # Build query with user restrictions
-        query = {"audio_uuid": audio_uuid}
-        if not current_user.is_superuser:
-            query["client_id"] = str(current_user.id)
+        # Find the conversation first
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not chunk:
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
         
+        # Check ownership for non-admin users
+        if not current_user.is_superuser:
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+
         update_doc = {}
 
         if speaker_id is not None:
@@ -1897,10 +1996,10 @@ async def update_transcript_segment(
         if not update_doc:
             return JSONResponse(status_code=400, content={"error": "No update parameters provided"})
 
-        result = await chunks_col.update_one(query, {"$set": update_doc})
+        result = await chunks_col.update_one({"audio_uuid": audio_uuid}, {"$set": update_doc})
 
-        if result.matched_count == 0:
-            return JSONResponse(status_code=404, content={"error": "Conversation not found or access denied"})
+        if result.modified_count == 0:
+            return JSONResponse(status_code=400, content={"error": "No changes were made"})
 
         return JSONResponse(content={"message": "Transcript segment updated successfully"})
 
@@ -2015,7 +2114,7 @@ async def health_check():
     # Check mem0 (depends on Ollama and Qdrant)
     try:
         # Test memory service connection with timeout
-        test_success = memory_service.test_connection()
+        test_success = await memory_service.test_connection()
         if test_success:
             health_status["services"]["mem0"] = {
                 "status": "✅ Connected",
@@ -2031,7 +2130,7 @@ async def health_check():
             overall_healthy = False
     except asyncio.TimeoutError:
         health_status["services"]["mem0"] = {
-            "status": "⚠️ Connection Test Timeout (10s) - Depends on Ollama/Qdrant",
+            "status": "⚠️ Connection Test Timeout (60s) - Depends on Ollama/Qdrant",
             "healthy": False,
             "critical": False,
         }
@@ -2147,10 +2246,14 @@ async def readiness_check():
 @app.post("/api/close_conversation")
 async def close_current_conversation(client_id: str, current_user: User = Depends(current_active_user)):
     """Close the current conversation for a specific client. Users can only close their own conversations."""
-    # Check if user has permission to close this conversation
-    if not current_user.is_superuser and client_id != str(current_user.id):
+    # Validate client ownership
+    if not current_user.is_superuser and not client_belongs_to_user(client_id, current_user.user_id):
+        logger.warning(f"User {current_user.user_id} attempted to close conversation for client {client_id} without permission")
         return JSONResponse(
-            content={"error": "You can only close your own conversations"},
+            content={
+                "error": "Access forbidden. You can only close your own conversations.",
+                "details": f"Client '{client_id}' does not belong to your account."
+            },
             status_code=403,
         )
     
@@ -2175,7 +2278,7 @@ async def close_current_conversation(client_id: str, current_user: User = Depend
         client_state.conversation_start_time = time.time()
         client_state.last_transcript_time = None
 
-        logger.info(f"Manually closed conversation for client {client_id}")
+        logger.info(f"Manually closed conversation for client {client_id} by user {current_user.id}")
 
         return JSONResponse(
             content={
@@ -2194,11 +2297,17 @@ async def close_current_conversation(client_id: str, current_user: User = Depend
 
 
 @app.get("/api/active_clients")
-async def get_active_clients(current_user: User = Depends(current_superuser)):
-    """Get list of currently active/connected clients. Admin-only endpoint."""
+async def get_active_clients(current_user: User = Depends(current_active_user)):
+    """Get list of currently active/connected clients. Admins see all, users see only their own."""
     client_info = {}
 
     for client_id, client_state in active_clients.items():
+        # Filter clients based on user permissions
+        if not current_user.is_superuser:
+            # Regular users can only see clients that belong to them
+            if not client_belongs_to_user(client_id, current_user.user_id):
+                continue
+
         client_info[client_id] = {
             "connected": client_state.connected,
             "current_audio_uuid": client_state.current_audio_uuid,
@@ -2208,23 +2317,23 @@ async def get_active_clients(current_user: User = Depends(current_superuser)):
         }
 
     return JSONResponse(
-        content={"active_clients_count": len(active_clients), "clients": client_info}
+        content={"active_clients_count": len(client_info), "clients": client_info}
     )
 
 
 @app.get("/api/debug/speech_segments")
-async def debug_speech_segments(current_user: User = Depends(current_superuser)):
-    """Debug endpoint to check current speech segments for all active clients. Admin-only endpoint."""
-    debug_info = {
-        "active_clients": len(active_clients),
-        "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
-        "min_speech_duration": MIN_SPEECH_SEGMENT_DURATION,
-        "cropping_padding": CROPPING_CONTEXT_PADDING,
-        "clients": {},
-    }
-
+async def debug_speech_segments(current_user: User = Depends(current_active_user)):
+    """Debug endpoint to check current speech segments. Admins see all clients, users see only their own."""
+    filtered_clients = {}
+    
     for client_id, client_state in active_clients.items():
-        debug_info["clients"][client_id] = {
+        # Filter clients based on user permissions
+        if not current_user.is_superuser:
+            # Regular users can only see clients that belong to them
+            if not client_belongs_to_user(client_id, current_user.user_id):
+                continue
+                
+        filtered_clients[client_id] = {
             "current_audio_uuid": client_state.current_audio_uuid,
             "speech_segments": {
                 uuid: segments for uuid, segments in client_state.speech_segments.items()
@@ -2233,6 +2342,14 @@ async def debug_speech_segments(current_user: User = Depends(current_superuser))
             "connected": client_state.connected,
             "last_transcript_time": client_state.last_transcript_time,
         }
+
+    debug_info = {
+        "active_clients": len(filtered_clients),
+        "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
+        "min_speech_duration": MIN_SPEECH_SEGMENT_DURATION,
+        "cropping_padding": CROPPING_CONTEXT_PADDING,
+        "clients": filtered_clients,
+    }
 
     return JSONResponse(content=debug_info)
 
@@ -2305,7 +2422,7 @@ async def get_action_items(current_user: User = Depends(current_active_user), us
         if current_user.is_superuser and user_id:
             target_user_id = user_id
         else:
-            target_user_id = str(current_user.id)
+            target_user_id = current_user.user_id
         
         # Query action items from database
         query = {"user_id": target_user_id}
@@ -2333,7 +2450,7 @@ async def create_action_item(item: ActionItemCreate, current_user: User = Depend
             "priority": item.priority,
             "status": "open",
             "context": item.context,
-            "user_id": str(current_user.id),
+            "user_id": current_user.user_id,
             "created_at": time.time(),
             "updated_at": time.time(),
         }
@@ -2355,7 +2472,7 @@ async def get_action_item(item_id: str, current_user: User = Depends(current_act
         # Build query with user restrictions
         query: dict[str, Any] = {"_id": ObjectId(item_id)}
         if not current_user.is_superuser:
-            query["user_id"] = str(current_user.id)
+            query["user_id"] = current_user.user_id
         
         item = await action_items_col.find_one(query)
         if not item:
@@ -2376,7 +2493,7 @@ async def update_action_item(item_id: str, updates: ActionItemUpdate, current_us
         # Build query with user restrictions
         query: dict[str, Any] = {"_id": ObjectId(item_id)}
         if not current_user.is_superuser:
-            query["user_id"] = str(current_user.id)
+            query["user_id"] = current_user.user_id
         
         # Build update document
         update_doc = {"updated_at": time.time()}
@@ -2403,7 +2520,7 @@ async def delete_action_item(item_id: str, current_user: User = Depends(current_
         # Build query with user restrictions
         query: dict[str, Any] = {"_id": ObjectId(item_id)}
         if not current_user.is_superuser:
-            query["user_id"] = str(current_user.id)
+            query["user_id"] = current_user.user_id
         
         result = await action_items_col.delete_one(query)
         
@@ -2423,7 +2540,7 @@ async def get_action_items_stats(current_user: User = Depends(current_active_use
         if current_user.is_superuser and user_id:
             target_user_id = user_id
         else:
-            target_user_id = str(current_user.id)
+            target_user_id = current_user.user_id
         
         # Aggregate stats from action items collection
         pipeline = [

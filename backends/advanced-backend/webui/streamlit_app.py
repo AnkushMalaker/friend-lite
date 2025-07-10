@@ -192,6 +192,48 @@ def logout():
     st.session_state.user_info = None
     st.session_state.auth_method = None
 
+def generate_jwt_token(email, password):
+    """Generate JWT token for given credentials."""
+    try:
+        logger.info(f"🔑 Generating JWT token for: {email}")
+        response = requests.post(
+            f"{BACKEND_API_URL}/auth/jwt/login",
+            data={'username': email, 'password': password},
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            auth_data = response.json()
+            token = auth_data.get('access_token')
+            token_type = auth_data.get('token_type', 'bearer')
+            
+            if token:
+                logger.info("✅ JWT token generated successfully")
+                return True, token, token_type
+            else:
+                logger.error("❌ No access token in response")
+                return False, "No access token received", None
+        else:
+            error_msg = "Invalid credentials"
+            try:
+                error_data = response.json()
+                error_msg = error_data.get('detail', error_msg)
+            except:
+                pass
+            logger.error(f"❌ Token generation failed: {error_msg}")
+            return False, error_msg, None
+            
+    except requests.exceptions.Timeout:
+        logger.error("❌ Token generation request timed out")
+        return False, "Request timed out. Please try again.", None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Token generation request failed: {e}")
+        return False, f"Connection error: {str(e)}", None
+    except Exception as e:
+        logger.error(f"❌ Unexpected token generation error: {e}")
+        return False, f"Unexpected error: {str(e)}", None
+
 def show_auth_sidebar():
     """Show authentication status and controls in sidebar."""
     with st.sidebar:
@@ -208,6 +250,58 @@ def show_auth_sidebar():
             
             st.success(f"✅ Logged in as **{user_name}**")
             st.caption(f"Method: {auth_method.title()}")
+            
+            # Quick token access for authenticated users
+            current_token = st.session_state.get('auth_token')
+            if current_token:
+                with st.expander("🔑 Your Current Token"):
+                    st.text_area(
+                        "Current Auth Token:",
+                        value=current_token,
+                        height=100,
+                        help="Your current authentication token",
+                        key="current_user_token"
+                    )
+                    
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        if st.button("📋 Copy Current Token", key="copy_current_token", use_container_width=True):
+                            copy_current_js = f"""
+                            <script>
+                            function copyCurrentToClipboard() {{
+                                const text = `{current_token}`;
+                                navigator.clipboard.writeText(text).then(function() {{
+                                    console.log('Current token copied to clipboard');
+                                }}).catch(function(err) {{
+                                    console.error('Could not copy current token: ', err);
+                                }});
+                            }}
+                            copyCurrentToClipboard();
+                            </script>
+                            """
+                            st.components.v1.html(copy_current_js, height=0)
+                            st.success("✅ Current token copied!")
+                    
+                    with col2:
+                        if st.button("📋 Copy Auth Header", key="copy_current_auth", use_container_width=True):
+                            auth_header_current = f"Authorization: Bearer {current_token}"
+                            copy_auth_current_js = f"""
+                            <script>
+                            function copyCurrentAuthToClipboard() {{
+                                const text = `{auth_header_current}`;
+                                navigator.clipboard.writeText(text).then(function() {{
+                                    console.log('Current auth header copied to clipboard');
+                                }}).catch(function(err) {{
+                                    console.error('Could not copy current auth header: ', err);
+                                }});
+                            }}
+                            copyCurrentAuthToClipboard();
+                            </script>
+                            """
+                            st.components.v1.html(copy_auth_current_js, height=0)
+                            st.success("✅ Auth header copied!")
+                    
+                    st.caption("💡 Use this token for WebSocket connections and API calls")
             
             if st.button("🚪 Logout", use_container_width=True):
                 logout()
@@ -268,6 +362,104 @@ def show_auth_sidebar():
                                     st.rerun()
                                 else:
                                     st.error(message)
+                        else:
+                            st.error("Please enter both email and password")
+            
+            # JWT Token Generator
+            with st.expander("🔑 Generate JWT Token"):
+                st.info("Generate JWT tokens for API access or WebSocket connections")
+                with st.form("jwt_token_form"):
+                    jwt_email = st.text_input("Email:", placeholder="admin@example.com")
+                    jwt_password = st.text_input("Password:", type="password", placeholder="Admin password")
+                    generate_submitted = st.form_submit_button("🔑 Generate Token")
+                    
+                    if generate_submitted:
+                        if jwt_email.strip() and jwt_password.strip():
+                            with st.spinner("Generating JWT token..."):
+                                success, result, token_type = generate_jwt_token(jwt_email.strip(), jwt_password.strip())
+                                if success:
+                                    st.success("✅ JWT token generated successfully!")
+                                    
+                                    # Create a container for the token display
+                                    token_container = st.container()
+                                    with token_container:
+                                        st.write("**Your JWT Token:**")
+                                        
+                                        # Display token in a text area (read-only)
+                                        st.text_area(
+                                            "Access Token:",
+                                            value=result,
+                                            height=100,
+                                            help="Copy this token for API calls or WebSocket connections",
+                                            key="generated_jwt_token"
+                                        )
+                                        
+                                        # Copy functionality with JavaScript
+                                        col1, col2 = st.columns([1, 1])
+                                        with col1:
+                                            copy_button = st.button("📋 Copy Token", key="copy_jwt_token", use_container_width=True)
+                                        with col2:
+                                            copy_auth_header = st.button("📋 Copy Auth Header", key="copy_auth_header", use_container_width=True)
+                                        
+                                        if copy_button:
+                                            # JavaScript copy functionality
+                                            copy_js = f"""
+                                            <script>
+                                            function copyToClipboard() {{
+                                                const text = `{result}`;
+                                                navigator.clipboard.writeText(text).then(function() {{
+                                                    console.log('Token copied to clipboard');
+                                                }}).catch(function(err) {{
+                                                    console.error('Could not copy text: ', err);
+                                                    // Fallback: select the text area
+                                                    const textArea = document.getElementById('generated_jwt_token');
+                                                    if (textArea) {{
+                                                        textArea.select();
+                                                        textArea.setSelectionRange(0, 99999); // For mobile devices
+                                                    }}
+                                                }});
+                                            }}
+                                            copyToClipboard();
+                                            </script>
+                                            """
+                                            st.components.v1.html(copy_js, height=0)
+                                            st.success("✅ Token copied to clipboard!")
+                                            st.info("💡 **Fallback:** If automatic copy failed, select text in the box above and copy (Ctrl+C)")
+                                            
+                                        if copy_auth_header:
+                                            # JavaScript copy functionality for auth header
+                                            auth_header = f"Authorization: Bearer {result}"
+                                            copy_auth_js = f"""
+                                            <script>
+                                            function copyAuthToClipboard() {{
+                                                const text = `{auth_header}`;
+                                                navigator.clipboard.writeText(text).then(function() {{
+                                                    console.log('Auth header copied to clipboard');
+                                                }}).catch(function(err) {{
+                                                    console.error('Could not copy auth header: ', err);
+                                                }});
+                                            }}
+                                            copyAuthToClipboard();
+                                            </script>
+                                            """
+                                            st.components.v1.html(copy_auth_js, height=0)
+                                            st.success("✅ Authorization header copied to clipboard!")
+                                            st.code(f"Authorization: Bearer {result}")
+                                            st.info("💡 **Fallback:** If automatic copy failed, select text in the code box above and copy (Ctrl+C)")
+                                        
+                                        # Show usage examples
+                                        with st.expander("Usage Examples"):
+                                            st.write("**WebSocket Connection:**")
+                                            st.code(f"ws://your-server:8000/ws?token={result[:20]}...")
+                                            
+                                            st.write("**API Call:**")
+                                            st.code(f"""curl -H "Authorization: Bearer {result[:20]}..." \\
+  {BACKEND_API_URL}/api/users""")
+                                            
+                                            st.write("**Full Token (for copying):**")
+                                            st.code(result)
+                                else:
+                                    st.error(f"❌ Failed to generate token: {result}")
                         else:
                             st.error("Please enter both email and password")
             
@@ -607,7 +799,18 @@ with st.sidebar:
         
         if active_clients_data and active_clients_data.get("clients"):
             clients = active_clients_data["clients"]
-            logger.info(f"📊 Found {len(clients)} active clients")
+            logger.info(f"📊 Found {len(clients)} accessible clients")
+            
+            # Check if user is authenticated to show appropriate messages
+            if st.session_state.get('authenticated', False):
+                user_info = st.session_state.get('user_info', {})
+                is_admin = user_info.get('is_superuser', False) if isinstance(user_info, dict) else False
+                
+                if not is_admin and len(clients) == 0:
+                    st.info("🔍 No active clients found for your account.")
+                    st.caption("💡 **Tip:** Connect an audio client with your user ID to see it here.")
+                elif not is_admin:
+                    st.caption("ℹ️ You can only see and manage your own conversations.")
             
             # Show active clients with conversation status
             for client_id, client_info in clients.items():
@@ -647,9 +850,19 @@ with st.sidebar:
                     else:
                         st.caption("No active conversation")
             
-            st.info(f"💡 **Total active clients:** {active_clients_data.get('active_clients_count', 0)}")
+            if len(clients) > 0:
+                st.info(f"💡 **Total accessible clients:** {active_clients_data.get('active_clients_count', 0)}")
         else:
-            st.info("No active clients found")
+            if st.session_state.get('authenticated', False):
+                st.info("🔍 No active clients found for your account.")
+                st.markdown("""
+                **To see active clients here:**
+                1. Connect an audio client using your user ID
+                2. Make sure to include your authentication token in the WebSocket connection
+                3. Use the format: `ws://localhost:8000/ws?user_id=YOUR_USER_ID&token=YOUR_TOKEN`
+                """)
+            else:
+                st.warning("🔒 Please authenticate to view your active clients.")
             logger.info("📊 No active clients found")
     
     st.divider()
@@ -1373,9 +1586,9 @@ with tab_users:
                         
                         with col_confirm:
                             if st.button("🗑️ Confirm Delete", key=f"confirm_{user_db_id}", use_container_width=True, type="primary"):
-                                # Build delete parameters
+                                # Build delete parameters - use _id not display user_id
                                 params = {
-                                    "user_id": user_id,
+                                    "user_id": user_db_id,  # Use MongoDB _id, not display user_id
                                     "delete_conversations": delete_conversations,
                                     "delete_memories": delete_memories
                                 }
@@ -1474,56 +1687,95 @@ with tab_manage:
     st.header("Conversation Management")
     
     st.subheader("🔒 Close Current Conversation")
-    st.write("Close the current active conversation for any connected client.")
     
-    # Get active clients for the dropdown
-    active_clients_data = get_data("/api/active_clients", require_auth=True)
-    
-    if active_clients_data and active_clients_data.get("clients"):
-        clients = active_clients_data["clients"]
+    # Check if user is authenticated and show appropriate message
+    if st.session_state.get('authenticated', False):
+        user_info = st.session_state.get('user_info', {})
+        is_admin = user_info.get('is_superuser', False) if isinstance(user_info, dict) else False
         
-        # Filter to only clients with active conversations
-        active_conversations = {
-            client_id: client_info 
-            for client_id, client_info in clients.items() 
-            if client_info.get("has_active_conversation", False)
-        }
-        
-        if active_conversations:
-            col1, col2 = st.columns([3, 1])
-            
-            with col1:
-                selected_client = st.selectbox(
-                    "Select client to close conversation:",
-                    options=list(active_conversations.keys()),
-                    format_func=lambda x: f"{x} (UUID: {active_conversations[x].get('current_audio_uuid', 'N/A')[:8]}...)"
-                )
-            
-            with col2:
-                st.write("")  # Spacer
-                close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
-            
-            if close_conversation_btn and selected_client:
-                result = post_data("/api/close_conversation", params={"client_id": selected_client}, require_auth=True)
-                if result:
-                    st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
-                    st.info(f"📋 {result.get('message', 'Conversation closed')}")
-                    time.sleep(1)  # Brief pause before refresh
-                    st.rerun()
-                else:
-                    st.error(f"❌ Failed to close conversation for client '{selected_client}'")
+        if is_admin:
+            st.write("Close the current active conversation for any connected client.")
         else:
-            st.info("🔍 No clients with active conversations found")
+            st.write("Close the current active conversation for your connected clients.")
             
-        # Show all clients status
-        with st.expander("All Connected Clients Status"):
-            for client_id, client_info in clients.items():
-                status_icon = "🟢" if client_info.get("has_active_conversation", False) else "⚪"
-                st.write(f"{status_icon} **{client_id}** - {'Active conversation' if client_info.get('has_active_conversation', False) else 'No active conversation'}")
-                if client_info.get("current_audio_uuid"):
-                    st.caption(f"   Audio UUID: {client_info['current_audio_uuid']}")
+        # Get active clients for the dropdown
+        active_clients_data = get_data("/api/active_clients", require_auth=True)
+        
+        if active_clients_data and active_clients_data.get("clients"):
+            clients = active_clients_data["clients"]
+            
+            # Filter to only clients with active conversations
+            active_conversations = {
+                client_id: client_info 
+                for client_id, client_info in clients.items() 
+                if client_info.get("has_active_conversation", False)
+            }
+            
+            if active_conversations:
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    selected_client = st.selectbox(
+                        "Select client to close conversation:",
+                        options=list(active_conversations.keys()),
+                        format_func=lambda x: f"{x} (UUID: {active_conversations[x].get('current_audio_uuid', 'N/A')[:8]}...)"
+                    )
+                
+                with col2:
+                    st.write("")  # Spacer
+                    close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
+                
+                if close_conversation_btn and selected_client:
+                    result = post_data("/api/close_conversation", params={"client_id": selected_client}, require_auth=True)
+                    if result:
+                        st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
+                        st.info(f"📋 {result.get('message', 'Conversation closed')}")
+                        time.sleep(1)  # Brief pause before refresh
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Failed to close conversation for client '{selected_client}'")
+            else:
+                if len(clients) > 0:
+                    st.info("🔍 No clients with active conversations found.")
+                    st.caption("💡 Your connected clients don't have active conversations at the moment.")
+                else:
+                    st.info("🔍 No connected clients found for your account.")
+                    st.caption("💡 Connect an audio client with your user ID to manage conversations.")
+                
+            # Show all clients status (only if there are clients)
+            if len(clients) > 0:
+                with st.expander("All Connected Clients Status"):
+                    for client_id, client_info in clients.items():
+                        status_icon = "🟢" if client_info.get("has_active_conversation", False) else "⚪"
+                        st.write(f"{status_icon} **{client_id}** - {'Active conversation' if client_info.get('has_active_conversation', False) else 'No active conversation'}")
+                        if client_info.get("current_audio_uuid"):
+                            st.caption(f"   Audio UUID: {client_info['current_audio_uuid']}")
+                            
+                    # Show ownership info for non-admin users
+                    if not is_admin:
+                        st.caption("ℹ️ You can only see and manage clients that belong to your account.")
+        else:
+            st.info("🔍 No accessible clients found for your account.")
+            st.markdown("""
+            **To connect an audio client:**
+            1. Use your user ID when connecting: `user_id=YOUR_USER_ID`
+            2. Include your authentication token in the WebSocket connection
+            3. Example: `ws://localhost:8000/ws?user_id=YOUR_USER_ID&token=YOUR_TOKEN`
+            """)
+            
+            if st.session_state.get('auth_token'):
+                st.info("💡 Your authentication token is available - see the WebSocket connection info below.")
+            else:
+                st.warning("⚠️ Please authenticate first to get your token for audio client connections.")
     else:
-        st.info("🔍 No active clients found")
+        st.warning("🔒 Authentication required to manage conversations.")
+        st.markdown("""
+        **Please authenticate using the sidebar to:**
+        - View your active audio clients
+        - Close conversations for your clients
+        - Manage your conversation data
+        """)
+        st.info("👆 Use the authentication options in the sidebar to get started.")
     
     st.divider()
     

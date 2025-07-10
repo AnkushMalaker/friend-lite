@@ -6,11 +6,13 @@ This module provides:
 - Action item extraction and management
 """
 
+import asyncio
 import logging
 import os
 import time
 import json
 from typing import Optional, List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
 
 from mem0 import Memory
 import ollama
@@ -31,6 +33,13 @@ MEM0_APP_ID = os.getenv("MEM0_APP_ID", "omi-backend")
 # Ollama & Qdrant Configuration (these should match main config)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
+
+# Timeout configurations
+OLLAMA_TIMEOUT_SECONDS = 1200  # Timeout for Ollama operations
+MEMORY_INIT_TIMEOUT_SECONDS = 60  # Timeout for memory initialization
+
+# Thread pool for blocking operations
+_MEMORY_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="memory_ops")
 
 # Global memory configuration
 MEM0_CONFIG = {
@@ -284,35 +293,58 @@ class MemoryService:
         self.memory = None
         self._initialized = False
     
-    def initialize(self):
-        """Initialize the memory service."""
+    async def initialize(self):
+        """Initialize the memory service with timeout protection."""
         if self._initialized:
             return
         
         try:
             # Log Qdrant and Ollama URLs
             memory_logger.info(f"Initializing MemoryService with Qdrant URL: {MEM0_CONFIG['vector_store']['config']['host']} and Ollama base URL: {MEM0_CONFIG['llm']['config']['ollama_base_url']}")
-            # Initialize main memory instance
-            self.memory = Memory.from_config(MEM0_CONFIG)
+            
+            # Initialize main memory instance with timeout protection
+            loop = asyncio.get_running_loop()
+            self.memory = await asyncio.wait_for(
+                loop.run_in_executor(_MEMORY_EXECUTOR, Memory.from_config, MEM0_CONFIG),
+                timeout=MEMORY_INIT_TIMEOUT_SECONDS
+            )
             self._initialized = True
             memory_logger.info("Memory service initialized successfully")
             
+        except asyncio.TimeoutError:
+            memory_logger.error(f"Memory service initialization timed out after {MEMORY_INIT_TIMEOUT_SECONDS}s")
+            raise Exception("Memory service initialization timeout")
         except Exception as e:
             memory_logger.error(f"Failed to initialize memory service: {e}")
             raise
 
-    def add_memory(self, transcript: str, client_id: str, audio_uuid: str) -> bool:
+    async def add_memory(self, transcript: str, client_id: str, audio_uuid: str) -> bool:
         """Add memory in background process (non-blocking)."""
         if not self._initialized:
-            self.initialize()
+            try:
+                await asyncio.wait_for(
+                    self.initialize(),
+                    timeout=MEMORY_INIT_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                memory_logger.error(f"Memory initialization timed out for {audio_uuid}")
+                return False
         
         try:
-            success = _add_memory_to_store(transcript, client_id, audio_uuid)
+            # Run the blocking operation in executor with timeout
+            loop = asyncio.get_running_loop()
+            success = await asyncio.wait_for(
+                loop.run_in_executor(_MEMORY_EXECUTOR, _add_memory_to_store, transcript, client_id, audio_uuid),
+                timeout=OLLAMA_TIMEOUT_SECONDS
+            )
             if success:
                 memory_logger.info(f"Added transcript for {audio_uuid} to mem0 (client: {client_id})")
             else:
                 memory_logger.error(f"Failed to add memory for {audio_uuid}")
             return success
+        except asyncio.TimeoutError:
+            memory_logger.error(f"Memory addition timed out after {OLLAMA_TIMEOUT_SECONDS}s for {audio_uuid}")
+            return False
         except Exception as e:
             memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
             return False
@@ -679,12 +711,18 @@ class MemoryService:
             memory_logger.error(f"Error deleting memories for user {user_id}: {e}")
             raise
     
-    def test_connection(self) -> bool:
-        """Test memory service connection."""
+    async def test_connection(self) -> bool:
+        """Test memory service connection with timeout protection."""
         try:
             if not self._initialized:
-                self.initialize()
+                await asyncio.wait_for(
+                    self.initialize(),
+                    timeout=MEMORY_INIT_TIMEOUT_SECONDS
+                )
             return True
+        except asyncio.TimeoutError:
+            memory_logger.error(f"Memory service connection test timed out after {MEMORY_INIT_TIMEOUT_SECONDS}s")
+            return False
         except Exception as e:
             memory_logger.error(f"Memory service connection test failed: {e}")
             return False
