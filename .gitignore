@@ -22,3 +22,4 @@ transcription_results.csv
 *.log
 **/speaker_data/**
 **/.venv/*
+**metrics_report**

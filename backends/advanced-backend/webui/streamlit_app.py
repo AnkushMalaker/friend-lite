@@ -1,9 +1,11 @@
+import json
 import logging
 import os
-import time
 import random
+import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 import requests
@@ -35,6 +37,453 @@ BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://192.168.0.110:8000")
 BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
 
 logger.info(f"🔧 Configuration loaded - Backend API: {BACKEND_API_URL}, Public URL: {BACKEND_PUBLIC_URL}")
+
+# ---- Authentication Functions ---- #
+def init_auth_state():
+    """Initialize authentication state in session state."""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'user_info' not in st.session_state:
+        st.session_state.user_info = None
+    if 'auth_token' not in st.session_state:
+        st.session_state.auth_token = None
+    if 'auth_method' not in st.session_state:
+        st.session_state.auth_method = None
+    if 'auth_config' not in st.session_state:
+        st.session_state.auth_config = None
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_auth_config():
+    """Get authentication configuration from backend."""
+    try:
+        response = requests.get(f"{BACKEND_API_URL}/api/auth/config", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.warning(f"Failed to get auth config: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.warning(f"Error getting auth config: {e}")
+        return None
+
+def get_auth_headers():
+    """Get authentication headers for API requests."""
+    if st.session_state.get('auth_token'):
+        return {'Authorization': f'Bearer {st.session_state.auth_token}'}
+    return {}
+
+def check_auth_from_url():
+    """Check for authentication token in URL parameters (from OAuth callback)."""
+    try:
+        # Check URL parameters for token (from OAuth redirect)
+        query_params = st.query_params
+        if 'token' in query_params:
+            token = query_params['token']
+            logger.info("🔐 Authentication token found in URL parameters")
+            
+            # Validate token by calling a protected endpoint
+            headers = {'Authorization': f'Bearer {token}'}
+            response = requests.get(f"{BACKEND_API_URL}/api/users", headers=headers, timeout=5)
+            
+            if response.status_code == 200:
+                st.session_state.authenticated = True
+                st.session_state.auth_token = token
+                st.session_state.auth_method = 'oauth'
+                
+                # Try to get user info from token (decode JWT payload)
+                try:
+                    import base64
+
+                    # Split JWT token and decode payload
+                    token_parts = token.split('.')
+                    if len(token_parts) >= 2:
+                        # Add padding if needed
+                        payload = token_parts[1]
+                        payload += '=' * (4 - len(payload) % 4)
+                        decoded = base64.b64decode(payload)
+                        user_data = json.loads(decoded)
+                        st.session_state.user_info = {
+                            'user_id': user_data.get('sub', 'Unknown'),
+                            'email': user_data.get('email', 'Unknown'),
+                            'name': user_data.get('name', user_data.get('email', 'Unknown'))
+                        }
+                except Exception as e:
+                    logger.warning(f"Could not decode user info from token: {e}")
+                    st.session_state.user_info = {'user_id': 'Unknown', 'email': 'Unknown'}
+                
+                logger.info("✅ Authentication successful from URL token")
+                
+                # Clear the token from URL to avoid confusion
+                st.query_params.clear()
+                st.rerun()
+                return True
+            else:
+                logger.warning("❌ Token validation failed")
+                return False
+        
+        # Check for error in URL (OAuth error)
+        if 'error' in query_params:
+            error = query_params['error']
+            logger.error(f"❌ OAuth error in URL: {error}")
+            st.error(f"Authentication error: {error}")
+            st.query_params.clear()
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error checking authentication from URL: {e}")
+        return False
+    
+    return False
+
+def login_with_credentials(email, password):
+    """Login with email and password."""
+    try:
+        logger.info(f"🔐 Attempting login for email: {email}")
+        response = requests.post(
+            f"{BACKEND_API_URL}/auth/jwt/login",
+            data={'username': email, 'password': password},
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            auth_data = response.json()
+            token = auth_data.get('access_token')
+            
+            if token:
+                st.session_state.authenticated = True
+                st.session_state.auth_token = token
+                st.session_state.auth_method = 'credentials'
+                st.session_state.user_info = {
+                    'user_id': email,
+                    'email': email,
+                    'name': email
+                }
+                logger.info("✅ Credential login successful")
+                return True, "Login successful!"
+            else:
+                logger.error("❌ No access token in response")
+                return False, "No access token received"
+        else:
+            error_msg = "Invalid credentials"
+            try:
+                error_data = response.json()
+                error_msg = error_data.get('detail', error_msg)
+            except:
+                pass
+            logger.error(f"❌ Login failed: {error_msg}")
+            return False, error_msg
+            
+    except requests.exceptions.Timeout:
+        logger.error("❌ Login request timed out")
+        return False, "Login request timed out. Please try again."
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Login request failed: {e}")
+        return False, f"Connection error: {str(e)}"
+    except Exception as e:
+        logger.error(f"❌ Unexpected login error: {e}")
+        return False, f"Unexpected error: {str(e)}"
+
+def logout():
+    """Logout and clear authentication state."""
+    logger.info("🚪 User logging out")
+    st.session_state.authenticated = False
+    st.session_state.auth_token = None
+    st.session_state.user_info = None
+    st.session_state.auth_method = None
+
+def generate_jwt_token(email, password):
+    """Generate JWT token for given credentials."""
+    try:
+        logger.info(f"🔑 Generating JWT token for: {email}")
+        response = requests.post(
+            f"{BACKEND_API_URL}/auth/jwt/login",
+            data={'username': email, 'password': password},
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            auth_data = response.json()
+            token = auth_data.get('access_token')
+            token_type = auth_data.get('token_type', 'bearer')
+            
+            if token:
+                logger.info("✅ JWT token generated successfully")
+                return True, token, token_type
+            else:
+                logger.error("❌ No access token in response")
+                return False, "No access token received", None
+        else:
+            error_msg = "Invalid credentials"
+            try:
+                error_data = response.json()
+                error_msg = error_data.get('detail', error_msg)
+            except:
+                pass
+            logger.error(f"❌ Token generation failed: {error_msg}")
+            return False, error_msg, None
+            
+    except requests.exceptions.Timeout:
+        logger.error("❌ Token generation request timed out")
+        return False, "Request timed out. Please try again.", None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Token generation request failed: {e}")
+        return False, f"Connection error: {str(e)}", None
+    except Exception as e:
+        logger.error(f"❌ Unexpected token generation error: {e}")
+        return False, f"Unexpected error: {str(e)}", None
+
+def show_auth_sidebar():
+    """Show authentication status and controls in sidebar."""
+    with st.sidebar:
+        st.header("🔐 Authentication")
+        
+        # Get auth configuration from backend
+        auth_config = get_auth_config()
+        google_oauth_enabled = auth_config.get('google_oauth_enabled', False) if auth_config else False
+        
+        if st.session_state.get('authenticated', False):
+            user_info = st.session_state.get('user_info', {})
+            user_name = user_info.get('name', 'Unknown User')
+            auth_method = st.session_state.get('auth_method', 'unknown')
+            
+            st.success(f"✅ Logged in as **{user_name}**")
+            st.caption(f"Method: {auth_method.title()}")
+            
+            # Quick token access for authenticated users
+            current_token = st.session_state.get('auth_token')
+            if current_token:
+                with st.expander("🔑 Your Current Token"):
+                    st.text_area(
+                        "Current Auth Token:",
+                        value=current_token,
+                        height=100,
+                        help="Your current authentication token",
+                        key="current_user_token"
+                    )
+                    
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        if st.button("📋 Copy Current Token", key="copy_current_token", use_container_width=True):
+                            copy_current_js = f"""
+                            <script>
+                            function copyCurrentToClipboard() {{
+                                const text = `{current_token}`;
+                                navigator.clipboard.writeText(text).then(function() {{
+                                    console.log('Current token copied to clipboard');
+                                }}).catch(function(err) {{
+                                    console.error('Could not copy current token: ', err);
+                                }});
+                            }}
+                            copyCurrentToClipboard();
+                            </script>
+                            """
+                            st.components.v1.html(copy_current_js, height=0)
+                            st.success("✅ Current token copied!")
+                    
+                    with col2:
+                        if st.button("📋 Copy Auth Header", key="copy_current_auth", use_container_width=True):
+                            auth_header_current = f"Authorization: Bearer {current_token}"
+                            copy_auth_current_js = f"""
+                            <script>
+                            function copyCurrentAuthToClipboard() {{
+                                const text = `{auth_header_current}`;
+                                navigator.clipboard.writeText(text).then(function() {{
+                                    console.log('Current auth header copied to clipboard');
+                                }}).catch(function(err) {{
+                                    console.error('Could not copy current auth header: ', err);
+                                }});
+                            }}
+                            copyCurrentAuthToClipboard();
+                            </script>
+                            """
+                            st.components.v1.html(copy_auth_current_js, height=0)
+                            st.success("✅ Auth header copied!")
+                    
+                    st.caption("💡 Use this token for WebSocket connections and API calls")
+            
+            if st.button("🚪 Logout", use_container_width=True):
+                logout()
+                st.rerun()
+        else:
+            st.warning("🔒 Not authenticated")
+            
+            # Login options
+            with st.expander("🔑 Login", expanded=True):
+                option_number = 1
+                
+                # Google OAuth login (conditional)
+                if google_oauth_enabled:
+                    st.write(f"**Option {option_number}: Google Sign-In**")
+                    google_login_url = f"{BACKEND_API_URL}/auth/google/login"
+                    st.markdown(f'<a href="{google_login_url}" target="_blank">🌐 Login with Google</a>', unsafe_allow_html=True)
+                    st.caption("Opens in new tab, then copy the token from the callback URL")
+                    
+                    # Manual token input
+                    with st.expander("Manual Token Entry"):
+                        manual_token = st.text_input("JWT Token:", type="password", help="Paste token from OAuth callback URL")
+                        if st.button("Submit Token"):
+                            if manual_token.strip():
+                                # Validate token
+                                headers = {'Authorization': f'Bearer {manual_token.strip()}'}
+                                try:
+                                    response = requests.get(f"{BACKEND_API_URL}/api/users", headers=headers, timeout=5)
+                                    if response.status_code == 200:
+                                        st.session_state.authenticated = True
+                                        st.session_state.auth_token = manual_token.strip()
+                                        st.session_state.auth_method = 'manual'
+                                        st.session_state.user_info = {'user_id': 'Unknown', 'email': 'Unknown', 'name': 'Manual Login'}
+                                        st.success("✅ Token validated successfully!")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Invalid token")
+                                except Exception as e:
+                                    st.error(f"❌ Error validating token: {e}")
+                            else:
+                                st.error("Please enter a token")
+                    
+                    st.divider()
+                    option_number += 1
+                
+                # Email/Password login
+                st.write(f"**Option {option_number}: Email & Password**")
+                with st.form("login_form"):
+                    email = st.text_input("Email:")
+                    password = st.text_input("Password:", type="password")
+                    login_submitted = st.form_submit_button("🔑 Login")
+                    
+                    if login_submitted:
+                        if email.strip() and password.strip():
+                            with st.spinner("Logging in..."):
+                                success, message = login_with_credentials(email.strip(), password.strip())
+                                if success:
+                                    st.success(message)
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+                        else:
+                            st.error("Please enter both email and password")
+            
+            # JWT Token Generator
+            with st.expander("🔑 Generate JWT Token"):
+                st.info("Generate JWT tokens for API access or WebSocket connections")
+                with st.form("jwt_token_form"):
+                    jwt_email = st.text_input("Email:", placeholder="admin@example.com")
+                    jwt_password = st.text_input("Password:", type="password", placeholder="Admin password")
+                    generate_submitted = st.form_submit_button("🔑 Generate Token")
+                    
+                    if generate_submitted:
+                        if jwt_email.strip() and jwt_password.strip():
+                            with st.spinner("Generating JWT token..."):
+                                success, result, token_type = generate_jwt_token(jwt_email.strip(), jwt_password.strip())
+                                if success:
+                                    st.success("✅ JWT token generated successfully!")
+                                    
+                                    # Create a container for the token display
+                                    token_container = st.container()
+                                    with token_container:
+                                        st.write("**Your JWT Token:**")
+                                        
+                                        # Display token in a text area (read-only)
+                                        st.text_area(
+                                            "Access Token:",
+                                            value=result,
+                                            height=100,
+                                            help="Copy this token for API calls or WebSocket connections",
+                                            key="generated_jwt_token"
+                                        )
+                                        
+                                        # Copy functionality with JavaScript
+                                        col1, col2 = st.columns([1, 1])
+                                        with col1:
+                                            copy_button = st.button("📋 Copy Token", key="copy_jwt_token", use_container_width=True)
+                                        with col2:
+                                            copy_auth_header = st.button("📋 Copy Auth Header", key="copy_auth_header", use_container_width=True)
+                                        
+                                        if copy_button:
+                                            # JavaScript copy functionality
+                                            copy_js = f"""
+                                            <script>
+                                            function copyToClipboard() {{
+                                                const text = `{result}`;
+                                                navigator.clipboard.writeText(text).then(function() {{
+                                                    console.log('Token copied to clipboard');
+                                                }}).catch(function(err) {{
+                                                    console.error('Could not copy text: ', err);
+                                                    // Fallback: select the text area
+                                                    const textArea = document.getElementById('generated_jwt_token');
+                                                    if (textArea) {{
+                                                        textArea.select();
+                                                        textArea.setSelectionRange(0, 99999); // For mobile devices
+                                                    }}
+                                                }});
+                                            }}
+                                            copyToClipboard();
+                                            </script>
+                                            """
+                                            st.components.v1.html(copy_js, height=0)
+                                            st.success("✅ Token copied to clipboard!")
+                                            st.info("💡 **Fallback:** If automatic copy failed, select text in the box above and copy (Ctrl+C)")
+                                            
+                                        if copy_auth_header:
+                                            # JavaScript copy functionality for auth header
+                                            auth_header = f"Authorization: Bearer {result}"
+                                            copy_auth_js = f"""
+                                            <script>
+                                            function copyAuthToClipboard() {{
+                                                const text = `{auth_header}`;
+                                                navigator.clipboard.writeText(text).then(function() {{
+                                                    console.log('Auth header copied to clipboard');
+                                                }}).catch(function(err) {{
+                                                    console.error('Could not copy auth header: ', err);
+                                                }});
+                                            }}
+                                            copyAuthToClipboard();
+                                            </script>
+                                            """
+                                            st.components.v1.html(copy_auth_js, height=0)
+                                            st.success("✅ Authorization header copied to clipboard!")
+                                            st.code(f"Authorization: Bearer {result}")
+                                            st.info("💡 **Fallback:** If automatic copy failed, select text in the code box above and copy (Ctrl+C)")
+                                        
+                                        # Show usage examples
+                                        with st.expander("Usage Examples"):
+                                            st.write("**WebSocket Connection:**")
+                                            st.code(f"ws://your-server:8000/ws?token={result[:20]}...")
+                                            
+                                            st.write("**API Call:**")
+                                            st.code(f"""curl -H "Authorization: Bearer {result[:20]}..." \\
+  {BACKEND_API_URL}/api/users""")
+                                            
+                                            st.write("**Full Token (for copying):**")
+                                            st.code(result)
+                                else:
+                                    st.error(f"❌ Failed to generate token: {result}")
+                        else:
+                            st.error("Please enter both email and password")
+            
+            # Registration info
+            with st.expander("📝 New User Registration"):
+                st.info("New users can register using the backend API:")
+                st.code(f"POST {BACKEND_API_URL}/auth/register")
+                if google_oauth_enabled:
+                    st.write("Or use Google Sign-In to automatically create an account")
+                else:
+                    st.caption("💡 Google OAuth is disabled - only email/password registration available")
+                    
+            # Show auth configuration status
+            if auth_config:
+                with st.expander("⚙️ Auth Configuration"):
+                    st.write("**Available Methods:**")
+                    st.write(f"• Google OAuth: {'✅ Enabled' if google_oauth_enabled else '❌ Disabled'}")
+                    st.write("• Email/Password: ✅ Enabled")
+                    st.write("• Registration: ✅ Enabled")
+                    
+                    if not google_oauth_enabled:
+                        st.caption("💡 To enable Google OAuth, set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend environment")
+            else:
+                st.caption("⚠️ Could not load auth configuration from backend")
 
 # ---- Health Check Functions ---- #
 @st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too many requests
@@ -133,18 +582,37 @@ def get_system_health():
         }
 
 # ---- Helper Functions ---- #
-def get_data(endpoint: str):
+def get_data(endpoint: str, require_auth: bool = False):
     """Helper function to get data from the backend API with retry logic."""
     logger.debug(f"📡 GET request to endpoint: {endpoint}")
     start_time = time.time()
     
+    # Check authentication if required
+    if require_auth and not st.session_state.get('authenticated', False):
+        logger.warning(f"❌ Authentication required for endpoint: {endpoint}")
+        st.error(f"🔒 Authentication required to access {endpoint}")
+        return None
+    
     max_retries = 3
     base_delay = 1
+    headers = get_auth_headers() if require_auth else {}
     
     for attempt in range(max_retries):
         try:
             logger.debug(f"📡 Attempt {attempt + 1}/{max_retries} for GET {endpoint}")
-            response = requests.get(f"{BACKEND_API_URL}{endpoint}")
+            response = requests.get(f"{BACKEND_API_URL}{endpoint}", headers=headers)
+            
+            # Handle authentication errors
+            if response.status_code == 401:
+                logger.error(f"❌ Authentication failed for {endpoint}")
+                st.error("🔒 Authentication failed. Please login again.")
+                logout()  # Clear invalid auth state
+                return None
+            elif response.status_code == 403:
+                logger.error(f"❌ Access forbidden for {endpoint}")
+                st.error("🔒 Access forbidden. You don't have permission for this resource.")
+                return None
+            
             response.raise_for_status()
             duration = time.time() - start_time
             logger.info(f"✅ GET {endpoint} successful in {duration:.3f}s")
@@ -158,16 +626,43 @@ def get_data(endpoint: str):
                 continue
             else:
                 logger.error(f"❌ GET {endpoint} failed after {max_retries} attempts in {duration:.3f}s: {e}")
-                st.error(f"Could not connect to the backend at `{BACKEND_API_URL}`. Please ensure it's running. Error: {e}")
+                if not require_auth:  # Only show connection error for public endpoints
+                    st.error(f"Could not connect to the backend at `{BACKEND_API_URL}`. Please ensure it's running. Error: {e}")
                 return None
 
-def post_data(endpoint: str, params: dict | None = None):
+def post_data(endpoint: str, params: dict | None = None, json_data: dict | None = None, require_auth: bool = False):
     """Helper function to post data to the backend API."""
     logger.debug(f"📤 POST request to endpoint: {endpoint} with params: {params}")
     start_time = time.time()
     
+    # Check authentication if required
+    if require_auth and not st.session_state.get('authenticated', False):
+        logger.warning(f"❌ Authentication required for endpoint: {endpoint}")
+        st.error(f"🔒 Authentication required to access {endpoint}")
+        return None
+    
+    headers = get_auth_headers() if require_auth else {}
+    
     try:
-        response = requests.post(f"{BACKEND_API_URL}{endpoint}", params=params)
+        kwargs = {'headers': headers}
+        if params:
+            kwargs['params'] = params
+        if json_data:
+            kwargs['json'] = json_data
+            
+        response = requests.post(f"{BACKEND_API_URL}{endpoint}", **kwargs)
+        
+        # Handle authentication errors
+        if response.status_code == 401:
+            logger.error(f"❌ Authentication failed for {endpoint}")
+            st.error("🔒 Authentication failed. Please login again.")
+            logout()  # Clear invalid auth state
+            return None
+        elif response.status_code == 403:
+            logger.error(f"❌ Access forbidden for {endpoint}")
+            st.error("🔒 Access forbidden. You don't have permission for this resource.")
+            return None
+            
         response.raise_for_status()
         duration = time.time() - start_time
         logger.info(f"✅ POST {endpoint} successful in {duration:.3f}s")
@@ -178,13 +673,33 @@ def post_data(endpoint: str, params: dict | None = None):
         st.error(f"Error posting to backend: {e}")
         return None
 
-def delete_data(endpoint: str, params: dict | None = None):
+def delete_data(endpoint: str, params: dict | None = None, require_auth: bool = False):
     """Helper function to delete data from the backend API."""
     logger.debug(f"🗑️ DELETE request to endpoint: {endpoint} with params: {params}")
     start_time = time.time()
     
+    # Check authentication if required
+    if require_auth and not st.session_state.get('authenticated', False):
+        logger.warning(f"❌ Authentication required for endpoint: {endpoint}")
+        st.error(f"🔒 Authentication required to access {endpoint}")
+        return None
+    
+    headers = get_auth_headers() if require_auth else {}
+    
     try:
-        response = requests.delete(f"{BACKEND_API_URL}{endpoint}", params=params)
+        response = requests.delete(f"{BACKEND_API_URL}{endpoint}", params=params, headers=headers)
+        
+        # Handle authentication errors
+        if response.status_code == 401:
+            logger.error(f"❌ Authentication failed for {endpoint}")
+            st.error("🔒 Authentication failed. Please login again.")
+            logout()  # Clear invalid auth state
+            return None
+        elif response.status_code == 403:
+            logger.error(f"❌ Access forbidden for {endpoint}")
+            st.error("🔒 Access forbidden. You don't have permission for this resource.")
+            return None
+            
         response.raise_for_status()
         duration = time.time() - start_time
         logger.info(f"✅ DELETE {endpoint} successful in {duration:.3f}s")
@@ -202,6 +717,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Initialize authentication state
+init_auth_state()
+
+# Check for authentication token in URL (from OAuth callback)
+check_auth_from_url()
 
 st.title("Friend-Lite Dashboard")
 logger.info("📊 Dashboard initialized")
@@ -225,7 +746,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- Sidebar with Health Checks ---- #
+# ---- Sidebar with Authentication and Health Checks ---- #
+# Show authentication first
+show_auth_sidebar()
+
 with st.sidebar:
     st.header("🔍 System Health")
     logger.debug("🔍 Loading system health sidebar...")
@@ -271,11 +795,22 @@ with st.sidebar:
     with st.expander("Active Clients & Close Conversation", expanded=True):
         # Get active clients
         logger.debug("📡 Fetching active clients...")
-        active_clients_data = get_data("/api/active_clients")
+        active_clients_data = get_data("/api/active_clients", require_auth=True)
         
         if active_clients_data and active_clients_data.get("clients"):
             clients = active_clients_data["clients"]
-            logger.info(f"📊 Found {len(clients)} active clients")
+            logger.info(f"📊 Found {len(clients)} accessible clients")
+            
+            # Check if user is authenticated to show appropriate messages
+            if st.session_state.get('authenticated', False):
+                user_info = st.session_state.get('user_info', {})
+                is_admin = user_info.get('is_superuser', False) if isinstance(user_info, dict) else False
+                
+                if not is_admin and len(clients) == 0:
+                    st.info("🔍 No active clients found for your account.")
+                    st.caption("💡 **Tip:** Connect an audio client with your user ID to see it here.")
+                elif not is_admin:
+                    st.caption("ℹ️ You can only see and manage your own conversations.")
             
             # Show active clients with conversation status
             for client_id, client_info in clients.items():
@@ -304,7 +839,7 @@ with st.sidebar:
                         
                         if close_btn:
                             logger.info(f"🔒 Closing conversation for client: {client_id}")
-                            result = post_data("/api/close_conversation", {"client_id": client_id})
+                            result = post_data("/api/close_conversation", params={"client_id": client_id}, require_auth=True)
                             if result:
                                 st.success(f"✅ Conversation closed for {client_id}")
                                 logger.info(f"✅ Successfully closed conversation for {client_id}")
@@ -315,9 +850,19 @@ with st.sidebar:
                     else:
                         st.caption("No active conversation")
             
-            st.info(f"💡 **Total active clients:** {active_clients_data.get('active_clients_count', 0)}")
+            if len(clients) > 0:
+                st.info(f"💡 **Total accessible clients:** {active_clients_data.get('active_clients_count', 0)}")
         else:
-            st.info("No active clients found")
+            if st.session_state.get('authenticated', False):
+                st.info("🔍 No active clients found for your account.")
+                st.markdown("""
+                **To see active clients here:**
+                1. Connect an audio client using your user ID
+                2. Make sure to include your authentication token in the WebSocket connection
+                3. Use the format: `ws://localhost:8000/ws?user_id=YOUR_USER_ID&token=YOUR_TOKEN`
+                """)
+            else:
+                st.warning("🔒 Please authenticate to view your active clients.")
             logger.info("📊 No active clients found")
     
     st.divider()
@@ -345,6 +890,13 @@ health_data = get_system_health()
 if not health_data.get("overall_healthy", False):
     st.error("⚠️ Some critical services are unavailable. The dashboard may not function properly.")
     logger.warning("⚠️ System is unhealthy - some services unavailable")
+
+# Show authentication status and guidance
+if not st.session_state.get('authenticated', False):
+    st.info("🔒 **Authentication Required:** Some features require authentication. Please login using the sidebar to access user management, protected conversations, and admin functions.")
+else:
+    user_info = st.session_state.get('user_info', {})
+    st.success(f"✅ **Authenticated as:** {user_info.get('name', 'Unknown User')} - You have access to all features.")
 
 # ---- Main Content ---- #
 logger.info("📋 Loading main dashboard tabs...")
@@ -383,7 +935,7 @@ with tab_convos:
         cache_buster = ""
 
     logger.debug("📡 Fetching conversations data...")
-    conversations = get_data("/api/conversations")
+    conversations = get_data("/api/conversations", require_auth=True)
 
     if conversations:
         logger.info(f"📊 Loaded {len(conversations) if isinstance(conversations, list) else 'grouped'} conversations")
@@ -634,12 +1186,12 @@ with tab_mem:
         with col1:
             with st.spinner("Loading memories..."):
                 logger.debug(f"📡 Fetching memories for user: {user_id_input.strip()}")
-                memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}")
+                memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}", require_auth=True)
         
         with col2:
             with st.spinner("Loading action items..."):
                 logger.debug(f"📡 Fetching action items for user: {user_id_input.strip()}")
-                action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}")
+                action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}", require_auth=True)
         
         # Handle the API response format with "results" wrapper for memories
         if memories_response and isinstance(memories_response, dict) and "results" in memories_response:
@@ -748,7 +1300,7 @@ with tab_mem:
             # Show statistics if requested
             if show_stats:
                 logger.info("📊 Action items statistics requested")
-                stats_response = get_data(f"/api/action-items/stats?user_id={user_id_input.strip()}")
+                stats_response = get_data(f"/api/action-items/stats?user_id={user_id_input.strip()}", require_auth=True)
                 if stats_response and "statistics" in stats_response:
                     stats = stats_response["statistics"]
                     logger.debug(f"📊 Action items statistics: {stats}")
@@ -809,8 +1361,8 @@ with tab_mem:
                                     logger.debug(f"📤 Creating action item with data: {create_data}")
                                     response = requests.post(
                                         f"{BACKEND_API_URL}/api/action-items",
-                                        params={"user_id": user_id_input.strip()},
-                                        json=create_data
+                                        json=create_data,
+                                        headers=get_auth_headers()
                                     )
                                     response.raise_for_status()
                                     result = response.json()
@@ -898,7 +1450,8 @@ with tab_mem:
                                         try:
                                             response = requests.put(
                                                 f"{BACKEND_API_URL}/api/action-items/{memory_id}",
-                                                json={"status": new_status}
+                                                json={"status": new_status},
+                                                headers=get_auth_headers()
                                             )
                                             response.raise_for_status()
                                             st.success(f"Status updated to {new_status}")
@@ -918,7 +1471,7 @@ with tab_mem:
                                 if memory_id:
                                     logger.info(f"🗑️ Deleting action item {memory_id}")
                                     try:
-                                        response = requests.delete(f"{BACKEND_API_URL}/api/action-items/{memory_id}")
+                                        response = requests.delete(f"{BACKEND_API_URL}/api/action-items/{memory_id}", headers=get_auth_headers())
                                         response.raise_for_status()
                                         st.success("Action item deleted")
                                         logger.info(f"✅ Action item deleted successfully")
@@ -955,21 +1508,22 @@ with tab_users:
     
     # Create User Section
     st.subheader("Create New User")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        new_user_id = st.text_input("New User ID:", placeholder="e.g., john_doe, alice123")
-    with col2:
-        st.write("")  # Spacer
-        create_user_btn = st.button("Create User", key="create_user")
+    with st.form("create_user_form"):
+        st.write("Create a new user with an email and a temporary password.")
+        new_user_email = st.text_input("New User Email:", placeholder="e.g., john.doe@example.com")
+        new_user_password = st.text_input("Temporary Password:", type="password", value="changeme")
+        create_user_submitted = st.form_submit_button("Create User")
 
-    if create_user_btn:
-        if new_user_id.strip():
-            result = post_data("/api/create_user", {"user_id": new_user_id.strip()})
-            if result:
-                st.success(f"User '{new_user_id.strip()}' created successfully!")
-                st.rerun()
-        else:
-            st.error("Please enter a valid User ID")
+        if create_user_submitted:
+            if new_user_email.strip() and new_user_password.strip():
+                create_data = {"email": new_user_email.strip(), "password": new_user_password.strip()}
+                # This endpoint requires authentication
+                result = post_data("/api/create_user", json_data=create_data, require_auth=True)
+                if result:
+                    st.success(f"User '{new_user_email.strip()}' created successfully!")
+                    st.rerun()
+            else:
+                st.error("Please provide both email and password.")
 
     st.divider()
 
@@ -982,7 +1536,7 @@ with tab_users:
     if refresh_users_btn:
         st.rerun()
 
-    users = get_data("/api/users")
+    users = get_data("/api/users", require_auth=True)
     
     if users:
         st.write(f"**Total Users:** {len(users)}")
@@ -1032,14 +1586,15 @@ with tab_users:
                         
                         with col_confirm:
                             if st.button("🗑️ Confirm Delete", key=f"confirm_{user_db_id}", use_container_width=True, type="primary"):
-                                # Build delete parameters
+                                # Build delete parameters - use _id not display user_id
                                 params = {
-                                    "user_id": user_id,
+                                    "user_id": user_db_id,  # Use MongoDB _id, not display user_id
                                     "delete_conversations": delete_conversations,
                                     "delete_memories": delete_memories
                                 }
                                 
-                                result = delete_data("/api/delete_user", params)
+                                # This endpoint requires authentication
+                                result = delete_data("/api/delete_user", params, require_auth=True)
                                 if result:
                                     deleted_data = result.get('deleted_data', {})
                                     message = result.get('message', f"User '{user_id}' deleted")
@@ -1095,61 +1650,132 @@ with tab_users:
       - Mix and match: You can delete just conversations, just memories, or both
     - Use the 'Memories' tab to view specific user memories
     """)
+    
+    # Authentication information
+    st.subheader("🔐 Authentication System")
+    if st.session_state.get('authenticated', False):
+        st.success("✅ You are authenticated and can use all user management features.")
+        user_info = st.session_state.get('user_info', {})
+        st.info(f"**Current User:** {user_info.get('name', 'Unknown')}")
+        st.info(f"**Auth Method:** {st.session_state.get('auth_method', 'unknown').title()}")
+    else:
+        st.warning("🔒 Authentication required for user management operations.")
+        st.markdown("""
+        **How to authenticate:**
+        1. **Google OAuth**: Click "Login with Google" in the sidebar
+        2. **Email/Password**: Use the login form in the sidebar if you have an account
+        3. **Manual Token**: If you have a JWT token, paste it in the manual entry section
+        
+        **Note:** The backend now requires authentication for:
+        - Creating new users
+        - Deleting users and their data
+        - WebSocket audio connections
+        """)
+        
+        st.markdown("**To set up Google OAuth:**")
+        st.code(f"""
+# Required environment variables for backend:
+AUTH_SECRET_KEY=your-secret-key
+GOOGLE_CLIENT_ID=your-google-client-id  
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+        """)
+        
+        if st.button("🔗 Go to Google OAuth Setup", help="Opens Google Cloud Console"):
+            st.markdown("[Google Cloud Console](https://console.cloud.google.com/)", unsafe_allow_html=True)
 
 with tab_manage:
     st.header("Conversation Management")
     
     st.subheader("🔒 Close Current Conversation")
-    st.write("Close the current active conversation for any connected client.")
     
-    # Get active clients for the dropdown
-    active_clients_data = get_data("/api/active_clients")
-    
-    if active_clients_data and active_clients_data.get("clients"):
-        clients = active_clients_data["clients"]
+    # Check if user is authenticated and show appropriate message
+    if st.session_state.get('authenticated', False):
+        user_info = st.session_state.get('user_info', {})
+        is_admin = user_info.get('is_superuser', False) if isinstance(user_info, dict) else False
         
-        # Filter to only clients with active conversations
-        active_conversations = {
-            client_id: client_info 
-            for client_id, client_info in clients.items() 
-            if client_info.get("has_active_conversation", False)
-        }
-        
-        if active_conversations:
-            col1, col2 = st.columns([3, 1])
-            
-            with col1:
-                selected_client = st.selectbox(
-                    "Select client to close conversation:",
-                    options=list(active_conversations.keys()),
-                    format_func=lambda x: f"{x} (UUID: {active_conversations[x].get('current_audio_uuid', 'N/A')[:8]}...)"
-                )
-            
-            with col2:
-                st.write("")  # Spacer
-                close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
-            
-            if close_conversation_btn and selected_client:
-                result = post_data("/api/close_conversation", {"client_id": selected_client})
-                if result:
-                    st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
-                    st.info(f"📋 {result.get('message', 'Conversation closed')}")
-                    time.sleep(1)  # Brief pause before refresh
-                    st.rerun()
-                else:
-                    st.error(f"❌ Failed to close conversation for client '{selected_client}'")
+        if is_admin:
+            st.write("Close the current active conversation for any connected client.")
         else:
-            st.info("🔍 No clients with active conversations found")
+            st.write("Close the current active conversation for your connected clients.")
             
-        # Show all clients status
-        with st.expander("All Connected Clients Status"):
-            for client_id, client_info in clients.items():
-                status_icon = "🟢" if client_info.get("has_active_conversation", False) else "⚪"
-                st.write(f"{status_icon} **{client_id}** - {'Active conversation' if client_info.get('has_active_conversation', False) else 'No active conversation'}")
-                if client_info.get("current_audio_uuid"):
-                    st.caption(f"   Audio UUID: {client_info['current_audio_uuid']}")
+        # Get active clients for the dropdown
+        active_clients_data = get_data("/api/active_clients", require_auth=True)
+        
+        if active_clients_data and active_clients_data.get("clients"):
+            clients = active_clients_data["clients"]
+            
+            # Filter to only clients with active conversations
+            active_conversations = {
+                client_id: client_info 
+                for client_id, client_info in clients.items() 
+                if client_info.get("has_active_conversation", False)
+            }
+            
+            if active_conversations:
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    selected_client = st.selectbox(
+                        "Select client to close conversation:",
+                        options=list(active_conversations.keys()),
+                        format_func=lambda x: f"{x} (UUID: {active_conversations[x].get('current_audio_uuid', 'N/A')[:8]}...)"
+                    )
+                
+                with col2:
+                    st.write("")  # Spacer
+                    close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
+                
+                if close_conversation_btn and selected_client:
+                    result = post_data("/api/close_conversation", params={"client_id": selected_client}, require_auth=True)
+                    if result:
+                        st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
+                        st.info(f"📋 {result.get('message', 'Conversation closed')}")
+                        time.sleep(1)  # Brief pause before refresh
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Failed to close conversation for client '{selected_client}'")
+            else:
+                if len(clients) > 0:
+                    st.info("🔍 No clients with active conversations found.")
+                    st.caption("💡 Your connected clients don't have active conversations at the moment.")
+                else:
+                    st.info("🔍 No connected clients found for your account.")
+                    st.caption("💡 Connect an audio client with your user ID to manage conversations.")
+                
+            # Show all clients status (only if there are clients)
+            if len(clients) > 0:
+                with st.expander("All Connected Clients Status"):
+                    for client_id, client_info in clients.items():
+                        status_icon = "🟢" if client_info.get("has_active_conversation", False) else "⚪"
+                        st.write(f"{status_icon} **{client_id}** - {'Active conversation' if client_info.get('has_active_conversation', False) else 'No active conversation'}")
+                        if client_info.get("current_audio_uuid"):
+                            st.caption(f"   Audio UUID: {client_info['current_audio_uuid']}")
+                            
+                    # Show ownership info for non-admin users
+                    if not is_admin:
+                        st.caption("ℹ️ You can only see and manage clients that belong to your account.")
+        else:
+            st.info("🔍 No accessible clients found for your account.")
+            st.markdown("""
+            **To connect an audio client:**
+            1. Use your user ID when connecting: `user_id=YOUR_USER_ID`
+            2. Include your authentication token in the WebSocket connection
+            3. Example: `ws://localhost:8000/ws?user_id=YOUR_USER_ID&token=YOUR_TOKEN`
+            """)
+            
+            if st.session_state.get('auth_token'):
+                st.info("💡 Your authentication token is available - see the WebSocket connection info below.")
+            else:
+                st.warning("⚠️ Please authenticate first to get your token for audio client connections.")
     else:
-        st.info("🔍 No active clients found")
+        st.warning("🔒 Authentication required to manage conversations.")
+        st.markdown("""
+        **Please authenticate using the sidebar to:**
+        - View your active audio clients
+        - Close conversations for your clients
+        - Manage your conversation data
+        """)
+        st.info("👆 Use the authentication options in the sidebar to get started.")
     
     st.divider()
     
@@ -1168,7 +1794,7 @@ with tab_manage:
     if add_speaker_btn:
         if audio_uuid_input.strip() and speaker_id_input.strip():
             result = post_data(f"/api/conversations/{audio_uuid_input.strip()}/speakers", 
-                             {"speaker_id": speaker_id_input.strip()})
+                             params={"speaker_id": speaker_id_input.strip()}, require_auth=True)
             if result:
                 st.success(f"Speaker '{speaker_id_input.strip()}' added to conversation!")
         else:
@@ -1205,7 +1831,8 @@ with tab_manage:
                 try:
                     response = requests.put(
                         f"{BACKEND_API_URL}/api/conversations/{update_audio_uuid.strip()}/transcript/{segment_index}",
-                        params=params
+                        params=params,
+                        headers=get_auth_headers()
                     )
                     response.raise_for_status()
                     result = response.json()
@@ -1248,3 +1875,38 @@ with tab_manage:
     """)
     
     st.info("💡 **Tip**: You can find Audio UUIDs in the conversation details on the 'Conversations' tab.")
+    
+    st.divider()
+    
+    # Authentication info for WebSocket connections
+    st.subheader("🔐 Authentication & WebSocket Connections")
+    if st.session_state.get('authenticated', False):
+        auth_token = st.session_state.get('auth_token', '')
+        st.success("✅ You are authenticated. Audio clients can use your token for WebSocket connections.")
+        
+        with st.expander("WebSocket Connection Info"):
+            st.markdown("**For audio clients, use one of these WebSocket URLs:**")
+            st.code(f"""
+# Opus audio stream (with authentication):
+ws://localhost:8000/ws?token={auth_token[:20]}...
+
+# PCM audio stream (with authentication):  
+ws://localhost:8000/ws_pcm?token={auth_token[:20]}...
+
+# Or include in Authorization header:
+Authorization: Bearer {auth_token[:20]}...
+            """)
+            st.caption("⚠️ Keep your token secure and don't share it publicly!")
+            
+        st.info("🎵 **Audio clients must now authenticate** to connect to WebSocket endpoints.")
+    else:
+        st.warning("🔒 WebSocket audio connections now require authentication.")
+        st.markdown("""
+        **Important Changes:**
+        - All WebSocket endpoints (`/ws` and `/ws_pcm`) now require authentication
+        - Audio clients must include a JWT token in the connection
+        - Tokens can be passed via query parameter (`?token=...`) or Authorization header
+        - Get a token by logging in via the sidebar or using the backend auth endpoints
+        """)
+        
+        st.info("👆 **Log in using the sidebar** to get your authentication token for audio clients.")

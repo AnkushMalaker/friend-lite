@@ -6,3 +6,4 @@
 !pyproject.blackwell.toml
 !README.md
 !src
+!.env

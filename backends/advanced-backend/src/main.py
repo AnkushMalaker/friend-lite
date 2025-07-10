@@ -8,23 +8,29 @@
 * The transcript is stored in **mem0** and MongoDB.
 
 """
+import logging
+logging.basicConfig(level=logging.INFO)
 
 import asyncio
 import concurrent.futures
-import logging
+import json
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
-from typing import Optional, Tuple
-import re
+from typing import Optional, Tuple, Any
+from bson import ObjectId
 
+# Import Beanie for user management
+from beanie import init_beanie
 import ollama
+import websockets
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -34,14 +40,31 @@ from wyoming.audio import AudioChunk, AudioStart
 from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
-# from debug_utils import memory_debug
+from action_items_service import ActionItemsService
+
+# Import authentication components
+from auth import (
+    GOOGLE_OAUTH_ENABLED,
+    SECRET_KEY,
+    bearer_backend,
+    cookie_backend,
+    create_admin_user_if_needed,
+    current_active_user,
+    current_superuser,
+    fastapi_users,
+    get_user_manager,
+    google_oauth_client,
+    websocket_auth,
+    ADMIN_EMAIL
+)
+
 from memory import get_memory_service, init_memory_config, shutdown_memory_service
 from metrics import (
     get_metrics_collector,
     start_metrics_collection,
     stop_metrics_collection,
 )
-from action_items_service import ActionItemsService
+from users import User, UserCreate, get_user_db, generate_client_id
 
 ###############################################################################
 # SETUP
@@ -49,8 +72,6 @@ from action_items_service import ActionItemsService
 
 # Load environment variables first
 load_dotenv()
-
-# Mem0 telemetry configuration is now handled in the memory module
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -90,15 +111,11 @@ SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
 # Conversation timeout configuration
-NEW_CONVERSATION_TIMEOUT_MINUTES = float(
-    os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5")
-)
+NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
 # Audio cropping configuration
 AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
-MIN_SPEECH_SEGMENT_DURATION = float(
-    os.getenv("MIN_SPEECH_SEGMENT_DURATION", "1.0")
-)  # seconds
+MIN_SPEECH_SEGMENT_DURATION = float(os.getenv("MIN_SPEECH_SEGMENT_DURATION", "1.0"))  # seconds
 CROPPING_CONTEXT_PADDING = float(
     os.getenv("CROPPING_CONTEXT_PADDING", "0.1")
 )  # seconds of padding around speech
@@ -112,22 +129,19 @@ OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://192.168.0.110:8765
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
 # Determine transcription strategy based on environment variables
-USE_DEEPGRAM = bool(DEEPGRAM_API_KEY and DEEPGRAM_AVAILABLE)
+# For WebSocket implementation, we don't need the Deepgram SDK
+USE_DEEPGRAM = bool(DEEPGRAM_API_KEY)
 if DEEPGRAM_API_KEY and not DEEPGRAM_AVAILABLE:
-    audio_logger.error(
-        "DEEPGRAM_API_KEY provided but Deepgram SDK not available. Falling back to offline ASR."
+    audio_logger.info(
+        "DEEPGRAM_API_KEY provided. Using WebSocket implementation (Deepgram SDK not required)."
     )
+
 audio_logger.info(
-    f"Transcription strategy: {'Deepgram' if USE_DEEPGRAM else 'Offline ASR'}"
+    f"Transcription strategy: {'Deepgram WebSocket' if USE_DEEPGRAM else 'Offline ASR'}"
 )
 
-# Deepgram client placeholder (not implemented)
+# Deepgram client placeholder (not needed for WebSocket implementation)
 deepgram_client = None
-if USE_DEEPGRAM:
-    audio_logger.warning(
-        "Deepgram transcription requested but not yet implemented. Falling back to offline ASR."
-    )
-    USE_DEEPGRAM = False
 
 # Ollama & Qdrant Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -183,14 +197,10 @@ async def _process_audio_cropping_with_relative_timestamps(
 
             # Ensure relative timestamps are positive (sanity check)
             if start_rel < 0:
-                audio_logger.warning(
-                    f"⚠️ Negative start timestamp: {start_rel}, clamping to 0.0"
-                )
+                audio_logger.warning(f"⚠️ Negative start timestamp: {start_rel}, clamping to 0.0")
                 start_rel = 0.0
             if end_rel < 0:
-                audio_logger.warning(
-                    f"⚠️ Negative end timestamp: {end_rel}, skipping segment"
-                )
+                audio_logger.warning(f"⚠️ Negative end timestamp: {end_rel}, skipping segment")
                 continue
 
             relative_segments.append((start_rel, end_rel))
@@ -201,18 +211,12 @@ async def _process_audio_cropping_with_relative_timestamps(
         audio_logger.info(f"🕐 Absolute segments: {speech_segments}")
         audio_logger.info(f"🕐 Relative segments: {relative_segments}")
 
-        success = await _crop_audio_with_ffmpeg(
-            original_path, relative_segments, output_path
-        )
+        success = await _crop_audio_with_ffmpeg(original_path, relative_segments, output_path)
         if success:
             # Update database with cropped file info (keep original absolute timestamps for reference)
             cropped_filename = output_path.split("/")[-1]
-            await chunk_repo.update_cropped_audio(
-                audio_uuid, cropped_filename, speech_segments
-            )
-            audio_logger.info(
-                f"Successfully processed cropped audio: {cropped_filename}"
-            )
+            await chunk_repo.update_cropped_audio(audio_uuid, cropped_filename, speech_segments)
+            audio_logger.info(f"Successfully processed cropped audio: {cropped_filename}")
             return True
         else:
             audio_logger.error(f"Failed to crop audio for {audio_uuid}")
@@ -357,8 +361,7 @@ class ChunkRepo:
             "client_id": client_id,
             "timestamp": timestamp,
             "transcript": transcript or [],  # List of conversation segments
-            "speakers_identified": speakers_identified
-            or [],  # List of identified speakers
+            "speakers_identified": speakers_identified or [],  # List of identified speakers
         }
         await self.col.insert_one(doc)
 
@@ -381,9 +384,7 @@ class ChunkRepo:
             {"audio_uuid": audio_uuid}, {"$set": {"transcript": full_transcript}}
         )
 
-    async def update_segment_timing(
-        self, audio_uuid, segment_index, start_time, end_time
-    ):
+    async def update_segment_timing(self, audio_uuid, segment_index, start_time, end_time):
         """Update timing information for a specific transcript segment."""
         await self.col.update_one(
             {"audio_uuid": audio_uuid},
@@ -430,9 +431,7 @@ class ChunkRepo:
             },
         )
         if result.modified_count > 0:
-            audio_logger.info(
-                f"Updated cropped audio info for {audio_uuid}: {cropped_path}"
-            )
+            audio_logger.info(f"Updated cropped audio info for {audio_uuid}: {cropped_path}")
         return result.modified_count > 0
 
 
@@ -442,24 +441,23 @@ class TranscriptionManager:
     def __init__(self, action_item_callback=None):
         self.client = None
         self._current_audio_uuid = None
-        self._streaming = False
         self.use_deepgram = USE_DEEPGRAM
         self.deepgram_client = deepgram_client
         self._audio_buffer = []  # Buffer for Deepgram batch processing
         self.action_item_callback = action_item_callback  # Callback to queue action items
 
-    async def connect(self):
-        """Establish connection to ASR service (only for offline ASR)."""
+    async def connect(self, client_id: str | None = None):
+        """Establish connection to ASR service."""
+        self._client_id = client_id
+
         if self.use_deepgram:
-            audio_logger.info("Using Deepgram transcription - no connection needed")
+            await self._connect_deepgram()
             return
 
         try:
             self.client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
             await self.client.connect()
-            audio_logger.info(
-                f"Connected to offline ASR service at {OFFLINE_ASR_TCP_URI}"
-            )
+            audio_logger.info(f"Connected to offline ASR service at {OFFLINE_ASR_TCP_URI}")
         except Exception as e:
             audio_logger.error(f"Failed to connect to offline ASR service: {e}")
             self.client = None
@@ -468,7 +466,7 @@ class TranscriptionManager:
     async def disconnect(self):
         """Cleanly disconnect from ASR service."""
         if self.use_deepgram:
-            audio_logger.info("Using Deepgram - no disconnection needed")
+            await self._disconnect_deepgram()
             return
 
         if self.client:
@@ -480,30 +478,193 @@ class TranscriptionManager:
             finally:
                 self.client = None
 
-    async def transcribe_chunk(
-        self, audio_uuid: str, chunk: AudioChunk, client_id: str
-    ):
+    async def _connect_deepgram(self):
+        """Establish WebSocket connection to Deepgram."""
+        if not DEEPGRAM_API_KEY:
+            raise Exception("DEEPGRAM_API_KEY is required for Deepgram transcription")
+
+        try:
+            # Deepgram WebSocket URL with configuration parameters
+            params = {
+                "sample_rate": "16000",
+                "encoding": "linear16",  # PCM audio
+                "channels": "1",
+                "model": "nova-2",
+                "language": "en-US",
+                "smart_format": "true",
+                "interim_results": "false",
+                "punctuate": "true",
+                "diarize": "true",
+            }
+
+            # Build URL with parameters
+            param_string = "&".join([f"{k}={v}" for k, v in params.items()])
+            ws_url = f"wss://api.deepgram.com/v1/listen?{param_string}"
+
+            # Headers for authentication
+            headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+
+            # Connect to Deepgram WebSocket
+            self.deepgram_ws = await websockets.connect(ws_url, extra_headers=headers)
+
+            self.deepgram_connected = True
+            audio_logger.info(f"Connected to Deepgram WebSocket for client {self._client_id}")
+
+            # Start listening for responses
+            asyncio.create_task(self._listen_for_deepgram_responses())
+
+        except Exception as e:
+            audio_logger.error(f"Failed to connect to Deepgram WebSocket: {e}")
+            self.deepgram_connected = False
+            raise
+
+    async def _disconnect_deepgram(self):
+        """Disconnect from Deepgram WebSocket."""
+        self.deepgram_connected = False
+        if self.deepgram_ws:
+            try:
+                await self.deepgram_ws.close()
+                audio_logger.info(
+                    f"Disconnected from Deepgram WebSocket for client {self._client_id}"
+                )
+            except Exception as e:
+                audio_logger.error(f"Error disconnecting from Deepgram WebSocket: {e}")
+            finally:
+                self.deepgram_ws = None
+
+    async def _listen_for_deepgram_responses(self):
+        """Listen for responses from Deepgram WebSocket."""
+        if not self.deepgram_ws:
+            return
+
+        try:
+            async for message in self.deepgram_ws:
+                if not self.deepgram_connected:
+                    break
+
+                try:
+                    data = json.loads(message)
+                    await self._handle_deepgram_response(data)
+                except json.JSONDecodeError as e:
+                    audio_logger.error(f"Failed to parse Deepgram response: {e}")
+                except Exception as e:
+                    audio_logger.error(f"Error handling Deepgram response: {e}")
+
+        except websockets.exceptions.ConnectionClosed:
+            audio_logger.info("Deepgram WebSocket connection closed")
+            self.deepgram_connected = False
+        except Exception as e:
+            audio_logger.error(f"Error in Deepgram response listener: {e}")
+            self.deepgram_connected = False
+
+    async def _handle_deepgram_response(self, data):
+        """Handle transcript response from Deepgram."""
+        try:
+            # Check if we have a transcript
+            if data.get("channel", {}).get("alternatives", []):
+                alternative = data["channel"]["alternatives"][0]
+                transcript_text = alternative.get("transcript", "").strip()
+
+                # Only process if we have actual text
+                if transcript_text:
+                    audio_logger.info(
+                        f"Deepgram transcript for {self._current_audio_uuid}: {transcript_text}"
+                    )
+
+                    # Track successful transcription
+                    metrics_collector = get_metrics_collector()
+                    metrics_collector.record_transcription_result(True)
+
+                    # Check for speaker information
+                    speaker_id = f"speaker_{self._client_id}"
+                    words = alternative.get("words", [])
+                    if words and words[0].get("speaker") is not None:
+                        speaker_id = f"speaker_{words[0]['speaker']}"
+
+                    # Create transcript segment
+                    transcript_segment = {
+                        "speaker": speaker_id,
+                        "text": transcript_text,
+                        "start": 0.0,  # Deepgram provides timestamps but we'll use 0 for now
+                        "end": 0.0,
+                    }
+
+                    # Store in database if we have a current audio UUID
+                    if self._current_audio_uuid and self._client_id:
+                        # We'll need to access these globals - they're defined later in the module
+                        # Use globals() to access them safely
+                        global chunk_repo, active_clients
+
+                        await chunk_repo.add_transcript_segment(
+                            self._current_audio_uuid, transcript_segment
+                        )
+                        await chunk_repo.add_speaker(self._current_audio_uuid, speaker_id)
+
+                        # Update client state
+                        if self._client_id in active_clients:
+                            active_clients[self._client_id].last_transcript_time = time.time()
+                            active_clients[self._client_id].conversation_transcripts.append(
+                                transcript_text
+                            )
+
+                        audio_logger.info(
+                            f"Added Deepgram transcript segment for {self._current_audio_uuid} to DB."
+                        )
+
+        except Exception as e:
+            audio_logger.error(f"Error handling Deepgram transcript: {e}")
+
+    async def transcribe_chunk(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
         """Transcribe a single chunk using either Deepgram or offline ASR."""
         if self.use_deepgram:
             await self._transcribe_chunk_deepgram(audio_uuid, chunk, client_id)
         else:
             await self._transcribe_chunk_offline(audio_uuid, chunk, client_id)
 
-    async def _transcribe_chunk_deepgram(
-        self, audio_uuid: str, chunk: AudioChunk, client_id: str
-    ):
-        """Transcribe using Deepgram API."""
-        raise NotImplementedError(
-            "Deepgram transcription is not yet implemented. Please use offline ASR by not setting DEEPGRAM_API_KEY."
-        )
+    async def _transcribe_chunk_deepgram(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
+        """Transcribe using Deepgram WebSocket."""
+        if not self.deepgram_connected or not self.deepgram_ws:
+            audio_logger.error(f"Deepgram WebSocket not connected for {audio_uuid}")
+            # Track transcription failure
+            metrics_collector = get_metrics_collector()
+            metrics_collector.record_transcription_result(False)
+            return
 
-    async def _process_deepgram_buffer(self, audio_uuid: str, client_id: str):
-        """Process buffered audio with Deepgram."""
-        raise NotImplementedError("Deepgram transcription is not yet implemented.")
+        # Track transcription request
+        start_time = time.time()
+        metrics_collector = get_metrics_collector()
+        metrics_collector.record_transcription_request()
 
-    async def _transcribe_chunk_offline(
-        self, audio_uuid: str, chunk: AudioChunk, client_id: str
-    ):
+        try:
+            # Update current audio UUID for response handling
+            if self._current_audio_uuid != audio_uuid:
+                self._current_audio_uuid = audio_uuid
+                audio_logger.info(f"New audio_uuid for Deepgram: {audio_uuid}")
+
+            # Send audio chunk to Deepgram WebSocket as binary data
+            if chunk.audio and len(chunk.audio) > 0:
+                await self.deepgram_ws.send(chunk.audio)
+                audio_logger.debug(f"Sent {len(chunk.audio)} bytes to Deepgram for {audio_uuid}")
+            else:
+                audio_logger.warning(f"Empty audio chunk received for {audio_uuid}")
+
+        except websockets.exceptions.ConnectionClosed:
+            audio_logger.error(
+                f"Deepgram WebSocket connection closed unexpectedly for {audio_uuid}"
+            )
+            self.deepgram_connected = False
+            # Track transcription failure
+            metrics_collector.record_transcription_result(False)
+            # Attempt to reconnect
+            await self._reconnect_deepgram()
+        except Exception as e:
+            audio_logger.error(f"Error sending audio to Deepgram for {audio_uuid}: {e}")
+            # Track transcription failure
+            metrics_collector.record_transcription_result(False)
+            # Attempt to reconnect on error
+            await self._reconnect_deepgram()
+
+    async def _transcribe_chunk_offline(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
         """Transcribe using offline ASR service."""
         if not self.client:
             audio_logger.error(f"No ASR connection available for {audio_uuid}")
@@ -567,9 +728,7 @@ class TranscriptionManager:
 
                             # Track successful transcription with latency
                             latency_ms = (time.time() - start_time) * 1000
-                            metrics_collector.record_transcription_result(
-                                True, latency_ms
-                            )
+                            metrics_collector.record_transcription_result(True, latency_ms)
 
                             # Create transcript segment with new format
                             transcript_segment = {
@@ -585,46 +744,38 @@ class TranscriptionManager:
 
                             # Queue for action item processing using callback (async, non-blocking)
                             if self.action_item_callback:
-                                await self.action_item_callback(transcript_text, client_id, audio_uuid)
+                                await self.action_item_callback(
+                                    transcript_text, client_id, audio_uuid
+                                )
 
                             await chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
                             audio_logger.info(f"Added transcript segment for {audio_uuid} to DB.")
-                            
+
                             # Update transcript time for conversation timeout tracking
                             if client_id in active_clients:
-                                active_clients[client_id].last_transcript_time = (
-                                    time.time()
-                                )
+                                active_clients[client_id].last_transcript_time = time.time()
                                 # Collect transcript for end-of-conversation memory processing
-                                active_clients[
-                                    client_id
-                                ].conversation_transcripts.append(transcript_text)
+                                active_clients[client_id].conversation_transcripts.append(
+                                    transcript_text
+                                )
                                 audio_logger.info(
                                     f"Added transcript to conversation collection: '{transcript_text}'"
                                 )
 
                     elif VoiceStarted.is_type(event.type):
-                        audio_logger.info(
-                            f"VoiceStarted event received for {audio_uuid}"
-                        )
+                        audio_logger.info(f"VoiceStarted event received for {audio_uuid}")
                         current_time = time.time()
                         if client_id in active_clients:
-                            active_clients[client_id].record_speech_start(
-                                audio_uuid, current_time
-                            )
+                            active_clients[client_id].record_speech_start(audio_uuid, current_time)
                             audio_logger.info(
                                 f"🎤 Voice started for {audio_uuid} at {current_time}"
                             )
 
                     elif VoiceStopped.is_type(event.type):
-                        audio_logger.info(
-                            f"VoiceStopped event received for {audio_uuid}"
-                        )
+                        audio_logger.info(f"VoiceStopped event received for {audio_uuid}")
                         current_time = time.time()
                         if client_id in active_clients:
-                            active_clients[client_id].record_speech_end(
-                                audio_uuid, current_time
-                            )
+                            active_clients[client_id].record_speech_end(audio_uuid, current_time)
                             audio_logger.info(
                                 f"🔇 Voice stopped for {audio_uuid} at {current_time}"
                             )
@@ -634,16 +785,33 @@ class TranscriptionManager:
                 pass
 
         except Exception as e:
-            audio_logger.error(
-                f"Error in offline transcribe_chunk for {audio_uuid}: {e}"
-            )
+            audio_logger.error(f"Error in offline transcribe_chunk for {audio_uuid}: {e}")
             # Track transcription failure
             metrics_collector.record_transcription_result(False)
             # Attempt to reconnect on error
             await self._reconnect()
 
+    async def _reconnect_deepgram(self):
+        """Attempt to reconnect to Deepgram WebSocket."""
+        audio_logger.info("Attempting to reconnect to Deepgram WebSocket...")
+
+        # Track reconnection attempt
+        metrics_collector = get_metrics_collector()
+        metrics_collector.record_service_reconnection("deepgram-websocket")
+
+        await self._disconnect_deepgram()
+        await asyncio.sleep(2)  # Brief delay before reconnecting
+        try:
+            await self._connect_deepgram()
+        except Exception as e:
+            audio_logger.error(f"Deepgram reconnection failed: {e}")
+
     async def _reconnect(self):
         """Attempt to reconnect to ASR service."""
+        if self.use_deepgram:
+            await self._reconnect_deepgram()
+            return
+
         audio_logger.info("Attempting to reconnect to ASR service...")
 
         # Track reconnection attempt
@@ -668,9 +836,13 @@ class ClientState:
         # Per-client queues
         self.chunk_queue = asyncio.Queue[Optional[AudioChunk]]()
         self.transcription_queue = asyncio.Queue[Tuple[Optional[str], Optional[AudioChunk]]]()
-        self.memory_queue = asyncio.Queue[Tuple[Optional[str], Optional[str], Optional[str]]]()  # (transcript, client_id, audio_uuid)
-        self.action_item_queue = asyncio.Queue[Tuple[Optional[str], Optional[str], Optional[str]]]()  # (transcript_text, client_id, audio_uuid)
-        
+        self.memory_queue = asyncio.Queue[
+            Tuple[Optional[str], Optional[str], Optional[str]]
+        ]()  # (transcript, client_id, audio_uuid)
+        self.action_item_queue = asyncio.Queue[
+            Tuple[Optional[str], Optional[str], Optional[str]]
+        ]()  # (transcript_text, client_id, audio_uuid)
+
         # Per-client file sink
         self.file_sink: Optional[LocalFileSink] = None
         self.current_audio_uuid: Optional[str] = None
@@ -686,9 +858,7 @@ class ClientState:
         self.speech_segments: dict[str, list[tuple[float, float]]] = (
             {}
         )  # audio_uuid -> [(start, end), ...]
-        self.current_speech_start: dict[str, Optional[float]] = (
-            {}
-        )  # audio_uuid -> start_time
+        self.current_speech_start: dict[str, Optional[float]] = {}  # audio_uuid -> start_time
 
         # Conversation transcript collection for end-of-conversation memory processing
         self.conversation_transcripts: list[str] = (
@@ -700,7 +870,7 @@ class ClientState:
         self.transcription_task: Optional[asyncio.Task] = None
         self.memory_task: Optional[asyncio.Task] = None
         self.action_item_task: Optional[asyncio.Task] = None
-          
+
     def record_speech_start(self, audio_uuid: str, timestamp: float):
         """Record the start of a speech segment."""
         self.current_speech_start[audio_uuid] = timestamp
@@ -723,9 +893,7 @@ class ClientState:
                     f"Recorded speech segment for {audio_uuid}: {start_time:.3f} -> {timestamp:.3f} (duration: {duration:.3f}s)"
                 )
         else:
-            audio_logger.warning(
-                f"Speech end recorded for {audio_uuid} but no start time found"
-            )
+            audio_logger.warning(f"Speech end recorded for {audio_uuid} but no start time found")
 
     async def start_processing(self):
         """Start the processing tasks for this client."""
@@ -751,7 +919,7 @@ class ClientState:
         await self.transcription_queue.put((None, None))
         await self.memory_queue.put((None, None, None))
         await self.action_item_queue.put((None, None, None))
-        
+
         # Wait for tasks to complete
         if self.saver_task:
             await self.saver_task
@@ -792,9 +960,12 @@ class ClientState:
             current_uuid = self.current_audio_uuid
             current_path = self.file_sink.file_path
 
-            audio_logger.info(
-                f"🔒 Closing conversation {current_uuid}, file: {current_path}"
-            )
+            audio_logger.info(f"🔒 Closing conversation {current_uuid}, file: {current_path}")
+
+            # Wait for transcription queue to finish
+            await self.transcription_queue.join()
+            logger.info(f"Sleeping waiting for transcript")
+            await asyncio.sleep(5)
 
             # Process memory at end of conversation if we have transcripts
             if self.conversation_transcripts and current_uuid:
@@ -802,26 +973,20 @@ class ClientState:
                 audio_logger.info(
                     f"💭 Processing memory for conversation {current_uuid} with {len(self.conversation_transcripts)} transcript segments"
                 )
-                audio_logger.info(
-                    f"💭 Individual transcripts: {self.conversation_transcripts}"
-                )
+                audio_logger.info(f"💭 Individual transcripts: {self.conversation_transcripts}")
                 audio_logger.info(
                     f"💭 Full conversation text: {full_conversation[:200]}..."
                 )  # Log first 200 chars
 
                 start_time = time.time()
-                memories_created = []
-                action_items_created = []
-                processing_success = True
-                error_message = None
 
                 try:
                     # Track memory storage request
                     metrics_collector = get_metrics_collector()
                     metrics_collector.record_memory_storage_request()
 
-                    # Add general memory
-                    memory_result = memory_service.add_memory(
+                    # Add general memory with fallback handling
+                    memory_result = await memory_service.add_memory(
                         full_conversation, self.client_id, current_uuid
                     )
                     if memory_result:
@@ -829,66 +994,27 @@ class ClientState:
                             f"✅ Successfully added conversation memory for {current_uuid}"
                         )
                         metrics_collector.record_memory_storage_result(True)
-
-                        # Use the actual memory objects returned from mem0's add() method
-                        memory_results = memory_result.get("results", [])
-                        memories_created = []
-
-                        for mem in memory_results:
-                            memory_text = mem.get("memory", "Memory text unavailable")
-                            memory_id = mem.get("id", "unknown")
-                            event = mem.get("event", "UNKNOWN")
-                            memories_created.append(
-                                {"id": memory_id, "text": memory_text, "event": event}
-                            )
-
-                        audio_logger.info(
-                            f"Created {len(memories_created)} memory objects: {[m['event'] for m in memories_created]}"
-                        )
                     else:
-                        audio_logger.error(
-                            f"❌ Failed to add conversation memory for {current_uuid}"
+                        audio_logger.warning(
+                            f"⚠️ Memory service returned False for {current_uuid} - may have timed out"
                         )
                         metrics_collector.record_memory_storage_result(False)
-                        processing_success = False
-                        error_message = "Failed to add general memory"
 
                 except Exception as e:
                     audio_logger.error(
-                        f"❌ Error processing memory and action items for {current_uuid}: {e}"
+                        f"❌ Error processing memory for {current_uuid}: {e}"
                     )
-                    processing_success = False
-                    error_message = str(e)
+                    metrics_collector.record_memory_storage_result(False)
 
-                # Log debug information
+                # Log processing summary
                 processing_time_ms = (time.time() - start_time) * 1000
-                # memory_debug.log_memory_processing(
-                #     user_id=self.client_id,
-                #     audio_uuid=current_uuid,
-                #     transcript_text=full_conversation,
-                #     memories_created=memories_created,
-                #     action_items_created=action_items_created,
-                #     processing_success=processing_success,
-                #     error_message=error_message,
-                #     processing_time_ms=processing_time_ms,
-                # )
+                audio_logger.info(
+                    f"🔄 Completed memory processing for {current_uuid} in {processing_time_ms:.1f}ms"
+                )
             else:
                 audio_logger.info(
                     f"ℹ️ No transcripts to process for memory in conversation {current_uuid}"
                 )
-                # Log empty processing for debug
-                if current_uuid:
-                    pass
-                    # memory_debug.log_memory_processing(
-                    #     user_id=self.client_id,
-                    #     audio_uuid=current_uuid,
-                    #     transcript_text="",
-                    #     memories_created=[],
-                    #     action_items_created=[],
-                    #     processing_success=True,
-                    #     error_message="No transcripts available for processing",
-                    #     processing_time_ms=0,
-                    # )
 
             await self.file_sink.close()
 
@@ -914,9 +1040,7 @@ class ClientState:
                     )
                 else:
                     metrics_collector.record_audio_chunk_failed()
-                    audio_logger.warning(
-                        f"📊 Audio file not found after save: {current_path}"
-                    )
+                    audio_logger.warning(f"📊 Audio file not found after save: {current_path}")
             except Exception as e:
                 audio_logger.error(f"📊 Error recording audio metrics: {e}")
 
@@ -959,9 +1083,7 @@ class ClientState:
                     )
 
         else:
-            audio_logger.info(
-                f"🔒 No active file sink to close for client {self.client_id}"
-            )
+            audio_logger.info(f"🔒 No active file sink to close for client {self.client_id}")
 
     async def start_new_conversation(self):
         """Start a new conversation by closing current conversation and resetting state."""
@@ -1006,9 +1128,7 @@ class ClientState:
                     # Create new file sink for this client
                     self.current_audio_uuid = uuid.uuid4().hex
                     timestamp = audio_chunk.timestamp or int(time.time())
-                    wav_filename = (
-                        f"{timestamp}_{self.client_id}_{self.current_audio_uuid}.wav"
-                    )
+                    wav_filename = f"{timestamp}_{self.client_id}_{self.current_audio_uuid}.wav"
                     audio_logger.info(
                         f"Creating file sink with: rate={int(OMI_SAMPLE_RATE)}, channels={int(OMI_CHANNELS)}, width={int(OMI_SAMPLE_WIDTH)}"
                     )
@@ -1025,9 +1145,7 @@ class ClientState:
                 await self.file_sink.write(audio_chunk)
 
                 # Queue for transcription
-                await self.transcription_queue.put(
-                    (self.current_audio_uuid, audio_chunk)
-                )
+                await self.transcription_queue.put((self.current_audio_uuid, audio_chunk))
 
         except Exception as e:
             audio_logger.error(
@@ -1051,10 +1169,12 @@ class ClientState:
                     # Create callback function to queue action items
                     async def action_item_callback(transcript_text, client_id, audio_uuid):
                         await self.action_item_queue.put((transcript_text, client_id, audio_uuid))
-                    
-                    self.transcription_manager = TranscriptionManager(action_item_callback=action_item_callback)
+
+                    self.transcription_manager = TranscriptionManager(
+                        action_item_callback=action_item_callback
+                    )
                     try:
-                        await self.transcription_manager.connect()
+                        await self.transcription_manager.connect(self.client_id)
                     except Exception as e:
                         audio_logger.error(
                             f"Failed to create transcription manager for client {self.client_id}: {e}"
@@ -1067,9 +1187,7 @@ class ClientState:
                         audio_uuid, chunk, self.client_id
                     )
                 except Exception as e:
-                    audio_logger.error(
-                        f"Error transcribing for client {self.client_id}: {e}"
-                    )
+                    audio_logger.error(f"Error transcribing for client {self.client_id}: {e}")
                     # Recreate transcription manager on error
                     if self.transcription_manager:
                         await self.transcription_manager.disconnect()
@@ -1119,41 +1237,107 @@ class ClientState:
         try:
             while self.connected:
                 transcript_text, client_id, audio_uuid = await self.action_item_queue.get()
-                
-                if transcript_text is None or client_id is None or audio_uuid is None:  # Disconnect signal
+
+                if (
+                    transcript_text is None or client_id is None or audio_uuid is None
+                ):  # Disconnect signal
                     break
-                
+
                 # Check for the special keyphrase 'simon says' (case-insensitive, any spaces or dots)
-                keyphrase_pattern = re.compile(r'\bSimon says\b', re.IGNORECASE)
+                keyphrase_pattern = re.compile(r"\bSimon says\b", re.IGNORECASE)
                 if keyphrase_pattern.search(transcript_text):
                     # Remove all occurrences of the keyphrase
-                    modified_text = keyphrase_pattern.sub('Simon says', transcript_text)
-                    audio_logger.info(f"🔑 'simon says' keyphrase detected in transcript for {audio_uuid}. Extracting action items from: '{modified_text.strip()}'")
+                    modified_text = keyphrase_pattern.sub("Simon says", transcript_text)
+                    audio_logger.info(
+                        f"🔑 'simon says' keyphrase detected in transcript for {audio_uuid}. Extracting action items from: '{modified_text.strip()}'"
+                    )
                     try:
-                        action_item_count = await action_items_service.extract_and_store_action_items(
-                            modified_text.strip(), client_id, audio_uuid
+                        action_item_count = (
+                            await action_items_service.extract_and_store_action_items(
+                                modified_text.strip(), client_id, audio_uuid
+                            )
                         )
                         if action_item_count > 0:
-                            audio_logger.info(f"🎯 Extracted {action_item_count} action items from 'simon says' transcript segment for {audio_uuid}")
+                            audio_logger.info(
+                                f"🎯 Extracted {action_item_count} action items from 'simon says' transcript segment for {audio_uuid}"
+                            )
                         else:
-                            audio_logger.debug(f"ℹ️ No action items found in 'simon says' transcript segment for {audio_uuid}")
+                            audio_logger.debug(
+                                f"ℹ️ No action items found in 'simon says' transcript segment for {audio_uuid}"
+                            )
                     except Exception as e:
-                        audio_logger.error(f"❌ Error processing 'simon says' action items for transcript segment in {audio_uuid}: {e}")
+                        audio_logger.error(
+                            f"❌ Error processing 'simon says' action items for transcript segment in {audio_uuid}: {e}"
+                        )
                     continue  # Skip the normal extraction for this case
-                
+
         except Exception as e:
-            audio_logger.error(f"Error in action item processor for client {self.client_id}: {e}", exc_info=True)
+            audio_logger.error(
+                f"Error in action item processor for client {self.client_id}: {e}",
+                exc_info=True,
+            )
 
 
 # Initialize repository and global state
 chunk_repo = ChunkRepo(chunks_col)
 active_clients: dict[str, ClientState] = {}
 
+# Client-to-user mapping for reliable permission checking
+client_to_user_mapping: dict[str, str] = {}  # client_id -> user_id
 
-async def create_client_state(client_id: str) -> ClientState:
+
+def register_client_user_mapping(client_id: str, user_id: str):
+    """Register that a client belongs to a specific user."""
+    client_to_user_mapping[client_id] = user_id
+    audio_logger.debug(f"Registered client {client_id} for user {user_id}")
+
+
+def unregister_client_user_mapping(client_id: str):
+    """Unregister a client from user mapping."""
+    if client_id in client_to_user_mapping:
+        user_id = client_to_user_mapping.pop(client_id)
+        audio_logger.debug(f"Unregistered client {client_id} from user {user_id}")
+
+
+def get_user_clients(user_id: str) -> list[str]:
+    """Get all currently active client IDs that belong to a specific user."""
+    return [client_id for client_id, mapped_user_id in client_to_user_mapping.items() 
+            if mapped_user_id == user_id]
+
+
+# Client ownership tracking for database records
+# Since we're in development, we'll track all client-user relationships in memory
+# This will be populated when clients connect and persisted in database records
+all_client_user_mappings: dict[str, str] = {}  # client_id -> user_id (includes disconnected clients)
+
+
+def track_client_user_relationship(client_id: str, user_id: str):
+    """Track that a client belongs to a user (persists after disconnection for database queries)."""
+    all_client_user_mappings[client_id] = user_id
+
+
+def client_belongs_to_user(client_id: str, user_id: str) -> bool:
+    """Check if a client belongs to a specific user."""
+    return all_client_user_mappings.get(client_id) == user_id
+
+
+def get_user_clients_all(user_id: str) -> list[str]:
+    """Get all client IDs (active and inactive) that belong to a specific user."""
+    return [client_id for client_id, mapped_user_id in all_client_user_mappings.items() 
+            if mapped_user_id == user_id]
+
+
+async def create_client_state(client_id: str, user_id: str) -> ClientState:
     """Create and register a new client state."""
     client_state = ClientState(client_id)
     active_clients[client_id] = client_state
+    
+    # Register client-user mapping (for active clients)
+    register_client_user_mapping(client_id, user_id)
+    
+    # Also track in persistent mapping (for database queries)
+    track_client_user_relationship(client_id, user_id)
+    
     await client_state.start_processing()
 
     # Track client connection in metrics
@@ -1170,9 +1354,12 @@ async def cleanup_client_state(client_id: str):
         await client_state.disconnect()
         del active_clients[client_id]
 
-        # Track client disconnection in metrics
-        metrics_collector = get_metrics_collector()
-        metrics_collector.record_client_disconnection(client_id)
+    # Unregister client-user mapping
+    unregister_client_user_mapping(client_id)
+
+    # Track client disconnection in metrics
+    metrics_collector = get_metrics_collector()
+    metrics_collector.record_client_disconnection(client_id)
 
 
 ###############################################################################
@@ -1186,13 +1373,39 @@ async def lifespan(app: FastAPI):
     # Startup
     audio_logger.info("Starting application...")
 
+    # Initialize Beanie for user management
+    try:
+        await init_beanie(
+            database=mongo_client.get_default_database("friend-lite"),
+            document_models=[User],
+        )
+        audio_logger.info("Beanie initialized for user management")
+    except Exception as e:
+        audio_logger.error(f"Failed to initialize Beanie: {e}")
+        raise
+
+    # Create admin user if needed
+    try:
+        await create_admin_user_if_needed()
+    except Exception as e:
+        audio_logger.error(f"Failed to create admin user: {e}")
+        # Don't raise here as this is not critical for startup
+
     # Start metrics collection
     await start_metrics_collection()
     audio_logger.info("Metrics collection started")
 
-    audio_logger.info(
-        "Application ready - clients will have individual processing pipelines."
-    )
+    # Pre-initialize memory service to avoid blocking during first use
+    try:
+        audio_logger.info("Pre-initializing memory service...")
+        await asyncio.wait_for(memory_service.initialize(), timeout=120)  # 2 minute timeout for startup
+        audio_logger.info("Memory service pre-initialized successfully")
+    except asyncio.TimeoutError:
+        audio_logger.warning("Memory service pre-initialization timed out - will initialize on first use")
+    except Exception as e:
+        audio_logger.warning(f"Memory service pre-initialization failed: {e} - will initialize on first use")
+
+    audio_logger.info("Application ready - clients will have individual processing pipelines.")
 
     try:
         yield
@@ -1219,21 +1432,65 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 
+# Add authentication routers
+app.include_router(
+    fastapi_users.get_auth_router(cookie_backend),
+    prefix="/auth/cookie",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_auth_router(bearer_backend),
+    prefix="/auth/jwt",
+    tags=["auth"],
+)
+# Only include Google OAuth router if enabled
+if GOOGLE_OAUTH_ENABLED:
+    app.include_router(
+        fastapi_users.get_oauth_router(
+            google_oauth_client,
+            cookie_backend,
+            SECRET_KEY,
+            associate_by_email=True,
+            is_verified_by_default=True,
+        ),
+        prefix="/auth/google",
+        tags=["auth"],
+    )
+    logger.info("✅ Google OAuth routes enabled: /auth/google/login, /auth/google/callback")
+else:
+    logger.info("⚠️ Google OAuth routes disabled - missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET")
+# Public registration disabled - use admin-only user creation instead
+# app.include_router(
+#     fastapi_users.get_register_router(UserRead, UserCreate),
+#     prefix="/auth",
+#     tags=["auth"],
+# )
+
 
 @app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
+async def ws_endpoint(
+    ws: WebSocket,
+    token: Optional[str] = Query(None),
+    device_name: Optional[str] = Query(None),
+):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
+    # Authenticate user before accepting WebSocket connection
+    user = await websocket_auth(ws, token)
+    if not user:
+        await ws.close(code=1008, reason="Authentication required")
+        return
+
     await ws.accept()
 
-    # Use user_id if provided, otherwise generate a random client_id
-    client_id = user_id if user_id else f"client_{str(uuid.uuid4())}"
-    audio_logger.info(f"🔌 WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
-    
+    # Generate proper client_id using user and device_name
+    client_id = generate_client_id(user, device_name)
+    audio_logger.info(f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}")
+
     decoder = OmiOpusDecoder()
     _decode_packet = partial(decoder.decode_packet, strip_header=False)
 
     # Create client state and start processing
-    client_state = await create_client_state(client_id)
+    client_state = await create_client_state(client_id, user.user_id)
 
     try:
         packet_count = 0
@@ -1242,16 +1499,16 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
             packet = await ws.receive_bytes()
             packet_count += 1
             total_bytes += len(packet)
-            
+
             start_time = time.time()
             loop = asyncio.get_running_loop()
-            pcm_data = await loop.run_in_executor(
-                _DEC_IO_EXECUTOR, _decode_packet, packet
-            )
+            pcm_data = await loop.run_in_executor(_DEC_IO_EXECUTOR, _decode_packet, packet)
             decode_time = time.time() - start_time
-            
+
             if pcm_data:
-                audio_logger.debug(f"🎵 Decoded packet #{packet_count}: {len(packet)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)")
+                audio_logger.debug(
+                    f"🎵 Decoded packet #{packet_count}: {len(packet)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
+                )
                 chunk = AudioChunk(
                     audio=pcm_data,
                     rate=OMI_SAMPLE_RATE,
@@ -1260,10 +1517,12 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
                     timestamp=int(time.time()),
                 )
                 await client_state.chunk_queue.put(chunk)
-                
+
                 # Log every 1000th packet to avoid spam
                 if packet_count % 1000 == 0:
-                    audio_logger.info(f"📊 Processed {packet_count} packets ({total_bytes} bytes total) for client {client_id}")
+                    audio_logger.info(
+                        f"📊 Processed {packet_count} packets ({total_bytes} bytes total) for client {client_id}"
+                    )
 
                 # Track audio chunk received in metrics
                 metrics_collector = get_metrics_collector()
@@ -1271,7 +1530,9 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
                 metrics_collector.record_client_activity(client_id)
 
     except WebSocketDisconnect:
-        audio_logger.info(f"🔌 WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}")
+        audio_logger.info(
+            f"🔌 WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}"
+        )
     except Exception as e:
         audio_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
@@ -1280,16 +1541,28 @@ async def ws_endpoint(ws: WebSocket, user_id: Optional[str] = Query(None)):
 
 
 @app.websocket("/ws_pcm")
-async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
+async def ws_endpoint_pcm(
+    ws: WebSocket, 
+    token: Optional[str] = Query(None),
+    device_name: Optional[str] = Query(None)
+):
     """Accepts WebSocket connections, processes PCM audio per-client."""
+    # Authenticate user before accepting WebSocket connection
+    user = await websocket_auth(ws, token)
+    if not user:
+        await ws.close(code=1008, reason="Authentication required")
+        return
+
     await ws.accept()
 
-    # Use user_id if provided, otherwise generate a random client_id
-    client_id = user_id if user_id else f"client_{uuid.uuid4().hex[:8]}"
-    audio_logger.info(f"🔌 PCM WebSocket connection accepted - Client: {client_id}, User ID: {user_id}")
-    
+    # Generate proper client_id using user and device_name
+    client_id = generate_client_id(user, device_name)
+    audio_logger.info(
+        f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
+    )
+
     # Create client state and start processing
-    client_state = await create_client_state(client_id)
+    client_state = await create_client_state(client_id, user.user_id)
 
     try:
         packet_count = 0
@@ -1298,7 +1571,7 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
             packet = await ws.receive_bytes()
             packet_count += 1
             total_bytes += len(packet)
-            
+
             if packet:
                 audio_logger.debug(f"🎵 Received PCM packet #{packet_count}: {len(packet)} bytes")
                 chunk = AudioChunk(
@@ -1309,18 +1582,21 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
                     timestamp=int(time.time()),
                 )
                 await client_state.chunk_queue.put(chunk)
-                
+
                 # Log every 1000th packet to avoid spam
                 if packet_count % 1000 == 0:
-                    audio_logger.info(f"📊 Processed {packet_count} PCM packets ({total_bytes} bytes total) for client {client_id}")
-                        
+                    audio_logger.info(
+                        f"📊 Processed {packet_count} PCM packets ({total_bytes} bytes total) for client {client_id}"
+                    )
 
                 # Track audio chunk received in metrics
                 metrics_collector = get_metrics_collector()
                 metrics_collector.record_audio_chunk_received(client_id)
                 metrics_collector.record_client_activity(client_id)
     except WebSocketDisconnect:
-        audio_logger.info(f"🔌 PCM WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}")
+        audio_logger.info(
+            f"🔌 PCM WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}"
+        )
     except Exception as e:
         audio_logger.error(f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
@@ -1329,11 +1605,22 @@ async def ws_endpoint_pcm(ws: WebSocket, user_id: Optional[str] = Query(None)):
 
 
 @app.get("/api/conversations")
-async def get_conversations():
-    """Get all conversations grouped by client_id."""
+async def get_conversations(current_user: User = Depends(current_active_user)):
+    """Get conversations. Admins see all conversations, users see only their own."""
     try:
-        # Get all audio chunks and group by client_id
-        cursor = chunks_col.find({}).sort("timestamp", -1)
+        # Build query based on user permissions
+        if not current_user.is_superuser:
+            # Regular users can only see their own conversations
+            user_client_ids = get_user_clients_all(current_user.user_id)
+            if not user_client_ids:
+                # User has no clients, return empty result
+                return {"conversations": {}}
+            query = {"client_id": {"$in": user_client_ids}}
+        else:
+            query = {}
+        
+        # Get audio chunks and group by client_id
+        cursor = chunks_col.find(query).sort("timestamp", -1)
         conversations = {}
 
         async for chunk in cursor:
@@ -1361,14 +1648,18 @@ async def get_conversations():
 
 
 @app.get("/api/conversations/{audio_uuid}/cropped")
-async def get_cropped_audio_info(audio_uuid: str):
-    """Get cropped audio information for a specific conversation."""
+async def get_cropped_audio_info(audio_uuid: str, current_user: User = Depends(current_active_user)):
+    """Get cropped audio information for a specific conversation. Users can only access their own conversations."""
     try:
+        # Find the conversation first
         chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
         if not chunk:
-            return JSONResponse(
-                status_code=404, content={"error": "Conversation not found"}
-            )
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        # Check ownership for non-admin users
+        if not current_user.is_superuser:
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         return {
             "audio_uuid": audio_uuid,
@@ -1385,20 +1676,22 @@ async def get_cropped_audio_info(audio_uuid: str):
 
 
 @app.post("/api/conversations/{audio_uuid}/reprocess")
-async def reprocess_audio_cropping(audio_uuid: str):
-    """Trigger reprocessing of audio cropping for a specific conversation."""
+async def reprocess_audio_cropping(audio_uuid: str, current_user: User = Depends(current_active_user)):
+    """Trigger reprocessing of audio cropping for a specific conversation. Users can only reprocess their own conversations."""
     try:
+        # Find the conversation first
         chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
         if not chunk:
-            return JSONResponse(
-                status_code=404, content={"error": "Conversation not found"}
-            )
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        # Check ownership for non-admin users
+        if not current_user.is_superuser:
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         original_path = f"{CHUNK_DIR}/{chunk['audio_path']}"
         if not Path(original_path).exists():
-            return JSONResponse(
-                status_code=404, content={"error": "Original audio file not found"}
-            )
+            return JSONResponse(status_code=404, content={"error": "Original audio file not found"})
 
         # Check if we have speech segments
         speech_segments = chunk.get("speech_segments", [])
@@ -1430,40 +1723,72 @@ async def reprocess_audio_cropping(audio_uuid: str):
 
 
 @app.get("/api/users")
-async def get_users():
-    """Retrieves all users from the database."""
+async def get_users(current_user: User = Depends(current_superuser)):
+    """Retrieves all users from the database. Admin-only endpoint."""
     try:
-        cursor = users_col.find()
+        # Query the correct collection that fastapi-users actually uses
+        fastapi_users_col = db["fastapi_users"]
+        cursor = fastapi_users_col.find()
         users = []
-        for doc in await cursor.to_list(length=100):
+        async for doc in cursor:
             doc["_id"] = str(doc["_id"])  # Convert ObjectId to string
+            
+            # Add user_id field for frontend compatibility
+            # Use display_name if available, otherwise email, otherwise fallback to _id
+            if doc.get("display_name"):
+                doc["user_id"] = doc["display_name"]
+            elif doc.get("email"):
+                # Use email prefix (before @) as user_id for better readability
+                doc["user_id"] = doc["email"].split("@")[0]
+            else:
+                doc["user_id"] = doc["_id"]
+            
+            # Remove hashed_password for security
+            if "hashed_password" in doc:
+                del doc["hashed_password"]
             users.append(doc)
         return JSONResponse(content=users)
     except Exception as e:
         audio_logger.error(f"Error fetching users: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500, content={"message": "Error fetching users"}
-        )
+        return JSONResponse(status_code=500, content={"message": "Error fetching users"})
 
 
 @app.post("/api/create_user")
-async def create_user(user_id: str):
-    """Creates a new user in the database."""
+async def create_user_admin(
+    user_data: UserCreate, 
+    current_user: User = Depends(current_superuser)
+):
+    """Creates a new user in the database. Admin-only endpoint."""
     try:
+        # Get user manager for proper user creation
+        user_db_gen = get_user_db()
+        user_db = await user_db_gen.__anext__()
+        user_manager_gen = get_user_manager(user_db)
+        user_manager = await user_manager_gen.__anext__()
+        
         # Check if user already exists
-        existing_user = await users_col.find_one({"user_id": user_id})
+        existing_user = await user_db.get_by_email(user_data.email)
         if existing_user:
             return JSONResponse(
-                status_code=409, content={"message": f"User {user_id} already exists"}
+                status_code=409, 
+                content={"message": f"User with email {user_data.email} already exists"}
             )
 
-        # Create new user
-        result = await users_col.insert_one({"user_id": user_id})
+        # Create new user using fastapi-users manager
+        new_user = await user_manager.create(user_data)
+        
         return JSONResponse(
             status_code=201,
             content={
-                "message": f"User {user_id} created successfully",
-                "id": str(result.inserted_id),
+                "message": f"User {user_data.email} created successfully",
+                "user": {
+                    "id": str(new_user.id),
+                    "email": new_user.email,
+                    "display_name": new_user.display_name,
+                    "is_active": new_user.is_active,
+                    "is_superuser": new_user.is_superuser,
+                    "is_verified": new_user.is_verified,
+                },
             },
         )
     except Exception as e:
@@ -1473,21 +1798,51 @@ async def create_user(user_id: str):
 
 @app.delete("/api/delete_user")
 async def delete_user(
-    user_id: str, delete_conversations: bool = False, delete_memories: bool = False
+    user_id: str,
+    delete_conversations: bool = False,
+    delete_memories: bool = False,
+    current_user: User = Depends(current_superuser),
 ):
     """Deletes a user from the database with optional data cleanup."""
     try:
-        # Check if user exists
-        existing_user = await users_col.find_one({"user_id": user_id})
-        if not existing_user:
+        # Validate user_id format
+        if not user_id or user_id == "Unknown":
             return JSONResponse(
-                status_code=404, content={"message": f"User {user_id} not found"}
+                status_code=400, 
+                content={"message": "Invalid user ID provided. Cannot delete user with ID 'Unknown'."}
+            )
+        
+        # Validate ObjectId format
+        try:
+            object_id = ObjectId(user_id)
+        except Exception:
+            return JSONResponse(
+                status_code=400, 
+                content={"message": f"Invalid user ID format: '{user_id}'. Must be a valid MongoDB ObjectId."}
+            )
+        
+        # Query the correct collection that fastapi-users actually uses
+        fastapi_users_col = db["fastapi_users"]
+        
+        # Check if user exists
+        existing_user = await fastapi_users_col.find_one({"_id": object_id})
+        if not existing_user:
+            return JSONResponse(status_code=404, content={"message": f"User {user_id} not found"})
+        
+        # Prevent deletion of administrator user
+        user_email = existing_user.get("email", "")
+        is_superuser = existing_user.get("is_superuser", False)
+        
+        if is_superuser or user_email == ADMIN_EMAIL:
+            return JSONResponse(
+                status_code=403, 
+                content={"message": f"Cannot delete administrator user. Admin users are protected from deletion."}
             )
 
         deleted_data = {}
 
-        # Delete user from users collection
-        user_result = await users_col.delete_one({"user_id": user_id})
+        # Delete user from fastapi_users collection
+        user_result = await fastapi_users_col.delete_one({"_id": object_id})
         deleted_data["user_deleted"] = user_result.deleted_count > 0
 
         if delete_conversations:
@@ -1498,12 +1853,12 @@ async def delete_user(
         if delete_memories:
             # Delete all memories for this user using the memory service
             try:
-                memory_count = memory_service.delete_all_user_memories(user_id)
+                memory_count = await asyncio.get_running_loop().run_in_executor(
+                    None, memory_service.delete_all_user_memories, user_id
+                )
                 deleted_data["memories_deleted"] = memory_count
             except Exception as mem_error:
-                audio_logger.error(
-                    f"Error deleting memories for user {user_id}: {mem_error}"
-                )
+                audio_logger.error(f"Error deleting memories for user {user_id}: {mem_error}")
                 deleted_data["memories_deleted"] = 0
                 deleted_data["memory_deletion_error"] = str(mem_error)
 
@@ -1511,9 +1866,7 @@ async def delete_user(
         message = f"User {user_id} deleted successfully"
         deleted_items = []
         if delete_conversations and deleted_data.get("conversations_deleted", 0) > 0:
-            deleted_items.append(
-                f"{deleted_data['conversations_deleted']} conversations"
-            )
+            deleted_items.append(f"{deleted_data['conversations_deleted']} conversations")
         if delete_memories and deleted_data.get("memories_deleted", 0) > 0:
             deleted_items.append(f"{deleted_data['memories_deleted']} memories")
 
@@ -1529,75 +1882,104 @@ async def delete_user(
 
 
 @app.get("/api/memories")
-async def get_memories(user_id: str, limit: int = 100):
-    """Retrieves memories from the mem0 store with optional filtering."""
+async def get_memories(current_user: User = Depends(current_active_user), user_id: Optional[str] = None, limit: int = 100):
+    """Retrieves memories from the mem0 store. Admins can specify user_id, users see only their own."""
     try:
-        all_memories = memory_service.get_all_memories(user_id=user_id, limit=limit)
+        # Determine which user's memories to retrieve
+        if current_user.is_superuser and user_id:
+            # Admin can request specific user's memories
+            target_user_id = user_id
+        else:
+            # Regular users can only see their own memories
+            target_user_id = current_user.user_id
+        
+        all_memories = await asyncio.get_running_loop().run_in_executor(
+            None, memory_service.get_all_memories, target_user_id, limit
+        )
         return JSONResponse(content=all_memories)
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500, content={"message": "Error fetching memories"}
-        )
+        return JSONResponse(status_code=500, content={"message": "Error fetching memories"})
 
 
 @app.get("/api/memories/search")
-async def search_memories(user_id: str, query: str, limit: int = 10):
-    """Search memories using semantic similarity for better retrieval."""
+async def search_memories(query: str, current_user: User = Depends(current_active_user), user_id: Optional[str] = None, limit: int = 10):
+    """Search memories using semantic similarity. Admins can specify user_id, users search only their own."""
     try:
-        relevant_memories = memory_service.search_memories(
-            query=query, user_id=user_id, limit=limit
+        # Determine which user's memories to search
+        if current_user.is_superuser and user_id:
+            # Admin can search specific user's memories
+            target_user_id = user_id
+        else:
+            # Regular users can only search their own memories
+            target_user_id = current_user.user_id
+        
+        relevant_memories = await asyncio.get_running_loop().run_in_executor(
+            None, memory_service.search_memories, query, target_user_id, limit
         )
         return JSONResponse(content=relevant_memories)
     except Exception as e:
         audio_logger.error(f"Error searching memories: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500, content={"message": "Error searching memories"}
-        )
+        return JSONResponse(status_code=500, content={"message": "Error searching memories"})
 
 
 @app.delete("/api/memories/{memory_id}")
 async def delete_memory(memory_id: str):
     """Delete a specific memory by ID."""
     try:
-        memory_service.delete_memory(memory_id=memory_id)
-        return JSONResponse(
-            content={"message": f"Memory {memory_id} deleted successfully"}
+        await asyncio.get_running_loop().run_in_executor(
+            None, memory_service.delete_memory, memory_id
         )
+        return JSONResponse(content={"message": f"Memory {memory_id} deleted successfully"})
     except Exception as e:
         audio_logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500, content={"message": "Error deleting memory"}
-        )
+        return JSONResponse(status_code=500, content={"message": "Error deleting memory"})
 
 
 @app.post("/api/conversations/{audio_uuid}/speakers")
-async def add_speaker_to_conversation(audio_uuid: str, speaker_id: str):
-    """Add a speaker to the speakers_identified list for a conversation."""
+async def add_speaker_to_conversation(audio_uuid: str, speaker_id: str, current_user: User = Depends(current_active_user)):
+    """Add a speaker to the speakers_identified list for a conversation. Users can only modify their own conversations."""
     try:
+        # Find the conversation first
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not chunk:
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        # Check ownership for non-admin users
+        if not current_user.is_superuser:
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
         await chunk_repo.add_speaker(audio_uuid, speaker_id)
         return JSONResponse(
-            content={
-                "message": f"Speaker {speaker_id} added to conversation {audio_uuid}"
-            }
+            content={"message": f"Speaker {speaker_id} added to conversation {audio_uuid}"}
         )
     except Exception as e:
         audio_logger.error(f"Error adding speaker: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500, content={"message": "Error adding speaker"}
-        )
+        return JSONResponse(status_code=500, content={"message": "Error adding speaker"})
 
 
 @app.put("/api/conversations/{audio_uuid}/transcript/{segment_index}")
 async def update_transcript_segment(
     audio_uuid: str,
     segment_index: int,
+    current_user: User = Depends(current_active_user),
     speaker_id: Optional[str] = None,
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
 ):
-    """Update a specific transcript segment with speaker or timing information."""
+    """Update a specific transcript segment with speaker or timing information. Users can only modify their own conversations."""
     try:
+        # Find the conversation first
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not chunk:
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        
+        # Check ownership for non-admin users
+        if not current_user.is_superuser:
+            if not client_belongs_to_user(chunk["client_id"], current_user.user_id):
+                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+
         update_doc = {}
 
         if speaker_id is not None:
@@ -1612,22 +1994,14 @@ async def update_transcript_segment(
             update_doc[f"transcript.{segment_index}.end"] = end_time
 
         if not update_doc:
-            return JSONResponse(
-                status_code=400, content={"error": "No update parameters provided"}
-            )
+            return JSONResponse(status_code=400, content={"error": "No update parameters provided"})
 
-        result = await chunks_col.update_one(
-            {"audio_uuid": audio_uuid}, {"$set": update_doc}
-        )
+        result = await chunks_col.update_one({"audio_uuid": audio_uuid}, {"$set": update_doc})
 
-        if result.matched_count == 0:
-            return JSONResponse(
-                status_code=404, content={"error": "Conversation not found"}
-            )
+        if result.modified_count == 0:
+            return JSONResponse(status_code=400, content={"error": "No changes were made"})
 
-        return JSONResponse(
-            content={"message": "Transcript segment updated successfully"}
-        )
+        return JSONResponse(content={"message": "Transcript segment updated successfully"})
 
     except Exception as e:
         audio_logger.error(f"Error updating transcript segment: {e}")
@@ -1671,7 +2045,9 @@ async def health_check():
             "mongodb_uri": MONGODB_URI,
             "ollama_url": OLLAMA_BASE_URL,
             "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
-            "asr_uri": OFFLINE_ASR_TCP_URI,
+            "transcription_service": ("Deepgram WebSocket" if USE_DEEPGRAM else "Offline ASR"),
+            "asr_uri": (OFFLINE_ASR_TCP_URI if not USE_DEEPGRAM else "wss://api.deepgram.com"),
+            "deepgram_enabled": USE_DEEPGRAM,
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
             "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
@@ -1712,9 +2088,7 @@ async def health_check():
     try:
         # Run in executor to avoid blocking the main thread
         loop = asyncio.get_running_loop()
-        models = await asyncio.wait_for(
-            loop.run_in_executor(None, ollama_client.list), timeout=8.0
-        )
+        models = await asyncio.wait_for(loop.run_in_executor(None, ollama_client.list), timeout=8.0)
         model_count = len(models.get("models", []))
         health_status["services"]["ollama"] = {
             "status": "✅ Connected",
@@ -1740,7 +2114,7 @@ async def health_check():
     # Check mem0 (depends on Ollama and Qdrant)
     try:
         # Test memory service connection with timeout
-        test_success = memory_service.test_connection()
+        test_success = await memory_service.test_connection()
         if test_success:
             health_status["services"]["mem0"] = {
                 "status": "✅ Connected",
@@ -1756,7 +2130,7 @@ async def health_check():
             overall_healthy = False
     except asyncio.TimeoutError:
         health_status["services"]["mem0"] = {
-            "status": "⚠️ Connection Test Timeout (10s) - Depends on Ollama/Qdrant",
+            "status": "⚠️ Connection Test Timeout (60s) - Depends on Ollama/Qdrant",
             "healthy": False,
             "critical": False,
         }
@@ -1769,45 +2143,60 @@ async def health_check():
         }
         overall_healthy = False
 
-    # Check ASR service (non-critical - may be external)
-    try:
-        test_client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
-        await asyncio.wait_for(test_client.connect(), timeout=5.0)
-        await test_client.disconnect()
-        health_status["services"]["asr"] = {
-            "status": "✅ Connected",
-            "healthy": True,
-            "uri": OFFLINE_ASR_TCP_URI,
-            "critical": False,
-        }
-    except asyncio.TimeoutError:
-        health_status["services"]["asr"] = {
-            "status": f"⚠️ Connection Timeout (5s) - Check external ASR service",
-            "healthy": False,
-            "uri": OFFLINE_ASR_TCP_URI,
-            "critical": False,
-        }
-        overall_healthy = False
-    except Exception as e:
-        health_status["services"]["asr"] = {
-            "status": f"⚠️ Connection Failed: {str(e)} - Check external ASR service",
-            "healthy": False,
-            "uri": OFFLINE_ASR_TCP_URI,
-            "critical": False,
-        }
-        overall_healthy = False
+    # Check ASR service based on configuration
+    if USE_DEEPGRAM:
+        # Check Deepgram WebSocket connectivity
+        if DEEPGRAM_API_KEY:
+            health_status["services"]["deepgram"] = {
+                "status": "✅ API Key Configured",
+                "healthy": True,
+                "type": "WebSocket",
+                "critical": False,
+            }
+        else:
+            health_status["services"]["deepgram"] = {
+                "status": "❌ API Key Missing",
+                "healthy": False,
+                "type": "WebSocket",
+                "critical": False,
+            }
+            overall_healthy = False
+    else:
+        # Check offline ASR service (non-critical - may be external)
+        try:
+            test_client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
+            await asyncio.wait_for(test_client.connect(), timeout=5.0)
+            await test_client.disconnect()
+            health_status["services"]["asr"] = {
+                "status": "✅ Connected",
+                "healthy": True,
+                "uri": OFFLINE_ASR_TCP_URI,
+                "critical": False,
+            }
+        except asyncio.TimeoutError:
+            health_status["services"]["asr"] = {
+                "status": f"⚠️ Connection Timeout (5s) - Check external ASR service",
+                "healthy": False,
+                "uri": OFFLINE_ASR_TCP_URI,
+                "critical": False,
+            }
+            overall_healthy = False
+        except Exception as e:
+            health_status["services"]["asr"] = {
+                "status": f"⚠️ Connection Failed: {str(e)} - Check external ASR service",
+                "healthy": False,
+                "uri": OFFLINE_ASR_TCP_URI,
+                "critical": False,
+            }
+            overall_healthy = False
 
     # Track health check results in metrics
     try:
         metrics_collector = get_metrics_collector()
         for service_name, service_info in health_status["services"].items():
             success = service_info.get("healthy", False)
-            failure_reason = (
-                None if success else service_info.get("status", "Unknown failure")
-            )
-            metrics_collector.record_service_health_check(
-                service_name, success, failure_reason
-            )
+            failure_reason = None if success else service_info.get("status", "Unknown failure")
+            metrics_collector.record_service_health_check(service_name, success, failure_reason)
 
         # Also track overall system health
         metrics_collector.record_service_health_check(
@@ -1841,9 +2230,7 @@ async def health_check():
             if not service["healthy"] and not service.get("critical", True)
         ]
         if unhealthy_optional:
-            messages.append(
-                f"Optional services unavailable: {', '.join(unhealthy_optional)}"
-            )
+            messages.append(f"Optional services unavailable: {', '.join(unhealthy_optional)}")
 
         health_status["message"] = "; ".join(messages)
 
@@ -1853,14 +2240,23 @@ async def health_check():
 @app.get("/readiness")
 async def readiness_check():
     """Simple readiness check for container orchestration."""
-    return JSONResponse(
-        content={"status": "ready", "timestamp": int(time.time())}, status_code=200
-    )
+    return JSONResponse(content={"status": "ready", "timestamp": int(time.time())}, status_code=200)
 
 
 @app.post("/api/close_conversation")
-async def close_current_conversation(client_id: str):
-    """Close the current conversation for a specific client."""
+async def close_current_conversation(client_id: str, current_user: User = Depends(current_active_user)):
+    """Close the current conversation for a specific client. Users can only close their own conversations."""
+    # Validate client ownership
+    if not current_user.is_superuser and not client_belongs_to_user(client_id, current_user.user_id):
+        logger.warning(f"User {current_user.user_id} attempted to close conversation for client {client_id} without permission")
+        return JSONResponse(
+            content={
+                "error": "Access forbidden. You can only close your own conversations.",
+                "details": f"Client '{client_id}' does not belong to your account."
+            },
+            status_code=403,
+        )
+    
     if client_id not in active_clients:
         return JSONResponse(
             content={"error": f"Client '{client_id}' not found or not connected"},
@@ -1882,7 +2278,7 @@ async def close_current_conversation(client_id: str):
         client_state.conversation_start_time = time.time()
         client_state.last_transcript_time = None
 
-        logger.info(f"Manually closed conversation for client {client_id}")
+        logger.info(f"Manually closed conversation for client {client_id} by user {current_user.id}")
 
         return JSONResponse(
             content={
@@ -1901,11 +2297,17 @@ async def close_current_conversation(client_id: str):
 
 
 @app.get("/api/active_clients")
-async def get_active_clients():
-    """Get list of currently active/connected clients."""
+async def get_active_clients(current_user: User = Depends(current_active_user)):
+    """Get list of currently active/connected clients. Admins see all, users see only their own."""
     client_info = {}
 
     for client_id, client_state in active_clients.items():
+        # Filter clients based on user permissions
+        if not current_user.is_superuser:
+            # Regular users can only see clients that belong to them
+            if not client_belongs_to_user(client_id, current_user.user_id):
+                continue
+
         client_info[client_id] = {
             "connected": client_state.connected,
             "current_audio_uuid": client_state.current_audio_uuid,
@@ -1915,91 +2317,264 @@ async def get_active_clients():
         }
 
     return JSONResponse(
-        content={"active_clients_count": len(active_clients), "clients": client_info}
+        content={"active_clients_count": len(client_info), "clients": client_info}
     )
 
 
 @app.get("/api/debug/speech_segments")
-async def debug_speech_segments():
-    """Debug endpoint to check current speech segments for all active clients."""
-    debug_info = {
-        "active_clients": len(active_clients),
-        "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
-        "min_speech_duration": MIN_SPEECH_SEGMENT_DURATION,
-        "cropping_padding": CROPPING_CONTEXT_PADDING,
-        "clients": {},
-    }
-
+async def debug_speech_segments(current_user: User = Depends(current_active_user)):
+    """Debug endpoint to check current speech segments. Admins see all clients, users see only their own."""
+    filtered_clients = {}
+    
     for client_id, client_state in active_clients.items():
-        debug_info["clients"][client_id] = {
+        # Filter clients based on user permissions
+        if not current_user.is_superuser:
+            # Regular users can only see clients that belong to them
+            if not client_belongs_to_user(client_id, current_user.user_id):
+                continue
+                
+        filtered_clients[client_id] = {
             "current_audio_uuid": client_state.current_audio_uuid,
             "speech_segments": {
-                uuid: segments
-                for uuid, segments in client_state.speech_segments.items()
+                uuid: segments for uuid, segments in client_state.speech_segments.items()
             },
             "current_speech_start": dict(client_state.current_speech_start),
             "connected": client_state.connected,
             "last_transcript_time": client_state.last_transcript_time,
         }
 
+    debug_info = {
+        "active_clients": len(filtered_clients),
+        "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
+        "min_speech_duration": MIN_SPEECH_SEGMENT_DURATION,
+        "cropping_padding": CROPPING_CONTEXT_PADDING,
+        "clients": filtered_clients,
+    }
+
     return JSONResponse(content=debug_info)
 
 
-@app.get("/api/debug/memory-processing")
-async def debug_memory_processing(
-    user_id: Optional[str] = None,
-    limit: int = 50,
-    since_timestamp: Optional[int] = None,
-):
-    """Get debug information about memory processing operations."""
-    try:
-        # debug_entries = memory_debug.get_debug_entries(
-        #     user_id=user_id, limit=limit, since_timestamp=since_timestamp
-        # )
-
-        pass
-        # return JSONResponse(
-        #     content={
-        #         "debug_entries": debug_entries,
-        #         "total_entries": len(debug_entries),
-        #         "user_filter": user_id,
-        #         "limit": limit,
-        #         "since_timestamp": since_timestamp,
-        #     }
-        # )
-
-    except Exception as e:
-        audio_logger.error(f"Error getting memory processing debug info: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": "Failed to get debug information"}
-        )
-
-
-@app.get("/api/debug/memory-processing/stats")
-async def debug_memory_processing_stats(user_id: Optional[str] = None):
-    """Get statistics about memory processing operations."""
-    try:
-        # stats = memory_debug.get_debug_stats(user_id=user_id)
-
-        pass
-        # return JSONResponse(content={"user_id": user_id, "statistics": stats})
-
-    except Exception as e:
-        audio_logger.error(f"Error getting memory processing stats: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": "Failed to get debug statistics"}
-        )
-
-
 @app.get("/api/metrics")
-async def get_current_metrics():
-    """Get current metrics summary for monitoring dashboard."""
+async def get_current_metrics(current_user: User = Depends(current_superuser)):
+    """Get current metrics summary for monitoring dashboard. Admin-only endpoint."""
     try:
         metrics_collector = get_metrics_collector()
         metrics_summary = metrics_collector.get_current_metrics_summary()
         return metrics_summary
     except Exception as e:
         audio_logger.error(f"Error getting current metrics: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/auth/config")
+async def get_auth_config():
+    """Get authentication configuration for UI."""
+    return {
+        "google_oauth_enabled": GOOGLE_OAUTH_ENABLED,
+        "auth_methods": {
+            "google_oauth": GOOGLE_OAUTH_ENABLED,
+            "email_password": True,
+            "registration": False,  # Public registration disabled
+            "admin_user_creation": True,  # Only admins can create users
+        },
+        "endpoints": {
+            "google_login": "/auth/google/login" if GOOGLE_OAUTH_ENABLED else None,
+            "google_callback": "/auth/google/callback" if GOOGLE_OAUTH_ENABLED else None,
+            "jwt_login": "/auth/jwt/login",
+            "cookie_login": "/auth/cookie/login",
+            "register": None,  # Public registration disabled
+            "admin_create_user": "/api/create_user",  # Admin-only user creation
+        },
+        "admin_user": {
+            "username": os.getenv("ADMIN_USERNAME", "admin"),
+            "email": os.getenv("ADMIN_EMAIL", f"{os.getenv('ADMIN_USERNAME', 'admin')}@admin.local"),
+        },
+    }
+
+
+###############################################################################
+# ACTION ITEMS API ENDPOINTS
+###############################################################################
+
+from typing import List
+from pydantic import BaseModel
+
+class ActionItemCreate(BaseModel):
+    description: str
+    assignee: Optional[str] = "unassigned"
+    due_date: Optional[str] = "not_specified"
+    priority: Optional[str] = "medium"
+    context: Optional[str] = ""
+
+class ActionItemUpdate(BaseModel):
+    description: Optional[str] = None
+    assignee: Optional[str] = None
+    due_date: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    context: Optional[str] = None
+
+@app.get("/api/action-items")
+async def get_action_items(current_user: User = Depends(current_active_user), user_id: Optional[str] = None):
+    """Get action items. Admins can specify user_id, users see only their own."""
+    try:
+        # Determine which user's action items to retrieve
+        if current_user.is_superuser and user_id:
+            target_user_id = user_id
+        else:
+            target_user_id = current_user.user_id
+        
+        # Query action items from database
+        query = {"user_id": target_user_id}
+        cursor = action_items_col.find(query).sort("created_at", -1)
+        action_items = []
+        
+        async for item in cursor:
+            # Convert ObjectId to string for JSON serialization
+            item["_id"] = str(item["_id"])
+            action_items.append(item)
+        
+        return {"action_items": action_items, "count": len(action_items)}
+    except Exception as e:
+        audio_logger.error(f"Error getting action items: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/api/action-items")
+async def create_action_item(item: ActionItemCreate, current_user: User = Depends(current_active_user)):
+    """Create a new action item."""
+    try:
+        action_item_doc = {
+            "description": item.description,
+            "assignee": item.assignee,
+            "due_date": item.due_date,
+            "priority": item.priority,
+            "status": "open",
+            "context": item.context,
+            "user_id": current_user.user_id,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+        
+        result = await action_items_col.insert_one(action_item_doc)
+        action_item_doc["_id"] = str(result.inserted_id)
+        
+        return {"message": "Action item created successfully", "action_item": action_item_doc}
+    except Exception as e:
+        audio_logger.error(f"Error creating action item: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/action-items/{item_id}")
+async def get_action_item(item_id: str, current_user: User = Depends(current_active_user)):
+    """Get a specific action item. Users can only access their own."""
+    try:
+        from bson import ObjectId
+        
+        # Build query with user restrictions
+        query: dict[str, Any] = {"_id": ObjectId(item_id)}
+        if not current_user.is_superuser:
+            query["user_id"] = current_user.user_id
+        
+        item = await action_items_col.find_one(query)
+        if not item:
+            return JSONResponse(status_code=404, content={"error": "Action item not found"})
+        
+        item["_id"] = str(item["_id"])
+        return {"action_item": item}
+    except Exception as e:
+        audio_logger.error(f"Error getting action item: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.put("/api/action-items/{item_id}")
+async def update_action_item(item_id: str, updates: ActionItemUpdate, current_user: User = Depends(current_active_user)):
+    """Update an action item. Users can only update their own."""
+    try:
+        from bson import ObjectId
+        
+        # Build query with user restrictions
+        query: dict[str, Any] = {"_id": ObjectId(item_id)}
+        if not current_user.is_superuser:
+            query["user_id"] = current_user.user_id
+        
+        # Build update document
+        update_doc = {"updated_at": time.time()}
+        for field, value in updates.dict(exclude_unset=True).items():
+            if value is not None:
+                update_doc[field] = value
+        
+        result = await action_items_col.update_one(query, {"$set": update_doc})
+        
+        if result.matched_count == 0:
+            return JSONResponse(status_code=404, content={"error": "Action item not found or access denied"})
+        
+        return {"message": "Action item updated successfully"}
+    except Exception as e:
+        audio_logger.error(f"Error updating action item: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.delete("/api/action-items/{item_id}")
+async def delete_action_item(item_id: str, current_user: User = Depends(current_active_user)):
+    """Delete an action item. Users can only delete their own."""
+    try:
+        from bson import ObjectId
+        
+        # Build query with user restrictions
+        query: dict[str, Any] = {"_id": ObjectId(item_id)}
+        if not current_user.is_superuser:
+            query["user_id"] = current_user.user_id
+        
+        result = await action_items_col.delete_one(query)
+        
+        if result.deleted_count == 0:
+            return JSONResponse(status_code=404, content={"error": "Action item not found or access denied"})
+        
+        return {"message": "Action item deleted successfully"}
+    except Exception as e:
+        audio_logger.error(f"Error deleting action item: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/action-items/stats")
+async def get_action_items_stats(current_user: User = Depends(current_active_user), user_id: Optional[str] = None):
+    """Get action items statistics. Admins can specify user_id, users see only their own stats."""
+    try:
+        # Determine which user's stats to retrieve
+        if current_user.is_superuser and user_id:
+            target_user_id = user_id
+        else:
+            target_user_id = current_user.user_id
+        
+        # Aggregate stats from action items collection
+        pipeline = [
+            {"$match": {"user_id": target_user_id}},
+            {
+                "$group": {
+                    "_id": "$status",
+                    "count": {"$sum": 1}
+                }
+            }
+        ]
+        
+        cursor = action_items_col.aggregate(pipeline)
+        status_counts = {}
+        total_count = 0
+        
+        async for doc in cursor:
+            status = doc["_id"]
+            count = doc["count"]
+            status_counts[status] = count
+            total_count += count
+        
+        stats = {
+            "total": total_count,
+            "by_status": status_counts,
+            "open": status_counts.get("open", 0),
+            "in_progress": status_counts.get("in_progress", 0),
+            "completed": status_counts.get("completed", 0),
+            "cancelled": status_counts.get("cancelled", 0),
+        }
+        
+        return {"stats": stats}
+    except Exception as e:
+        audio_logger.error(f"Error getting action items stats: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 

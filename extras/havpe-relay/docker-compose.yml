@@ -9,6 +9,9 @@ services:
       # Connect to backend running on host (adjust as needed)
       - WS_URL=${WS_URL:-ws://host.docker.internal:8000/ws_pcm}
       - TCP_PORT=${TCP_PORT:-8989}
+      # Authentication credentials for backend
+      - AUTH_USERNAME=${AUTH_USERNAME}
+      - AUTH_PASSWORD=${AUTH_PASSWORD}
       # - VERBOSE=${VERBOSE:-1}
       - DEBUG=${DEBUG:-0}
     restart: unless-stopped
