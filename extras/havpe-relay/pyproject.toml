@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "easy-audio-interfaces>=0.5",
+    "requests>=2.32.4",
     "websockets>=15.0.1",
 ]
 
