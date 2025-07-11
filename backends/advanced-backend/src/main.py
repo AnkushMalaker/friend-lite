@@ -7,11 +7,12 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from api_routes import router as api_router
+from deps import current_user_ws
 
 # Authentication and user management
 from auth import (
@@ -43,7 +44,7 @@ async def lifespan(app: FastAPI):
     
     try:
         # Initialize all services
-        services = initialize_all_services()
+        services = await initialize_all_services()
         logger.info("✅ All services initialized successfully")
         
         # Create admin user if needed
@@ -129,54 +130,30 @@ def register_service_routers(app: FastAPI):
 
 # WebSocket endpoints
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    client_id: str = Query(..., description="Unique client ID"),
+    user = Depends(current_user_ws),          # ← injects authenticated user
+):
     """WebSocket endpoint for Opus audio streaming."""
-    await websocket.accept()
-    
+    await websocket.accept()                        # only reached when auth passed
     try:
-        # Get client ID from query params or generate one
-        client_id = websocket.query_params.get("client_id")
-        if not client_id:
-            logger.warning("No client_id provided in WebSocket connection")
-            await websocket.close(code=4000, reason="client_id required")
-            return
-        
-        # Handle WebSocket connection
-        await handle_websocket_connection(websocket, client_id)
-        
+        await handle_websocket_connection(websocket, client_id, user)
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for client {client_id}")
-    except Exception as e:
-        logger.error(f"Error in WebSocket connection: {e}")
-        try:
-            await websocket.close(code=1011, reason="Internal server error")
-        except:
-            pass
+        logger.info("WS disconnected: %s (%s)", client_id, user.id)
 
 @app.websocket("/ws_pcm")
-async def websocket_pcm_endpoint(websocket: WebSocket):
+async def websocket_pcm_endpoint(
+    websocket: WebSocket,
+    client_id: str = Query(...),
+    user = Depends(current_user_ws),
+):
     """WebSocket endpoint for PCM audio streaming with JSON messages."""
     await websocket.accept()
-    
     try:
-        # Get client ID from query params or generate one
-        client_id = websocket.query_params.get("client_id")
-        if not client_id:
-            logger.warning("No client_id provided in PCM WebSocket connection")
-            await websocket.close(code=4000, reason="client_id required")
-            return
-        
-        # Handle PCM WebSocket connection
-        await handle_pcm_websocket_connection(websocket, client_id)
-        
+        await handle_pcm_websocket_connection(websocket, client_id, user)
     except WebSocketDisconnect:
-        logger.info(f"PCM WebSocket disconnected for client {client_id}")
-    except Exception as e:
-        logger.error(f"Error in PCM WebSocket connection: {e}")
-        try:
-            await websocket.close(code=1011, reason="Internal server error")
-        except:
-            pass
+        logger.info("PCM WS disconnected: %s (%s)", client_id, user.id)
 
 
 

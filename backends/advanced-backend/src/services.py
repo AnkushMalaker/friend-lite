@@ -15,6 +15,8 @@ from memory import get_memory_service, init_memory_config
 from service_interface import TranscriptServiceManager
 from other_services.action_items_service import ActionItemsService
 from other_services.coaching_service import CoachingService
+from beanie import init_beanie
+from users import User
 
 # Set up logging
 services_logger = logging.getLogger("services")
@@ -56,7 +58,7 @@ def get_config():
         "QDRANT_BASE_URL": os.getenv("QDRANT_BASE_URL", "qdrant"),
     }
 
-def initialize_database():
+async def initialize_database():
     """Initialize MongoDB database and collections."""
     global _mongo_client, _db, _collections
     
@@ -68,6 +70,9 @@ def initialize_database():
     # Initialize MongoDB
     _mongo_client = AsyncIOMotorClient(config["MONGODB_URI"])
     _db = _mongo_client.get_default_database("friend-lite")
+    
+    
+    await init_beanie(database=_db, document_models=[User])
     
     # Initialize collections
     _collections = {
@@ -105,7 +110,7 @@ def initialize_ai_services():
     services_logger.info("AI services initialized successfully")
     return _services
 
-def initialize_transcript_services():
+async def initialize_transcript_services():
     """Initialize transcript processing services."""
     global _services
     
@@ -113,7 +118,7 @@ def initialize_transcript_services():
         return _services["transcript_service_manager"]
     
     # Ensure database and AI services are initialized
-    _, _, collections = initialize_database()
+    _, _, collections = await initialize_database()
     ai_services = initialize_ai_services()
     
     # Initialize transcript service manager
@@ -136,19 +141,19 @@ def initialize_transcript_services():
     services_logger.info("Transcript services initialized successfully")
     return transcript_service_manager
 
-def initialize_all_services():
+async def initialize_all_services():
     """Initialize all services in the correct order."""
     global _services_initialized
     
     if _services_initialized:
-        return get_all_services()
+        return await get_all_services()
     
     services_logger.info("Initializing all services...")
     
     # Initialize in order
-    mongo_client, db, collections = initialize_database()
+    mongo_client, db, collections = await initialize_database()
     ai_services = initialize_ai_services()
-    transcript_service_manager = initialize_transcript_services()
+    transcript_service_manager = await initialize_transcript_services()
     
     _services_initialized = True
     services_logger.info("All services initialized successfully")
@@ -161,10 +166,10 @@ def initialize_all_services():
         "transcript_service_manager": transcript_service_manager,
     }
 
-def get_all_services():
+async def get_all_services():
     """Get all initialized services."""
     if not _services_initialized:
-        return initialize_all_services()
+        return await initialize_all_services()
     
     return {
         "mongo_client": _mongo_client,

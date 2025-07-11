@@ -1,10 +1,10 @@
 """Authentication configuration for fastapi-users with email/password and JWT."""
 
 import os
-from typing import Optional, overload, Literal, Union
+from typing import Optional, overload, Literal
 
 from beanie import PydanticObjectId
-from fastapi import Depends, Request, HTTPException, status
+from fastapi import Depends, Request
 from fastapi_users import BaseUserManager, FastAPIUsers
 from fastapi_users.authentication import (
     AuthenticationBackend,
@@ -14,7 +14,6 @@ from fastapi_users.authentication import (
 )
 from fastapi_users.password import PasswordHelper
 
-import re
 import logging
 from users import User, UserCreate, get_user_db
 from dotenv import load_dotenv
@@ -82,18 +81,12 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         
         Args:
             credentials: OAuth2PasswordRequestForm with username and password
-                        'username' should be email address
         
         Returns:
             User if authentication successful, None otherwise
         """
-        # Handle both dict and OAuth2PasswordRequestForm
-        if hasattr(credentials, 'username'):
-            username = credentials.username
-            password = credentials.password
-        else:
-            username = credentials.get("username")
-            password = credentials.get("password")
+        username = credentials.username
+        password = credentials.password
         
         if not username or not password:
             return None
@@ -125,10 +118,10 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         # Update user with superuser and verified status if needed
         # This is required because the base implementation may not preserve these fields
         update_needed = False
-        if user_create.is_superuser != user.is_superuser:
+        if user_create.is_superuser is not None and user_create.is_superuser != user.is_superuser:
             user.is_superuser = user_create.is_superuser
             update_needed = True
-        if user_create.is_verified != user.is_verified:
+        if user_create.is_verified is not None and user_create.is_verified != user.is_verified:
             user.is_verified = user_create.is_verified
             update_needed = True
         
@@ -248,58 +241,4 @@ async def create_admin_user_if_needed():
 
 
 
-async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[User]:
-    """
-    WebSocket authentication that supports both cookie and token-based auth.
-    Returns None if authentication fails (allowing graceful handling).
-    
-    Args:
-        websocket: The WebSocket connection
-        token: Optional JWT token from query parameter
-    """
-    # Try to get user from JWT token in query parameter first
-    if token:
-        logger.debug("Attempting WebSocket auth with token from query parameter.")
-        try:
-            strategy = get_jwt_strategy()
-            # Create a dummy user manager instance for token validation
-            user_db = await get_user_db().__anext__()
-            user_manager = UserManager(user_db)
-            user = await strategy.read_token(token, user_manager)
-            if user and user.is_active:
-                logger.info(f"WebSocket auth successful for user {user.user_id} ({user.email}) using query token.")
-                return user
-        except Exception as e:
-            logger.warning(f"WebSocket auth with query token failed: {e}")
-            pass  # Fall through to cookie auth
-    
-    # Try to get user from cookie
-    logger.debug("Attempting WebSocket auth with cookie.")
-    try:
-        # Extract cookies from WebSocket headers
-        cookie_header = None
-        for name, value in websocket.headers.items():
-            if name.lower() == b'cookie':
-                cookie_header = value.decode()
-                break
-        
-        if cookie_header:
-            # Parse cookies to find our auth cookie
-            cookie_pattern = r'fastapiusersauth=([^;]+)'
-            match = re.search(cookie_pattern, cookie_header)
-            if match:
-                cookie_value = match.group(1)
-                strategy = get_jwt_strategy()
-                # Create a dummy user manager instance for token validation
-                user_db = await get_user_db().__anext__()
-                user_manager = UserManager(user_db)
-                user = await strategy.read_token(cookie_value, user_manager)
-                if user and user.is_active:
-                    logger.info(f"WebSocket auth successful for user {user.user_id} ({user.email}) using cookie.")
-                    return user
-    except Exception as e:
-        logger.warning(f"WebSocket auth with cookie failed: {e}")
-        pass
-    
-    logger.warning("WebSocket authentication failed.")
-    return None 
+ 

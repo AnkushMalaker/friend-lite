@@ -4,24 +4,21 @@ Handles WebSocket connections, client state management, and real-time audio proc
 """
 
 import asyncio
-import concurrent.futures
 import json
 import logging
 import time
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
+from functools import partial
 from fastapi import WebSocket, WebSocketDisconnect
 from omi.decoder import OmiOpusDecoder
-from wyoming.audio import AudioChunk, AudioStart, AudioStop
-from wyoming.vad import VoiceStarted, VoiceStopped
 
 from audio_processing import (
     AUDIO_CROPPING_ENABLED,
     CHUNK_DIR,
-    NEW_CONVERSATION_TIMEOUT_MINUTES,
     TARGET_SAMPLES,
     ChunkRepo,
     TranscriptionManager,
@@ -91,7 +88,8 @@ class ClientState:
         self.client_id = client_id
         self.websocket = websocket
         self.connected = False
-        self.decoder = OmiOpusDecoder()
+        self.decoder = OmiOpusDecoder() # Not all clients need it, maybe lazy load?
+        self._decode = partial(self.decoder.decode_packet, strip_header=True)
         
         # Audio processing state
         self.current_audio_uuid: Optional[str] = None
@@ -106,7 +104,7 @@ class ClientState:
         self.conversation_transcripts: List[str] = []
         
         # Processing queues
-        self.chunk_queue = asyncio.Queue()
+        self.chunk_queue: asyncio.Queue[] = asyncio.Queue()
         self.transcription_queue = asyncio.Queue()
         self.memory_queue = asyncio.Queue()
         self.action_item_queue = asyncio.Queue()
@@ -247,7 +245,7 @@ class ClientState:
         self.file_sink = _new_local_file_sink(str(file_path))
         
         # Create chunk entry in database
-        # assert self.chunk_repo is not None
+        assert self.chunk_repo is not None
         await self.chunk_repo.create_chunk(self.current_audio_uuid, self.client_id, str(file_path))
         
         # Reset counters
@@ -287,6 +285,7 @@ class ClientState:
             
             if success:
                 # Update database with cropped audio info
+                assert self.chunk_repo is not None
                 await self.chunk_repo.update_cropped_audio(
                     audio_uuid, cropped_path, self.speech_segments[audio_uuid]
                 )
@@ -304,6 +303,7 @@ class ClientState:
                 return
             
             # Add to memory service
+            assert self.memory_service is not None
             await self.memory_service.add_memory(
                 client_id=client_id,
                 user_id=user.user_id,
@@ -333,7 +333,7 @@ class ClientState:
                     
                     # Decode audio
                     decoded_samples = await asyncio.get_event_loop().run_in_executor(
-                        _DEC_IO_EXECUTOR, self.decoder.decode, chunk
+                        _DEC_IO_EXECUTOR, self._decode, chunk
                     )
                     
                     # Write to file
@@ -501,14 +501,18 @@ class ClientState:
                 exc_info=True,
             )
 
-async def handle_websocket_connection(websocket: WebSocket, client_id: str):
+async def handle_websocket_connection(websocket: WebSocket, client_id: str, user):
     """Handle WebSocket connection for audio streaming."""
+    
     client_state = ClientState(client_id, websocket)
     active_clients[client_id] = client_state
     
+    # Register client-user mapping
+    register_client_user_mapping(client_id, str(user.id))
+    
     try:
         await client_state.connect()
-        websocket_logger.info(f"WebSocket connected for client {client_id}")
+        websocket_logger.info(f"WebSocket connected for client {client_id} (user: {user.user_id})")
         
         while True:
             try:
@@ -519,7 +523,7 @@ async def handle_websocket_connection(websocket: WebSocket, client_id: str):
                 await client_state.chunk_queue.put(data)
                 
             except WebSocketDisconnect:
-                websocket_logger.info(f"WebSocket disconnected for client {client_id}")
+                websocket_logger.info(f"WebSocket disconnected for client {client_id} (user: {user.user_id})")
                 break
             except Exception as e:
                 websocket_logger.error(f"Error in WebSocket connection for client {client_id}: {e}")
@@ -534,14 +538,18 @@ async def handle_websocket_connection(websocket: WebSocket, client_id: str):
             del active_clients[client_id]
         unregister_client_user_mapping(client_id)
 
-async def handle_pcm_websocket_connection(websocket: WebSocket, client_id: str):
+async def handle_pcm_websocket_connection(websocket: WebSocket, client_id: str, user):
     """Handle WebSocket connection for PCM audio streaming."""
+    
     client_state = ClientState(client_id, websocket)
     active_clients[client_id] = client_state
     
+    # Register client-user mapping
+    register_client_user_mapping(client_id, str(user.id))
+    
     try:
         await client_state.connect()
-        websocket_logger.info(f"PCM WebSocket connected for client {client_id}")
+        websocket_logger.info(f"PCM WebSocket connected for client {client_id} (user: {user.user_id})")
         
         while True:
             try:
@@ -567,7 +575,7 @@ async def handle_pcm_websocket_connection(websocket: WebSocket, client_id: str):
                         client_state.record_speech_end(client_state.current_audio_uuid)
                         
             except WebSocketDisconnect:
-                websocket_logger.info(f"PCM WebSocket disconnected for client {client_id}")
+                websocket_logger.info(f"PCM WebSocket disconnected for client {client_id} (user: {user.user_id})")
                 break
             except Exception as e:
                 websocket_logger.error(f"Error in PCM WebSocket connection for client {client_id}: {e}")

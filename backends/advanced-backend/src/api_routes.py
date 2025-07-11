@@ -83,7 +83,7 @@ async def health_check():
             "services": {
                 "database": "connected",
                 "memory": "available",
-                "active_clients": len(active_clients),
+                "active_clients": f"{len(active_clients)} connected",
             },
             "environment": {
                 "chunk_dir": str(CHUNK_DIR),
@@ -270,10 +270,9 @@ async def get_memories(
             target_user_id = current_user.user_id
         
         memory_service = get_memory_service_instance()
-        memories = await memory_service.get_memories(
+        memories = memory_service.get_all_memories(
             user_id=target_user_id,
-            limit=limit,
-            offset=offset
+            limit=limit
         )
         
         return {"memories": memories, "count": len(memories)}
@@ -291,7 +290,7 @@ async def search_memories(
     """Search memories."""
     try:
         memory_service = get_memory_service_instance()
-        results = await memory_service.search_memories(
+        results = memory_service.search_memories(
             query=query,
             user_id=current_user.user_id,
             limit=limit
@@ -332,12 +331,29 @@ async def debug_memories(
 ):
     """Debug memories for admin."""
     try:
-        memory_service = get_memory_service_instance()
+        from memory_debug import get_debug_tracker
         
+        debug_tracker = get_debug_tracker()
+        
+        # Get recent sessions limited by user if specified
         if user_id:
-            debug_info = await memory_service.get_debug_info(user_id)
+            sessions = debug_tracker.get_recent_sessions(limit=50)
+            # Filter for specific user
+            user_sessions = [s for s in sessions if s.get("user_id") == user_id]
+            debug_info = {
+                "user_id": user_id,
+                "sessions": user_sessions,
+                "session_count": len(user_sessions)
+            }
         else:
-            debug_info = await memory_service.get_debug_info()
+            # Get overall debug statistics
+            stats = debug_tracker.get_stats()
+            recent_sessions = debug_tracker.get_recent_sessions(limit=20)
+            debug_info = {
+                "stats": stats,
+                "recent_sessions": recent_sessions,
+                "session_count": len(recent_sessions)
+            }
         
         return {"debug_info": debug_info}
         
@@ -356,16 +372,35 @@ async def get_admin_memories(
         memory_service = get_memory_service_instance()
         
         if user_id:
-            memories = await memory_service.get_memories(
+            memories = memory_service.get_all_memories(
                 user_id=user_id,
-                limit=limit,
-                include_metadata=True
+                limit=limit
             )
         else:
-            memories = await memory_service.get_all_memories(
-                limit=limit,
-                include_metadata=True
-            )
+            # For admin to get ALL memories from all users, we need a different approach
+            # Since get_all_memories requires a user_id, we'll get all users and their memories
+            all_memories = []
+            try:
+                # Get all users from database
+                _, _, collections = get_database()
+                user_docs = await collections["users"].find({}).to_list(length=None)
+                for user_doc in user_docs:
+                    try:
+                        user_memories = memory_service.get_all_memories(
+                            user_id=str(user_doc["_id"]),
+                            limit=limit
+                        )
+                        all_memories.extend(user_memories)
+                        if len(all_memories) >= limit:
+                            break
+                    except Exception as user_error:
+                        api_logger.debug(f"Could not get memories for user {user_doc['_id']}: {user_error}")
+                        continue
+                memories = all_memories[:limit]
+            except Exception as e:
+                api_logger.warning(f"Could not get all users' memories: {e}")
+                # Fallback: return empty list for now
+                memories = []
         
         return {"memories": memories, "count": len(memories)}
         
