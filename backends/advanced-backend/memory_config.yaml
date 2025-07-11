@@ -1,0 +1,214 @@
+# Memory Extraction Configuration
+# This file controls how memories and facts are extracted from conversations
+
+# General memory extraction settings
+memory_extraction:
+  # Whether to extract general memories (conversation summaries, topics, etc.)
+  enabled: true
+  
+  # Main prompt for memory extraction
+  prompt: |
+    Extract anything relevant about this conversation that would be valuable to remember.
+    Focus on:
+    - Key topics discussed
+    - People mentioned and their roles
+    - Decisions made or plans created
+    - Important dates, deadlines, or events
+    - Emotional context or tone
+    - Any significant insights or learnings
+    
+    Keep memories concise but informative. Include context about when and why things were discussed.
+    
+    If no significant information to remember, return a brief summary of the conversation topic.
+  
+  # LLM parameters for memory extraction
+  llm_settings:
+    temperature: 0.1  # Lower temperature for more consistent extraction
+    max_tokens: 2000
+    model: "llama3.1:latest"  # Can be overridden by environment
+
+# Fact extraction settings (structured information)
+fact_extraction:
+  # Whether to extract structured facts separately from general memories
+  enabled: true
+  
+  # Prompt for extracting structured facts
+  prompt: |
+    Extract specific, verifiable facts from this conversation. Focus on:
+    - Names of people and their roles/titles
+    - Company names and organizations
+    - Dates and specific times
+    - Locations and addresses
+    - Numbers, quantities, and measurements
+    - Contact information (emails, phone numbers)
+    - Project names and code names
+    - Technical specifications or requirements
+    
+    Format each fact clearly. If no specific facts are mentioned, return empty.
+    
+    Examples:
+    - "John Smith works as Software Engineer at Acme Corp"
+    - "Project deadline is December 15th, 2024"
+    - "Meeting scheduled for 2 PM EST on Monday"
+    - "Budget approved for $50,000"
+  
+  # LLM parameters for fact extraction
+  llm_settings:
+    temperature: 0.0  # Very low temperature for factual accuracy
+    max_tokens: 1500
+    model: "llama3.1:latest"
+
+# Action item extraction settings
+action_item_extraction:
+  # Whether to extract action items
+  enabled: true
+  
+  # Trigger phrases that indicate explicit action items
+  trigger_phrases:
+    - "simon says"
+    - "action item"
+    - "todo"
+    - "follow up"
+    - "next step"
+    - "homework"
+    - "deliverable"
+  
+  # Main prompt for action item extraction
+  prompt: |
+    Extract actionable tasks and commitments from this conversation.
+    
+    Look for:
+    - Explicit commitments ("I'll send you the report")
+    - Requested actions ("Can you review the document?")
+    - Scheduled tasks ("We need to meet next week")
+    - Follow-up items ("Let's check on this tomorrow")
+    - Deliverables mentioned ("The presentation is due Friday")
+    
+    For each action item, determine:
+    - What needs to be done (clear, specific description)
+    - Who is responsible (assignee)
+    - When it's due (deadline if mentioned)
+    - Priority level (high/medium/low)
+    
+    Return ONLY valid JSON array. If no action items found, return [].
+    
+    Example format:
+    [
+      {
+        "description": "Send project status report to team",
+        "assignee": "John",
+        "due_date": "Friday",
+        "priority": "high",
+        "context": "Discussed in weekly team meeting"
+      }
+    ]
+  
+  # LLM parameters for action item extraction
+  llm_settings:
+    temperature: 0.1
+    max_tokens: 1000
+    model: "llama3.1:latest"
+
+# Memory categorization settings
+categorization:
+  # Whether to automatically categorize memories
+  enabled: true
+  
+  # Predefined categories
+  categories:
+    - personal
+    - work
+    - meeting
+    - project
+    - learning
+    - social
+    - health
+    - finance
+    - travel
+    - other
+  
+  # Prompt for categorizing memories
+  prompt: |
+    Categorize this conversation into one or more of these categories:
+    personal, work, meeting, project, learning, social, health, finance, travel, other
+    
+    Return only the category names, comma-separated.
+    Examples: "work, meeting" or "personal, health" or "project"
+  
+  # LLM parameters for categorization
+  llm_settings:
+    temperature: 0.2
+    max_tokens: 100
+    model: "llama3.1:latest"
+
+# Quality control settings
+quality_control:
+  # Minimum conversation length (in characters) to process
+  min_conversation_length: 50
+  
+  # Maximum conversation length (in characters) to process
+  max_conversation_length: 50000
+  
+  # Whether to skip conversations that are mostly silence/filler
+  skip_low_content: true
+  
+  # Minimum meaningful content ratio (0.0-1.0)
+  min_content_ratio: 0.3
+  
+  # Skip conversations with these patterns
+  skip_patterns:
+    - "^(um|uh|hmm|yeah|ok|okay)\\s*$"
+    - "^test\\s*$"
+    - "^hello\\s*$"
+    - "^testing\\s*$"
+
+# Processing settings
+processing:
+  # Whether to process memories in parallel
+  parallel_processing: true
+  
+  # Maximum number of concurrent processing tasks
+  max_concurrent_tasks: 3
+  
+  # Timeout for memory processing (seconds)
+  processing_timeout: 300
+  
+  # Whether to retry failed extractions
+  retry_failed: true
+  
+  # Maximum number of retries
+  max_retries: 2
+  
+  # Delay between retries (seconds)
+  retry_delay: 5
+
+# Storage settings
+storage:
+  # Whether to store detailed extraction metadata
+  store_metadata: true
+  
+  # Whether to store the original prompts used
+  store_prompts: true
+  
+  # Whether to store LLM responses
+  store_llm_responses: true
+  
+  # Whether to store processing timing information
+  store_timing: true
+
+# Debug settings
+debug:
+  # Whether to enable debug tracking
+  enabled: true
+  
+  # Debug database path
+  db_path: "/app/debug/memory_debug.db"
+  
+  # Log level for memory processing
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  
+  # Whether to log full conversations (privacy consideration)
+  log_full_conversations: false
+  
+  # Whether to log extracted memories
+  log_extracted_memories: true

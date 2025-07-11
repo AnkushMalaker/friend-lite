@@ -2,17 +2,13 @@
 
 import random
 import string
-from typing import Optional
+from datetime import datetime
+from typing import Optional, List, Dict, Any
 
 from beanie import Document, PydanticObjectId
-from fastapi_users.db import BaseOAuthAccount, BeanieBaseUser, BeanieUserDatabase
+from fastapi_users.db import BeanieBaseUser, BeanieUserDatabase
 from fastapi_users.schemas import BaseUser, BaseUserCreate, BaseUserUpdate
 from pydantic import Field
-
-
-class OAuthAccount(BaseOAuthAccount):
-    """OAuth account model for storing third-party authentication info."""
-    pass
 
 
 class User(BeanieBaseUser, Document):
@@ -21,12 +17,48 @@ class User(BeanieBaseUser, Document):
     # Custom fields for your application
     display_name: Optional[str] = None
     profile_picture: Optional[str] = None
-    oauth_accounts: list[OAuthAccount] = Field(default_factory=list)
+    
+    # Client tracking for audio devices
+    registered_clients: List[Dict[str, Any]] = Field(default_factory=list)
     
     @property
     def user_id(self) -> str:
         """Return string representation of MongoDB ObjectId for backward compatibility."""
         return str(self.id)
+    
+    def register_client(self, client_id: str, device_name: Optional[str] = None) -> None:
+        """Register a new client for this user."""
+        # Check if client already exists
+        for client in self.registered_clients:
+            if client["client_id"] == client_id:
+                # Update existing client
+                client["last_seen"] = datetime.utcnow()
+                client["device_name"] = device_name or client.get("device_name")
+                return
+        
+        # Add new client
+        self.registered_clients.append({
+            "client_id": client_id,
+            "device_name": device_name,
+            "first_seen": datetime.utcnow(),
+            "last_seen": datetime.utcnow(),
+            "is_active": True
+        })
+    
+    def update_client_activity(self, client_id: str) -> None:
+        """Update the last_seen timestamp for a client."""
+        for client in self.registered_clients:
+            if client["client_id"] == client_id:
+                client["last_seen"] = datetime.utcnow()
+                break
+    
+    def get_client_ids(self) -> List[str]:
+        """Get all client IDs registered to this user."""
+        return [client["client_id"] for client in self.registered_clients]
+    
+    def has_client(self, client_id: str) -> bool:
+        """Check if a client is registered to this user."""
+        return any(client["client_id"] == client_id for client in self.registered_clients)
     
     class Settings:
         name = "fastapi_users"  # Collection name in MongoDB
@@ -55,7 +87,7 @@ class UserUpdate(BaseUserUpdate):
 
 async def get_user_db():
     """Get the user database instance for dependency injection."""
-    yield BeanieUserDatabase(User, OAuthAccount)
+    yield BeanieUserDatabase(User)
 
 
 async def get_user_by_id(user_id: str) -> Optional[User]:
@@ -64,6 +96,17 @@ async def get_user_by_id(user_id: str) -> Optional[User]:
         return await User.get(PydanticObjectId(user_id))
     except Exception:
         return None
+
+
+async def get_user_by_client_id(client_id: str) -> Optional[User]:
+    """Find the user that owns a specific client_id."""
+    return await User.find_one({"registered_clients.client_id": client_id})
+
+
+async def register_client_to_user(user: User, client_id: str, device_name: Optional[str] = None) -> None:
+    """Register a client to a user and save to database."""
+    user.register_client(client_id, device_name)
+    await user.save()
 
 
 def generate_client_id(user: User, device_name: Optional[str] = None) -> str:

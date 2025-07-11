@@ -19,9 +19,10 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, List
 from bson import ObjectId
 
 # Import Beanie for user management
@@ -36,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder
 from wyoming.asr import Transcribe, Transcript
-from wyoming.audio import AudioChunk, AudioStart
+from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
@@ -44,8 +45,6 @@ from action_items_service import ActionItemsService
 
 # Import authentication components
 from auth import (
-    GOOGLE_OAUTH_ENABLED,
-    SECRET_KEY,
     bearer_backend,
     cookie_backend,
     create_admin_user_if_needed,
@@ -53,7 +52,6 @@ from auth import (
     current_superuser,
     fastapi_users,
     get_user_manager,
-    google_oauth_client,
     websocket_auth,
     ADMIN_EMAIL
 )
@@ -64,7 +62,7 @@ from metrics import (
     start_metrics_collection,
     stop_metrics_collection,
 )
-from users import User, UserCreate, get_user_db, generate_client_id
+from users import User, UserCreate, UserRead, get_user_db, generate_client_id, get_user_by_client_id, register_client_to_user
 
 ###############################################################################
 # SETUP
@@ -187,20 +185,35 @@ async def _process_audio_cropping_with_relative_timestamps(
         # Convert absolute timestamps to relative timestamps
         # Extract file start time from filename: timestamp_client_uuid.wav
         filename = original_path.split("/")[-1]
-        file_start_timestamp = float(filename.split("_")[0])
+        audio_logger.info(f"🕐 Parsing filename: {filename}")
+        filename_parts = filename.split("_")
+        if len(filename_parts) < 3:
+            audio_logger.error(f"Invalid filename format: {filename}. Expected format: timestamp_client_id_audio_uuid.wav")
+            return False
+        
+        try:
+            file_start_timestamp = float(filename_parts[0])
+        except ValueError as e:
+            audio_logger.error(f"Cannot parse timestamp from filename {filename}: {e}")
+            return False
 
         # Convert speech segments to relative timestamps
         relative_segments = []
         for start_abs, end_abs in speech_segments:
+            # Validate input timestamps
+            if start_abs >= end_abs:
+                audio_logger.warning(f"⚠️ Invalid speech segment: start={start_abs} >= end={end_abs}, skipping")
+                continue
+                
             start_rel = start_abs - file_start_timestamp
             end_rel = end_abs - file_start_timestamp
 
             # Ensure relative timestamps are positive (sanity check)
             if start_rel < 0:
-                audio_logger.warning(f"⚠️ Negative start timestamp: {start_rel}, clamping to 0.0")
+                audio_logger.warning(f"⚠️ Negative start timestamp: {start_rel} (absolute: {start_abs}, file_start: {file_start_timestamp}), clamping to 0.0")
                 start_rel = 0.0
             if end_rel < 0:
-                audio_logger.warning(f"⚠️ Negative end timestamp: {end_rel}, skipping segment")
+                audio_logger.warning(f"⚠️ Negative end timestamp: {end_rel} (absolute: {end_abs}, file_start: {file_start_timestamp}), skipping segment")
                 continue
 
             relative_segments.append((start_rel, end_rel))
@@ -210,6 +223,11 @@ async def _process_audio_cropping_with_relative_timestamps(
         )
         audio_logger.info(f"🕐 Absolute segments: {speech_segments}")
         audio_logger.info(f"🕐 Relative segments: {relative_segments}")
+
+        # Validate that we have valid relative segments after conversion
+        if not relative_segments:
+            audio_logger.warning(f"No valid relative segments after timestamp conversion for {audio_uuid}")
+            return False
 
         success = await _crop_audio_with_ffmpeg(original_path, relative_segments, output_path)
         if success:
@@ -222,7 +240,7 @@ async def _process_audio_cropping_with_relative_timestamps(
             audio_logger.error(f"Failed to crop audio for {audio_uuid}")
             return False
     except Exception as e:
-        audio_logger.error(f"Error in audio cropping task for {audio_uuid}: {e}")
+        audio_logger.error(f"Error in audio cropping task for {audio_uuid}: {e}", exc_info=True)
         return False
 
 
@@ -240,6 +258,11 @@ async def _crop_audio_with_ffmpeg(
 
     if not speech_segments:
         audio_cropper_logger.warning(f"No speech segments to crop for {original_path}")
+        return False
+
+    # Check if the original file exists
+    if not os.path.exists(original_path):
+        audio_cropper_logger.error(f"Original audio file does not exist: {original_path}")
         return False
 
     # Filter out segments that are too short
@@ -319,7 +342,7 @@ async def _crop_audio_with_ffmpeg(
             return False
 
     except Exception as e:
-        audio_logger.error(f"Error running ffmpeg on {original_path}: {e}")
+        audio_logger.error(f"Error running ffmpeg on {original_path}: {e}", exc_info=True)
         return False
 
 
@@ -337,6 +360,7 @@ def _new_local_file_sink(file_path):
         sample_width=int(OMI_SAMPLE_WIDTH),
     )
     return sink
+
 
 
 class ChunkRepo:
@@ -462,6 +486,39 @@ class TranscriptionManager:
             audio_logger.error(f"Failed to connect to offline ASR service: {e}")
             self.client = None
             raise
+
+    async def flush_final_transcript(self):
+        """Flush any remaining transcript from ASR by sending AudioStop."""
+        if self.use_deepgram:
+            await self._flush_deepgram()
+        else:
+            await self._flush_offline_asr()
+
+    async def _flush_deepgram(self):
+        """Flush final transcript from Deepgram by closing the stream."""
+        if self.deepgram_connected and self.deepgram_ws:
+            try:
+                # Send close frame to signal end of audio stream
+                # Deepgram will send final results when the connection closes
+                audio_logger.info(f"Flushing final transcript from Deepgram for client {self._client_id}")
+                await self.deepgram_ws.send(b'{"type": "CloseStream"}')
+                # Give Deepgram a moment to process final audio and send results
+                await asyncio.sleep(1.0)
+            except Exception as e:
+                audio_logger.error(f"Error flushing Deepgram transcript: {e}")
+
+    async def _flush_offline_asr(self):
+        """Flush final transcript from offline ASR by sending AudioStop."""
+        if self.client and self._current_audio_uuid:
+            try:
+                audio_logger.info(f"Flushing final transcript from offline ASR for audio {self._current_audio_uuid}")
+                # Send AudioStop to signal end of audio stream
+                audio_stop = AudioStop(timestamp=int(time.time()))
+                await self.client.write_event(audio_stop.event())
+                # Give ASR a moment to process final audio and send transcript
+                await asyncio.sleep(1.0)
+            except Exception as e:
+                audio_logger.error(f"Error flushing offline ASR transcript: {e}")
 
     async def disconnect(self):
         """Cleanly disconnect from ASR service."""
@@ -704,6 +761,7 @@ class TranscriptionManager:
                     if event is None:
                         break
 
+                    audio_logger.debug(f"Received event type: {event.type} for {audio_uuid}")
                     if Transcript.is_type(event.type):
                         transcript_obj = Transcript.from_event(event)
                         transcript_text = transcript_obj.text.strip()
@@ -770,6 +828,8 @@ class TranscriptionManager:
                             audio_logger.info(
                                 f"🎤 Voice started for {audio_uuid} at {current_time}"
                             )
+                        else:
+                            audio_logger.warning(f"Client {client_id} not found in active_clients for VoiceStarted event")
 
                     elif VoiceStopped.is_type(event.type):
                         audio_logger.info(f"VoiceStopped event received for {audio_uuid}")
@@ -779,6 +839,8 @@ class TranscriptionManager:
                             audio_logger.info(
                                 f"🔇 Voice stopped for {audio_uuid} at {current_time}"
                             )
+                        else:
+                            audio_logger.warning(f"Client {client_id} not found in active_clients for VoiceStopped event")
 
             except asyncio.TimeoutError:
                 # No events available right now, that's fine
@@ -962,55 +1024,41 @@ class ClientState:
 
             audio_logger.info(f"🔒 Closing conversation {current_uuid}, file: {current_path}")
 
-            # Wait for transcription queue to finish
-            await self.transcription_queue.join()
-            logger.info(f"Sleeping waiting for transcript")
-            await asyncio.sleep(5)
+            # Flush any remaining transcript from ASR before waiting for queue
+            if self.transcription_manager:
+                try:
+                    audio_logger.info(f"🏁 Flushing final transcript for {current_uuid}")
+                    await self.transcription_manager.flush_final_transcript()
+                except Exception as e:
+                    audio_logger.error(f"Error flushing final transcript for {current_uuid}: {e}")
+
+            # Wait for transcription queue to finish with timeout to prevent hanging
+            try:
+                await asyncio.wait_for(self.transcription_queue.join(), timeout=15.0)  # Increased timeout for final transcript
+                audio_logger.info("Transcription queue processing completed")
+            except asyncio.TimeoutError:
+                audio_logger.warning(f"Transcription queue join timed out after 15 seconds for {current_uuid}")
+            
+            # Small delay to allow final processing to complete
+            await asyncio.sleep(0.5)
 
             # Process memory at end of conversation if we have transcripts
             if self.conversation_transcripts and current_uuid:
                 full_conversation = " ".join(self.conversation_transcripts)
                 audio_logger.info(
-                    f"💭 Processing memory for conversation {current_uuid} with {len(self.conversation_transcripts)} transcript segments"
+                    f"💭 Queuing memory processing for conversation {current_uuid} with {len(self.conversation_transcripts)} transcript segments"
                 )
                 audio_logger.info(f"💭 Individual transcripts: {self.conversation_transcripts}")
                 audio_logger.info(
                     f"💭 Full conversation text: {full_conversation[:200]}..."
                 )  # Log first 200 chars
 
-                start_time = time.time()
-
-                try:
-                    # Track memory storage request
-                    metrics_collector = get_metrics_collector()
-                    metrics_collector.record_memory_storage_request()
-
-                    # Add general memory with fallback handling
-                    memory_result = await memory_service.add_memory(
-                        full_conversation, self.client_id, current_uuid
-                    )
-                    if memory_result:
-                        audio_logger.info(
-                            f"✅ Successfully added conversation memory for {current_uuid}"
-                        )
-                        metrics_collector.record_memory_storage_result(True)
-                    else:
-                        audio_logger.warning(
-                            f"⚠️ Memory service returned False for {current_uuid} - may have timed out"
-                        )
-                        metrics_collector.record_memory_storage_result(False)
-
-                except Exception as e:
-                    audio_logger.error(
-                        f"❌ Error processing memory for {current_uuid}: {e}"
-                    )
-                    metrics_collector.record_memory_storage_result(False)
-
-                # Log processing summary
-                processing_time_ms = (time.time() - start_time) * 1000
-                audio_logger.info(
-                    f"🔄 Completed memory processing for {current_uuid} in {processing_time_ms:.1f}ms"
-                )
+                # Process memory in background to avoid blocking conversation close
+                asyncio.create_task(self._process_memory_background(
+                    full_conversation, current_uuid
+                ))
+                
+                audio_logger.info(f"💭 Memory processing queued in background for {current_uuid}")
             else:
                 audio_logger.info(
                     f"ℹ️ No transcripts to process for memory in conversation {current_uuid}"
@@ -1053,6 +1101,7 @@ class ClientState:
                     audio_logger.info(
                         f"🎯 Found {len(speech_segments)} speech segments for {current_uuid}: {speech_segments}"
                     )
+                    audio_logger.info(f"🎯 Audio file path: {current_path}")
                     if speech_segments:  # Only crop if we have speech segments
                         cropped_path = str(current_path).replace(".wav", "_cropped.wav")
 
@@ -1111,6 +1160,49 @@ class ClientState:
             original_path, speech_segments, output_path, audio_uuid
         )
 
+    async def _process_memory_background(self, full_conversation: str, audio_uuid: str):
+        """Background task for memory processing to avoid blocking conversation close."""
+        start_time = time.time()
+        
+        try:
+            # Track memory storage request
+            metrics_collector = get_metrics_collector()
+            metrics_collector.record_memory_storage_request()
+
+            # Add general memory with fallback handling
+            # First resolve client_id to user information
+            user = await get_user_by_client_id(self.client_id)
+            if user:
+                memory_result = await memory_service.add_memory(
+                    full_conversation, self.client_id, audio_uuid, user.user_id, user.email
+                )
+            else:
+                audio_logger.error(f"Could not resolve client_id {self.client_id} to user for memory storage")
+                memory_result = False
+            if memory_result:
+                audio_logger.info(
+                    f"✅ Successfully added conversation memory for {audio_uuid}"
+                )
+                metrics_collector.record_memory_storage_result(True)
+            else:
+                audio_logger.warning(
+                    f"⚠️ Memory service returned False for {audio_uuid} - may have timed out"
+                )
+                metrics_collector.record_memory_storage_result(False)
+
+        except Exception as e:
+            audio_logger.error(
+                f"❌ Error processing memory for {audio_uuid}: {e}"
+            )
+            metrics_collector = get_metrics_collector()
+            metrics_collector.record_memory_storage_result(False)
+
+        # Log processing summary
+        processing_time_ms = (time.time() - start_time) * 1000
+        audio_logger.info(
+            f"🔄 Completed background memory processing for {audio_uuid} in {processing_time_ms:.1f}ms"
+        )
+
     async def _audio_saver(self):
         """Per-client audio saver consumer."""
         try:
@@ -1118,34 +1210,42 @@ class ClientState:
                 audio_chunk = await self.chunk_queue.get()
 
                 if audio_chunk is None:  # Disconnect signal
+                    self.chunk_queue.task_done()
                     break
 
-                # Check if we should start a new conversation due to timeout
-                if self._should_start_new_conversation():
-                    await self.start_new_conversation()
+                try:
+                    # Check if we should start a new conversation due to timeout
+                    if self._should_start_new_conversation():
+                        await self.start_new_conversation()
 
-                if self.file_sink is None:
-                    # Create new file sink for this client
-                    self.current_audio_uuid = uuid.uuid4().hex
-                    timestamp = audio_chunk.timestamp or int(time.time())
-                    wav_filename = f"{timestamp}_{self.client_id}_{self.current_audio_uuid}.wav"
-                    audio_logger.info(
-                        f"Creating file sink with: rate={int(OMI_SAMPLE_RATE)}, channels={int(OMI_CHANNELS)}, width={int(OMI_SAMPLE_WIDTH)}"
-                    )
-                    self.file_sink = _new_local_file_sink(f"{CHUNK_DIR}/{wav_filename}")
-                    await self.file_sink.open()
+                    if self.file_sink is None:
+                        # Create new file sink for this client
+                        self.current_audio_uuid = uuid.uuid4().hex
+                        timestamp = audio_chunk.timestamp or int(time.time())
+                        wav_filename = f"{timestamp}_{self.client_id}_{self.current_audio_uuid}.wav"
+                        audio_logger.info(
+                            f"Creating file sink with: rate={int(OMI_SAMPLE_RATE)}, channels={int(OMI_CHANNELS)}, width={int(OMI_SAMPLE_WIDTH)}"
+                        )
+                        self.file_sink = _new_local_file_sink(f"{CHUNK_DIR}/{wav_filename}")
+                        await self.file_sink.open()
 
-                    await chunk_repo.create_chunk(
-                        audio_uuid=self.current_audio_uuid,
-                        audio_path=wav_filename,
-                        client_id=self.client_id,
-                        timestamp=timestamp,
-                    )
+                        await chunk_repo.create_chunk(
+                            audio_uuid=self.current_audio_uuid,
+                            audio_path=wav_filename,
+                            client_id=self.client_id,
+                            timestamp=timestamp,
+                        )
 
-                await self.file_sink.write(audio_chunk)
+                    await self.file_sink.write(audio_chunk)
 
-                # Queue for transcription
-                await self.transcription_queue.put((self.current_audio_uuid, audio_chunk))
+                    # Queue for transcription
+                    await self.transcription_queue.put((self.current_audio_uuid, audio_chunk))
+
+                except Exception as e:
+                    audio_logger.error(f"Error processing audio chunk for client {self.client_id}: {e}")
+                finally:
+                    # Always mark task as done
+                    self.chunk_queue.task_done()
 
         except Exception as e:
             audio_logger.error(
@@ -1162,36 +1262,45 @@ class ClientState:
                 audio_uuid, chunk = await self.transcription_queue.get()
 
                 if audio_uuid is None or chunk is None:  # Disconnect signal
+                    self.transcription_queue.task_done()
                     break
 
-                # Get or create transcription manager
-                if self.transcription_manager is None:
-                    # Create callback function to queue action items
-                    async def action_item_callback(transcript_text, client_id, audio_uuid):
-                        await self.action_item_queue.put((transcript_text, client_id, audio_uuid))
-
-                    self.transcription_manager = TranscriptionManager(
-                        action_item_callback=action_item_callback
-                    )
-                    try:
-                        await self.transcription_manager.connect(self.client_id)
-                    except Exception as e:
-                        audio_logger.error(
-                            f"Failed to create transcription manager for client {self.client_id}: {e}"
-                        )
-                        continue
-
-                # Process transcription
                 try:
-                    await self.transcription_manager.transcribe_chunk(
-                        audio_uuid, chunk, self.client_id
-                    )
+                    # Get or create transcription manager
+                    if self.transcription_manager is None:
+                        # Create callback function to queue action items
+                        async def action_item_callback(transcript_text, client_id, audio_uuid):
+                            await self.action_item_queue.put((transcript_text, client_id, audio_uuid))
+
+                        self.transcription_manager = TranscriptionManager(
+                            action_item_callback=action_item_callback
+                        )
+                        try:
+                            await self.transcription_manager.connect(self.client_id)
+                        except Exception as e:
+                            audio_logger.error(
+                                f"Failed to create transcription manager for client {self.client_id}: {e}"
+                            )
+                            self.transcription_queue.task_done()
+                            continue
+
+                    # Process transcription
+                    try:
+                        await self.transcription_manager.transcribe_chunk(
+                            audio_uuid, chunk, self.client_id
+                        )
+                    except Exception as e:
+                        audio_logger.error(f"Error transcribing for client {self.client_id}: {e}")
+                        # Recreate transcription manager on error
+                        if self.transcription_manager:
+                            await self.transcription_manager.disconnect()
+                            self.transcription_manager = None
+
                 except Exception as e:
-                    audio_logger.error(f"Error transcribing for client {self.client_id}: {e}")
-                    # Recreate transcription manager on error
-                    if self.transcription_manager:
-                        await self.transcription_manager.disconnect()
-                        self.transcription_manager = None
+                    audio_logger.error(f"Error processing transcription item for client {self.client_id}: {e}")
+                finally:
+                    # Always mark task as done
+                    self.transcription_queue.task_done()
 
         except Exception as e:
             audio_logger.error(
@@ -1208,13 +1317,20 @@ class ClientState:
                 if (
                     transcript is None or client_id is None or audio_uuid is None
                 ):  # Disconnect signal
+                    self.memory_queue.task_done()
                     break
 
-                # Memory processing now happens at conversation end, so this is effectively a no-op
-                # Keeping the processor running to avoid breaking the queue system
-                audio_logger.debug(
-                    f"Memory processor received item but processing is now done at conversation end"
-                )
+                try:
+                    # Memory processing now happens at conversation end, so this is effectively a no-op
+                    # Keeping the processor running to avoid breaking the queue system
+                    audio_logger.debug(
+                        f"Memory processor received item but processing is now done at conversation end"
+                    )
+                except Exception as e:
+                    audio_logger.error(f"Error processing memory item for client {self.client_id}: {e}")
+                finally:
+                    # Always mark task as done
+                    self.memory_queue.task_done()
 
         except Exception as e:
             audio_logger.error(
@@ -1225,14 +1341,9 @@ class ClientState:
     async def _action_item_processor(self):
         """
         Processes transcript segments from the per-client action item queue.
-
-        For each transcript segment, this processor:
-        - Checks if the special keyphrase 'Simon says' (case-insensitive, as a phrase) appears in the text.
-          - If found, it replaces all occurrences of the keyphrase with 'Simon says' (canonical form) and extracts action items from the modified text.
-          - Logs the detection and extraction process for this special case.
-        - If the keyphrase is not found, it extracts action items from the original transcript text.
-        - All extraction is performed using the action_items_service.
-        - Logs the number of action items extracted or any errors encountered.
+        
+        This processor handles queue management and delegates the actual 
+        action item processing to the ActionItemsService.
         """
         try:
             while self.connected:
@@ -1241,35 +1352,35 @@ class ClientState:
                 if (
                     transcript_text is None or client_id is None or audio_uuid is None
                 ):  # Disconnect signal
+                    self.action_item_queue.task_done()
                     break
 
-                # Check for the special keyphrase 'simon says' (case-insensitive, any spaces or dots)
-                keyphrase_pattern = re.compile(r"\bSimon says\b", re.IGNORECASE)
-                if keyphrase_pattern.search(transcript_text):
-                    # Remove all occurrences of the keyphrase
-                    modified_text = keyphrase_pattern.sub("Simon says", transcript_text)
-                    audio_logger.info(
-                        f"🔑 'simon says' keyphrase detected in transcript for {audio_uuid}. Extracting action items from: '{modified_text.strip()}'"
-                    )
-                    try:
-                        action_item_count = (
-                            await action_items_service.extract_and_store_action_items(
-                                modified_text.strip(), client_id, audio_uuid
-                            )
+                try:
+                    # Resolve client_id to user information
+                    user = await get_user_by_client_id(client_id)
+                    if user:
+                        # Delegate action item processing to the service
+                        action_item_count = await action_items_service.process_transcript_for_action_items(
+                            transcript_text, client_id, audio_uuid, user.user_id, user.email
                         )
-                        if action_item_count > 0:
-                            audio_logger.info(
-                                f"🎯 Extracted {action_item_count} action items from 'simon says' transcript segment for {audio_uuid}"
-                            )
-                        else:
-                            audio_logger.debug(
-                                f"ℹ️ No action items found in 'simon says' transcript segment for {audio_uuid}"
-                            )
-                    except Exception as e:
-                        audio_logger.error(
-                            f"❌ Error processing 'simon says' action items for transcript segment in {audio_uuid}: {e}"
+                    else:
+                        audio_logger.error(f"Could not resolve client_id {client_id} to user for action item processing")
+                        action_item_count = 0
+                    
+                    if action_item_count > 0:
+                        audio_logger.info(
+                            f"🎯 Action item processor completed: {action_item_count} items processed for {audio_uuid}"
                         )
-                    continue  # Skip the normal extraction for this case
+                    else:
+                        audio_logger.debug(
+                            f"ℹ️ Action item processor completed: no items found for {audio_uuid}"
+                        )
+                        
+                except Exception as e:
+                    audio_logger.error(f"Error processing action item for client {self.client_id}: {e}")
+                finally:
+                    # Always mark task as done
+                    self.action_item_queue.task_done()
 
         except Exception as e:
             audio_logger.error(
@@ -1327,16 +1438,19 @@ def get_user_clients_all(user_id: str) -> list[str]:
             if mapped_user_id == user_id]
 
 
-async def create_client_state(client_id: str, user_id: str) -> ClientState:
+async def create_client_state(client_id: str, user: User, device_name: Optional[str] = None) -> ClientState:
     """Create and register a new client state."""
     client_state = ClientState(client_id)
     active_clients[client_id] = client_state
     
     # Register client-user mapping (for active clients)
-    register_client_user_mapping(client_id, user_id)
+    register_client_user_mapping(client_id, user.user_id)
     
     # Also track in persistent mapping (for database queries)
-    track_client_user_relationship(client_id, user_id)
+    track_client_user_relationship(client_id, user.user_id)
+    
+    # Register client in user model (persistent)
+    await register_client_to_user(user, client_id, device_name)
     
     await client_state.start_processing()
 
@@ -1443,28 +1557,10 @@ app.include_router(
     prefix="/auth/jwt",
     tags=["auth"],
 )
-# Only include Google OAuth router if enabled
-if GOOGLE_OAUTH_ENABLED:
-    app.include_router(
-        fastapi_users.get_oauth_router(
-            google_oauth_client,
-            cookie_backend,
-            SECRET_KEY,
-            associate_by_email=True,
-            is_verified_by_default=True,
-        ),
-        prefix="/auth/google",
-        tags=["auth"],
-    )
-    logger.info("✅ Google OAuth routes enabled: /auth/google/login, /auth/google/callback")
-else:
-    logger.info("⚠️ Google OAuth routes disabled - missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET")
-# Public registration disabled - use admin-only user creation instead
-# app.include_router(
-#     fastapi_users.get_register_router(UserRead, UserCreate),
-#     prefix="/auth",
-#     tags=["auth"],
-# )
+
+# Add memory debug router
+from memory_debug_api import debug_router
+app.include_router(debug_router)
 
 
 @app.websocket("/ws")
@@ -1490,7 +1586,7 @@ async def ws_endpoint(
     _decode_packet = partial(decoder.decode_packet, strip_header=False)
 
     # Create client state and start processing
-    client_state = await create_client_state(client_id, user.user_id)
+    client_state = await create_client_state(client_id, user, device_name)
 
     try:
         packet_count = 0
@@ -1562,7 +1658,7 @@ async def ws_endpoint_pcm(
     )
 
     # Create client state and start processing
-    client_state = await create_client_state(client_id, user.user_id)
+    client_state = await create_client_state(client_id, user, device_name)
 
     try:
         packet_count = 0
@@ -1722,32 +1818,13 @@ async def reprocess_audio_cropping(audio_uuid: str, current_user: User = Depends
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.get("/api/users")
+@app.get("/api/users", response_model=List[UserRead])
 async def get_users(current_user: User = Depends(current_superuser)):
     """Retrieves all users from the database. Admin-only endpoint."""
     try:
-        # Query the correct collection that fastapi-users actually uses
-        fastapi_users_col = db["fastapi_users"]
-        cursor = fastapi_users_col.find()
-        users = []
-        async for doc in cursor:
-            doc["_id"] = str(doc["_id"])  # Convert ObjectId to string
-            
-            # Add user_id field for frontend compatibility
-            # Use display_name if available, otherwise email, otherwise fallback to _id
-            if doc.get("display_name"):
-                doc["user_id"] = doc["display_name"]
-            elif doc.get("email"):
-                # Use email prefix (before @) as user_id for better readability
-                doc["user_id"] = doc["email"].split("@")[0]
-            else:
-                doc["user_id"] = doc["_id"]
-            
-            # Remove hashed_password for security
-            if "hashed_password" in doc:
-                del doc["hashed_password"]
-            users.append(doc)
-        return JSONResponse(content=users)
+        # Use Beanie to query users properly - this handles datetime serialization automatically
+        users = await User.find_all().to_list()
+        return users
     except Exception as e:
         audio_logger.error(f"Error fetching users: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"message": "Error fetching users"})
@@ -1924,8 +2001,8 @@ async def search_memories(query: str, current_user: User = Depends(current_activ
 
 
 @app.delete("/api/memories/{memory_id}")
-async def delete_memory(memory_id: str):
-    """Delete a specific memory by ID."""
+async def delete_memory(memory_id: str, current_user: User = Depends(current_active_user)):
+    """Delete a specific memory by ID. Requires authentication."""
     try:
         await asyncio.get_running_loop().run_in_executor(
             None, memory_service.delete_memory, memory_id
@@ -1934,6 +2011,134 @@ async def delete_memory(memory_id: str):
     except Exception as e:
         audio_logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"message": "Error deleting memory"})
+
+
+@app.get("/api/admin/memories/debug")
+async def get_all_memories_debug(current_user: User = Depends(current_superuser), limit: int = 100):
+    """Admin-only endpoint to get all memories across all users with debug information."""
+    try:
+        # Get all users from database
+        all_users = await User.find().to_list()
+        
+        # Convert datetime objects to ISO strings for JSON serialization
+        def convert_datetime_to_string(obj):
+            if hasattr(obj, 'isoformat'):  # datetime objects
+                return obj.isoformat()
+            elif isinstance(obj, dict):
+                return {k: convert_datetime_to_string(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_datetime_to_string(item) for item in obj]
+            else:
+                return obj
+        
+        admin_user_dict = {
+            "id": current_user.user_id,
+            "email": current_user.email,
+            "is_superuser": current_user.is_superuser
+        }
+        
+        debug_info = {
+            "total_users": len(all_users),
+            "admin_user": convert_datetime_to_string(admin_user_dict),
+            "users_with_memories": []
+        }
+        
+        total_memories = 0
+        
+        # Check memories for all database users
+        for user in all_users:
+            try:
+                user_memories = await asyncio.get_running_loop().run_in_executor(
+                    None, memory_service.get_all_memories, user.user_id, limit
+                )
+                
+                # Include client information from user model
+                registered_clients = user.registered_clients if hasattr(user, 'registered_clients') else []
+                
+                # Convert user object to dict and handle datetime serialization
+                user_dict = {
+                    "user_id": user.user_id,
+                    "email": user.email,
+                    "display_name": user.display_name,
+                    "is_superuser": user.is_superuser,
+                    "memory_count": len(user_memories),
+                    "memories": user_memories,
+                    "registered_clients": registered_clients,
+                    "client_count": len(registered_clients)
+                }
+                
+                user_info = convert_datetime_to_string(user_dict)
+                
+                debug_info["users_with_memories"].append(user_info)
+                total_memories += len(user_memories)
+                
+            except Exception as e:
+                audio_logger.error(f"Error fetching memories for user {user.user_id}: {e}")
+                # Convert user object to dict and handle datetime serialization for error case
+                error_user_dict = {
+                    "user_id": user.user_id,
+                    "email": user.email,
+                    "display_name": user.display_name,
+                    "is_superuser": user.is_superuser,
+                    "memory_count": 0,
+                    "memories": [],
+                    "registered_clients": [],
+                    "client_count": 0,
+                    "error": str(e)
+                }
+                
+                error_user_info = convert_datetime_to_string(error_user_dict)
+                debug_info["users_with_memories"].append(error_user_info)
+        
+        debug_info["total_memories"] = total_memories
+        
+        return JSONResponse(content=debug_info)
+    except Exception as e:
+        audio_logger.error(f"Error fetching admin debug memories: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"message": "Error fetching admin debug memories"})
+
+
+@app.get("/api/admin/memories")
+async def get_all_memories_admin(current_user: User = Depends(current_superuser), limit: int = 200):
+    """Admin-only endpoint to get all memories across all users in a clean format."""
+    try:
+        # Get all users from database
+        all_users = await User.find().to_list()
+        
+        all_memories = []
+        
+        # Collect memories for all users
+        for user in all_users:
+            try:
+                user_memories = await asyncio.get_running_loop().run_in_executor(
+                    None, memory_service.get_all_memories, user.user_id, limit
+                )
+                
+                # Enrich each memory with user information
+                for memory in user_memories:
+                    memory_with_user = {
+                        **memory,
+                        "owner_user_id": user.user_id,
+                        "owner_email": user.email,
+                        "owner_display_name": user.display_name
+                    }
+                    all_memories.append(memory_with_user)
+                    
+            except Exception as e:
+                audio_logger.error(f"Error fetching memories for user {user.user_id}: {e}")
+                continue
+        
+        # Sort by creation date (newest first)
+        all_memories.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return JSONResponse(content={
+            "total_memories": len(all_memories),
+            "total_users": len(all_users),
+            "memories": all_memories[:limit]  # Respect limit
+        })
+    except Exception as e:
+        audio_logger.error(f"Error fetching admin memories: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"message": "Error fetching admin memories"})
 
 
 @app.post("/api/conversations/{audio_uuid}/speakers")
@@ -2354,6 +2559,58 @@ async def debug_speech_segments(current_user: User = Depends(current_active_user
     return JSONResponse(content=debug_info)
 
 
+@app.get("/api/debug/audio-cropping")
+async def get_audio_cropping_debug(current_user: User = Depends(current_superuser)):
+    """Get detailed debug information about the audio cropping system."""
+    # Get speech segments for all active clients
+    speech_segments_info = {}
+    for client_id, client_state in active_clients.items():
+        if client_state.connected:
+            speech_segments_info[client_id] = {
+                "current_audio_uuid": client_state.current_audio_uuid,
+                "speech_segments": dict(client_state.speech_segments),
+                "current_speech_start": dict(client_state.current_speech_start),
+                "total_segments": sum(len(segments) for segments in client_state.speech_segments.values()),
+            }
+
+    # Get recent audio chunks with cropping status
+    recent_chunks = []
+    try:
+        cursor = chunks_col.find().sort("timestamp", -1).limit(10)
+        async for chunk in cursor:
+            recent_chunks.append({
+                "audio_uuid": chunk["audio_uuid"],
+                "timestamp": chunk["timestamp"],
+                "client_id": chunk["client_id"],
+                "audio_path": chunk["audio_path"],
+                "has_cropped_version": bool(chunk.get("cropped_audio_path")),
+                "cropped_audio_path": chunk.get("cropped_audio_path"),
+                "speech_segments_count": len(chunk.get("speech_segments", [])),
+                "cropped_duration": chunk.get("cropped_duration"),
+            })
+    except Exception as e:
+        audio_logger.error(f"Error getting recent chunks: {e}")
+        recent_chunks = []
+
+    return JSONResponse(
+        content={
+            "timestamp": time.time(),
+            "audio_cropping_config": {
+                "enabled": AUDIO_CROPPING_ENABLED,
+                "min_speech_duration": MIN_SPEECH_SEGMENT_DURATION,
+                "cropping_padding": CROPPING_CONTEXT_PADDING,
+            },
+            "asr_config": {
+                "use_deepgram": USE_DEEPGRAM,
+                "offline_asr_uri": OFFLINE_ASR_TCP_URI,
+                "deepgram_available": DEEPGRAM_AVAILABLE,
+            },
+            "active_clients_speech_segments": speech_segments_info,
+            "recent_audio_chunks": recent_chunks,
+        }
+    )
+
+
 @app.get("/api/metrics")
 async def get_current_metrics(current_user: User = Depends(current_superuser)):
     """Get current metrics summary for monitoring dashboard. Admin-only endpoint."""
@@ -2370,16 +2627,12 @@ async def get_current_metrics(current_user: User = Depends(current_superuser)):
 async def get_auth_config():
     """Get authentication configuration for UI."""
     return {
-        "google_oauth_enabled": GOOGLE_OAUTH_ENABLED,
         "auth_methods": {
-            "google_oauth": GOOGLE_OAUTH_ENABLED,
             "email_password": True,
             "registration": False,  # Public registration disabled
             "admin_user_creation": True,  # Only admins can create users
         },
         "endpoints": {
-            "google_login": "/auth/google/login" if GOOGLE_OAUTH_ENABLED else None,
-            "google_callback": "/auth/google/callback" if GOOGLE_OAUTH_ENABLED else None,
             "jwt_login": "/auth/jwt/login",
             "cookie_login": "/auth/cookie/login",
             "register": None,  # Public registration disabled

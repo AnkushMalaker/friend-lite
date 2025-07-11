@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "easy-audio-interfaces>=0.5.1",
     "fastapi>=0.115.12",
-    "mem0ai>=0.1.111",
+    "mem0ai>=0.1.114",
     "motor>=3.7.1",
     "ollama>=0.4.8",
     "omi-sdk>=0.1.5",
@@ -15,7 +15,8 @@ dependencies = [
     "uvicorn>=0.34.2",
     "wyoming>=1.6.1",
     "aiohttp>=3.8.0",
-    "fastapi-users[beanie,oauth]>=14.0.1",
+    "fastapi-users[beanie]>=14.0.1",
+    "PyYAML>=6.0.1",
 ]
 
 [dependency-groups]
