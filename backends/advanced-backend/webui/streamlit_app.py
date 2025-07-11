@@ -5,7 +5,6 @@ import random
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 import requests
@@ -33,8 +32,8 @@ logger.info("🚀 Starting Friend-Lite Streamlit Dashboard")
 
 # ---- Configuration ---- #
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://192.168.0.110:8000")
-# For browser-accessible URLs (audio files), use localhost instead of Docker service name
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
+
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", BACKEND_API_URL)
 
 logger.info(f"🔧 Configuration loaded - Backend API: {BACKEND_API_URL}, Public URL: {BACKEND_PUBLIC_URL}")
 
@@ -73,9 +72,9 @@ def get_auth_headers():
     return {}
 
 def check_auth_from_url():
-    """Check for authentication token in URL parameters (from OAuth callback)."""
+    """Check for authentication token in URL parameters."""
     try:
-        # Check URL parameters for token (from OAuth redirect)
+        # Check URL parameters for token
         query_params = st.query_params
         if 'token' in query_params:
             token = query_params['token']
@@ -88,7 +87,7 @@ def check_auth_from_url():
             if response.status_code == 200:
                 st.session_state.authenticated = True
                 st.session_state.auth_token = token
-                st.session_state.auth_method = 'oauth'
+                st.session_state.auth_method = 'token'
                 
                 # Try to get user info from token (decode JWT payload)
                 try:
@@ -121,10 +120,10 @@ def check_auth_from_url():
                 logger.warning("❌ Token validation failed")
                 return False
         
-        # Check for error in URL (OAuth error)
+        # Check for error in URL
         if 'error' in query_params:
             error = query_params['error']
-            logger.error(f"❌ OAuth error in URL: {error}")
+            logger.error(f"❌ Authentication error in URL: {error}")
             st.error(f"Authentication error: {error}")
             st.query_params.clear()
             return False
@@ -241,7 +240,6 @@ def show_auth_sidebar():
         
         # Get auth configuration from backend
         auth_config = get_auth_config()
-        google_oauth_enabled = auth_config.get('google_oauth_enabled', False) if auth_config else False
         
         if st.session_state.get('authenticated', False):
             user_info = st.session_state.get('user_info', {})
@@ -309,45 +307,31 @@ def show_auth_sidebar():
         else:
             st.warning("🔒 Not authenticated")
             
-            # Login options
-            with st.expander("🔑 Login", expanded=True):
-                option_number = 1
-                
-                # Google OAuth login (conditional)
-                if google_oauth_enabled:
-                    st.write(f"**Option {option_number}: Google Sign-In**")
-                    google_login_url = f"{BACKEND_API_URL}/auth/google/login"
-                    st.markdown(f'<a href="{google_login_url}" target="_blank">🌐 Login with Google</a>', unsafe_allow_html=True)
-                    st.caption("Opens in new tab, then copy the token from the callback URL")
-                    
-                    # Manual token input
-                    with st.expander("Manual Token Entry"):
-                        manual_token = st.text_input("JWT Token:", type="password", help="Paste token from OAuth callback URL")
-                        if st.button("Submit Token"):
-                            if manual_token.strip():
-                                # Validate token
-                                headers = {'Authorization': f'Bearer {manual_token.strip()}'}
-                                try:
-                                    response = requests.get(f"{BACKEND_API_URL}/api/users", headers=headers, timeout=5)
-                                    if response.status_code == 200:
-                                        st.session_state.authenticated = True
-                                        st.session_state.auth_token = manual_token.strip()
-                                        st.session_state.auth_method = 'manual'
-                                        st.session_state.user_info = {'user_id': 'Unknown', 'email': 'Unknown', 'name': 'Manual Login'}
-                                        st.success("✅ Token validated successfully!")
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Invalid token")
-                                except Exception as e:
-                                    st.error(f"❌ Error validating token: {e}")
+            # Manual token input
+            with st.expander("🔑 Manual Token Entry"):
+                manual_token = st.text_input("JWT Token:", type="password", help="Paste token from generated JWT")
+                if st.button("Submit Token"):
+                    if manual_token.strip():
+                        # Validate token
+                        headers = {'Authorization': f'Bearer {manual_token.strip()}'}
+                        try:
+                            response = requests.get(f"{BACKEND_API_URL}/api/users", headers=headers, timeout=5)
+                            if response.status_code == 200:
+                                st.session_state.authenticated = True
+                                st.session_state.auth_token = manual_token.strip()
+                                st.session_state.auth_method = 'manual'
+                                st.session_state.user_info = {'user_id': 'Unknown', 'email': 'Unknown', 'name': 'Manual Login'}
+                                st.success("✅ Token validated successfully!")
+                                st.rerun()
                             else:
-                                st.error("Please enter a token")
-                    
-                    st.divider()
-                    option_number += 1
-                
-                # Email/Password login
-                st.write(f"**Option {option_number}: Email & Password**")
+                                st.error("❌ Invalid token")
+                        except Exception as e:
+                            st.error(f"❌ Error validating token: {e}")
+                    else:
+                        st.error("Please enter a token")
+            
+            # Email/Password login
+            with st.expander("🔑 Email & Password Login", expanded=True):
                 with st.form("login_form"):
                     email = st.text_input("Email:")
                     password = st.text_input("Password:", type="password")
@@ -448,16 +432,21 @@ def show_auth_sidebar():
                                             st.info("💡 **Fallback:** If automatic copy failed, select text in the code box above and copy (Ctrl+C)")
                                         
                                         # Show usage examples
-                                        with st.expander("Usage Examples"):
+                                        st.divider()
+                                        st.write("**Usage Examples:**")
+                                        
+                                        col1, col2 = st.columns(2)
+                                        with col1:
                                             st.write("**WebSocket Connection:**")
                                             st.code(f"ws://your-server:8000/ws?token={result[:20]}...")
                                             
+                                        with col2:
                                             st.write("**API Call:**")
                                             st.code(f"""curl -H "Authorization: Bearer {result[:20]}..." \\
   {BACKEND_API_URL}/api/users""")
-                                            
-                                            st.write("**Full Token (for copying):**")
-                                            st.code(result)
+                                        
+                                        st.write("**Full Token (for copying):**")
+                                        st.code(result)
                                 else:
                                     st.error(f"❌ Failed to generate token: {result}")
                         else:
@@ -467,21 +456,14 @@ def show_auth_sidebar():
             with st.expander("📝 New User Registration"):
                 st.info("New users can register using the backend API:")
                 st.code(f"POST {BACKEND_API_URL}/auth/register")
-                if google_oauth_enabled:
-                    st.write("Or use Google Sign-In to automatically create an account")
-                else:
-                    st.caption("💡 Google OAuth is disabled - only email/password registration available")
+                st.caption("💡 Email/password registration available")
                     
             # Show auth configuration status
             if auth_config:
                 with st.expander("⚙️ Auth Configuration"):
                     st.write("**Available Methods:**")
-                    st.write(f"• Google OAuth: {'✅ Enabled' if google_oauth_enabled else '❌ Disabled'}")
                     st.write("• Email/Password: ✅ Enabled")
                     st.write("• Registration: ✅ Enabled")
-                    
-                    if not google_oauth_enabled:
-                        st.caption("💡 To enable Google OAuth, set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend environment")
             else:
                 st.caption("⚠️ Could not load auth configuration from backend")
 
@@ -663,6 +645,19 @@ def post_data(endpoint: str, params: dict | None = None, json_data: dict | None 
             st.error("🔒 Access forbidden. You don't have permission for this resource.")
             return None
             
+        # Handle specific HTTP status codes before raising for status
+        if response.status_code == 409:
+            duration = time.time() - start_time
+            logger.error(f"❌ POST {endpoint} failed with 409 Conflict in {duration:.3f}s")
+            # Try to get the specific error message from the response
+            try:
+                error_data = response.json()
+                error_message = error_data.get('message', 'Resource already exists')
+                st.error(f"❌ {error_message}")
+            except:
+                st.error("❌ Resource already exists. Please check your input and try again.")
+            return None
+        
         response.raise_for_status()
         duration = time.time() - start_time
         logger.info(f"✅ POST {endpoint} successful in {duration:.3f}s")
@@ -721,7 +716,7 @@ st.set_page_config(
 # Initialize authentication state
 init_auth_state()
 
-# Check for authentication token in URL (from OAuth callback)
+# Check for authentication token in URL parameters
 check_auth_from_url()
 
 st.title("Friend-Lite Dashboard")
@@ -883,6 +878,39 @@ Qdrant URL: {config.get('qdrant_url', 'Unknown')}
 ASR URI: {config.get('asr_uri', 'Unknown')}
 Chunk Directory: {config.get('chunk_dir', 'Unknown')}
         """)
+        
+        # Audio connectivity test
+        st.write("**Audio Endpoint Test:**")
+        try:
+            import requests
+            test_url = f"{BACKEND_PUBLIC_URL}/audio/"
+            response = requests.head(test_url, timeout=2)
+            if response.status_code in [200, 404]:  # 404 is OK for directory listing
+                st.success(f"✅ Audio endpoint reachable: {test_url}")
+            else:
+                st.error(f"❌ Audio endpoint issue (HTTP {response.status_code}): {test_url}")
+        except Exception as e:
+            st.error(f"❌ Cannot reach audio endpoint: {e}")
+            st.caption(f"Trying URL: {BACKEND_PUBLIC_URL}/audio/")
+            
+        # Manual override option for audio URL
+        st.write("**Audio URL Override:**")
+        if st.button("🔧 Fix Audio URLs"):
+            # Allow user to manually set the correct public URL
+            st.session_state['show_url_override'] = True
+            
+        if st.session_state.get('show_url_override', False):
+            custom_url = st.text_input(
+                "Custom Backend Public URL",
+                value=BACKEND_PUBLIC_URL,
+                help="Enter the URL that your browser can access (e.g., http://100.99.62.5:8000)"
+            )
+            if st.button("Apply Custom URL"):
+                st.session_state['custom_backend_url'] = custom_url
+                st.session_state['show_url_override'] = False
+                st.success(f"✅ Audio URLs will now use: {custom_url}")
+                st.rerun()
+                
         logger.debug(f"🔧 Configuration displayed - Backend API: {BACKEND_API_URL}")
 
 # Show warning if system is unhealthy
@@ -1036,9 +1064,25 @@ with tab_convos:
                             
                             # Display audio with label and cache-busting
                             st.write(audio_label)
-                            audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
-                            st.audio(audio_url, format="audio/wav")
-                            logger.debug(f"🎵 Audio URL: {audio_url}")
+                            # Use custom URL if set, otherwise use detected URL
+                            backend_url = st.session_state.get('custom_backend_url', BACKEND_PUBLIC_URL)
+                            audio_url = f"{backend_url}/audio/{selected_audio_path}{cache_buster}"
+                            
+                            # Test audio accessibility
+                            try:
+                                import requests
+                                test_response = requests.head(audio_url, timeout=2)
+                                if test_response.status_code == 200:
+                                    st.audio(audio_url, format="audio/wav")
+                                    logger.debug(f"🎵 Audio URL accessible: {audio_url}")
+                                else:
+                                    st.error(f"❌ Audio file not accessible (HTTP {test_response.status_code})")
+                                    st.code(f"URL: {audio_url}")
+                                    logger.error(f"🎵 Audio URL not accessible: {audio_url} (HTTP {test_response.status_code})")
+                            except Exception as e:
+                                st.error(f"❌ Cannot reach audio file: {str(e)}")
+                                st.code(f"URL: {audio_url}")
+                                logger.error(f"🎵 Audio URL error: {audio_url} - {e}")
                             
                             # Show additional info in debug mode or when both versions exist
                             if debug_mode and cropped_audio_path:
@@ -1135,9 +1179,25 @@ with tab_convos:
                         
                         # Display audio with label and cache-busting
                         st.write(audio_label)
-                        audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
-                        st.audio(audio_url, format="audio/wav")
-                        logger.debug(f"🎵 Audio URL: {audio_url}")
+                        # Use custom URL if set, otherwise use detected URL
+                        backend_url = st.session_state.get('custom_backend_url', BACKEND_PUBLIC_URL)
+                        audio_url = f"{backend_url}/audio/{selected_audio_path}{cache_buster}"
+                        
+                        # Test audio accessibility
+                        try:
+                            import requests
+                            test_response = requests.head(audio_url, timeout=2)
+                            if test_response.status_code == 200:
+                                st.audio(audio_url, format="audio/wav")
+                                logger.debug(f"🎵 Audio URL accessible: {audio_url}")
+                            else:
+                                st.error(f"❌ Audio file not accessible (HTTP {test_response.status_code})")
+                                st.code(f"URL: {audio_url}")
+                                logger.error(f"🎵 Audio URL not accessible: {audio_url} (HTTP {test_response.status_code})")
+                        except Exception as e:
+                            st.error(f"❌ Cannot reach audio file: {str(e)}")
+                            st.code(f"URL: {audio_url}")
+                            logger.error(f"🎵 Audio URL error: {audio_url} - {e}")
                         
                         # Show additional info in debug mode or when both versions exist
                         if debug_mode and cropped_audio_path:
@@ -1216,6 +1276,252 @@ with tab_mem:
         st.info("👆 Please enter a username above to view their memories and action items.")
         st.markdown("💡 **Tip:** You can find existing usernames in the 'User Management' tab.")
 
+    # Admin Debug Section - Show before regular memories
+    if st.session_state.get('authenticated', False):
+        user_info = st.session_state.get('user_info', {})
+        
+        # Check if user is admin (look for is_superuser in different possible locations)
+        is_admin = False
+        if isinstance(user_info, dict):
+            is_admin = user_info.get('is_superuser', False)
+        
+        # Alternative: Check if the token has superuser privileges by trying an admin endpoint
+        if not is_admin:
+            try:
+                test_response = get_data("/api/users", require_auth=True)
+                is_admin = test_response is not None
+            except:
+                pass
+        
+        if is_admin:
+            st.subheader("🔧 Admin Debug: All Memories")
+            logger.debug("🔧 Admin user detected, showing admin debug section")
+            
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col1:
+                if st.button("🔧 Load All User Memories (Admin)", key="admin_debug_memories"):
+                    logger.info("🔧 Admin debug: Loading all memories for all users")
+                    st.session_state['show_admin_debug'] = True
+                    
+            with col2:
+                if st.button("📋 View All Memories (Admin)", key="admin_all_memories"):
+                    logger.info("📋 Admin: Loading all memories in clean format")
+                    st.session_state['show_admin_memories'] = True
+                    
+            with col3:
+                if st.session_state.get('show_admin_debug', False) or st.session_state.get('show_admin_memories', False):
+                    if st.button("❌ Hide Admin Views", key="hide_admin_views"):
+                        st.session_state['show_admin_debug'] = False
+                        st.session_state['show_admin_memories'] = False
+                        st.rerun()
+            
+            # Show admin debug info if requested
+            if st.session_state.get('show_admin_debug', False):
+                with st.spinner("Loading admin debug data for all users..."):
+                    logger.debug("📡 Fetching admin debug memories data")
+                    admin_debug_response = get_data("/api/admin/memories/debug", require_auth=True)
+                
+                if admin_debug_response:
+                    logger.info(f"🔧 Admin debug: Loaded data for {admin_debug_response.get('total_users', 0)} users")
+                    
+                    # Display summary stats
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Users", admin_debug_response.get('total_users', 0))
+                    with col2:
+                        st.metric("Total Memories", admin_debug_response.get('total_memories', 0))
+                    with col3:
+                        admin_user = admin_debug_response.get('admin_user', {})
+                        st.metric("Admin User", admin_user.get('email', 'Unknown'))
+                    
+                    st.divider()
+                    
+                    # Display database users and their memories
+                    users_with_memories = admin_debug_response.get('users_with_memories', [])
+                    client_ids_with_memories = admin_debug_response.get('client_ids_with_memories', [])
+                    
+                    if users_with_memories:
+                        st.write("### 👥 Database Users")
+                        for user_data in users_with_memories:
+                            user_id = user_data.get('user_id', 'Unknown')
+                            email = user_data.get('email', 'Unknown')
+                            memory_count = user_data.get('memory_count', 0)
+                            memories = user_data.get('memories', [])
+                            error = user_data.get('error')
+                            source = user_data.get('source', 'unknown')
+                            
+                            # User header with collapsible section
+                            with st.expander(f"👤 {email} ({user_id}) - {memory_count} memories [{source}]", expanded=False):
+                                if error:
+                                    st.error(f"❌ Error loading memories for this user: {error}")
+                                elif memories:
+                                    # Display memories in a nice format
+                                    # Ensure memories is a list-like object that can be sliced
+                                    if isinstance(memories, (list, tuple)):
+                                        memories_to_show = memories[:10]  # Limit to first 10 for performance
+                                        total_memories = len(memories)
+                                    else:
+                                        # If it's not a list, convert to list or handle as single item
+                                        if hasattr(memories, '__iter__') and not isinstance(memories, (str, dict)):
+                                            memories_list = list(memories)
+                                            memories_to_show = memories_list[:10]
+                                            total_memories = len(memories_list)
+                                        else:
+                                            memories_to_show = [memories]
+                                            total_memories = 1
+                                    
+                                    for i, memory in enumerate(memories_to_show):
+                                        memory_text = ""
+                                        if isinstance(memory, dict):
+                                            memory_text = memory.get('memory', memory.get('text', str(memory)))
+                                        else:
+                                            memory_text = str(memory)
+                                        
+                                        st.write(f"**{i+1}.** {memory_text[:200]}{'...' if len(memory_text) > 200 else ''}")
+                                    
+                                    if total_memories > 10:
+                                        st.caption(f"... and {total_memories - 10} more memories")
+                                else:
+                                    st.info("No memories found for this user.")
+                    
+                    if client_ids_with_memories:
+                        st.write("### 🔌 Discovered Client IDs")
+                        st.caption("These are client IDs that have memories but don't correspond to database users")
+                        
+                        for client_data in client_ids_with_memories:
+                            user_id = client_data.get('user_id', 'Unknown')
+                            email = client_data.get('email', 'Unknown')
+                            memory_count = client_data.get('memory_count', 0)
+                            memories = client_data.get('memories', [])
+                            error = client_data.get('error')
+                            source = client_data.get('source', 'unknown')
+                            
+                            # Client header with collapsible section
+                            with st.expander(f"🔌 {user_id} - {memory_count} memories [{source}]", expanded=False):
+                                if error:
+                                    st.error(f"❌ Error loading memories for this user: {error}")
+                                elif memories:
+                                    # Display memories in a nice format
+                                    # Ensure memories is a list-like object that can be sliced
+                                    if isinstance(memories, (list, tuple)):
+                                        memories_to_show = memories[:10]  # Limit to first 10 for performance
+                                        total_memories = len(memories)
+                                    else:
+                                        # If it's not a list, convert to list or handle as single item
+                                        if hasattr(memories, '__iter__') and not isinstance(memories, (str, dict)):
+                                            memories_list = list(memories)
+                                            memories_to_show = memories_list[:10]
+                                            total_memories = len(memories_list)
+                                        else:
+                                            memories_to_show = [memories]
+                                            total_memories = 1
+                                    
+                                    for i, memory in enumerate(memories_to_show):
+                                        memory_text = ""
+                                        if isinstance(memory, dict):
+                                            memory_text = memory.get('memory', memory.get('text', str(memory)))
+                                        else:
+                                            memory_text = str(memory)
+                                        
+                                        st.write(f"**{i+1}.** {memory_text[:200]}{'...' if len(memory_text) > 200 else ''}")
+                                    
+                                    if total_memories > 10:
+                                        st.caption(f"... and {total_memories - 10} more memories")
+                                else:
+                                    st.info("No memories found for this client ID.")
+                    
+                    st.divider()
+                    
+                    # Raw data view
+                    with st.expander("🔍 Raw Admin Debug Data (JSON)", expanded=False):
+                        st.json(admin_debug_response)
+                        
+                else:
+                    logger.error("❌ Failed to load admin debug data")
+                    st.error("❌ Failed to load admin debug data. You may not have admin privileges.")
+            
+            # Show admin all memories view if requested
+            if st.session_state.get('show_admin_memories', False):
+                with st.spinner("Loading all memories for all users..."):
+                    logger.debug("📋 Fetching all memories for admin view")
+                    admin_memories_response = get_data("/api/admin/memories", require_auth=True)
+                
+                if admin_memories_response:
+                    logger.info(f"📋 Admin memories: Loaded {admin_memories_response.get('total_memories', 0)} memories from {admin_memories_response.get('total_users', 0)} users")
+                    
+                    # Display summary stats
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Total Users", admin_memories_response.get('total_users', 0))
+                    with col2:
+                        st.metric("Total Memories", admin_memories_response.get('total_memories', 0))
+                    
+                    st.divider()
+                    
+                    # Display all memories
+                    memories = admin_memories_response.get('memories', [])
+                    
+                    if memories:
+                        st.write("### 🧠 All User Memories")
+                        
+                        # Create a searchable/filterable view
+                        search_term = st.text_input("🔍 Search memories", placeholder="Enter text to search...")
+                        
+                        if search_term:
+                            filtered_memories = [
+                                m for m in memories 
+                                if search_term.lower() in m.get('memory', '').lower() or 
+                                   search_term.lower() in m.get('owner_email', '').lower()
+                            ]
+                            st.caption(f"Showing {len(filtered_memories)} memories matching '{search_term}'")
+                        else:
+                            filtered_memories = memories
+                            st.caption(f"Showing all {len(memories)} memories")
+                        
+                        # Display memories in a nice format
+                        for i, memory in enumerate(filtered_memories[:50]):  # Limit to 50 for performance
+                            with st.container():
+                                # Memory header
+                                col1, col2, col3 = st.columns([2, 1, 1])
+                                with col1:
+                                    st.write(f"**Memory {i+1}**")
+                                with col2:
+                                    st.caption(f"👤 {memory.get('owner_email', 'Unknown')}")
+                                with col3:
+                                    st.caption(f"📅 {memory.get('created_at', 'Unknown')}")
+                                
+                                # Memory content
+                                memory_text = memory.get('memory', 'No content')
+                                st.write(memory_text)
+                                
+                                # Memory metadata
+                                with st.expander("🔍 Memory Details", expanded=False):
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.write(f"**User ID:** {memory.get('owner_user_id', 'Unknown')}")
+                                        st.write(f"**User Email:** {memory.get('owner_email', 'Unknown')}")
+                                        st.write(f"**Display Name:** {memory.get('owner_display_name', 'None')}")
+                                    with col2:
+                                        metadata = memory.get('metadata', {})
+                                        if metadata:
+                                            st.write(f"**Client ID:** {metadata.get('client_id', 'Unknown')}")
+                                            st.write(f"**Audio UUID:** {metadata.get('audio_uuid', 'Unknown')}")
+                                            st.write(f"**Source:** {metadata.get('source', 'Unknown')}")
+                                
+                                st.divider()
+                        
+                        if len(filtered_memories) > 50:
+                            st.info(f"Showing first 50 memories. Total: {len(filtered_memories)}")
+                        
+                    else:
+                        st.info("No memories found across all users.")
+                        
+                else:
+                    logger.error("❌ Failed to load admin memories")
+                    st.error("❌ Failed to load admin memories. You may not have admin privileges.")
+            
+            st.divider()
+    
     # Display Memories Section
     if memories is not None:
         logger.debug("🧠 Displaying memories section...")
@@ -1520,10 +1826,11 @@ with tab_users:
                 # This endpoint requires authentication
                 result = post_data("/api/create_user", json_data=create_data, require_auth=True)
                 if result:
-                    st.success(f"User '{new_user_email.strip()}' created successfully!")
+                    st.success(f"✅ User '{new_user_email.strip()}' created successfully!")
                     st.rerun()
+                # Note: Error handling for 409 Conflict (user exists) is now handled in post_data function
             else:
-                st.error("Please provide both email and password.")
+                st.error("❌ Please provide both email and password.")
 
     st.divider()
 
@@ -1541,38 +1848,49 @@ with tab_users:
     if users:
         st.write(f"**Total Users:** {len(users)}")
         
+        # Debug: Show first user structure (temporary)
+        with st.expander("🐛 Debug: User Data Structure", expanded=False):
+            if users:
+                st.write("**First user data structure:**")
+                st.json(users[0])
+                st.caption("💡 This shows the actual fields returned by the API")
+        
         # Initialize session state for delete confirmation
         if 'delete_confirmation' not in st.session_state:
             st.session_state.delete_confirmation = {}
         
         # Display users in a nice format
-        for user in users:
-            user_id = user.get('user_id', 'Unknown')
-            user_db_id = user.get('_id', 'unknown')
+        for index, user in enumerate(users):
+            # The API returns 'id' (ObjectId), 'email', 'display_name', etc.
+            # Use display_name if available, otherwise email, otherwise the ID
+            user_display = user.get('display_name') or user.get('email', 'Unknown User')
+            user_db_id = str(user.get('id', 'unknown'))  # MongoDB ObjectId as string
+            # Create unique key using both user_db_id and index to avoid duplicates
+            unique_key = f"{user_db_id}_{index}"
             
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.write(f"👤 **{user_id}**")
-                if '_id' in user:
-                    st.caption(f"ID: {user['_id']}")
+                st.write(f"👤 **{user_display}**")
+                st.caption(f"Email: {user.get('email', 'No email')}")
+                st.caption(f"ID: {user_db_id}")
             
             with col2:
-                # Check if we're in confirmation mode for this user
-                if user_id in st.session_state.delete_confirmation:
+                # Check if we're in confirmation mode for this user (use db_id as key)
+                if user_db_id in st.session_state.delete_confirmation:
                     # Show confirmation dialog in a container
                     with st.container():
                         st.error("⚠️ **Confirm Deletion**")
-                        st.write(f"Delete user **{user_id}** and optionally:")
+                        st.write(f"Delete user **{user_display}** and optionally:")
                         
                         # Checkboxes for what to delete
                         delete_conversations = st.checkbox(
                             "🗨️ Delete all conversations", 
-                            key=f"conv_{user_db_id}",
+                            key=f"conv_{unique_key}",
                             help="Permanently delete all audio recordings and transcripts"
                         )
                         delete_memories = st.checkbox(
                             "🧠 Delete all memories", 
-                            key=f"mem_{user_db_id}",
+                            key=f"mem_{unique_key}",
                             help="Permanently delete all extracted memories from conversations"
                         )
                         
@@ -1580,15 +1898,15 @@ with tab_users:
                         col_cancel, col_confirm = st.columns([1, 1])
                         
                         with col_cancel:
-                            if st.button("❌ Cancel", key=f"cancel_{user_db_id}", use_container_width=True, type="secondary"):
-                                del st.session_state.delete_confirmation[user_id]
+                            if st.button("❌ Cancel", key=f"cancel_{unique_key}", use_container_width=True, type="secondary"):
+                                del st.session_state.delete_confirmation[user_db_id]
                                 st.rerun()
                         
                         with col_confirm:
-                            if st.button("🗑️ Confirm Delete", key=f"confirm_{user_db_id}", use_container_width=True, type="primary"):
-                                # Build delete parameters - use _id not display user_id
+                            if st.button("🗑️ Confirm Delete", key=f"confirm_{unique_key}", use_container_width=True, type="primary"):
+                                # Build delete parameters - use MongoDB ObjectId
                                 params = {
-                                    "user_id": user_db_id,  # Use MongoDB _id, not display user_id
+                                    "user_id": user_db_id,  # MongoDB ObjectId as string
                                     "delete_conversations": delete_conversations,
                                     "delete_memories": delete_memories
                                 }
@@ -1597,23 +1915,23 @@ with tab_users:
                                 result = delete_data("/api/delete_user", params, require_auth=True)
                                 if result:
                                     deleted_data = result.get('deleted_data', {})
-                                    message = result.get('message', f"User '{user_id}' deleted")
+                                    message = result.get('message', f"User '{user_display}' deleted")
                                     st.success(message)
                                     
                                     # Show detailed deletion info
                                     if deleted_data.get('conversations_deleted', 0) > 0 or deleted_data.get('memories_deleted', 0) > 0:
                                         st.info(f"📊 Deleted: {deleted_data.get('conversations_deleted', 0)} conversations, {deleted_data.get('memories_deleted', 0)} memories")
                                     
-                                    del st.session_state.delete_confirmation[user_id]
+                                    del st.session_state.delete_confirmation[user_db_id]
                                     st.rerun()
                         
                         if delete_conversations or delete_memories:
                             st.caption("⚠️ Selected data will be **permanently deleted** and cannot be recovered!")
                 else:
                     # Show normal delete button
-                    delete_btn = st.button("🗑️ Delete", key=f"delete_{user_db_id}", type="secondary")
+                    delete_btn = st.button("🗑️ Delete", key=f"delete_{unique_key}", type="secondary")
                     if delete_btn:
-                        st.session_state.delete_confirmation[user_id] = True
+                        st.session_state.delete_confirmation[user_db_id] = True
                         st.rerun()
             
             st.divider()
@@ -1662,26 +1980,22 @@ with tab_users:
         st.warning("🔒 Authentication required for user management operations.")
         st.markdown("""
         **How to authenticate:**
-        1. **Google OAuth**: Click "Login with Google" in the sidebar
-        2. **Email/Password**: Use the login form in the sidebar if you have an account
-        3. **Manual Token**: If you have a JWT token, paste it in the manual entry section
+        1. **Email/Password**: Use the login form in the sidebar if you have an account
+        2. **Manual Token**: If you have a JWT token, paste it in the manual entry section
         
-        **Note:** The backend now requires authentication for:
+        **Note:** The backend requires authentication for:
         - Creating new users
         - Deleting users and their data
         - WebSocket audio connections
         """)
         
-        st.markdown("**To set up Google OAuth:**")
+        st.markdown("**Authentication Configuration:**")
         st.code(f"""
 # Required environment variables for backend:
 AUTH_SECRET_KEY=your-secret-key
-GOOGLE_CLIENT_ID=your-google-client-id  
-GOOGLE_CLIENT_SECRET=your-google-client-secret
         """)
         
-        if st.button("🔗 Go to Google OAuth Setup", help="Opens Google Cloud Console"):
-            st.markdown("[Google Cloud Console](https://console.cloud.google.com/)", unsafe_allow_html=True)
+        st.caption("💡 Email/password authentication is enabled by default")
 
 with tab_manage:
     st.header("Conversation Management")

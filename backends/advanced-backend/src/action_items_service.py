@@ -1,3 +1,4 @@
+import asyncio
 import time
 import json
 from typing import List, Dict, Any, Optional
@@ -5,9 +6,18 @@ from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorCollection
 import logging
 import ollama
+from concurrent.futures import ThreadPoolExecutor
+import re
 
 # Set up logging
 action_items_logger = logging.getLogger("action_items")
+
+# Timeout configurations
+OLLAMA_TIMEOUT_SECONDS = 30  # Timeout for Ollama operations
+EXTRACTION_TIMEOUT_SECONDS = 45  # Timeout for action item extraction
+
+# Thread pool for blocking operations
+_ACTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="action_ops")
 
 class ActionItemsService:
     """
@@ -39,28 +49,85 @@ class ActionItemsService:
             action_items_logger.error(f"Failed to initialize action items service: {e}")
             raise
     
-    async def extract_and_store_action_items(self, transcript: str, client_id: str, audio_uuid: str) -> int:
+    async def process_transcript_for_action_items(self, transcript_text: str, client_id: str, audio_uuid: str, user_id: str, user_email: str) -> int:
         """
-        Extract action items from transcript and store them in MongoDB.
+        Process a transcript segment for action items with special keyphrase detection.
+        
+        This method:
+        - Checks for the special keyphrase 'Simon says' (case-insensitive)
+        - If found, processes the modified text for action item extraction
+        - Returns the number of action items extracted and stored
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        try:
+            # Check for the special keyphrase 'simon says' (case-insensitive, any spaces or dots)
+            keyphrase_pattern = re.compile(r"\bSimon says\b", re.IGNORECASE)
+            
+            if keyphrase_pattern.search(transcript_text):
+                # Remove all occurrences of the keyphrase
+                modified_text = keyphrase_pattern.sub("Simon says", transcript_text)
+                action_items_logger.info(
+                    f"🔑 'Simon says' keyphrase detected in transcript for {audio_uuid}. Extracting action items from: '{modified_text.strip()}'"
+                )
+                
+                try:
+                    action_item_count = await self.extract_and_store_action_items(
+                        modified_text.strip(), client_id, audio_uuid, user_id, user_email
+                    )
+                    if action_item_count > 0:
+                        action_items_logger.info(
+                            f"🎯 Extracted {action_item_count} action items from 'Simon says' transcript segment for {audio_uuid}"
+                        )
+                    else:
+                        action_items_logger.debug(
+                            f"ℹ️ No action items found in 'Simon says' transcript segment for {audio_uuid}"
+                        )
+                    return action_item_count
+                except Exception as e:
+                    action_items_logger.error(
+                        f"❌ Error processing 'Simon says' action items for transcript segment in {audio_uuid}: {e}"
+                    )
+                    return 0
+            else:
+                # No keyphrase found, no action items to extract
+                action_items_logger.debug(f"No 'Simon says' keyphrase found in transcript for {audio_uuid}")
+                return 0
+                
+        except Exception as e:
+            action_items_logger.error(f"Error processing transcript for action items in {audio_uuid}: {e}")
+            return 0
+
+    async def extract_and_store_action_items(self, transcript: str, client_id: str, audio_uuid: str, user_id: str, user_email: str) -> int:
+        """
+        Extract action items from transcript and store them in MongoDB with timeout protection.
         Returns the number of action items extracted and stored.
         """
         if not self._initialized:
             await self.initialize()
         
         try:
-            # Extract action items from the transcript
-            action_items = await self._extract_action_items_from_transcript(transcript, client_id, audio_uuid)
-            
-            if not action_items:
-                action_items_logger.info(f"No action items found in transcript for {audio_uuid}")
-                return 0
-            
-            # Store action items in MongoDB
-            success_count = await self._store_action_items(action_items, client_id, audio_uuid)
-            
-            action_items_logger.info(f"Successfully extracted and stored {success_count}/{len(action_items)} action items for {audio_uuid}")
-            return success_count
+            # Extract and store action items with overall timeout
+            async def _extract_and_store():
+                # Extract action items from the transcript
+                action_items = await self._extract_action_items_from_transcript(transcript, client_id, audio_uuid)
                 
+                if not action_items:
+                    action_items_logger.info(f"No action items found in transcript for {audio_uuid}")
+                    return 0
+                
+                # Store action items in MongoDB
+                success_count = await self._store_action_items(action_items, client_id, audio_uuid, user_id, user_email)
+                
+                action_items_logger.info(f"Successfully extracted and stored {success_count}/{len(action_items)} action items for {audio_uuid}")
+                return success_count
+            
+            return await asyncio.wait_for(_extract_and_store(), timeout=EXTRACTION_TIMEOUT_SECONDS)
+                
+        except asyncio.TimeoutError:
+            action_items_logger.error(f"Action item extraction and storage timed out after {EXTRACTION_TIMEOUT_SECONDS}s for {audio_uuid}")
+            return 0
         except Exception as e:
             action_items_logger.error(f"Error extracting action items for {audio_uuid}: {e}")
             return 0
@@ -96,10 +163,18 @@ Transcript:
 <|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>
 """
-            response = self.ollama_client.generate(
-                model="llama3.1:latest",
-                prompt=extraction_prompt,
-                options={"temperature": 0.1}
+            # Run Ollama call in executor with timeout
+            def _ollama_generate():
+                return self.ollama_client.generate(
+                    model="llama3.1:latest",
+                    prompt=extraction_prompt,
+                    options={"temperature": 0.1}
+                )
+            
+            loop = asyncio.get_running_loop()
+            response = await asyncio.wait_for(
+                loop.run_in_executor(_ACTION_EXECUTOR, _ollama_generate),
+                timeout=OLLAMA_TIMEOUT_SECONDS
             )
             
             response_text = response['response'].strip()
@@ -136,6 +211,9 @@ Transcript:
             action_items_logger.info(f"Extracted {len(action_items)} action items from {audio_uuid}")
             return action_items
             
+        except asyncio.TimeoutError:
+            action_items_logger.error(f"Action item extraction timed out after {OLLAMA_TIMEOUT_SECONDS}s for {audio_uuid}")
+            return []
         except json.JSONDecodeError as e:
             action_items_logger.error(f"Failed to parse action items JSON for {audio_uuid}: {e}")
             return []
@@ -143,8 +221,16 @@ Transcript:
             action_items_logger.error(f"Error extracting action items from transcript for {audio_uuid}: {e}")
             return []
     
-    async def _store_action_items(self, action_items: List[Dict[str, Any]], client_id: str, audio_uuid: str) -> int:
-        """Store action items in MongoDB."""
+    async def _store_action_items(self, action_items: List[Dict[str, Any]], client_id: str, audio_uuid: str, user_id: str, user_email: str) -> int:
+        """Store action items in MongoDB.
+        
+        Args:
+            action_items: List of action item dictionaries
+            client_id: The client ID that generated the audio
+            audio_uuid: Unique identifier for the audio
+            user_id: Database user ID to associate the action items with
+            user_email: User email for identification
+        """
         try:
             if not action_items:
                 return 0
@@ -154,7 +240,9 @@ Transcript:
             for item in action_items:
                 document = {
                     "action_item_id": item.get("id"),
-                    "user_id": client_id,
+                    "user_id": user_id,  # Use database user_id instead of client_id
+                    "client_id": client_id,  # Store client_id for reference
+                    "user_email": user_email,  # Store user email for easy identification
                     "audio_uuid": audio_uuid,
                     "description": item.get("description", ""),
                     "assignee": item.get("assignee", "unassigned"),

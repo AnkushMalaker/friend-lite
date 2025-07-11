@@ -1,8 +1,12 @@
 # Friend-Lite Backend Architecture
 
+> 📖 **Prerequisite**: Read [quickstart.md](./quickstart.md) first for basic system understanding.
+
 ## System Overview
 
 Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, extracts memories, and generates action items. The system features a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard for management, and complete user authentication with role-based access control.
+
+**Core Implementation**: The complete system is implemented in `src/main.py` with supporting services in dedicated modules.
 
 ## Architecture Diagram
 
@@ -107,11 +111,11 @@ graph TB
 
 #### FastAPI Backend (`main.py`)
 - **Authentication-First Design**: All endpoints require JWT authentication
-- **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation
-- **Conversation Management**: Automatic conversation lifecycle with timeout handling
-- **REST API Suite**: Comprehensive endpoints for user, conversation, memory, and action item management
-- **Health Monitoring**: Detailed service health checks and performance metrics
-- **Audio Cropping**: Intelligent speech segment extraction using FFmpeg
+- **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation (`main.py:1562+`)
+- **Conversation Management**: Automatic conversation lifecycle with timeout handling (`main.py:1018-1149`)
+- **REST API Suite**: Comprehensive endpoints for user, conversation, memory, and action item management (`main.py:1700+`)
+- **Health Monitoring**: Detailed service health checks and performance metrics (`main.py:2500+`)
+- **Audio Cropping**: Intelligent speech segment extraction using FFmpeg (`main.py:174-200`)
 
 #### Authentication System (`auth.py`)
 - **FastAPI-Users Integration**: Complete user lifecycle management
@@ -172,13 +176,14 @@ stateDiagram-v2
 - **Client Metadata**: Client and user information stored for reference and debugging
 - **Context Preservation**: Links action items to original conversations and audio segments
 
-#### Memory Management (`memory/`)
+#### Memory Management (`src/memory/memory_service.py`)
 - **User-Centric Storage**: All memories keyed by database user_id (not client_id)
 - **Conversation Summarization**: Automatic memory extraction using mem0 framework
 - **Vector Storage**: Semantic memory search with Qdrant embeddings
 - **Client Metadata**: Client information stored in memory metadata for reference
 - **User Isolation**: Complete data separation between users via user_id
 - **Temporal Memory**: Long-term conversation history with semantic retrieval
+- **Processing Trigger**: `main.py:1047-1065` (conversation end) → `main.py:1163-1195` (background processing)
 
 #### Metrics System (`metrics.py`)
 - **Performance Tracking**: Audio processing latency, transcription success rates

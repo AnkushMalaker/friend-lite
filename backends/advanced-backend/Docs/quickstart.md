@@ -1,8 +1,12 @@
 # Friend-Lite Backend Quickstart Guide
 
+> 📖 **New to friend-lite?** This is your starting point! After reading this, continue with [architecture.md](./architecture.md) for technical details.
+
 ## Overview
 
 Friend-Lite is a real-time conversation processing system that captures audio, transcribes speech, extracts memories, and generates action items. The system includes a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard, and comprehensive user management.
+
+**Core Implementation**: See `src/main.py` for the complete FastAPI application and WebSocket handling.
 
 ## Prerequisites
 
@@ -57,6 +61,8 @@ This starts:
 - **MongoDB**: `localhost:27017`
 - **Qdrant**: `localhost:6333`
 - (optional) **Ollama**: # commented out
+
+**Implementation**: See `docker-compose.yml` for complete service configuration and `src/main.py` for FastAPI application setup.
 
 ### 3. Optional: Start ASR Service
 
@@ -147,6 +153,8 @@ The system automatically generates client IDs as `user_id-device_name` (e.g., `a
 - **Speech detection**: Automatic silence removal
 - **Audio cropping**: Extract only speech segments
 
+**Implementation**: See `src/main.py:1562+` for WebSocket endpoints and `src/main.py:895-1340` for audio processing pipeline.
+
 ### Transcription Options
 - **Deepgram API**: Cloud-based, high accuracy (recommended)
 - **Self-hosted ASR**: Local Wyoming protocol services
@@ -159,10 +167,20 @@ The system automatically generates client IDs as `user_id-device_name` (e.g., `a
 - **Manual controls**: Close conversations via API or dashboard
 
 ### Memory & Intelligence
+- **User-centric storage**: All memories and action items keyed by database user_id
 - **Memory extraction**: Automatic conversation summaries using LLM
 - **Semantic search**: Vector-based memory retrieval
 - **Action item detection**: Automatic task extraction with "Simon says" triggers
-- **User isolation**: All data scoped to individual users
+- **Configurable extraction**: YAML-based configuration for memory and action item extraction
+- **Debug tracking**: SQLite-based tracking of transcript → memory/action item conversion
+- **Client metadata**: Device information preserved for debugging and reference
+- **User isolation**: All data scoped to individual users with multi-device support
+
+**Implementation**: 
+- **Memory System**: `src/memory/memory_service.py` + `main.py:1047-1065, 1163-1195`
+- **Action Items**: `src/action_items_service.py` + `main.py:1341-1378`
+- **Configuration**: `memory_config.yaml` + `src/memory_config_loader.py`
+- **Debug Tracking**: `src/memory_debug.py` + API endpoints at `/api/debug/memory/*`
 
 ### Authentication & Security
 - **Flexible Authentication**: Login with either email or 6-character user_id
@@ -174,7 +192,7 @@ The system automatically generates client IDs as `user_id-device_name` (e.g., `a
 - **Multi-device support**: Single user can connect multiple devices
 - **Security headers**: Proper CORS, cookie security, and token validation
 
-See [`auth.md`](./auth.md) for comprehensive authentication documentation.
+**Implementation**: See `src/auth.py` for authentication logic, `src/users.py` for user management, and [`auth.md`](./auth.md) for comprehensive documentation.
 
 ## Verification
 
@@ -245,10 +263,60 @@ uv sync --group (whatever group you want to sync)
 - Ensure WebSocket connections include authentication token
 - Check firewall/port settings for remote connections
 
+## Data Architecture
+
+The friend-lite backend uses a **user-centric data architecture**:
+
+- **All memories and action items are keyed by database user_id** (not client_id)
+- **Client information is stored in metadata** for reference and debugging
+- **User email is included** for easy identification in admin interfaces
+- **Multi-device support**: Users can access their data from any registered device
+
+For detailed information, see [User Data Architecture](user-data-architecture.md).
+
+## Memory & Action Item Configuration
+
+The system supports configurable memory and action item extraction via `memory_config.yaml`:
+
+### Basic Configuration
+```yaml
+# Enable/disable different extraction types
+memory_extraction:
+  enabled: true
+  
+action_item_extraction:
+  enabled: true
+  trigger_phrases:
+    - "simon says"
+    - "action item"
+    - "todo"
+    - "follow up"
+```
+
+### Debug & Monitoring
+```yaml
+debug:
+  enabled: true
+  db_path: "/app/debug/memory_debug.db"
+  log_level: "INFO"
+```
+
+### API Endpoints for Debugging
+- `GET /api/debug/memory/stats` - Processing statistics
+- `GET /api/debug/memory/sessions` - Recent memory sessions
+- `GET /api/debug/memory/session/{audio_uuid}` - Detailed session info
+- `GET /api/debug/memory/config` - Current configuration
+- `GET /api/debug/memory/pipeline/{audio_uuid}` - Pipeline trace
+
+**Implementation**: See `src/memory_debug_api.py` for debug endpoints and `../MEMORY_DEBUG_IMPLEMENTATION.md` for complete debug system documentation.
+
 ## Next Steps
 
 - **Configure Google OAuth** for easy user login
 - **Set up Ollama** for local memory processing
 - **Deploy ASR service** for self-hosted transcription
 - **Connect audio clients** using the WebSocket API
-- **Explore the dashboard** to manage conversations and users 
+- **Explore the dashboard** to manage conversations and users
+- **Review the user data architecture** for understanding data organization
+- **Customize memory extraction** by editing `memory_config.yaml`
+- **Monitor processing performance** using debug API endpoints

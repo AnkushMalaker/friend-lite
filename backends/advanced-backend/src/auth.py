@@ -1,4 +1,4 @@
-"""Authentication configuration for fastapi-users with Google OAuth."""
+"""Authentication configuration for fastapi-users with email/password and JWT."""
 
 import os
 from typing import Optional, overload, Literal, Union
@@ -15,7 +15,6 @@ from fastapi_users.authentication import (
 from fastapi_users.password import PasswordHelper
 
 import re
-from httpx_oauth.clients.google import GoogleOAuth2
 import logging
 from users import User, UserCreate, get_user_db
 from dotenv import load_dotenv
@@ -38,23 +37,12 @@ def _verify_configured(var_name: str, *, optional: bool = False) -> Optional[str
 
 # Configuration from environment variables
 SECRET_KEY = _verify_configured("AUTH_SECRET_KEY")
-GOOGLE_CLIENT_ID = _verify_configured("GOOGLE_CLIENT_ID", optional=True)
-GOOGLE_CLIENT_SECRET = _verify_configured("GOOGLE_CLIENT_SECRET", optional=True)
 COOKIE_SECURE = _verify_configured("COOKIE_SECURE", optional=True) == "true"
 
 # Admin user configuration
 ADMIN_USERNAME = _verify_configured("ADMIN_USERNAME", optional=True) or "admin"
 ADMIN_PASSWORD = _verify_configured("ADMIN_PASSWORD")
 ADMIN_EMAIL = _verify_configured("ADMIN_EMAIL", optional=True) or f"{ADMIN_USERNAME}@example.com"
-
-# Check if Google OAuth is available
-GOOGLE_OAUTH_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
-
-if GOOGLE_OAUTH_ENABLED:
-    print("✅ Google OAuth enabled")
-else:
-    print("⚠️ Google OAuth disabled - GOOGLE_CLIENT_ID and/or GOOGLE_CLIENT_SECRET not provided")
-    print("   Authentication will work with email/password only")
 
 # Check admin configuration
 if ADMIN_PASSWORD:
@@ -169,14 +157,6 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
 async def get_user_manager(user_db=Depends(get_user_db)):
     """Get user manager instance for dependency injection."""
     yield UserManager(user_db)
-
-
-# Google OAuth client (only if enabled)
-google_oauth_client = None
-if GOOGLE_OAUTH_ENABLED:
-    assert GOOGLE_CLIENT_ID is not None
-    assert GOOGLE_CLIENT_SECRET is not None
-    google_oauth_client = GoogleOAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)
 
 
 # Transport configurations
