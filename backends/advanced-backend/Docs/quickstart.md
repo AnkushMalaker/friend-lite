@@ -144,6 +144,54 @@ curl -X POST "http://localhost:8000/api/create_user" \
 **Client ID Format:**
 The system automatically generates client IDs as `user_id-device_name` (e.g., `abc123-phone`, `admin-desktop`). This ensures proper user-client association and data isolation.
 
+## Add Existing Data
+
+### Audio File Upload & Processing
+
+The system supports processing existing audio files through the file upload API. This allows you to import and process pre-recorded conversations without requiring a live WebSocket connection.
+
+**Upload and Process WAV Files:**
+```bash
+export USER_TOKEN="your-jwt-token"
+
+# Upload single WAV file
+curl -X POST "http://localhost:8000/api/process-audio-files" \
+  -H "Authorization: Bearer $USER_TOKEN" \
+  -F "files=@/path/to/audio.wav" \
+  -F "device_name=file_upload"
+
+# Upload multiple WAV files
+curl -X POST "http://localhost:8000/api/process-audio-files" \
+  -H "Authorization: Bearer $USER_TOKEN" \
+  -F "files=@/path/to/recording1.wav" \
+  -F "files=@/path/to/recording2.wav" \
+  -F "device_name=import_batch"
+```
+
+**Response Example:**
+```json
+{
+  "message": "Successfully processed 2 audio files",
+  "processed_files": [
+    {
+      "filename": "recording1.wav",
+      "sample_rate": 16000,
+      "channels": 1,
+      "duration_seconds": 120.5,
+      "size_bytes": 3856000
+    },
+    {
+      "filename": "recording2.wav", 
+      "sample_rate": 44100,
+      "channels": 2,
+      "duration_seconds": 85.2,
+      "size_bytes": 7532800
+    }
+  ],
+  "client_id": "user01-import_batch"
+}
+```
+
 ## System Features
 
 ### Audio Processing
