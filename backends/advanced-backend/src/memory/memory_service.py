@@ -8,19 +8,20 @@ This module provides:
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
-import json
-from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional
 
-from mem0 import Memory
 import ollama
+from mem0 import Memory
+
+from memory_config_loader import get_config_loader
 
 # Import debug tracker and config loader
 from memory_debug import get_debug_tracker
-from memory_config_loader import get_config_loader
 
 # Configure Mem0 telemetry based on environment variable
 # Set default to False for privacy unless explicitly enabled
@@ -286,14 +287,6 @@ def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str, user_
             debug_tracker.complete_memory_processing(session_id, False, str(e))
         
         return False
-
-
-# Action item extraction functions removed - now handled by ActionItemsService
-# See action_items_service.py for the main action item processing logic
-
-
-# Action item storage functions removed - now handled by ActionItemsService
-# See action_items_service.py for the main action item processing logic
 
 
 class MemoryService:

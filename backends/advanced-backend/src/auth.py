@@ -247,6 +247,7 @@ async def create_admin_user_if_needed():
         print(f"❌ Failed to create admin user: {e}")
 
 
+
 async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[User]:
     """
     WebSocket authentication that supports both cookie and token-based auth.

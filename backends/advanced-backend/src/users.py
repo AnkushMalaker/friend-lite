@@ -3,7 +3,7 @@
 import random
 import string
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from beanie import Document, PydanticObjectId
 from fastapi_users.db import BeanieBaseUser, BeanieUserDatabase
@@ -144,4 +144,4 @@ def generate_client_id(user: User, device_name: Optional[str] = None) -> str:
     else:
         # Generate random 4-character suffix if no device name provided
         suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
-        return f"{user_id_suffix}-{suffix}" 
+        return f"{user_id_suffix}-{suffix}"

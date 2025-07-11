@@ -1,219 +1,299 @@
-# Friend-Lite Backend Architecture
+# Architecture Guide: What to Look Where
 
-> 📖 **Prerequisite**: Read [quickstart.md](./quickstart.md) first for basic system understanding.
+This document provides a comprehensive overview of the modular architecture after the refactoring from the original 2,923-line `main.py` file.
 
-## System Overview
+## Overview
 
-Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, extracts memories, and generates action items. The system features a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard for management, and complete user authentication with role-based access control.
+The application has been restructured into a modular architecture with clear separation of concerns:
 
-**Core Implementation**: The complete system is implemented in `src/main.py` with supporting services in dedicated modules.
+- **Core Application**: `main.py` (reduced to 206 lines)
+- **Service Layer**: `services.py` for initialization and configuration
+- **Audio Processing**: `audio_processing.py` for audio pipeline and transcription
+- **WebSocket Handling**: `websocket_handler.py` for real-time connections
+- **API Routes**: `api_routes.py` for HTTP endpoints
+- **Authentication**: `auth.py` and `users.py` for user management
+- **Data Models**: `models.py` for API request/response schemas
+- **Extensions**: `other_services/` for pluggable transcript services
 
-## Architecture Diagram
+## File-by-File Guide
 
-```mermaid
-graph TB
-    %% External Clients
-    Client[Audio Client<br/>Mobile/Desktop Apps]
-    WebUI[Streamlit Dashboard<br/>Web Interface]
-    
-    %% Main Backend Components
-    subgraph "Core Application"
-        Main[main.py<br/>FastAPI Backend]
-        Auth[auth.py<br/>Authentication System]
-        StreamlitApp[streamlit_app.py<br/>Web Dashboard]
-    end
-    
-    %% Audio Processing Pipeline
-    subgraph "Audio Processing Pipeline"
-        OpusDecoder[Opus Decoder<br/>Realtime Audio]
-        AudioChunks[Audio Chunks<br/>Per-Client Queues]
-        Transcription[Transcription Manager<br/>Deepgram/Wyoming ASR]
-        ClientState[Per-Client State<br/>Conversation Management]
-        AudioCropping[Audio Cropping<br/>Speech Segment Extraction]
-    end
-    
-    %% Business Logic Services
-    subgraph "Intelligence Services"
-        ActionItems[action_items_service.py<br/>Task Extraction]
-        Memory[memory/<br/>Conversation Memory]
-        Metrics[metrics.py<br/>System Monitoring]
-    end
-    
-    %% Data Layer
-    subgraph "Data Models & Security"
-        Users[users.py<br/>User Management]
-        ChunkRepo[ChunkRepo<br/>Audio Data Access]
-    end
-    
-    %% External Services
-    subgraph "External Services"
-        MongoDB[(MongoDB<br/>Users & Conversations)]
-        Ollama[Ollama<br/>LLM Processing]
-        Qdrant[Qdrant<br/>Vector Memory Store]
-        ASR[Wyoming ASR/<br/>Deepgram API]
-    end
-    
-    %% Docker Container Structure
-    subgraph "Docker Deployment"
-        BackendContainer[friend-backend<br/>FastAPI + Python]
-        StreamlitContainer[streamlit<br/>Web Dashboard]
-        ProxyContainer[nginx<br/>Reverse Proxy]
-        MongoContainer[mongo<br/>Database]
-        QdrantContainer[qdrant<br/>Vector DB]
-    end
-    
-    %% Authentication & API Flow
-    Client -->|WebSocket + JWT| Auth
-    WebUI -->|HTTP + JWT| Auth
-    Auth -->|User Validation| Main
-    StreamlitApp -->|Backend API| Main
-    
-    %% Audio Processing Flow
-    Client -->|Opus/PCM Audio| Main
-    Main -->|Audio Packets| OpusDecoder
-    OpusDecoder -->|PCM Data| AudioChunks
-    AudioChunks -->|Per-Client Processing| ClientState
-    ClientState -->|Audio Chunks| Transcription
-    ClientState -->|Speech Segments| AudioCropping
-    
-    %% WebSocket & REST Endpoints
-    Main -->|/ws, /ws_pcm| Client
-    Main -->|/api/* endpoints| WebUI
-    
-    %% Service Integration
-    Transcription -->|Transcript Text| ActionItems
-    Transcription -->|Conversation Data| Memory
-    ActionItems -->|Tasks| MongoDB
-    Memory -->|Memory Storage| Ollama
-    Memory -->|Vector Storage| Qdrant
-    
-    %% External Service Connections
-    Main -->|User & Conversation Data| MongoDB
-    Transcription -->|Speech Processing| ASR
-    Memory -->|Embeddings| Qdrant
-    ActionItems -->|LLM Analysis| Ollama
-    
-    %% Monitoring & Metrics
-    Main -->|System Metrics| Metrics
-    Metrics -->|Performance Data| MongoDB
-    
-    %% Container Relationships
-    BackendContainer -->|Internal Network| MongoContainer
-    BackendContainer -->|Internal Network| QdrantContainer
-    StreamlitContainer -->|HTTP API| BackendContainer
-    ProxyContainer -->|Load Balance| BackendContainer
-    ProxyContainer -->|Route /dashboard| StreamlitContainer
-```
+### 📁 Core Application Files
 
-## Component Descriptions
+#### `src/main.py` (206 lines)
+**What it contains:**
+- FastAPI application initialization
+- WebSocket endpoints (`/ws`, `/ws-pcm`)
+- Application lifecycle management
+- Service router registration
 
-### Core Application
+**Look here for:**
+- Application startup and shutdown logic
+- WebSocket endpoint definitions
+- High-level application configuration
+- Service integration points
 
-#### FastAPI Backend (`main.py`)
-- **Authentication-First Design**: All endpoints require JWT authentication
-- **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation (`main.py:1562+`)
-- **Conversation Management**: Automatic conversation lifecycle with timeout handling (`main.py:1018-1149`)
-- **REST API Suite**: Comprehensive endpoints for user, conversation, memory, and action item management (`main.py:1700+`)
-- **Health Monitoring**: Detailed service health checks and performance metrics (`main.py:2500+`)
-- **Audio Cropping**: Intelligent speech segment extraction using FFmpeg (`main.py:174-200`)
+**Key functions:**
+- `lifespan()`: Application lifecycle management
+- `websocket_endpoint()`: Opus audio streaming
+- `pcm_websocket_endpoint()`: PCM audio streaming
 
-#### Authentication System (`auth.py`)
-- **FastAPI-Users Integration**: Complete user lifecycle management
-- **Dual Authentication**: Support for both email and 6-character user_id login
-- **Multi-Authentication**: JWT tokens, Google OAuth, and cookie-based sessions
-- **Role-Based Access Control**: Admin vs regular user permissions with data isolation
-- **WebSocket Security**: Custom authentication for real-time connections with token/cookie support
-- **Admin User Bootstrap**: Automatic admin account creation with configurable user_id
-- **Client ID Generation**: Automatic `user_id-device_name` format for client identification
+#### `src/services.py`
+**What it contains:**
+- Database initialization and connection management
+- Service factory functions
+- Configuration management
+- Transcript service registration
 
-#### Streamlit Dashboard (`streamlit_app.py`)
-- **User-Friendly Interface**: Complete web-based management interface
-- **Authentication Integration**: Login with backend JWT tokens or Google OAuth
-- **Real-Time Monitoring**: Live client status and conversation management
-- **Data Management**: User, conversation, memory, and action item interfaces
-- **Audio Playback**: Smart audio player with original/cropped audio options
-- **System Health**: Visual service status and configuration display
+**Look here for:**
+- Database setup and collections
+- Service initialization (AI, transcription, memory)
+- Configuration loading
+- Service dependency injection
+
+**Key functions:**
+- `initialize_all_services()`: Main service initialization
+- `get_database()`: Database connection and collections
+- `initialize_transcript_services()`: Service manager setup
+
+### 📁 Audio Processing
+
+#### `src/audio_processing.py`
+**What it contains:**
+- Audio chunk database operations (`ChunkRepo`)
+- Transcription management (`TranscriptionManager`)
+- Audio cropping and processing utilities
+- File sink management
+
+**Look here for:**
+- Audio file storage and management
+- Speech-to-text processing
+- Audio chunk database operations
+- Voice activity detection handling
+
+**Key classes:**
+- `ChunkRepo`: Database operations for audio chunks
+- `TranscriptionManager`: Handles Deepgram/offline ASR transcription
+
+### 📁 WebSocket & Real-time Communication
+
+#### `src/websocket_handler.py`
+**What it contains:**
+- Client state management (`ClientState`)
+- WebSocket connection handling
+- Audio streaming processors
+- Background task management
+
+**Look here for:**
+- WebSocket connection lifecycle
+- Client state tracking
+- Audio pipeline processors
+- Real-time audio streaming
+
+**Key classes:**
+- `ClientState`: Manages individual client connections
+- Background processors for audio, transcription, memory, and services
+
+### 📁 HTTP API
+
+#### `src/api_routes.py`
+**What it contains:**
+- All HTTP REST API endpoints
+- Conversation management endpoints
+- User management (admin)
+- Memory operations
+- Debug and metrics endpoints
+
+**Look here for:**
+- REST API endpoints
+- Conversation retrieval and management
+- User administration features
+- Memory search and management
+- Application metrics and debugging
+
+**Key endpoint groups:**
+- `/health`, `/readiness`: Health checks
+- `/api/conversations`: Conversation management
+- `/api/users`: User management (admin)
+- `/api/memories`: Memory operations
+- `/api/admin/*`: Admin-only endpoints
+
+### 📁 Authentication & User Management
+
+#### `src/auth.py`
+**What it contains:**
+- FastAPI-Users configuration
+- JWT authentication strategies
+- User manager with custom authentication
+- WebSocket authentication
+- Admin user creation
+
+**Look here for:**
+- Authentication configuration
+- JWT token handling
+- User registration and management
+- Admin user setup
+- WebSocket authentication
+
+**Key classes:**
+- `UserManager`: Custom user management with email/password auth
+- Authentication backends (cookie, bearer)
+
+#### `src/users.py`
+**What it contains:**
+- User model definitions
+- Client-user relationship management
+- User database operations
+- Client ID generation
+
+**Look here for:**
+- User data models
+- Client registration and tracking
+- User-client relationship mapping
+- Database user operations
+
+**Key classes:**
+- `User`: Main user model with client tracking
+- User schema classes for API operations
+
+### 📁 Data Models
+
+#### `src/models.py`
+**What it contains:**
+- API request/response models
+- Essential data structures for HTTP endpoints
+
+**Look here for:**
+- API request/response schemas
+- Data validation models
+- Type definitions for API contracts
+
+**Key models:**
+- `SpeakerAssignment`: Speaker identification
+- `TranscriptUpdate`: Transcript modification
+- `CloseConversationRequest`: Conversation management
+
+### 📁 Extensible Services
+
+#### `src/other_services/`
+**What it contains:**
+- Pluggable transcript processing services
+- Action items service implementation
+- Service-specific API routes
+
+**Look here for:**
+- Adding new transcript processing services
+- Action items business logic
+- Service-specific API endpoints
+
+**Key files:**
+- `action_items_service.py`: Action items processing
+- `action_items_api.py`: Action items API endpoints
+- `service_interface.py`: Abstract service interface
+
+## Architecture Patterns
+
+### 1. Service Layer Pattern
+- All services initialized in `services.py`
+- Dependency injection throughout the application
+- Clear separation between business logic and infrastructure
+
+### 2. Repository Pattern
+- `ChunkRepo` for audio chunk database operations
+- Centralized database access patterns
+- Consistent data access layer
+
+### 3. Observer Pattern
+- Transcript services receive callbacks when transcriptions complete
+- Extensible processing pipeline
+- Loose coupling between transcription and processing
+
+### 4. State Management
+- `ClientState` class manages individual client connections
+- Centralized state tracking for WebSocket connections
+- Clean lifecycle management
+
+## Service Flow
 
 ### Audio Processing Pipeline
+1. **Audio Reception**: WebSocket receives audio chunks
+2. **Audio Storage**: `ChunkRepo` stores audio files and metadata
+3. **Transcription**: `TranscriptionManager` processes speech-to-text
+4. **Service Processing**: Transcript services (action items, etc.) process results
+5. **Memory Storage**: Processed results stored in memory service
 
-#### Per-Client State Management
-```mermaid
-stateDiagram-v2
-    [*] --> Connected: WebSocket Auth
-    Connected --> Processing: Audio Received
-    Processing --> Transcribing: Chunk Buffered
-    Transcribing --> ActiveConversation: Transcript Generated
-    ActiveConversation --> Processing: Continue Audio
-    ActiveConversation --> ConversationTimeout: 1.5min Silence
-    Processing --> ManualClose: User Action
-    ConversationTimeout --> ProcessingMemory: Extract Insights
-    ManualClose --> ProcessingMemory: Extract Insights
-    ProcessingMemory --> AudioCropping: Remove Silence
-    AudioCropping --> ConversationClosed: Cleanup Complete
-    ConversationClosed --> Connected: Ready for New
-    Connected --> [*]: Client Disconnect
+### Authentication Flow
+1. **User Registration**: Email/password through `UserManager`
+2. **Client Registration**: Device clients registered to users
+3. **WebSocket Auth**: JWT token or cookie-based authentication
+4. **API Auth**: Bearer token or cookie authentication
+
+## Database Collections
+
+### MongoDB Collections
+- `chunks`: Audio files and transcription data
+- `users`: User accounts and client relationships
+- `memories`: Processed memories and insights
+- `action_items`: Action items extracted from conversations
+
+## Configuration
+
+### Environment Variables
+- `AUTH_SECRET_KEY`: JWT secret key
+- `ADMIN_USERNAME`, `ADMIN_PASSWORD`: Admin user credentials
+- `DATABASE_URI`: MongoDB connection string
+- `DEEPGRAM_API_KEY`: Speech-to-text API key
+
+## Adding New Features
+
+### Adding a New Transcript Service
+1. Create service class extending `TranscriptService` in `other_services/`
+2. Implement `process_transcript()` method
+3. Register service in `services.py`
+4. Add API routes if needed
+
+### Adding New API Endpoints
+1. Add endpoint functions to `api_routes.py`
+2. Use existing authentication dependencies
+3. Follow existing patterns for error handling and logging
+
+### Adding New Database Operations
+1. Extend `ChunkRepo` or create new repository class
+2. Add database operations in `services.py`
+3. Use existing collection patterns
+
+## Development Workflow
+
+### Running the Application
+```bash
+uv run python src/main.py
 ```
 
-#### Audio Processing Queues (Per-Client)
-- **Chunk Queue**: Raw audio buffering with client isolation
-- **Transcription Queue**: Audio chunks for real-time ASR processing
-- **Memory Queue**: Completed conversations for LLM memory extraction
-- **Action Item Queue**: Transcript analysis for task detection
+### Testing
+```bash
+# Run tests (check README for specific test commands)
+uv run pytest
+```
 
-#### Speech Processing Features
-- **Voice Activity Detection**: Automatic silence removal and speech segment extraction
-- **Audio Cropping**: FFmpeg-based processing to create concise audio files
-- **Multiple Format Support**: Opus (compressed) and PCM (uncompressed) audio input
-- **Conversation Chunking**: 60-second segments with seamless processing
+### Debugging
+- Check logs in console output
+- Use `/health` endpoint for service status
+- Use `/api/debug/*` endpoints for debugging information
 
-### Intelligence Services
+## Migration Notes
 
-#### Action Items Service (`action_items_service.py`)
-- **User-Centric Storage**: Action items stored with database user_id (not client_id)
-- **LLM-Powered Extraction**: Uses Ollama for intelligent task identification
-- **Trigger Recognition**: Special "Simon says" keyphrase detection for explicit task creation
-- **Task Management**: Full CRUD operations with status tracking (open, in-progress, completed, cancelled)
-- **Client Metadata**: Client and user information stored for reference and debugging
-- **Context Preservation**: Links action items to original conversations and audio segments
+### From Original Architecture
+- **Before**: Single 2,923-line file with mixed concerns
+- **After**: Modular architecture with clear separation
+- **Benefits**: Easier testing, maintenance, and feature addition
+- **Compatibility**: All existing functionality preserved
 
-#### Memory Management (`src/memory/memory_service.py`)
-- **User-Centric Storage**: All memories keyed by database user_id (not client_id)
-- **Conversation Summarization**: Automatic memory extraction using mem0 framework
-- **Vector Storage**: Semantic memory search with Qdrant embeddings
-- **Client Metadata**: Client information stored in memory metadata for reference
-- **User Isolation**: Complete data separation between users via user_id
-- **Temporal Memory**: Long-term conversation history with semantic retrieval
-- **Processing Trigger**: `main.py:1047-1065` (conversation end) → `main.py:1163-1195` (background processing)
+### Import Changes
+- Import service functions from `services.py`
+- Import audio processing from `audio_processing.py`
+- Import WebSocket handlers from `websocket_handler.py`
+- Import API routes from `api_routes.py`
 
-#### Metrics System (`metrics.py`)
-- **Performance Tracking**: Audio processing latency, transcription success rates
-- **Service Health Monitoring**: External service connectivity and response times
-- **User Analytics**: Connection patterns, conversation statistics
-- **Resource Monitoring**: System resource usage and bottleneck identification
-
-### Data Models & Access
-
-#### User Management (`users.py`)
-- **Beanie ODM**: MongoDB document modeling with type safety
-- **User ID System**: 6-character alphanumeric user_id generation and validation
-- **Authentication Data**: Secure password hashing, email verification, dual login support
-- **Profile Management**: User preferences, display names, and permissions
-- **Client Registration**: Tracking of registered clients per user with device names
-- **Data Ownership**: All data (conversations, memories, action items) associated via user_id
-- **Client ID Generation**: Helper functions for `user_id-device_name` format
-
-#### Conversation Data Access (`ChunkRepo`)
-- **Audio Metadata**: File paths, timestamps, duration tracking
-- **Transcript Management**: Speaker identification and timing information
-- **Memory Links**: Connection between conversations and extracted memories
-- **Action Item Relations**: Task tracking per conversation
-
-#### Permission System
-- **Dictionary-Based Mapping**: Clean client-user relationship tracking via in-memory dictionaries
-- **Active Client Tracking**: `client_to_user_mapping` for currently connected clients
-- **Persistent Tracking**: `all_client_user_mappings` for database query permission checks
-- **Ownership Validation**: Simple dictionary lookup instead of regex pattern matching
-- **Data Isolation**: User-scoped queries using client ID lists for efficient permission filtering
+This architecture provides a solid foundation for extending the application with new features while maintaining clean separation of concerns and testability.
 
 ## Deployment Architecture
 
