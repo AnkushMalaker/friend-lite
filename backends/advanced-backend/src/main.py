@@ -15,11 +15,12 @@ import asyncio
 import concurrent.futures
 import json
 import os
-import re
 import time
 import uuid
+import wave
+import io
+import numpy as np
 from contextlib import asynccontextmanager
-from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple, Any, List
@@ -31,7 +32,7 @@ import ollama
 import websockets
 from dotenv import load_dotenv
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
-from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -511,12 +512,49 @@ class TranscriptionManager:
         """Flush final transcript from offline ASR by sending AudioStop."""
         if self.client and self._current_audio_uuid:
             try:
-                audio_logger.info(f"Flushing final transcript from offline ASR for audio {self._current_audio_uuid}")
+                audio_logger.info(f"🏁 Flushing final transcript from offline ASR for audio {self._current_audio_uuid}")
                 # Send AudioStop to signal end of audio stream
                 audio_stop = AudioStop(timestamp=int(time.time()))
                 await self.client.write_event(audio_stop.event())
-                # Give ASR a moment to process final audio and send transcript
-                await asyncio.sleep(1.0)
+                
+                # Wait longer for final transcripts and process any remaining events
+                max_wait = 5.0  # Wait up to 5 seconds for final transcripts
+                start_time = time.time()
+                
+                while (time.time() - start_time) < max_wait:
+                    try:
+                        event = await asyncio.wait_for(self.client.read_event(), timeout=0.5)
+                        if event is None:
+                            break
+                            
+                        audio_logger.info(f"🏁 Final flush - received event type: {event.type}")
+                        if Transcript.is_type(event.type):
+                            transcript_obj = Transcript.from_event(event)
+                            transcript_text = transcript_obj.text.strip()
+                            if transcript_text:
+                                audio_logger.info(f"🏁 Final transcript: {transcript_text}")
+                                
+                                # Process final transcript the same way
+                                transcript_segment = {
+                                    "speaker": f"speaker_{self._client_id}",
+                                    "text": transcript_text,
+                                    "start": 0.0,
+                                    "end": 0.0,
+                                }
+                                
+                                await chunk_repo.add_transcript_segment(self._current_audio_uuid, transcript_segment)
+                                
+                                # Update client state
+                                global active_clients
+                                if self._client_id in active_clients:
+                                    active_clients[self._client_id].conversation_transcripts.append(transcript_text)
+                                    audio_logger.info(f"🏁 Added final transcript to conversation")
+                                
+                    except asyncio.TimeoutError:
+                        # No more events available
+                        break
+                        
+                audio_logger.info(f"🏁 Finished flushing ASR for {self._current_audio_uuid}")
             except Exception as e:
                 audio_logger.error(f"Error flushing offline ASR transcript: {e}")
 
@@ -750,18 +788,19 @@ class TranscriptionManager:
                 await self.client.write_event(audio_start.event())
 
             # Send the audio chunk
+            audio_logger.info(f"🎵 Sending {len(chunk.audio)} bytes audio chunk to ASR for {audio_uuid}")
             await self.client.write_event(chunk.event())
 
             # Read and process any available events (non-blocking)
             try:
                 while True:
                     event = await asyncio.wait_for(
-                        self.client.read_event(), timeout=0.001
-                    )  # this is a quick poll, feels like a better solution can exist
+                        self.client.read_event(), timeout=0.1
+                    )  # Increased timeout for better ASR response handling
                     if event is None:
                         break
 
-                    audio_logger.debug(f"Received event type: {event.type} for {audio_uuid}")
+                    audio_logger.info(f"🎤 Received ASR event type: {event.type} for {audio_uuid}")
                     if Transcript.is_type(event.type):
                         transcript_obj = Transcript.from_event(event)
                         transcript_text = transcript_obj.text.strip()
@@ -797,8 +836,16 @@ class TranscriptionManager:
                             }
 
                             # Store transcript segment in DB immediately
-
                             await chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
+
+                            # Update client state with transcript for memory processing
+                            global active_clients
+                            if client_id in active_clients:
+                                active_clients[client_id].last_transcript_time = time.time()
+                                active_clients[client_id].conversation_transcripts.append(transcript_text)
+                                audio_logger.info(f"✅ Added transcript to conversation: '{transcript_text}' (total: {len(active_clients[client_id].conversation_transcripts)})")
+                            else:
+                                audio_logger.warning(f"⚠️ Client {client_id} not found in active_clients for transcript update")
 
                             # Queue for action item processing using callback (async, non-blocking)
                             if self.action_item_callback:
@@ -807,7 +854,7 @@ class TranscriptionManager:
                                 )
 
                             await chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
-                            audio_logger.info(f"Added transcript segment for {audio_uuid} to DB.")
+                            audio_logger.info(f"📝 Added transcript segment for {audio_uuid} to DB.")
 
                             # Update transcript time for conversation timeout tracking
                             if client_id in active_clients:
@@ -2829,6 +2876,161 @@ async def get_action_items_stats(current_user: User = Depends(current_active_use
     except Exception as e:
         audio_logger.error(f"Error getting action items stats: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/process-audio-files")
+async def process_audio_files(
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(current_active_user),
+    device_name: Optional[str] = "file_upload"
+):
+    """Process uploaded audio files (.wav) and add them to the audio processing pipeline."""
+    try:
+        if not files:
+            raise HTTPException(status_code=400, detail="No files provided")
+        
+        # Generate client ID for file processing
+        client_id = generate_client_id(current_user, device_name)
+        
+        # Create client state for processing
+        client_state = await create_client_state(client_id, current_user, device_name)
+        
+        processed_files = []
+        
+        for file in files:
+            # Check if file is a WAV file
+            if not file.filename or not file.filename.lower().endswith('.wav'):
+                audio_logger.warning(f"Skipping non-WAV file: {file.filename}")
+                continue
+                
+            try:
+                # Read file content
+                content = await file.read()
+                
+                # Process WAV file
+                with wave.open(io.BytesIO(content), 'rb') as wav_file:
+                    # Get audio parameters
+                    sample_rate = wav_file.getframerate()
+                    sample_width = wav_file.getsampwidth()
+                    channels = wav_file.getnchannels()
+                    
+                    # Read all audio data
+                    audio_data = wav_file.readframes(wav_file.getnframes())
+                    
+                    # Convert to mono if stereo
+                    if channels == 2:
+                        # Convert stereo to mono by averaging channels
+                        if sample_width == 2:
+                            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                        else:
+                            audio_array = np.frombuffer(audio_data, dtype=np.int32)
+                        
+                        # Reshape to separate channels and average
+                        audio_array = audio_array.reshape(-1, 2)
+                        audio_data = np.mean(audio_array, axis=1).astype(audio_array.dtype).tobytes()
+                        channels = 1
+                    
+                    # Ensure sample rate is 16kHz (resample if needed)
+                    if sample_rate != 16000:
+                        audio_logger.warning(f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz. Processing anyway.")
+                    
+                    # Process audio in larger chunks for faster file processing
+                    # File uploads don't need to simulate real-time streaming delays
+                    # Use larger chunks (32KB) for optimal performance
+                    chunk_size = 32 * 1024  # 32KB chunks (was 1KB with 10ms delays)
+                    base_timestamp = int(time.time())
+                    
+                    for i in range(0, len(audio_data), chunk_size):
+                        chunk_data = audio_data[i:i + chunk_size]
+                        
+                        # Calculate relative timestamp for this chunk
+                        chunk_offset_bytes = i
+                        chunk_offset_seconds = chunk_offset_bytes / (sample_rate * sample_width * channels)
+                        chunk_timestamp = base_timestamp + int(chunk_offset_seconds)
+                        
+                        # Create AudioChunk
+                        chunk = AudioChunk(
+                            audio=chunk_data,
+                            rate=sample_rate,
+                            width=sample_width,
+                            channels=channels,
+                            timestamp=chunk_timestamp,
+                        )
+                        
+                        # Add to processing queue
+                        await client_state.chunk_queue.put(chunk)
+                        
+                        # For file uploads, we don't need delays like real-time streams
+                        # Just yield control occasionally to prevent blocking the event loop
+                        if i % (chunk_size * 10) == 0:  # Every 10 chunks (~320KB)
+                            await asyncio.sleep(0)
+                    
+                    # Track in metrics
+                    metrics_collector = get_metrics_collector()
+                    metrics_collector.record_audio_chunk_received(client_id)
+                    metrics_collector.record_client_activity(client_id)
+                    
+                    processed_files.append({
+                        "filename": file.filename,
+                        "sample_rate": sample_rate,
+                        "channels": channels,
+                        "duration_seconds": len(audio_data) / (sample_rate * sample_width * channels),
+                        "size_bytes": len(audio_data)
+                    })
+                    
+                    audio_logger.info(f"✅ Processed audio file: {file.filename} ({len(audio_data)} bytes)")
+                    
+            except Exception as e:
+                audio_logger.error(f"Error processing file {file.filename}: {e}")
+                continue
+        
+        # For file uploads, wait for transcription processing to complete
+        # before closing the conversation to ensure we get results
+        
+        audio_logger.info(f"📁 File upload completed. Waiting for transcription to process {len(processed_files)} files...")
+        
+        # Wait for all chunks to be processed by the audio saver
+        # This ensures the transcription queue is populated
+        await asyncio.sleep(1.0)  # Give audio saver time to process chunks
+        
+        # Wait for transcription queue to be processed
+        max_wait_time = 120  # Maximum 2 minutes wait
+        wait_interval = 0.5  # Check every 500ms
+        elapsed_time = 0
+        
+        while elapsed_time < max_wait_time:
+            # Check if transcription queue is empty and processing is complete
+            if (client_state.transcription_queue.empty() and 
+                client_state.chunk_queue.empty()):
+                audio_logger.info(f"📁 Transcription processing completed for {client_id}")
+                break
+                
+            await asyncio.sleep(wait_interval)
+            elapsed_time += wait_interval
+            
+            # Log progress periodically
+            if elapsed_time % 10 == 0:  # Every 10 seconds
+                audio_logger.info(f"📁 Still processing transcription for {client_id} ({elapsed_time:.1f}s elapsed)")
+        
+        if elapsed_time >= max_wait_time:
+            audio_logger.warning(f"📁 Transcription processing timed out for {client_id} after {max_wait_time}s")
+        
+        # Now signal end of audio stream to close conversation properly
+        await client_state.chunk_queue.put(None)
+        
+        # Give a moment for cleanup to complete
+        await asyncio.sleep(0.5)
+        
+        return {
+            "message": f"Successfully processed {len(processed_files)} audio files",
+            "processed_files": processed_files,
+            "client_id": client_id,
+            "transcription_status": "completed" if elapsed_time < max_wait_time else "timed_out"
+        }
+        
+    except Exception as e:
+        audio_logger.error(f"Error in process_audio_files: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing audio files: {str(e)}")
 
 
 ###############################################################################
