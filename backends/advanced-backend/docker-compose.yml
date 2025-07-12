@@ -8,16 +8,15 @@ services:
     volumes:
       - ./audio_chunks:/app/audio_chunks
       - ./debug_dir:/app/debug_dir
+      - ./data:/app/data
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - HF_TOKEN=${HF_TOKEN}
       - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
-      - ADMIN_USERNAME=${ADMIN_USERNAME}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - ADMIN_EMAIL=${ADMIN_EMAIL}
-      - COOKIE_SECURE=${COOKIE_SECURE}
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
     depends_on:
       qdrant:

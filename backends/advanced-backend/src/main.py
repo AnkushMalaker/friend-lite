@@ -65,6 +65,20 @@ from metrics import (
 )
 from users import User, UserCreate, UserRead, get_user_db, generate_client_id, get_user_by_client_id, register_client_to_user
 
+# Import failure recovery system
+from failure_recovery import (
+    init_failure_recovery_system,
+    shutdown_failure_recovery_system,
+    perform_startup_recovery,
+    get_failure_recovery_router,
+    get_queue_tracker,
+    get_persistent_queue,
+    QueueType,
+    QueueStatus,
+    QueueItem,
+    MessagePriority
+)
+
 ###############################################################################
 # SETUP
 ###############################################################################
@@ -1081,7 +1095,7 @@ class ClientState:
 
             # Wait for transcription queue to finish with timeout to prevent hanging
             try:
-                await asyncio.wait_for(self.transcription_queue.join(), timeout=15.0)  # Increased timeout for final transcript
+                await asyncio.wait_for(self.transcription_queue.join(), timeout=60.0)  # Increased timeout for final transcript
                 audio_logger.info("Transcription queue processing completed")
             except asyncio.TimeoutError:
                 audio_logger.warning(f"Transcription queue join timed out after 15 seconds for {current_uuid}")
@@ -1566,6 +1580,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         audio_logger.warning(f"Memory service pre-initialization failed: {e} - will initialize on first use")
 
+    # Initialize failure recovery system
+    try:
+        audio_logger.info("Initializing failure recovery system...")
+        await init_failure_recovery_system(
+            queue_tracker_db="data/queue_tracker.db",
+            persistent_queue_db="data/persistent_queues.db",
+            start_monitoring=True,
+            start_recovery=True,
+            recovery_interval=30
+        )
+        audio_logger.info("Failure recovery system initialized successfully")
+        
+        # Perform startup recovery for any items that were processing when service stopped
+        await perform_startup_recovery()
+        audio_logger.info("Startup recovery completed")
+        
+    except Exception as e:
+        audio_logger.error(f"Failed to initialize failure recovery system: {e}")
+        # Don't raise here as this is not critical for basic operation
+
     audio_logger.info("Application ready - clients will have individual processing pipelines.")
 
     try:
@@ -1585,6 +1619,13 @@ async def lifespan(app: FastAPI):
         # Shutdown memory service and speaker service
         shutdown_memory_service()
         audio_logger.info("Memory and speaker services shut down.")
+
+        # Shutdown failure recovery system
+        try:
+            await shutdown_failure_recovery_system()
+            audio_logger.info("Failure recovery system shut down.")
+        except Exception as e:
+            audio_logger.error(f"Error shutting down failure recovery system: {e}")
 
         audio_logger.info("Shutdown complete.")
 
@@ -1608,6 +1649,10 @@ app.include_router(
 # Add memory debug router
 from memory_debug_api import debug_router
 app.include_router(debug_router)
+
+# Add failure recovery router
+failure_recovery_router = get_failure_recovery_router()
+app.include_router(failure_recovery_router)
 
 
 @app.websocket("/ws")
@@ -2686,8 +2731,7 @@ async def get_auth_config():
             "admin_create_user": "/api/create_user",  # Admin-only user creation
         },
         "admin_user": {
-            "username": os.getenv("ADMIN_USERNAME", "admin"),
-            "email": os.getenv("ADMIN_EMAIL", f"{os.getenv('ADMIN_USERNAME', 'admin')}@admin.local"),
+            "email": os.getenv("ADMIN_EMAIL",  'admin@example.com'),
         },
     }
 
@@ -2884,26 +2928,30 @@ async def process_audio_files(
     current_user: User = Depends(current_active_user),
     device_name: Optional[str] = "file_upload"
 ):
-    """Process uploaded audio files (.wav) and add them to the audio processing pipeline."""
+    """Process uploaded audio files (.wav) and add them to the audio processing pipeline. Each file creates a separate conversation."""
     try:
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
         
-        # Generate client ID for file processing
-        client_id = generate_client_id(current_user, device_name)
-        
-        # Create client state for processing
-        client_state = await create_client_state(client_id, current_user, device_name)
-        
         processed_files = []
+        processed_conversations = []
         
-        for file in files:
+        for file_index, file in enumerate(files):
             # Check if file is a WAV file
             if not file.filename or not file.filename.lower().endswith('.wav'):
                 audio_logger.warning(f"Skipping non-WAV file: {file.filename}")
                 continue
                 
             try:
+                # Generate unique client ID for each file to create separate conversations
+                file_device_name = f"{device_name}-{file_index + 1}"
+                client_id = generate_client_id(current_user, file_device_name)
+                
+                # Create separate client state for this file
+                client_state = await create_client_state(client_id, current_user, file_device_name)
+                
+                audio_logger.info(f"📁 Processing file {file_index + 1}/{len(files)}: {file.filename} with client_id: {client_id}")
+                
                 # Read file content
                 content = await file.read()
                 
@@ -2975,57 +3023,63 @@ async def process_audio_files(
                         "sample_rate": sample_rate,
                         "channels": channels,
                         "duration_seconds": len(audio_data) / (sample_rate * sample_width * channels),
-                        "size_bytes": len(audio_data)
+                        "size_bytes": len(audio_data),
+                        "client_id": client_id
                     })
                     
                     audio_logger.info(f"✅ Processed audio file: {file.filename} ({len(audio_data)} bytes)")
+                
+                # Wait for this file's transcription processing to complete
+                audio_logger.info(f"📁 Waiting for transcription to process file: {file.filename}")
+                
+                # Wait for chunks to be processed by the audio saver
+                await asyncio.sleep(1.0)
+                
+                # Wait for transcription queue to be processed for this file
+                max_wait_time = 60  # 1 minute per file
+                wait_interval = 0.5
+                elapsed_time = 0
+                
+                while elapsed_time < max_wait_time:
+                    if (client_state.transcription_queue.empty() and 
+                        client_state.chunk_queue.empty()):
+                        audio_logger.info(f"📁 Transcription completed for file: {file.filename}")
+                        break
+                        
+                    await asyncio.sleep(wait_interval)
+                    elapsed_time += wait_interval
+                
+                if elapsed_time >= max_wait_time:
+                    audio_logger.warning(f"📁 Transcription timed out for file: {file.filename}")
+                
+                # Close this conversation
+                await client_state.chunk_queue.put(None)
+                
+                # Give cleanup time to complete
+                await asyncio.sleep(0.5)
+                
+                # Track conversation created
+                conversation_info = {
+                    "client_id": client_id,
+                    "filename": file.filename,
+                    "status": "completed" if elapsed_time < max_wait_time else "timed_out"
+                }
+                processed_conversations.append(conversation_info)
+                
+                audio_logger.info(f"📁 Completed processing file {file_index + 1}/{len(files)}: {file.filename}")
                     
             except Exception as e:
                 audio_logger.error(f"Error processing file {file.filename}: {e}")
                 continue
         
-        # For file uploads, wait for transcription processing to complete
-        # before closing the conversation to ensure we get results
-        
-        audio_logger.info(f"📁 File upload completed. Waiting for transcription to process {len(processed_files)} files...")
-        
-        # Wait for all chunks to be processed by the audio saver
-        # This ensures the transcription queue is populated
-        await asyncio.sleep(1.0)  # Give audio saver time to process chunks
-        
-        # Wait for transcription queue to be processed
-        max_wait_time = 120  # Maximum 2 minutes wait
-        wait_interval = 0.5  # Check every 500ms
-        elapsed_time = 0
-        
-        while elapsed_time < max_wait_time:
-            # Check if transcription queue is empty and processing is complete
-            if (client_state.transcription_queue.empty() and 
-                client_state.chunk_queue.empty()):
-                audio_logger.info(f"📁 Transcription processing completed for {client_id}")
-                break
-                
-            await asyncio.sleep(wait_interval)
-            elapsed_time += wait_interval
-            
-            # Log progress periodically
-            if elapsed_time % 10 == 0:  # Every 10 seconds
-                audio_logger.info(f"📁 Still processing transcription for {client_id} ({elapsed_time:.1f}s elapsed)")
-        
-        if elapsed_time >= max_wait_time:
-            audio_logger.warning(f"📁 Transcription processing timed out for {client_id} after {max_wait_time}s")
-        
-        # Now signal end of audio stream to close conversation properly
-        await client_state.chunk_queue.put(None)
-        
-        # Give a moment for cleanup to complete
-        await asyncio.sleep(0.5)
+        # All files have been processed individually
+        audio_logger.info(f"📁 Completed processing all {len(processed_files)} files with {len(processed_conversations)} conversations created")
         
         return {
-            "message": f"Successfully processed {len(processed_files)} audio files",
+            "message": f"Successfully processed {len(processed_files)} audio files into {len(processed_conversations)} separate conversations",
             "processed_files": processed_files,
-            "client_id": client_id,
-            "transcription_status": "completed" if elapsed_time < max_wait_time else "timed_out"
+            "conversations": processed_conversations,
+            "total_conversations_created": len(processed_conversations)
         }
         
     except Exception as e:

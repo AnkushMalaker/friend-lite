@@ -119,12 +119,12 @@ graph TB
 
 #### Authentication System (`auth.py`)
 - **FastAPI-Users Integration**: Complete user lifecycle management
-- **Dual Authentication**: Support for both email and 6-character user_id login
-- **Multi-Authentication**: JWT tokens, Google OAuth, and cookie-based sessions
+- **Email Authentication**: User authentication via email and password
+- **Multi-Authentication**: JWT tokens,  and cookie-based sessions
 - **Role-Based Access Control**: Admin vs regular user permissions with data isolation
 - **WebSocket Security**: Custom authentication for real-time connections with token/cookie support
-- **Admin User Bootstrap**: Automatic admin account creation with configurable user_id
-- **Client ID Generation**: Automatic `user_id-device_name` format for client identification
+- **Admin User Bootstrap**: Automatic admin account creation
+- **Client ID Generation**: Automatic `objectid_suffix-device_name` format for client identification
 
 #### Streamlit Dashboard (`streamlit_app.py`)
 - **User-Friendly Interface**: Complete web-based management interface
@@ -195,12 +195,12 @@ stateDiagram-v2
 
 #### User Management (`users.py`)
 - **Beanie ODM**: MongoDB document modeling with type safety
-- **User ID System**: 6-character alphanumeric user_id generation and validation
-- **Authentication Data**: Secure password hashing, email verification, dual login support
+- **User ID System**: MongoDB ObjectId-based user identification
+- **Authentication Data**: Secure password hashing, email verification, email-based login
 - **Profile Management**: User preferences, display names, and permissions
 - **Client Registration**: Tracking of registered clients per user with device names
 - **Data Ownership**: All data (conversations, memories, action items) associated via user_id
-- **Client ID Generation**: Helper functions for `user_id-device_name` format
+- **Client ID Generation**: Helper functions for `objectid_suffix-device_name` format
 
 #### Conversation Data Access (`ChunkRepo`)
 - **Audio Metadata**: File paths, timestamps, duration tracking
@@ -299,7 +299,6 @@ graph LR
 4. **Permission Tracking**: Dictionary-based client-user relationship management
 5. **Authorization**: Per-endpoint permission checking with simplified ownership validation
 6. **Data Isolation**: User-scoped data access via client ID mapping and ownership validation
-7. **OAuth Integration**: Optional Google OAuth for simplified login
 
 ## Security Architecture
 
@@ -325,7 +324,7 @@ graph LR
 ### Data Protection
 - **Encryption**: JWT token signing with configurable secret keys
 - **Password Security**: Bcrypt hashing with salt rounds
-- **User Identification**: 6-character alphanumeric user_id system with validation
+- **User Identification**: MongoDB ObjectId-based user system
 - **Data Isolation**: User ID validation on all data operations via client mapping
 - **Permission Efficiency**: Dictionary-based ownership checking instead of regex patterns
 - **Audit Logging**: Comprehensive request and authentication logging with user_id tracking

@@ -7,8 +7,7 @@ This module loads and manages memory extraction configuration from YAML files.
 import yaml
 import os
 import logging
-from typing import Dict, Any, List, Optional
-from pathlib import Path
+from typing import Dict, Any
 
 # Logger for configuration
 config_logger = logging.getLogger("memory_config")
@@ -55,6 +54,9 @@ class MemoryConfigLoader:
     
     def _get_default_config(self) -> Dict[str, Any]:
         """Return default configuration if file loading fails."""
+        # Get model from environment or use a fallback
+        default_model = os.getenv("OLLAMA_MODEL", "gemma3n:e4b")
+        
         return {
             "memory_extraction": {
                 "enabled": True,
@@ -62,7 +64,7 @@ class MemoryConfigLoader:
                 "llm_settings": {
                     "temperature": 0.1,
                     "max_tokens": 2000,
-                    "model": "llama3.1:latest"
+                    "model": default_model
                 }
             },
             "fact_extraction": {
@@ -71,7 +73,7 @@ class MemoryConfigLoader:
                 "llm_settings": {
                     "temperature": 0.0,
                     "max_tokens": 1500,
-                    "model": "llama3.1:latest"
+                    "model": default_model
                 }
             },
             "action_item_extraction": {
@@ -81,7 +83,7 @@ class MemoryConfigLoader:
                 "llm_settings": {
                     "temperature": 0.1,
                     "max_tokens": 1000,
-                    "model": "llama3.1:latest"
+                    "model": default_model
                 }
             },
             "categorization": {
@@ -91,7 +93,7 @@ class MemoryConfigLoader:
                 "llm_settings": {
                     "temperature": 0.2,
                     "max_tokens": 100,
-                    "model": "llama3.1:latest"
+                    "model": default_model
                 }
             },
             "quality_control": {
@@ -272,7 +274,7 @@ class MemoryConfigLoader:
         
         return False
     
-    def get_action_item_triggers(self) -> List[str]:
+    def get_action_item_triggers(self) -> list[str]:
         """Get action item trigger phrases."""
         return self.get_action_item_extraction_config().get("trigger_phrases", [])
     
@@ -287,7 +289,7 @@ class MemoryConfigLoader:
         
         return False
     
-    def get_categories(self) -> List[str]:
+    def get_categories(self) -> list[str]:
         """Get available categories for classification."""
         return self.get_categorization_config().get("categories", [])
     
