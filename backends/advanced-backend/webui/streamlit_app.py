@@ -928,7 +928,47 @@ else:
 
 # ---- Main Content ---- #
 logger.info("📋 Loading main dashboard tabs...")
-tab_convos, tab_mem, tab_users, tab_manage = st.tabs(["Conversations", "Memories", "User Management", "Conversation Management"])
+# Check if user is admin to show debug tab
+is_admin = False
+if st.session_state.get('authenticated', False):
+    user_info = st.session_state.get('user_info', {})
+    if isinstance(user_info, dict):
+        is_admin = user_info.get('is_superuser', False)
+    
+    # Check if the token has superuser privileges by trying an admin endpoint
+    if not is_admin:
+        try:
+            test_response = get_data("/api/users", require_auth=True)
+            if test_response and isinstance(test_response, list) and len(test_response) > 0:
+                # Find the current user in the response
+                current_user_email = user_info.get('email')
+                for user in test_response:
+                    if user.get('email') == current_user_email and user.get('is_superuser'):
+                        is_admin = True
+                        break
+            logger.info(f"🔧 Admin test via /api/users: response_length={len(test_response) if test_response else 0}, is_admin={is_admin}")
+        except Exception as e:
+            logger.warning(f"🔧 Admin test failed: {e}")
+
+# Debug: Show admin detection status
+if st.session_state.get('authenticated', False):
+    user_info = st.session_state.get('user_info', {})
+    st.sidebar.caption(f"🔧 Admin status: {'✅ Admin' if is_admin else '❌ Regular user'}")
+    # Add debug info to help troubleshoot
+    with st.sidebar.expander("🔧 Debug User Info", expanded=False):
+        st.write("User Info Type:", type(user_info))
+        if isinstance(user_info, dict):
+            st.write("is_superuser value:", user_info.get('is_superuser', 'NOT_FOUND'))
+            st.write("All user_info keys:", list(user_info.keys()) if user_info else "Empty dict")
+        st.write("Session authenticated:", st.session_state.get('authenticated', False))
+        st.write("Final is_admin:", is_admin)
+
+# Create tabs based on admin status
+if is_admin:
+    tab_convos, tab_mem, tab_users, tab_manage, tab_debug = st.tabs(["Conversations", "Memories", "User Management", "Conversation Management", "🔧 System State"])
+else:
+    tab_convos, tab_mem, tab_users, tab_manage = st.tabs(["Conversations", "Memories", "User Management", "Conversation Management"])
+    tab_debug = None  # Set to None for non-admin users
 
 with tab_convos:
     logger.debug("🗨️ Loading conversations tab...")
@@ -2224,3 +2264,258 @@ Authorization: Bearer {auth_token[:20]}...
         """)
         
         st.info("👆 **Log in using the sidebar** to get your authentication token for audio clients.")
+
+# System State Tab
+if tab_debug is not None:
+    with tab_debug:
+        st.header("🔧 System State & Failure Recovery")
+        st.caption("Real-time system monitoring and debug information")
+        
+        # Check authentication like other tabs
+        if not st.session_state.get('authenticated', False):
+            st.warning("🔒 Please log in to access system monitoring features")
+        else:
+            # Show immediate system status
+            st.info("💡 **Click the buttons below to load different system monitoring sections**")
+            
+            # Quick system status check (always visible)
+            with st.container():
+                st.subheader("⚡ Quick System Status")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    try:
+                        health_check = get_data("/health", require_auth=False)
+                        if health_check and health_check.get('overall_healthy'):
+                            st.success("✅ Backend Healthy")
+                            st.caption(f"Services: {list(health_check.get('services', {}).keys())}")
+                        else:
+                            st.error("❌ Backend Issues")
+                    except:
+                        st.error("❌ Backend Unreachable")
+                
+                with col2:
+                    try:
+                        active_clients = get_data("/api/active_clients", require_auth=True)
+                        if active_clients:
+                            client_count = len(active_clients.get('clients', []))
+                            st.metric("Active Clients", client_count)
+                        else:
+                            st.metric("Active Clients", "Error")
+                    except:
+                        st.metric("Active Clients", "Auth Error")
+                
+                with col3:
+                    st.success("✅ Authenticated")
+                    st.caption(f"User: {st.session_state.get('user_info', {}).get('email', 'Unknown')}")
+            
+            st.divider()
+            
+            # System Overview Section
+            st.subheader("📊 Detailed System Monitoring")
+            st.caption("Click buttons below to load specific monitoring data")
+            
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("📈 Load Debug Stats", key="load_debug_stats"):
+                    st.session_state['debug_stats_loaded'] = True
+            with col2:
+                if st.button("🔄 Refresh Debug Data", key="refresh_debug_data"):
+                    # Clear cached data to force refresh
+                    if 'debug_stats_loaded' in st.session_state:
+                        del st.session_state['debug_stats_loaded']
+                    if 'debug_sessions_loaded' in st.session_state:
+                        del st.session_state['debug_sessions_loaded']
+                    st.rerun()
+            
+            if st.session_state.get('debug_stats_loaded', False):
+                with st.spinner("Loading debug statistics..."):
+                    try:
+                        debug_stats = get_data("/api/debug/memory/stats", require_auth=True)
+                        
+                        if debug_stats:
+                            stats = debug_stats.get('stats', {})
+                            
+                            st.success("✅ Memory processing statistics loaded successfully")
+                            
+                            # Display key metrics
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Total Sessions", stats.get('total_sessions', 0))
+                            with col2:
+                                success_rate = stats.get('success_rate', 0) or 0
+                                st.metric("Success Rate", f"{success_rate:.1f}%", 
+                                         delta=f"{'✅' if success_rate > 80 else '⚠️' if success_rate > 50 else '❌'}")
+                            with col3:
+                                avg_time = stats.get('avg_processing_time_seconds', 0) or 0
+                                st.metric("Avg Processing Time", f"{avg_time:.2f}s")
+                            with col4:
+                                failed = stats.get('failed_sessions', 0) or 0
+                                st.metric("Failed Sessions", failed, 
+                                         delta=f"{'✅' if failed == 0 else '⚠️'}")
+                            
+                            # Show additional metrics
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Total Memories", stats.get('total_memories', 0) or 0)
+                            with col2:
+                                st.metric("Successful Sessions", stats.get('successful_sessions', 0) or 0)
+                            with col3:
+                                memories_per_session = stats.get('memories_per_session', 0) or 0
+                                st.metric("Memories per Session", f"{memories_per_session:.1f}")
+                            
+                            # Show detailed stats
+                            with st.expander("📋 Detailed Statistics", expanded=False):
+                                st.json(stats)
+                        else:
+                            st.error("❌ Failed to load debug statistics - No data received")
+                            st.caption("This could indicate an authentication issue or the debug endpoint is not available")
+                    except Exception as e:
+                        st.error(f"❌ Error loading debug statistics: {str(e)}")
+                        st.caption("Check the backend logs for more details")
+            
+            st.divider()
+            
+            # Recent Sessions Section
+            st.subheader("📝 Recent Memory Sessions")
+            
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                session_limit = st.number_input("Number of sessions to load:", min_value=5, max_value=100, value=20, step=5)
+            with col2:
+                if st.button("📋 Load Recent Sessions", key="load_debug_sessions"):
+                    st.session_state['debug_sessions_loaded'] = True
+            
+            if st.session_state.get('debug_sessions_loaded', False):
+                with st.spinner("Loading recent memory sessions..."):
+                    debug_sessions = get_data(f"/api/debug/memory/sessions?limit={session_limit}", require_auth=True)
+                    
+                    if debug_sessions:
+                        sessions = debug_sessions.get('sessions', [])
+                        
+                        if sessions:
+                            st.success(f"✅ Loaded {len(sessions)} memory sessions")
+                            
+                            # Display sessions in a table
+                            session_data = []
+                            for session in sessions:
+                                session_data.append({
+                                    "Audio UUID": session.get('audio_uuid', 'N/A')[:12] + "...",
+                                    "User ID": session.get('user_id', 'N/A')[:12] + "...",
+                                    "Status": session.get('status', 'unknown'),
+                                    "Processing Time": f"{session.get('processing_time', 0):.2f}s",
+                                    "Transcript Length": session.get('transcript_length', 0),
+                                    "Memory Count": session.get('memory_count', 0),
+                                    "Created": session.get('created_at', 'N/A')[:19] if session.get('created_at') else 'N/A'
+                                })
+                            
+                            df = pd.DataFrame(session_data)
+                            st.dataframe(df, use_container_width=True)
+                        else:
+                            st.info("No memory sessions found")
+                    else:
+                        st.error("Failed to load memory sessions")
+            
+            st.divider()
+            
+            # Failure Recovery Section  
+            st.subheader("🛠️ Failure Recovery System")
+            
+            if st.button("📊 Load System Overview", key="load_system_overview"):
+                with st.spinner("Loading failure recovery system overview..."):
+                    try:
+                        system_overview = get_data("/api/failure-recovery/system-overview", require_auth=True)
+                        
+                        if system_overview:
+                            st.success("✅ Failure recovery system data loaded successfully")
+                            
+                            # Overall system status
+                            system_status = system_overview.get('system_status', 'unknown')
+                            if system_status == 'healthy':
+                                st.success(f"🟢 System Status: **{system_status.upper()}**")
+                            elif system_status == 'degraded':
+                                st.warning(f"🟡 System Status: **{system_status.upper()}**")
+                            else:
+                                st.error(f"🔴 System Status: **{system_status.upper()}**")
+                            
+                            # Display key metrics from summary
+                            summary = system_overview.get('summary', {})
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Queue Items", summary.get('total_queue_items', 0))
+                            with col2:
+                                healthy = summary.get('healthy_services', 0)
+                                total = summary.get('total_services', 0)
+                                st.metric("Service Health", f"{healthy}/{total}", 
+                                         delta=f"{'✅' if healthy == total else '⚠️'}")
+                            with col3:
+                                st.metric("Open Circuits", summary.get('open_circuits', 0))
+                            with col4:
+                                recoveries = summary.get('recoveries_successful', 0)
+                                attempted = summary.get('recoveries_attempted', 0)
+                                if attempted > 0:
+                                    recovery_rate = (recoveries / attempted) * 100
+                                    st.metric("Recovery Rate", f"{recovery_rate:.1f}%")
+                                else:
+                                    st.metric("Recovery Rate", "N/A")
+                            
+                            # Detailed overview
+                            with st.expander("📋 Complete System Overview Data", expanded=False):
+                                st.json(system_overview)
+                        else:
+                            st.error("❌ Failed to load system overview - No data received")
+                    except Exception as e:
+                        st.error(f"❌ Error loading system overview: {str(e)}")
+            
+            # Service Health
+            st.subheader("🏥 Service Health")
+            
+            if st.button("🔍 Check Service Health", key="check_service_health"):
+                with st.spinner("Checking service health..."):
+                    health_data = get_data("/api/failure-recovery/health", require_auth=True)
+                    
+                    if health_data:
+                        services = health_data.get('services', {})
+                        
+                        # Display service status
+                        cols = st.columns(min(len(services), 4))
+                        for i, (service, status) in enumerate(services.items()):
+                            with cols[i % 4]:
+                                if status.get('status') == 'healthy':
+                                    st.success(f"✅ {service}")
+                                    st.caption(f"⏱️ {status.get('response_time', 0)*1000:.1f}ms")
+                                else:
+                                    st.error(f"❌ {service}")
+                                    failures = status.get('consecutive_failures', 0)
+                                    st.caption(f"🔄 {failures} failures")
+                        
+                        # Detailed health info
+                        with st.expander("🏥 Detailed Health Information", expanded=False):
+                            st.json(health_data)
+                    else:
+                        st.error("Failed to check service health")
+            
+            st.divider()
+            
+            # Help Section
+            st.subheader("📚 Debug API Reference")
+            
+            with st.expander("🔗 Available Debug Endpoints", expanded=False):
+                st.markdown("""
+                **Memory Debug APIs:**
+                - `GET /api/debug/memory/stats` - Memory processing statistics
+                - `GET /api/debug/memory/sessions` - Recent memory sessions
+                - `GET /api/debug/memory/session/{uuid}` - Session details
+                - `GET /api/debug/memory/config` - Memory configuration
+                - `GET /api/debug/memory/pipeline/{uuid}` - Processing pipeline trace
+                
+                **Failure Recovery APIs:**
+                - `GET /api/failure-recovery/system-overview` - System overview
+                - `GET /api/failure-recovery/queue-stats` - Queue statistics  
+                - `GET /api/failure-recovery/health` - Service health
+                - `GET /api/failure-recovery/circuit-breakers` - Circuit breaker status
+                
+                All endpoints require authentication.
+                """)
+                
+            st.info("💡 **Tip**: Use these debug tools to monitor system performance and troubleshoot issues with memory extraction and failure recovery.")

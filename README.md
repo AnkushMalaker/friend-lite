@@ -109,6 +109,7 @@ Choose one based on your needs:
 - Requires multiple services (MongoDB, Qdrant, Ollama)
 - Higher resource requirements
 - Steeper learning curve
+- Authentication setup required
 
 ---
 

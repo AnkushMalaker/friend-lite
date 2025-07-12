@@ -23,3 +23,5 @@ transcription_results.csv
 **/speaker_data/**
 **/.venv/*
 **metrics_report**
+
+*.db

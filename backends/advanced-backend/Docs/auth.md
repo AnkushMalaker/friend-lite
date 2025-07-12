@@ -172,7 +172,6 @@ AUTH_SECRET_KEY=your-super-secret-jwt-key-here-make-it-long-and-random
 
 # Admin user credentials
 ADMIN_PASSWORD=your-secure-admin-password
-ADMIN_USERNAME=admin
 ADMIN_EMAIL=admin@example.com
 ```
 
@@ -248,7 +247,6 @@ COOKIE_SECURE=true
 ```bash
 # Create admin during startup
 ADMIN_PASSWORD=secure_admin_password
-ADMIN_USERNAME=admin
 ADMIN_EMAIL=admin@yourdomain.com
 ```
 
@@ -303,7 +301,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/users/me
 1. **Update Environment Variables**
    ```bash
    # Old
-   AUTH_USERNAME=abc123  # Custom user_id
+   AUTH_USERNAME=abc123  # Custom user_id (deprecated)
    
    # New
    AUTH_USERNAME=user@example.com  # Email address only

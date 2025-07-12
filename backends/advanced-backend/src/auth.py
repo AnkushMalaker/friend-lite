@@ -40,16 +40,8 @@ SECRET_KEY = _verify_configured("AUTH_SECRET_KEY")
 COOKIE_SECURE = _verify_configured("COOKIE_SECURE", optional=True) == "true"
 
 # Admin user configuration
-ADMIN_USERNAME = _verify_configured("ADMIN_USERNAME", optional=True) or "admin"
 ADMIN_PASSWORD = _verify_configured("ADMIN_PASSWORD")
-ADMIN_EMAIL = _verify_configured("ADMIN_EMAIL", optional=True) or f"{ADMIN_USERNAME}@example.com"
-
-# Check admin configuration
-if ADMIN_PASSWORD:
-    print(f"✅ Admin user configured: {ADMIN_USERNAME}")
-else:
-    print("⚠️ ADMIN_PASSWORD not set - admin user will not be created automatically")
-    print("   Set ADMIN_PASSWORD in environment to enable automatic admin creation")
+ADMIN_EMAIL = _verify_configured("ADMIN_EMAIL", optional=True) or "admin@example.com"
 
 
 class UserManager(BaseUserManager[User, PydanticObjectId]):

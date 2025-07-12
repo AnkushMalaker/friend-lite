@@ -12,11 +12,10 @@ import logging
 import os
 import time
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from mem0 import Memory
-import ollama
 
 # Import debug tracker and config loader
 from memory_debug import get_debug_tracker
@@ -26,6 +25,18 @@ from memory_config_loader import get_config_loader
 # Set default to False for privacy unless explicitly enabled
 if not os.getenv("MEM0_TELEMETRY"):
     os.environ["MEM0_TELEMETRY"] = "False"
+
+# Enable detailed mem0 logging to capture LLM responses
+mem0_logger = logging.getLogger("mem0")
+mem0_logger.setLevel(logging.DEBUG)
+
+# Also enable detailed ollama client logging
+ollama_logger = logging.getLogger("ollama")
+ollama_logger.setLevel(logging.DEBUG)
+
+# Enable httpx logging to see raw HTTP requests/responses to Ollama
+httpx_logger = logging.getLogger("httpx")
+httpx_logger.setLevel(logging.DEBUG)
 
 # Logger for memory operations
 memory_logger = logging.getLogger("memory_service")
@@ -46,71 +57,99 @@ MEMORY_INIT_TIMEOUT_SECONDS = 60  # Timeout for memory initialization
 # Thread pool for blocking operations
 _MEMORY_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="memory_ops")
 
-# Global memory configuration
-MEM0_CONFIG = {
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": "llama3.1:latest",
-            "ollama_base_url": OLLAMA_BASE_URL,
-            "temperature": 0,
-            "max_tokens": 2000,
+def _build_mem0_config() -> dict:
+    """Build Mem0 configuration from YAML config and environment variables."""
+    config_loader = get_config_loader()
+    memory_config = config_loader.get_memory_extraction_config()
+    fact_config = config_loader.get_fact_extraction_config()
+    llm_settings = memory_config.get("llm_settings", {})
+    
+    # Get LLM provider from environment or config
+    llm_provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+    
+    # Build LLM configuration based on provider
+    if llm_provider == "openai":
+        llm_config = {
+            "provider": "openai",
+            "config": {
+                "model": llm_settings.get("model", "gpt-4o-mini"),
+                "api_key": os.getenv("OPENAI_API_KEY"),
+                "temperature": llm_settings.get("temperature", 0.1),
+                "max_tokens": llm_settings.get("max_tokens", 2000),
+            },
+        }
+        # For OpenAI, use OpenAI embeddings
+        embedder_config = {
+            "provider": "openai",
+            "config": {
+                "model": "text-embedding-3-small",
+                "embedding_dims": 1536,
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+        }
+        embedding_dims = 1536
+    else:  # Default to ollama
+        llm_config = {
+            "provider": "ollama",
+            "config": {
+                "model": llm_settings.get("model", "gemma3n:e4b"),
+                "ollama_base_url": OLLAMA_BASE_URL,
+                "temperature": llm_settings.get("temperature", 0.1),
+                "max_tokens": llm_settings.get("max_tokens", 2000),
+            },
+        }
+        # For Ollama, use Ollama embeddings
+        embedder_config = {
+            "provider": "ollama",
+            "config": {
+                "model": "nomic-embed-text:latest",
+                "embedding_dims": 768,
+                "ollama_base_url": OLLAMA_BASE_URL,
+            },
+        }
+        embedding_dims = 768
+    
+    mem0_config = {
+        "llm": llm_config,
+        "embedder": embedder_config,
+        "vector_store": {
+            "provider": "qdrant",
+            "config": {
+                "collection_name": "omi_memories",
+                "embedding_model_dims": embedding_dims,
+                "host": QDRANT_BASE_URL,
+                "port": 6333,
+            },
         },
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": "nomic-embed-text:latest",
-            "embedding_dims": 768,
-            "ollama_base_url": OLLAMA_BASE_URL,
-        },
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "collection_name": "omi_memories",
-            "embedding_model_dims": 768,
-            "host": QDRANT_BASE_URL,
-            "port": 6333,
-        },
-    },
-    "custom_prompt": (
-        "Extract anything relevant about this conversation. "
-        "Anything from what the conversation was about, the people involved, emotion, etc. In each memory, include: No calls mentioned if no call was mentioned."
-    ),
-    # "custom_fact_extraction_prompt": (
-    #     "Extract anything relevant about this conversation. "
-    #     "Anything from what the conversation was about, the people involved, emotion, etc."
-    # ),
+        "custom_prompt": memory_config.get("prompt", 
+            "Extract anything relevant about this conversation. "
+            "Anything from what the conversation was about, the people involved, emotion, etc. In each memory, include: No calls mentioned if no call was mentioned."
+        ),
+    }
+    
+    # Configure fact extraction based on YAML config
+    fact_enabled = config_loader.is_fact_extraction_enabled()
+    memory_logger.info(f"Fact extraction enabled: {fact_enabled}")
+    
+    if fact_enabled:
+        fact_prompt = fact_config.get("prompt", "Extract specific facts from this conversation.")
+        mem0_config["custom_fact_extraction_prompt"] = fact_prompt
+        memory_logger.info(f"Fact extraction enabled with prompt: {fact_prompt[:50]}...")
+    else:
+        # Disable fact extraction completely - multiple approaches
+        mem0_config["custom_fact_extraction_prompt"] = ""
+        mem0_config["fact_retrieval"] = False  # Disable fact retrieval
+        mem0_config["enable_fact_extraction"] = False  # Explicit disable
+        memory_logger.info("Fact extraction disabled - empty prompt and flags set")
+    
+    memory_logger.debug(f"Final mem0_config: {json.dumps(mem0_config, indent=2)}")
+    return mem0_config
 
-}
+# Global memory configuration - built dynamically from YAML config
+MEM0_CONFIG = _build_mem0_config()
 
-# Action item extraction configuration
-ACTION_ITEM_EXTRACTION_PROMPT = """
-You are an AI assistant specialized in extracting actionable tasks from meeting transcripts and conversations.
-
-Analyze the following conversation transcript and extract all action items, tasks, and commitments mentioned.
-
-For each action item you find, return a JSON object with these fields:
-- "description": A clear, specific description of the task
-- "assignee": The person responsible (use "unassigned" if not specified)
-- "due_date": The deadline if mentioned (use "not_specified" if not mentioned)
-- "priority": The urgency level ("high", "medium", "low", or "not_specified")
-- "status": Always set to "open" for new items
-- "context": A brief context about when/why this was mentioned
-
-Return ONLY a valid JSON array of action items. If no action items are found, return an empty array [].
-
-Examples of action items to look for:
-- "I'll send you the report by Friday"
-- "We need to schedule a follow-up meeting"
-- "Can you review the document before tomorrow?"
-- "Let's get that bug fixed"
-- "I'll call the client next week"
-
-Transcript:
-{transcript}
-"""
+# Action item extraction is now handled by ActionItemsService
+# using configuration from memory_config.yaml
 
 # Global instances
 _memory_service = None
@@ -152,7 +191,14 @@ def _init_process_memory():
     """Initialize memory instance once per worker process."""
     global _process_memory
     if _process_memory is None:
-        _process_memory = Memory.from_config(MEM0_CONFIG)
+        # Build fresh config to ensure we get latest YAML settings
+        config = _build_mem0_config()
+        # Log config in chunks to avoid truncation
+        memory_logger.info("=== MEM0 CONFIG START ===")
+        for key, value in config.items():
+            memory_logger.info(f"  {key}: {json.dumps(value, indent=4)}")
+        memory_logger.info("=== MEM0 CONFIG END ===")
+        _process_memory = Memory.from_config(config)
     return _process_memory
 
 
@@ -203,26 +249,152 @@ def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str, user_
         # Use configured prompt or default
         prompt = memory_config.get("prompt", "Please extract summary of the conversation - any topics or names")
         
-        # Add the memory with configured settings
-        result = process_memory.add(
-            transcript,
-            user_id=user_id,  # Use database user_id instead of client_id
-            metadata={
-                "source": "offline_streaming",
-                "client_id": client_id,  # Store client_id in metadata
-                "user_email": user_email,  # Store user email for easy identification
-                "audio_uuid": audio_uuid,
-                "timestamp": int(time.time()),
-                "conversation_context": "audio_transcription",
-                "device_type": "audio_recording",
-                "organization_id": MEM0_ORGANIZATION_ID,
-                "project_id": MEM0_PROJECT_ID,
-                "app_id": MEM0_APP_ID,
-                "extraction_method": "configurable",
-                "config_enabled": True,
-            },
-            prompt=prompt
-        )
+        # Get LLM settings for logging and testing
+        llm_settings = memory_config.get("llm_settings", {})
+        model_name = llm_settings.get('model', 'gemma3n:e4b')
+        
+        # Add the memory with configured settings and error handling
+        memory_logger.info(f"Adding memory for {audio_uuid} with prompt: {prompt[:100]}...")
+        memory_logger.info(f"Transcript length: {len(transcript)} chars")
+        memory_logger.info(f"Transcript preview: {transcript[:300]}...")
+        
+        # Check if transcript meets quality control
+        if len(transcript.strip()) < 10:
+            memory_logger.warning(f"Very short transcript for {audio_uuid}: '{transcript}'")
+        
+        
+        # Log LLM model being used
+        memory_logger.info(f"Using LLM model: {model_name}")
+        
+        # Test LLM directly before mem0 processing
+        try:
+            import ollama
+            test_prompt = f"{prompt}\n\nConversation:\n{transcript[:500]}..."
+            memory_logger.info(f"Testing LLM directly with prompt: {test_prompt[:200]}...")
+            
+            # Use the same Ollama URL as configured for mem0
+            client = ollama.Client(host=OLLAMA_BASE_URL)
+            response = client.chat(
+                model=model_name,
+                messages=[{'role': 'user', 'content': test_prompt}]
+            )
+            
+            raw_response = response.get('message', {}).get('content', 'No content')
+            memory_logger.info(f"Raw LLM response: {raw_response}")
+            memory_logger.info(f"LLM response length: {len(raw_response)} chars")
+            
+            # Log the full response to see what gemma3n:e4b is generating
+            memory_logger.debug(f"Full LLM response: {raw_response}")
+            
+        except Exception as llm_test_error:
+            memory_logger.error(f"Direct LLM test failed: {llm_test_error}")
+        
+        memory_logger.info(f"Starting mem0 processing for {audio_uuid}...")
+        mem0_start_time = time.time()
+        
+        try:
+            result = process_memory.add(
+                transcript,
+                user_id=user_id,  # Use database user_id instead of client_id
+                metadata={
+                    "source": "offline_streaming",
+                    "client_id": client_id,  # Store client_id in metadata
+                    "user_email": user_email,  # Store user email for easy identification
+                    "audio_uuid": audio_uuid,
+                    "timestamp": int(time.time()),
+                    "conversation_context": "audio_transcription",
+                    "device_type": "audio_recording",
+                    "organization_id": MEM0_ORGANIZATION_ID,
+                    "project_id": MEM0_PROJECT_ID,
+                    "app_id": MEM0_APP_ID,
+                    "extraction_method": "configurable",
+                    "config_enabled": True,
+                },
+                prompt=prompt
+            )
+            
+            mem0_duration = time.time() - mem0_start_time
+            memory_logger.info(f"Mem0 processing completed in {mem0_duration:.2f}s")
+            memory_logger.info(f"Successfully added memory for {audio_uuid}, result type: {type(result)}")
+            
+            # Log detailed memory result to understand what's being stored
+            memory_logger.info(f"Raw mem0 result for {audio_uuid}: {result}")
+            memory_logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'not a dict'}")
+            
+            # Check if mem0 returned empty results
+            if isinstance(result, dict) and result.get('results') == []:
+                memory_logger.error(f"Mem0 returned empty results for {audio_uuid} - LLM may not be generating memories")
+                raise Exception(f"Empty results from mem0 - LLM '{model_name}' returned no memories")
+            
+            if isinstance(result, dict):
+                results_list = result.get('results', [])
+                if results_list:
+                    memory_count = len(results_list)
+                    memory_logger.info(f"Successfully created {memory_count} memories for {audio_uuid}")
+                    
+                    # Log details of each memory
+                    for i, memory_item in enumerate(results_list):
+                        memory_id = memory_item.get('id', 'unknown')
+                        memory_text = memory_item.get('memory', 'unknown')
+                        event_type = memory_item.get('event', 'unknown')
+                        memory_logger.info(f"Memory {i+1}: ID={memory_id[:8]}..., Event={event_type}, Text={memory_text[:80]}...")
+                else:
+                    # Check for old format (direct id/memory keys)
+                    memory_id = result.get("id", result.get("memory_id", "unknown"))
+                    memory_text = result.get("memory", result.get("text", result.get("content", "unknown")))
+                    memory_logger.info(f"Single memory - ID: {memory_id}, Text: {memory_text[:100] if isinstance(memory_text, str) else memory_text}...")
+                
+                memory_logger.info(f"Memory metadata: {result.get('metadata', {})}")
+                
+                # Check for other possible keys in result
+                for key, value in result.items():
+                    if key not in ['results', 'id', 'memory', 'metadata']:
+                        memory_logger.info(f"Additional result key '{key}': {str(value)[:100]}...")
+            else:
+                memory_logger.info(f"Memory result (non-dict): {str(result)[:200]}...")
+            
+            memory_logger.debug(f"Full memory result for {audio_uuid}: {result}")
+        except (json.JSONDecodeError, Exception) as error:
+            # Handle JSON parsing errors and other mem0 errors
+            error_msg = str(error)
+            memory_logger.error(f"Mem0 error for {audio_uuid}: {error} (type: {type(error)})")
+            
+            if "UNIQUE constraint failed" in error_msg:
+                memory_logger.error(f"Database constraint error for {audio_uuid}: {error}")
+                error_type = "database_constraint_error"
+            elif "Empty results from mem0" in error_msg:
+                memory_logger.error(f"LLM returned empty results for {audio_uuid}: {error}")
+                error_type = "empty_llm_results"
+            elif "Expecting ':' delimiter" in error_msg or "JSONDecodeError" in str(type(error)) or "Unterminated string" in error_msg:
+                memory_logger.error(f"JSON parsing error in mem0 for {audio_uuid}: {error}")
+                error_type = "json_parsing_error"
+            elif "'facts'" in error_msg:
+                memory_logger.error(f"Fact extraction error (should be disabled) for {audio_uuid}: {error}")
+                error_type = "fact_extraction_error"
+            else:
+                memory_logger.error(f"General mem0 processing error for {audio_uuid}: {error}")
+                error_type = "mem0_processing_error"
+            
+            # Create a fallback memory entry 
+            try:
+                # Store the transcript as a basic memory without using mem0
+                result = {
+                    "id": f"fallback_{audio_uuid}_{int(time.time())}",
+                    "memory": f"Conversation summary: {transcript[:500]}{'...' if len(transcript) > 500 else ''}",
+                    "metadata": {
+                        "fallback_reason": error_type,
+                        "original_error": str(error),
+                        "audio_uuid": audio_uuid,
+                        "client_id": client_id,
+                        "user_email": user_email,
+                        "timestamp": int(time.time()),
+                        "mem0_bypassed": True
+                    }
+                }
+                memory_logger.warning(f"Created fallback memory for {audio_uuid} due to mem0 error: {error_type}")
+            except Exception as fallback_error:
+                memory_logger.error(f"Failed to create fallback memory for {audio_uuid}: {fallback_error}")
+                raise error  # Re-raise original error if fallback fails
         
         # Record debug information
         if session_id:
@@ -314,8 +486,10 @@ class MemoryService:
             
             # Initialize main memory instance with timeout protection
             loop = asyncio.get_running_loop()
+            # Build fresh config to ensure we get latest YAML settings
+            config = _build_mem0_config()
             self.memory = await asyncio.wait_for(
-                loop.run_in_executor(_MEMORY_EXECUTOR, Memory.from_config, MEM0_CONFIG),
+                loop.run_in_executor(_MEMORY_EXECUTOR, Memory.from_config, config),
                 timeout=MEMORY_INIT_TIMEOUT_SECONDS
             )
             self._initialized = True

@@ -243,15 +243,15 @@ def get_important_memories(self, user_id: str):
 The system maintains a mapping between client IDs and database users:
 
 ```python
-# Client ID format: user_id-device_name
-client_id = "abc123-laptop"  # Maps to user_id="abc123"
+# Client ID format: objectid_suffix-device_name
+client_id = "cd7994-laptop"  # Maps to user_id="507f1f77bcf86cd799439011" (ObjectId)
 
-# Memory storage uses database user_id
+# Memory storage uses database user_id (full ObjectId)
 process_memory.add(
     transcript,
-    user_id="abc123",  # Database user_id
+    user_id="507f1f77bcf86cd799439011",  # Database user_id (MongoDB ObjectId)
     metadata={
-        "client_id": "abc123-laptop",  # Client reference
+        "client_id": "cd7994-laptop",  # Client reference
         "user_email": "user@example.com",
         # ... other metadata
     }

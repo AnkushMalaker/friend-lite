@@ -4,7 +4,14 @@
 
 ## Overview
 
-Friend-Lite is a real-time conversation processing system that captures audio, transcribes speech, extracts memories, and generates action items. The system includes a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard, and comprehensive user management.
+Friend-Lite is an eco-system of services to support "AI wearable" agents/functionality.
+At the moment, the basic functionalities are:
+- Audio capture (via WebSocket, from OMI device, files, or a laptop)
+- Audio transcription
+- Memory extraction
+- Action item extraction
+- Streamlit web dashboard
+- Basic user management
 
 **Core Implementation**: See `src/main.py` for the complete FastAPI application and WebSocket handling.
 
@@ -18,38 +25,11 @@ Friend-Lite is a real-time conversation processing system that captures audio, t
 
 ### 1. Environment Setup
 
-Create a `.env` file in `backends/advanced-backend/`:
-
-```bash
-# Required Authentication
-AUTH_SECRET_KEY=your-super-secret-jwt-key-here-make-it-long-and-random
-ADMIN_PASSWORD=your-secure-admin-password
-
-# Optional Configuration
-ADMIN_USERNAME=admin
-ADMIN_EMAIL=admin@example.com
-COOKIE_SECURE=false
-
-# Required for Memory Processing (if using Ollama)
-OLLAMA_BASE_URL=http://ollama:11434 # if within same compose build, can access by container name
-
-# ASR Configuration (choose one)
-DEEPGRAM_API_KEY=your-deepgram-api-key
-# OR for self-hosted ASR
-OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765 # if within same compose build, can access by container name, or here, for example another docker container running on the same machine but different compose (thus network)
-
-# Optional Google OAuth
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-
-# Optional Services
-HF_TOKEN=your-huggingface-token # For speaker service
-NGROK_AUTHTOKEN=your-ngrok-token
-```
+Copy the `.env.template` file to `.env` and fill in the values. The commented values are optional.
 
 ### 2. Start the System
 
-**Recommended: Docker Compose (using uv)**
+**Recommended: Docker Compose**
 ```bash
 cd backends/advanced-backend
 docker compose up --build -d
@@ -75,7 +55,6 @@ For self-hosted speech recognition, see instructions in `extras/asr-services/`:
 1. Open `http://localhost:8501`
 2. **Login** using the sidebar:
    - **Admin**: `admin@example.com` / `your-admin-password`
-   - **Google OAuth** (if configured)
    - **Create new users** via admin interface
 
 ### Dashboard Features
@@ -100,25 +79,20 @@ ws://your-server-ip:8000/ws_pcm?token=YOUR_JWT_TOKEN&device_name=YOUR_DEVICE_NAM
 ```
 
 **Authentication Methods:**
-The system supports authentication with either email or 6-character user_id. The backend automatically detects the format:
+The system uses email-based authentication with JWT tokens:
 
 ```bash
-# Login with email (admin user)
+# Login with email
 curl -X POST "http://localhost:8000/auth/jwt/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin@example.com&password=your-admin-password"
-
-# Login with user_id (6-character alphanumeric)
-curl -X POST "http://localhost:8000/auth/jwt/login" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=abc123&password=user-password"
 
 # Response: {"access_token": "eyJhbGciOiJIUzI1NiIs...", "token_type": "bearer"}
 ```
 
 **Authentication Flow:**
 1. **User Registration**: Admin creates users via API or dashboard
-2. **Login**: Users authenticate with email or user_id
+2. **Login**: Users authenticate with email and password
 3. **Token Usage**: Include JWT token in API calls and WebSocket connections
 4. **Data Access**: Users can only access their own data (admins see all)
 
@@ -128,21 +102,18 @@ For detailed authentication documentation, see [`auth.md`](./auth.md).
 ```bash
 export ADMIN_TOKEN="your-admin-token"
 
-# Create user with auto-generated user_id
+# Create user
 curl -X POST "http://localhost:8000/api/create_user" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@example.com", "password": "userpass", "display_name": "John Doe"}'
 
-# Create user with specific user_id (6 chars, lowercase alphanumeric)
-curl -X POST "http://localhost:8000/api/create_user" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "userpass", "user_id": "user01", "display_name": "John Doe"}'
+# Response includes the user_id (MongoDB ObjectId)
+# {"message": "User user@example.com created successfully", "user": {"id": "507f1f77bcf86cd799439011", ...}}
 ```
 
 **Client ID Format:**
-The system automatically generates client IDs as `user_id-device_name` (e.g., `abc123-phone`, `admin-desktop`). This ensures proper user-client association and data isolation.
+The system automatically generates client IDs using the last 6 characters of the MongoDB ObjectId plus device name (e.g., `439011-phone`, `439011-desktop`). This ensures proper user-client association and data isolation.
 
 ## Add Existing Data
 
@@ -231,12 +202,11 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 - **Debug Tracking**: `src/memory_debug.py` + API endpoints at `/api/debug/memory/*`
 
 ### Authentication & Security
-- **Flexible Authentication**: Login with either email or 6-character user_id
+- **Email Authentication**: Login with email and password
 - **JWT tokens**: Secure API and WebSocket authentication with 1-hour expiration
-- **Google OAuth**: Optional social login integration
 - **Role-based access**: Admin vs regular user permissions
 - **Data isolation**: Users can only access their own data
-- **Client ID Management**: Automatic client-user association via `user_id-device_name` format
+- **Client ID Management**: Automatic client-user association via `objectid_suffix-device_name` format
 - **Multi-device support**: Single user can connect multiple devices
 - **Security headers**: Proper CORS, cookie security, and token validation
 
@@ -261,7 +231,7 @@ For ESP32 audio streaming using the HAVPE relay (`extras/havpe-relay/`):
 
 ```bash
 # Environment variables for HAVPE relay
-export AUTH_USERNAME="abc123"                 # Can be email or user_id
+export AUTH_USERNAME="user@example.com"       # Email address
 export AUTH_PASSWORD="your-password"
 export DEVICE_NAME="havpe"                    # Device identifier
 
@@ -271,16 +241,12 @@ python main.py --backend-url http://your-server:8000 --backend-ws-url ws://your-
 ```
 
 The relay will automatically:
-- Authenticate using `AUTH_USERNAME` (email or 6-character user_id)
-- Generate client ID as `user_id-havpe`
+- Authenticate using `AUTH_USERNAME` (email address)
+- Generate client ID as `objectid_suffix-havpe`
 - Forward ESP32 audio to the backend with proper authentication
 - Handle token refresh and reconnection
 
 ## Development tip
-docker compose down && docker compose up --build -d && docker compose logs friend-backend -f
-lmao
-Once the build is cached it takes 29 seconds on my rasp pi 4, thats enough delay I think. 
-If you would like to use the debugger, you can use the following command:
 uv sync --group (whatever group you want to sync) 
 (for example, deepgram, etc.)
 
@@ -324,21 +290,91 @@ For detailed information, see [User Data Architecture](user-data-architecture.md
 
 ## Memory & Action Item Configuration
 
-The system supports configurable memory and action item extraction via `memory_config.yaml`:
+The system uses **centralized configuration** via `memory_config.yaml` for all memory and action item extraction settings. All hardcoded values have been removed from the code to ensure consistent, configurable behavior.
 
-### Basic Configuration
+### Configuration File Location
+- **Path**: `backends/advanced-backend/memory_config.yaml`
+- **Hot-reload**: Changes are applied on next processing cycle (no restart required)
+- **Fallback**: If file is missing, system uses safe defaults with environment variables
+
+### LLM Provider & Model Configuration
+
+The system supports **multiple LLM providers** - configure via environment variables:
+
+```bash
+# In your .env file
+LLM_PROVIDER=ollama          # Options: "ollama" or "openai"
+OLLAMA_MODEL=gemma3n:e4b     # Fallback if YAML config fails to load
+
+# For OpenAI (when LLM_PROVIDER=openai)
+OPENAI_API_KEY=your-openai-api-key
+```
+
+**YAML Configuration** (provider-specific models):
 ```yaml
-# Enable/disable different extraction types
 memory_extraction:
   enabled: true
-  
+  prompt: |
+    Extract anything relevant about this conversation that would be valuable to remember.
+    Focus on key topics, people, decisions, dates, and emotional context.
+  llm_settings:
+    # Model selection based on LLM_PROVIDER:
+    # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
+    # - OpenAI: "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    model: "gemma3n:e4b"
+    temperature: 0.1
+    max_tokens: 2000
+
+fact_extraction:
+  enabled: false  # Disabled to avoid JSON parsing issues
+  llm_settings:
+    model: "gemma3n:e4b"  # Auto-switches based on LLM_PROVIDER
+    temperature: 0.0  # Lower for factual accuracy
+    max_tokens: 1500
+
 action_item_extraction:
   enabled: true
   trigger_phrases:
     - "simon says"
-    - "action item"
+    - "action item" 
     - "todo"
     - "follow up"
+    - "next step"
+    - "homework"
+    - "deliverable"
+  llm_settings:
+    model: "gemma3n:e4b"  # Auto-switches based on LLM_PROVIDER
+    temperature: 0.1
+    max_tokens: 1000
+```
+
+**Provider-Specific Behavior:**
+- **Ollama**: Uses local models with Ollama embeddings (nomic-embed-text)
+- **OpenAI**: Uses OpenAI models with OpenAI embeddings (text-embedding-3-small)
+- **Embeddings**: Automatically selected based on provider (768 dims for Ollama, 1536 for OpenAI)
+
+### Quality Control Settings
+```yaml
+quality_control:
+  min_conversation_length: 50      # Skip very short conversations
+  max_conversation_length: 50000   # Skip extremely long conversations
+  skip_low_content: true           # Skip conversations with mostly filler words
+  min_content_ratio: 0.3           # Minimum meaningful content ratio
+  skip_patterns:                   # Regex patterns to skip
+    - "^(um|uh|hmm|yeah|ok|okay)\\s*$"
+    - "^test\\s*$"
+    - "^testing\\s*$"
+```
+
+### Processing & Performance
+```yaml
+processing:
+  parallel_processing: true        # Enable concurrent processing
+  max_concurrent_tasks: 3          # Limit concurrent LLM requests
+  processing_timeout: 300          # Timeout for memory extraction (seconds)
+  retry_failed: true              # Retry failed extractions
+  max_retries: 2                  # Maximum retry attempts
+  retry_delay: 5                  # Delay between retries (seconds)
 ```
 
 ### Debug & Monitoring
@@ -346,7 +382,18 @@ action_item_extraction:
 debug:
   enabled: true
   db_path: "/app/debug/memory_debug.db"
-  log_level: "INFO"
+  log_level: "INFO"                # DEBUG, INFO, WARNING, ERROR
+  log_full_conversations: false    # Privacy consideration
+  log_extracted_memories: true     # Log successful extractions
+```
+
+### Configuration Validation
+The system validates configuration on startup and provides detailed error messages for invalid settings. Use the debug API to verify your configuration:
+
+```bash
+# Check current configuration
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:8000/api/debug/memory/config
 ```
 
 ### API Endpoints for Debugging
