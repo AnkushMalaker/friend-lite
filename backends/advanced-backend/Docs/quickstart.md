@@ -35,16 +35,31 @@ ADMIN_PASSWORD=your-secure-admin-password
 ADMIN_EMAIL=admin@example.com
 ```
 
-**Optional Transcription Services:**
+**LLM Configuration (Choose One):**
 ```bash
-# For high-quality cloud transcription (recommended)
+# Option 1: OpenAI (Recommended for best memory extraction)
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your-openai-api-key-here
+OPENAI_MODEL=gpt-4o
+
+# Option 2: Local Ollama
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://ollama:11434
+```
+
+**Transcription Services (Choose One):**
+```bash
+# Option 1: Deepgram (Recommended for best transcription quality)
 DEEPGRAM_API_KEY=your-deepgram-api-key-here
 
-# For offline transcription fallback
+# Option 2: Local ASR service
 OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
 ```
 
-**Note**: If `DEEPGRAM_API_KEY` is provided, the system automatically uses Deepgram's Nova-3 model for transcription. Otherwise, it falls back to offline ASR services.
+**Important Notes:**
+- **OpenAI is strongly recommended** for LLM processing as it provides much better memory extraction and eliminates JSON parsing errors
+- If `DEEPGRAM_API_KEY` is provided, the system automatically uses Deepgram's Nova-3 model for transcription
+- The system falls back to offline services if cloud APIs are not configured
 
 ### 2. Start the System
 
@@ -205,14 +220,16 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 - **Manual controls**: Close conversations via API or dashboard
 
 ### Memory & Intelligence
+- **Enhanced Memory Extraction**: Improved fact extraction with granular, specific memories instead of generic transcript storage
 - **User-centric storage**: All memories and action items keyed by database user_id
-- **Memory extraction**: Automatic conversation summaries using LLM
+- **Memory extraction**: Automatic conversation summaries using LLM with enhanced prompts
 - **Semantic search**: Vector-based memory retrieval
 - **Action item detection**: Automatic task extraction with "Simon says" triggers
 - **Configurable extraction**: YAML-based configuration for memory and action item extraction
 - **Debug tracking**: SQLite-based tracking of transcript → memory/action item conversion
 - **Client metadata**: Device information preserved for debugging and reference
 - **User isolation**: All data scoped to individual users with multi-device support
+- **No more fallbacks**: System now creates proper memories instead of generic transcript placeholders
 
 **Implementation**: 
 - **Memory System**: `src/memory/memory_service.py` + `main.py:1047-1065, 1163-1195`
@@ -321,17 +338,27 @@ The system uses **centralized configuration** via `memory_config.yaml` for all m
 
 ### LLM Provider & Model Configuration
 
+⭐ **OpenAI is STRONGLY RECOMMENDED** for optimal memory extraction performance.
+
 The system supports **multiple LLM providers** - configure via environment variables:
 
 ```bash
 # In your .env file
-LLM_PROVIDER=ollama          # Options: "ollama" or "openai"
-OLLAMA_MODEL=gemma3n:e4b     # Fallback if YAML config fails to load
-
-# For OpenAI (when LLM_PROVIDER=openai)
+LLM_PROVIDER=openai          # RECOMMENDED: Use "openai" for best results
 OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-4o          # Recommended: "gpt-4o" for better JSON parsing, or "gpt-4o-mini"
+OPENAI_MODEL=gpt-4o          # RECOMMENDED: "gpt-4o" for better memory extraction
+
+# Alternative: Local Ollama (may have reduced memory quality)
+LLM_PROVIDER=ollama          
+OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_MODEL=gemma3n:e4b     # Fallback if YAML config fails to load
 ```
+
+**Why OpenAI is recommended:**
+- **Enhanced memory extraction**: Creates multiple granular memories instead of fallback transcripts
+- **Better fact extraction**: More reliable JSON parsing and structured output  
+- **No more "fallback memories"**: Eliminates generic transcript-based memory entries
+- **Improved conversation understanding**: Better context awareness and detail extraction
 
 **YAML Configuration** (provider-specific models):
 ```yaml
