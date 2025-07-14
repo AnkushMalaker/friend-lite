@@ -115,37 +115,29 @@ class ClientManager:
 
         client_info = []
         for client_id, client_state in self._active_clients.items():
-            # Extract key information from ClientState
-            # Note: This avoids exposing internal queue objects
+            current_audio_uuid = client_state.current_audio_uuid
             client_data = {
                 "client_id": client_id,
                 "connected": getattr(client_state, "connected", True),
-                "current_audio_uuid": getattr(client_state, "current_audio_uuid", None),
-                "last_transcript_time": getattr(client_state, "last_transcript_time", None),
-                "conversation_start_time": getattr(client_state, "conversation_start_time", None),
+                "current_audio_uuid": current_audio_uuid,
+                "last_transcript_time": client_state.last_transcript_time,
+                "conversation_start_time": client_state.conversation_start_time,
+                "has_active_conversation": current_audio_uuid is not None,
                 "conversation_transcripts_count": len(
                     getattr(client_state, "conversation_transcripts", [])
                 ),
                 "queues": {
                     "chunk_queue_size": (
                         client_state.chunk_queue.qsize()
-                        if hasattr(client_state, "chunk_queue")
-                        else 0
                     ),
                     "transcription_queue_size": (
                         client_state.transcription_queue.qsize()
-                        if hasattr(client_state, "transcription_queue")
-                        else 0
                     ),
                     "memory_queue_size": (
                         client_state.memory_queue.qsize()
-                        if hasattr(client_state, "memory_queue")
-                        else 0
                     ),
                     "action_item_queue_size": (
                         client_state.action_item_queue.qsize()
-                        if hasattr(client_state, "action_item_queue")
-                        else 0
                     ),
                 },
             }

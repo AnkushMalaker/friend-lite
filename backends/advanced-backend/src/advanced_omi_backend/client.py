@@ -52,10 +52,6 @@ class ClientState:
         self.user_id = user_id
         self.user_email = user_email
 
-
-        self.chut = str("hello")
-
-
         # Per-client queues
         self.chunk_queue = asyncio.Queue[Optional[AudioChunk]]()
         self.transcription_queue = asyncio.Queue[Tuple[Optional[str], Optional[AudioChunk]]]()

@@ -1,12 +1,9 @@
 import asyncio
-import json
 import logging
 import os
 import time
-import tempfile
 from typing import Optional
 import httpx
-from io import BytesIO
 
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
@@ -399,7 +396,7 @@ class TranscriptionManager:
             
             params = {
                 "model": "nova-3",
-                "language": "en-US",
+                "language": "multi",
                 "smart_format": "true",
                 "punctuate": "true",
                 "diarize": "true",
