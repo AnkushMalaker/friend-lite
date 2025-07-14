@@ -2,7 +2,7 @@
 
 ## Overview
 
-Friend-Lite uses a comprehensive authentication system built on `fastapi-users` with support for multiple authentication methods including JWT tokens, cookies, and Google OAuth. The system provides secure user management with proper data isolation and role-based access control using MongoDB ObjectIds for user identification.
+Friend-Lite uses a comprehensive authentication system built on `fastapi-users` with support for multiple authentication methods including JWT tokens and cookies. The system provides secure user management with proper data isolation and role-based access control using MongoDB ObjectIds for user identification.
 
 ## Architecture Components
 
@@ -19,8 +19,7 @@ class User(BeanieBaseUser, Document):
     
     # Custom fields
     display_name: Optional[str] = None
-    profile_picture: Optional[str] = None
-    oauth_accounts: list[OAuthAccount] = []
+    registered_clients: dict[str, dict] = Field(default_factory=dict)
     
     @property
     def user_id(self) -> str:
@@ -32,7 +31,6 @@ class User(BeanieBaseUser, Document):
 - **Email-based Authentication**: Users authenticate using email addresses
 - **MongoDB ObjectId**: Uses MongoDB's native ObjectId as unique identifier
 - **MongoDB Integration**: Uses Beanie ODM for document storage
-- **OAuth Support**: Integrated Google OAuth account linking
 - **Backward Compatibility**: user_id property provides ObjectId as string
 
 ### 2. Authentication Manager (`auth.py`)
@@ -68,11 +66,6 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
 - **Lifetime**: 1 hour
 - **Usage**: Web dashboard, browser-based clients
 
-#### Google OAuth (Optional)
-- **Endpoint**: `/auth/google/login`
-- **Transport**: OAuth2 flow with cookies
-- **Features**: Auto-registration, email verification
-- **Usage**: Social login integration
 
 ## Authentication Flow
 
@@ -102,11 +95,6 @@ curl -X POST "http://localhost:8000/auth/jwt/login" \
   -d "username=user@example.com&password=userpass"
 ```
 
-#### Google OAuth Login
-```bash
-# Redirect to Google OAuth
-curl "http://localhost:8000/auth/google/login"
-```
 
 ### 3. WebSocket Authentication
 
@@ -180,9 +168,6 @@ ADMIN_EMAIL=admin@example.com
 # Cookie security (set to true for HTTPS)
 COOKIE_SECURE=false
 
-# Google OAuth (optional)
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
 ```
 
 ## API Endpoints
@@ -191,7 +176,6 @@ GOOGLE_CLIENT_SECRET=your-google-client-secret
 - `POST /auth/jwt/login` - JWT token authentication
 - `POST /auth/cookie/login` - Cookie-based authentication
 - `POST /auth/logout` - Logout (clear cookies)
-- `GET /auth/google/login` - Google OAuth login (if enabled)
 
 ### User Management
 - `POST /api/create_user` - Create new user (admin only)
@@ -340,8 +324,6 @@ async def get_all_data(user: User = Depends(current_superuser)):
 
 ### 2. OAuth Integration
 ```python
-# Google OAuth with automatic user creation
-# Users can link Google accounts to existing accounts
 # Automatic email verification for OAuth users
 ```
 

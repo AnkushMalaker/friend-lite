@@ -18,6 +18,7 @@ WORKDIR /app
 
 # Copy dependency files
 COPY pyproject.blackwell.toml pyproject.toml
+COPY README.md .
 
 # Install dependencies using uv
 RUN --mount=type=cache,target=/root/.cache/uv \

@@ -18,14 +18,33 @@ At the moment, the basic functionalities are:
 ## Prerequisites
 
 - Docker and Docker Compose
-- (Optional) Deepgram API key /Local ASR for cloud transcription
-- (Optional) Ollama/OpenAI for local Speech-to-Text processing
+- (Optional) Deepgram API key for high-quality cloud transcription
+- (Optional) Ollama for local LLM processing (memory extraction, action items)
+- (Optional) Wyoming ASR for offline speech-to-text processing
 
 ## Quick Start
 
 ### 1. Environment Setup
 
-Copy the `.env.template` file to `.env` and fill in the values. The commented values are optional.
+Copy the `.env.template` file to `.env` and configure the required values:
+
+**Required Environment Variables:**
+```bash
+AUTH_SECRET_KEY=your-super-secret-jwt-key-here
+ADMIN_PASSWORD=your-secure-admin-password
+ADMIN_EMAIL=admin@example.com
+```
+
+**Optional Transcription Services:**
+```bash
+# For high-quality cloud transcription (recommended)
+DEEPGRAM_API_KEY=your-deepgram-api-key-here
+
+# For offline transcription fallback
+OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
+```
+
+**Note**: If `DEEPGRAM_API_KEY` is provided, the system automatically uses Deepgram's Nova-3 model for transcription. Otherwise, it falls back to offline ASR services.
 
 ### 2. Start the System
 
@@ -175,9 +194,9 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 **Implementation**: See `src/main.py:1562+` for WebSocket endpoints and `src/main.py:895-1340` for audio processing pipeline.
 
 ### Transcription Options
-- **Deepgram API**: Cloud-based, high accuracy (recommended)
-- **Self-hosted ASR**: Local Wyoming protocol services
-- **Real-time processing**: Live transcription with conversation tracking
+- **Deepgram API**: Cloud-based batch processing, high accuracy (recommended)
+- **Self-hosted ASR**: Local Wyoming protocol services with real-time processing
+- **Collection timeout**: 1.5 minute collection for optimal Deepgram quality
 
 ### Conversation Management
 - **Automatic chunking**: 60-second audio segments
@@ -223,6 +242,9 @@ open http://localhost:8501
 
 # View active clients (requires auth token)
 curl -H "Authorization: Bearer your-token" http://localhost:8000/api/active_clients
+
+# Alternative endpoint (same data)
+curl -H "Authorization: Bearer your-token" http://localhost:8000/api/clients/active
 ```
 
 ## HAVPE Relay Configuration
@@ -258,9 +280,9 @@ uv sync --group (whatever group you want to sync)
 - View all services: `docker compose ps`
 
 **Authentication Issues:**
-- Verify `AUTH_SECRET_KEY` is set and long enough
+- Verify `AUTH_SECRET_KEY` is set and long enough (minimum 32 characters)
 - Check admin credentials match `.env` file
-- For Google OAuth, verify client ID/secret are correct
+- Ensure user email/password combinations are correct
 
 **ASR Issues:**
 - **Deepgram**: Verify API key is valid
@@ -308,6 +330,7 @@ OLLAMA_MODEL=gemma3n:e4b     # Fallback if YAML config fails to load
 
 # For OpenAI (when LLM_PROVIDER=openai)
 OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4o          # Recommended: "gpt-4o" for better JSON parsing, or "gpt-4o-mini"
 ```
 
 **YAML Configuration** (provider-specific models):
@@ -320,13 +343,14 @@ memory_extraction:
   llm_settings:
     # Model selection based on LLM_PROVIDER:
     # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
-    # - OpenAI: "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    # - OpenAI: "gpt-4o" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
     model: "gemma3n:e4b"
     temperature: 0.1
     max_tokens: 2000
 
 fact_extraction:
   enabled: false  # Disabled to avoid JSON parsing issues
+  # RECOMMENDATION: Enable with OpenAI GPT-4o for better JSON reliability
   llm_settings:
     model: "gemma3n:e4b"  # Auto-switches based on LLM_PROVIDER
     temperature: 0.0  # Lower for factual accuracy
@@ -334,6 +358,7 @@ fact_extraction:
 
 action_item_extraction:
   enabled: true
+  # RECOMMENDATION: Works best with OpenAI GPT-4o for reliable JSON parsing
   trigger_phrases:
     - "simon says"
     - "action item" 
@@ -342,6 +367,8 @@ action_item_extraction:
     - "next step"
     - "homework"
     - "deliverable"
+    - "task"
+    - "assignment"
   llm_settings:
     model: "gemma3n:e4b"  # Auto-switches based on LLM_PROVIDER
     temperature: 0.1
@@ -352,6 +379,74 @@ action_item_extraction:
 - **Ollama**: Uses local models with Ollama embeddings (nomic-embed-text)
 - **OpenAI**: Uses OpenAI models with OpenAI embeddings (text-embedding-3-small)
 - **Embeddings**: Automatically selected based on provider (768 dims for Ollama, 1536 for OpenAI)
+
+#### Fixing JSON Parsing Errors
+
+If you experience JSON parsing errors in action items or fact extraction:
+
+1. **Switch to OpenAI GPT-4o** (recommended solution):
+   ```bash
+   # In your .env file
+   LLM_PROVIDER=openai
+   OPENAI_API_KEY=your-openai-api-key
+   OPENAI_MODEL=gpt-4o
+   ```
+
+2. **Enable fact extraction** with reliable JSON output:
+   ```yaml
+   # In memory_config.yaml
+   fact_extraction:
+     enabled: true  # Safe to enable with GPT-4o
+   ```
+
+3. **Monitor logs** for JSON parsing success:
+   ```bash
+   # Check for JSON parsing errors
+   docker logs advanced-backend | grep "JSONDecodeError"
+   
+   # Verify OpenAI usage
+   docker logs advanced-backend | grep "OpenAI response"
+   ```
+
+**Why GPT-4o helps with JSON errors:**
+- More consistent JSON formatting
+- Better instruction following for structured output
+- Reduced malformed JSON responses
+- Built-in JSON mode for reliable parsing
+
+#### Testing OpenAI Configuration
+
+To verify your OpenAI setup is working:
+
+1. **Check logs for OpenAI usage**:
+   ```bash
+   # Start the backend and check logs
+   docker logs advanced-backend | grep -i "openai"
+   
+   # You should see:
+   # "Using OpenAI provider with model: gpt-4o"
+   ```
+
+2. **Test memory extraction** with a conversation:
+   ```bash
+   # The health endpoint includes LLM provider info
+   curl http://localhost:8000/health
+   
+   # Response should include: "llm_provider": "openai"
+   ```
+
+3. **Monitor memory processing**:
+   ```bash
+   # After a conversation ends, check for successful processing
+   docker logs advanced-backend | grep "memory processing"
+   ```
+
+If you see errors about missing API keys or models, verify your `.env` file has:
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-actual-api-key-here
+OPENAI_MODEL=gpt-4o
+```
 
 ### Quality Control Settings
 ```yaml

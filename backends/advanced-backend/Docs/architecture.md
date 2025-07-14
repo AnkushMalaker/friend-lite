@@ -27,7 +27,7 @@ graph TB
     subgraph "Audio Processing Pipeline"
         OpusDecoder[Opus Decoder<br/>Realtime Audio]
         AudioChunks[Audio Chunks<br/>Per-Client Queues]
-        Transcription[Transcription Manager<br/>Deepgram/Wyoming ASR]
+        Transcription[Transcription Manager<br/>Deepgram WebSocket/Wyoming Fallback]
         ClientState[Per-Client State<br/>Conversation Management]
         AudioCropping[Audio Cropping<br/>Speech Segment Extraction]
     end
@@ -126,6 +126,8 @@ graph TB
 - **Admin User Bootstrap**: Automatic admin account creation
 - **Client ID Generation**: Automatic `objectid_suffix-device_name` format for client identification
 
+> 📖 **Read more**: [Authentication Architecture](./auth.md) for complete authentication system details
+
 #### Streamlit Dashboard (`streamlit_app.py`)
 - **User-Friendly Interface**: Complete web-based management interface
 - **Authentication Integration**: Login with backend JWT tokens or Google OAuth
@@ -135,6 +137,64 @@ graph TB
 - **System Health**: Visual service status and configuration display
 
 ### Audio Processing Pipeline
+
+#### Transcription Architecture
+
+The system implements a dual transcription approach with Deepgram as primary and Wyoming ASR as fallback:
+
+**Deepgram Batch Processing**:
+- **Model**: Nova-3 (Deepgram's latest high-accuracy model)
+- **Features**: Smart formatting, punctuation, speaker diarization
+- **Processing**: Collect-then-process approach using REST API
+- **Timeout**: 1.5 minute collection timeout for optimal quality
+- **Client Manager Integration**: Uses centralized ClientManager for clean client state access
+- **Configuration**: Auto-enables when `DEEPGRAM_API_KEY` environment variable is present
+
+**Wyoming ASR Fallback**:
+- **Purpose**: Offline fallback when Deepgram unavailable
+- **Protocol**: TCP connection to self-hosted Wyoming ASR service
+- **Event-Driven**: Asynchronous event processing with background queue management
+- **Graceful Degradation**: Seamless fallback without service interruption
+
+**TranscriptionManager Architecture**:
+```python
+# Clean dependency injection pattern
+TranscriptionManager(
+    action_item_callback=callback_func,
+    chunk_repo=database_repo,
+    # Uses get_client_manager() singleton for client state access
+)
+```
+
+#### Client Manager Architecture
+
+The system uses a centralized **ClientManager** for managing active client connections and state:
+
+**Centralized Client Management**:
+```python
+# Singleton pattern for global client state access
+client_manager = get_client_manager()
+
+# Client state management
+client_state = ClientState(
+    client_id="user_id_suffix-device_name",
+    chunk_repo=database_repo,
+    action_items_service=action_service,
+    chunk_dir=audio_storage_path
+)
+```
+
+**Client ID Format**: `{objectid_suffix}-{device_name}`
+- Uses last 6 characters of MongoDB ObjectId + device name
+- Examples: `cd7994-laptop`, `e26efe-upload-001`
+- Ensures unique identification across users and devices
+
+**Key Features**:
+- **Connection Tracking**: Real-time monitoring of active clients
+- **State Isolation**: Per-client queues and processing pipelines
+- **Resource Management**: Automatic cleanup on client disconnect
+- **Multi-Device Support**: Single user can have multiple active clients
+- **Thread-Safe Operations**: Concurrent client access with proper synchronization
 
 #### Per-Client State Management
 ```mermaid
@@ -156,9 +216,10 @@ stateDiagram-v2
 
 #### Audio Processing Queues (Per-Client)
 - **Chunk Queue**: Raw audio buffering with client isolation
-- **Transcription Queue**: Audio chunks for real-time ASR processing
-- **Memory Queue**: Completed conversations for LLM memory extraction
+- **Transcription Queue**: Audio chunks for real-time ASR processing with quality validation
+- **Memory Queue**: Completed conversations for LLM memory extraction (with transcript validation)
 - **Action Item Queue**: Transcript analysis for task detection
+- **Quality Control**: Multi-stage validation prevents empty/invalid transcripts from consuming LLM resources
 
 #### Speech Processing Features
 - **Voice Activity Detection**: Automatic silence removal and speech segment extraction
@@ -176,6 +237,8 @@ stateDiagram-v2
 - **Client Metadata**: Client and user information stored for reference and debugging
 - **Context Preservation**: Links action items to original conversations and audio segments
 
+> 📖 **Read more**: [Action Items Documentation](./action-items.md) for detailed task extraction features
+
 #### Memory Management (`src/memory/memory_service.py`)
 - **User-Centric Storage**: All memories keyed by database user_id (not client_id)
 - **Conversation Summarization**: Automatic memory extraction using mem0 framework
@@ -184,6 +247,8 @@ stateDiagram-v2
 - **User Isolation**: Complete data separation between users via user_id
 - **Temporal Memory**: Long-term conversation history with semantic retrieval
 - **Processing Trigger**: `main.py:1047-1065` (conversation end) → `main.py:1163-1195` (background processing)
+
+> 📖 **Read more**: [Memory System Documentation](./memories.md) for detailed memory extraction and storage
 
 #### Metrics System (`metrics.py`)
 - **Performance Tracking**: Audio processing latency, transcription success rates
@@ -271,11 +336,171 @@ graph LR
 - **Qdrant Latest**: Vector database for memory embeddings
 - **Nginx Alpine**: Reverse proxy and load balancing
 
-## Data Flow Architecture
+## Detailed Data Flow Architecture
+
+> 📖 **Reference Documentation**: 
+> - [Authentication Details](./auth.md) - Complete authentication system documentation
+> - [Failure Recovery System](./failure-recovery.md) - Robust error handling and recovery
+
+### Complete System Data Flow Diagram
+
+```mermaid
+flowchart TB
+    %% External Clients
+    Client[📱 Audio Client<br/>Mobile/Desktop/HAVPE]
+    WebUI[🌐 Web Dashboard<br/>Streamlit Interface]
+
+    %% Authentication Gateway
+    subgraph "🔐 Authentication Layer"
+        AuthGW[JWT/Cookie Auth<br/>🕐 1hr token lifetime]
+        ClientGen[Client ID Generator<br/>user_suffix-device_name]
+        UserDB[(👤 User Database<br/>MongoDB ObjectId)]
+    end
+
+    %% Audio Processing Pipeline
+    subgraph "🎵 Audio Processing Pipeline"
+        WSAuth[WebSocket Auth<br/>🕐 Connection timeout: 30s]
+        OpusDecoder[Opus/PCM Decoder<br/>Real-time Processing]
+        
+        subgraph "⏱️ Per-Client State Management"
+            ClientState[Client State<br/>🕐 Conversation timeout: 1.5min]
+            AudioQueue[Audio Chunk Queue<br/>60s segments]
+            ConversationTimer[Conversation Timer<br/>🔄 Auto-timeout tracking]
+        end
+        
+        subgraph "🎙️ Transcription Layer"
+            ASRManager[Transcription Manager<br/>🕐 Init timeout: 60s]
+            DeepgramWS[Deepgram WebSocket<br/>Nova-3 Model, Smart Format<br/>🔌 Auto-reconnect on disconnect]
+            OfflineASR[Wyoming ASR Fallback<br/>🕐 Connect timeout: 5s]
+            ClientManager[Client Manager<br/>Centralized client state access]
+            TranscriptValidation[Transcript Validation<br/>📏 Min 10 chars]
+        end
+    end
+
+    %% Intelligence Services
+    subgraph "🧠 Intelligence Processing"
+        subgraph "💭 Memory Pipeline"
+            MemoryService[Memory Service<br/>🕐 Init timeout: 60s<br/>🕐 Processing timeout: 20min]
+            MemoryValidation[Memory Validation<br/>📏 Min conversation length]
+            LLMProcessor[Ollama LLM<br/>🔄 Circuit breaker protection]
+            VectorStore[Qdrant Vector Store<br/>🔍 Semantic search]
+        end
+        
+        subgraph "✅ Action Items Pipeline"
+            ActionService[Action Items Service<br/>🔍 "Simon says" detection]
+            TaskExtraction[Task Extraction<br/>🤖 LLM-powered analysis]
+        end
+    end
+
+    %% Failure Recovery System
+    subgraph "🛡️ Failure Recovery System"
+        QueueTracker[Queue Tracker<br/>📊 SQLite tracking]
+        PersistentQueue[Persistent Queue<br/>💾 Survives restarts]
+        RecoveryManager[Recovery Manager<br/>🔄 Auto-retry with backoff]
+        HealthMonitor[Health Monitor<br/>🏥 Service health checks]
+        CircuitBreaker[Circuit Breaker<br/>⚡ Fast-fail protection]
+        DeadLetter[Dead Letter Queue<br/>💀 Persistent failures]
+    end
+
+    %% Data Storage
+    subgraph "💾 Data Storage Layer"
+        MongoDB[(MongoDB<br/>Users & Conversations<br/>🕐 Health check: 5s)]
+        QdrantDB[(Qdrant<br/>Vector Embeddings<br/>🔍 Semantic memory)]
+        SQLiteTracking[(SQLite<br/>Failure Recovery Tracking<br/>📊 Performance metrics)]
+        AudioFiles[Audio Files<br/>📁 Chunk storage + cropping]
+    end
+
+    %% Connection Flow with Timeouts
+    Client -->|🔐 Auth Token| AuthGW
+    AuthGW -->|❌ 401 Unauthorized<br/>⏱️ Invalid/expired token| Client
+    AuthGW -->|✅ Validated| ClientGen
+    ClientGen -->|🏷️ Generate client_id| WSAuth
+    
+    %% Audio Processing Flow
+    Client -->|🎵 Opus/PCM Stream<br/>🕐 30s connection timeout| WSAuth
+    WSAuth -->|❌ 1008 Policy Violation<br/>🔐 Auth required| Client
+    WSAuth -->|✅ Authenticated| OpusDecoder
+    OpusDecoder -->|📦 Audio chunks| ClientState
+    ClientState -->|⏱️ 1.5min timeout check| ConversationTimer
+    ConversationTimer -->|🔄 Timeout exceeded| ClientState
+    
+    %% Transcription Flow with Failure Points
+    ClientState -->|🎵 Audio data| ASRManager
+    ASRManager -->|🔌 Primary connection| DeepgramWS
+    ASRManager -->|🔌 Fallback connection| OfflineASR
+    ASRManager -->|📋 Client state access| ClientManager
+    DeepgramWS -->|❌ WebSocket disconnect<br/>🔄 Auto-reconnect after 2s| ASRManager
+    OfflineASR -->|❌ TCP connection timeout<br/>🕐 5s limit| ASRManager
+    ASRManager -->|📝 Raw transcript| TranscriptValidation
+    TranscriptValidation -->|❌ Too short (<10 chars)<br/>🚫 Skip processing| QueueTracker
+    TranscriptValidation -->|✅ Valid transcript| MemoryService
+
+    %% Memory Processing with Timeouts
+    MemoryService -->|🕐 20min timeout| LLMProcessor
+    LLMProcessor -->|❌ Model stopped<br/>🔄 Circuit breaker trip| CircuitBreaker
+    LLMProcessor -->|❌ Empty response<br/>🔄 Fallback memory| MemoryService
+    LLMProcessor -->|✅ Memory extracted| VectorStore
+    MemoryService -->|📊 Track processing| QueueTracker
+    
+    %% Action Items Flow
+    TranscriptValidation -->|📝 Valid transcript| ActionService
+    ActionService -->|🔍 "Simon says" detected| TaskExtraction
+    TaskExtraction -->|✅ Task extracted| MongoDB
+
+    %% Failure Recovery Integration
+    QueueTracker -->|📊 Track all items| PersistentQueue
+    PersistentQueue -->|🔄 Failed items| RecoveryManager
+    RecoveryManager -->|🔄 Exponential backoff retry| MemoryService
+    RecoveryManager -->|💀 Max retries exceeded| DeadLetter
+    HealthMonitor -->|🏥 Service health checks<br/>🕐 5s MongoDB<br/>🕐 8s Ollama<br/>🕐 5s ASR| CircuitBreaker
+    CircuitBreaker -->|⚡ Service unavailable<br/>🔄 Fast-fail mode| RecoveryManager
+
+    %% Disconnect and Cleanup Flow
+    Client -->|🔌 Disconnect| ClientState
+    ClientState -->|🧹 Cleanup tasks<br/>🕐 Background memory: 5min<br/>🕐 Transcription queue: 60s| ASRManager
+    ASRManager -->|🔌 Graceful disconnect<br/>🕐 2s timeout| DeepgramWS
+    ClientState -->|🔄 Final conversation processing| MemoryService
+
+    %% Storage Integration
+    MemoryService -->|💾 Store memories| MongoDB
+    VectorStore -->|💾 Embeddings| QdrantDB
+    QueueTracker -->|📊 Metrics & tracking| SQLiteTracking
+    ClientState -->|📁 Audio segments| AudioFiles
+    ActionService -->|📝 Tasks| MongoDB
+
+    %% Web Dashboard Flow
+    WebUI -->|🔐 Cookie/JWT auth<br/>🕐 1hr lifetime| AuthGW
+    WebUI -->|📊 API calls| MongoDB
+    WebUI -->|🎵 Audio playback| AudioFiles
+```
+
+### Critical Timeout and Failure Points
+
+#### 🕐 **Timeout Configuration**
+| Component | Timeout Value | Failure Behavior | Recovery Action |
+|-----------|---------------|------------------|-----------------|
+| **JWT Tokens** | 1 hour | 401 Unauthorized | Client re-authentication required |
+| **WebSocket Connection** | 30 seconds | Connection dropped | Client reconnection with auth |
+| **Conversation Auto-Close** | 1.5 minutes | New conversation started | Memory processing triggered |
+| **Transcription Queue** | 60 seconds | Queue processing timeout | Graceful degradation |
+| **Memory Service Init** | 60 seconds | Service unavailable | Health check failure |
+| **Ollama Processing** | 20 minutes | LLM timeout | Fallback memory creation |
+| **Background Memory Task** | 5 minutes | Task cancellation | Partial processing retained |
+| **MongoDB Health Check** | 5 seconds | Service marked unhealthy | Circuit breaker activation |
+| **Ollama Health Check** | 8 seconds | Service marked unhealthy | Circuit breaker activation |
+| **ASR Connection** | 5 seconds | Connection failure | Fallback ASR or degraded mode |
+
+#### 🔌 **Disconnection Scenarios**
+1. **Client Disconnect**: Graceful cleanup with conversation finalization
+2. **Network Interruption**: Auto-reconnection with exponential backoff  
+3. **Service Failure**: Circuit breaker protection and alternative routing
+4. **Authentication Expiry**: Forced re-authentication with clear error codes
+
+> 📖 **Read more**: [Failure Recovery System](./failure-recovery.md) for complete error handling details
 
 ### Audio Ingestion & Processing
 1. **Client Authentication**: JWT token validation for WebSocket connection (email or user_id based)
-2. **Client ID Generation**: Automatic `user_id-device_name` format creation for client identification
+2. **Client ID Generation**: Automatic `user_id-device_name` format creation for client identification  
 3. **Permission Registration**: Client-user relationship tracking in permission dictionaries
 4. **Audio Streaming**: Real-time Opus/PCM packets over WebSocket with user context
 5. **Per-Client Processing**: Isolated audio queues and state management per user
@@ -285,12 +510,16 @@ graph LR
 
 ### Memory & Intelligence Processing
 1. **Conversation Completion**: End-of-session trigger for memory extraction
-2. **User Resolution**: Client-ID to database user mapping for proper data association
-3. **LLM Processing**: Ollama-based conversation summarization with user context
-4. **Vector Storage**: Semantic embeddings stored in Qdrant keyed by user_id
-5. **Action Item Analysis**: Automatic task detection with user-centric storage
-6. **Metadata Enhancement**: Client information and user email stored in metadata
-7. **Search & Retrieval**: User-scoped semantic memory search capabilities
+2. **Transcript Validation**: Multi-layer validation prevents empty/short transcripts from reaching LLM
+   - Individual transcript filtering during collection (`main.py:594, 717, 858`)
+   - Full conversation length validation before memory processing (`main.py:1224`)
+   - Memory service validation with 10-character minimum (`memory_service.py:242`)
+3. **User Resolution**: Client-ID to database user mapping for proper data association
+4. **LLM Processing**: Ollama-based conversation summarization with user context (only for validated transcripts)
+5. **Vector Storage**: Semantic embeddings stored in Qdrant keyed by user_id
+6. **Action Item Analysis**: Automatic task detection with user-centric storage
+7. **Metadata Enhancement**: Client information and user email stored in metadata
+8. **Search & Retrieval**: User-scoped semantic memory search capabilities
 
 ### User Management & Security
 1. **Registration**: Admin-controlled user creation with email/password and auto-generated user_id
@@ -348,13 +577,10 @@ OLLAMA_BASE_URL=http://ollama:11434
 # Vector Storage
 QDRANT_BASE_URL=qdrant
 
-# ASR Services
-DEEPGRAM_API_KEY=your-deepgram-api-key
+# Transcription Services (Deepgram Primary, Wyoming Fallback)
+DEEPGRAM_API_KEY=your-deepgram-api-key-here
 OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
 
-# OAuth Integration
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
 ```
 
 ### Service Dependencies
@@ -366,10 +592,10 @@ GOOGLE_CLIENT_SECRET=your-google-client-secret
 #### Enhanced Services (Optional but Recommended)
 - **Ollama**: Memory processing and action item extraction
 - **Qdrant**: Vector storage for semantic memory search
-- **ASR Service**: Speech-to-text transcription (Deepgram or self-hosted)
+- **Deepgram**: Primary speech-to-text transcription service (WebSocket streaming)
+- **Wyoming ASR**: Fallback transcription service (self-hosted)
 
 #### External Services (Optional)
-- **Google OAuth**: Simplified user authentication
 - **Ngrok**: Public internet access for development
 - **HAVPE Relay**: ESP32 audio streaming bridge with authentication (`extras/havpe-relay/`)
 
@@ -381,6 +607,85 @@ The HAVPE relay (`extras/havpe-relay/main.py`) provides ESP32 audio streaming ca
 - **Audio Processing**: Converts ESP32 32-bit stereo to 16-bit mono for backend
 - **Reconnection**: Automatic JWT token refresh and WebSocket reconnection on auth failures
 - **Device Name**: Configurable device identifier for multi-device support
+
+## REST API Architecture
+
+The system provides a comprehensive REST API organized into functional modules:
+
+### API Organization
+```
+/api/
+├── /users                    # User management (admin only)
+├── /clients/active          # Active client monitoring
+├── /conversations           # Conversation CRUD operations
+├── /memories               # Memory management and search
+│   ├── /admin              # Admin view (all users)
+│   └── /search             # Semantic memory search
+├── /action_items           # Task management
+├── /admin/                 # Admin compatibility endpoints
+│   ├── /memories           # Consolidated admin memory view
+│   └── /memories/debug     # Legacy debug endpoint
+└── /active_clients         # Client monitoring (compatibility)
+```
+
+### Key Endpoints
+
+#### User & Authentication
+- `POST /auth/jwt/login` - Email/password authentication
+- `GET /api/users` - User management (admin only)
+- `POST /api/create_user` - User creation (admin only)
+
+#### Client Management
+- `GET /api/clients/active` - Active client monitoring
+- `GET /api/active_clients` - Compatibility endpoint for Streamlit UI
+
+#### Memory Management
+- `GET /api/memories` - User memories (with user_id filter for admin)
+- `GET /api/memories/admin` - All memories grouped by user (admin only)
+- `GET /api/admin/memories` - Consolidated admin view with debug info
+- `GET /api/memories/search?query=` - Semantic memory search
+
+#### Audio & Conversations
+- `GET /api/conversations` - User conversations
+- `POST /api/process-audio-files` - Batch audio file processing
+- WebSocket `/ws` - Real-time Opus audio streaming
+- WebSocket `/ws_pcm` - Real-time PCM audio streaming
+
+### Authentication & Authorization
+- **JWT Tokens**: All API endpoints require valid JWT authentication
+- **User Isolation**: Regular users see only their own data
+- **Admin Access**: Superusers can access cross-user data with `user_id` filters
+- **WebSocket Auth**: Token or cookie-based authentication for real-time connections
+
+### Data Formats
+```json
+// Active clients response
+{
+  "clients": [
+    {
+      "client_id": "cd7994-laptop",
+      "user_id": "507f1f77bcf86cd799439011",
+      "connected_at": "2025-01-15T10:30:00Z",
+      "conversation_count": 3
+    }
+  ],
+  "active_clients_count": 1,
+  "total_count": 1
+}
+
+// Admin memories response
+{
+  "memories": [...],           // Flat list for compatibility
+  "user_memories": {...},      // Grouped by user_id
+  "stats": {
+    "total_memories": 150,
+    "total_users": 5,
+    "debug_tracker_initialized": true,
+    "users_with_memories": ["user1", "user2"],
+    "client_ids_with_memories": ["cd7994-laptop", "e26efe-upload"]
+  }
+}
+```
 
 ## Performance & Scalability
 
@@ -395,5 +700,8 @@ The HAVPE relay (`extras/havpe-relay/main.py`) provides ESP32 audio streaming ca
 - **Performance Metrics**: Audio processing latency, transcription accuracy
 - **Resource Tracking**: Memory usage, connection counts, processing queues
 - **Error Handling**: Graceful degradation with detailed logging
+- **Failure Recovery**: Automatic retry, circuit breakers, and persistent queue management
+
+> 📖 **Read more**: [Failure Recovery System](./failure-recovery.md) for complete error handling and monitoring capabilities
 
 This architecture supports a fully-featured conversation processing system with enterprise-grade authentication, real-time audio processing, and intelligent content analysis, all deployable via a single Docker Compose command. 
