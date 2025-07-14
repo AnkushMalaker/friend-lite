@@ -126,6 +126,8 @@ def _build_mem0_config() -> dict:
         }
         embedding_dims = 768
 
+    # Valid mem0 configuration format based on official documentation
+    # See: https://docs.mem0.ai/platform/quickstart and https://github.com/mem0ai/mem0
     mem0_config = {
         "llm": llm_config,
         "embedder": embedder_config,
@@ -145,27 +147,33 @@ def _build_mem0_config() -> dict:
     fact_enabled = config_loader.is_fact_extraction_enabled()
     memory_logger.info(f"YAML fact extraction enabled: {fact_enabled}")
 
-    # FORCE ENABLE fact extraction with working prompt format
+    # FORCE ENABLE fact extraction with working prompt format - UPDATED for more inclusive extraction
+    # Using custom_fact_extraction_prompt as documented in mem0 repo: https://github.com/mem0ai/mem0
     formatted_fact_prompt = """
-Please extract relevant facts from the conversation.
+Please extract ALL relevant facts from the conversation, including topics discussed, activities mentioned, people referenced, emotions expressed, and any other notable details.
+Extract granular, specific facts rather than broad summaries. Be inclusive and extract multiple facts even from casual conversations.
+
 Here are some few shot examples:
 
 Input: Hi.
-Output: {"facts" : []}
+Output: {"facts" : ["Greeting exchanged"]}
 
 Input: I need to buy groceries tomorrow.
-Output: {"facts" : ["Need to buy groceries tomorrow"]}
+Output: {"facts" : ["Need to buy groceries tomorrow", "Shopping task mentioned", "Time reference to tomorrow"]}
 
 Input: The meeting is at 3 PM on Friday.
-Output: {"facts" : ["Meeting scheduled for 3 PM on Friday"]}
+Output: {"facts" : ["Meeting scheduled for 3 PM on Friday", "Business meeting mentioned", "Specific time commitment", "Friday scheduling"]}
 
 Input: We are talking about unicorns.
-Output: {"facts" : ["Conversation about unicorns"]}
+Output: {"facts" : ["Conversation about unicorns", "Fantasy topic discussed", "Mythical creatures mentioned"]}
 
 Input: My alarm keeps ringing.
-Output: {"facts" : ["Alarm is ringing"]}
+Output: {"facts" : ["Alarm is ringing", "Audio disturbance mentioned", "Repetitive sound issue", "Device malfunction or setting"]}
 
-Now extract facts from the following conversation. Return only JSON format with "facts" key.
+Input: Bro, he just did it for the funny. Every move does not need to be perfect.
+Output: {"facts" : ["Gaming strategy discussed", "Casual conversation with friend", "Philosophy about game moves", "Humorous game action mentioned", "Perfectionism topic", "Gaming advice given"]}
+
+Now extract facts from the following conversation. Return only JSON format with "facts" key. Be thorough and extract multiple specific facts. ALWAYS extract at least one fact unless the input is completely empty or meaningless.
 """
     mem0_config["custom_fact_extraction_prompt"] = formatted_fact_prompt
     memory_logger.info(f"✅ FORCED fact extraction enabled with working JSON prompt format")
