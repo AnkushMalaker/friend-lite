@@ -29,6 +29,17 @@ interface DeviceDetailsProps {
   userId: string;
   onSetUserId: (userId: string) => void;
   onFetchUsers: () => Promise<string[]>;
+
+  // Authentication
+  authUsername: string;
+  authPassword: string;
+  authToken: string;
+  onSetAuthUsername: (username: string) => void;
+  onSetAuthPassword: (password: string) => void;
+  onSetAuthToken: (token: string) => void;
+  onClearAuthData: () => void;
+  onTestAuth: () => Promise<boolean>;
+  onShowConversations: () => void;
 }
 
 export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
@@ -48,11 +59,22 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
   audioStreamerError,
   userId,
   onSetUserId,
-  onFetchUsers
+  onFetchUsers,
+  authUsername,
+  authPassword,
+  authToken,
+  onSetAuthUsername,
+  onSetAuthPassword,
+  onSetAuthToken,
+  onClearAuthData,
+  onTestAuth,
+  onShowConversations
 }) => {
   const [showUsersModal, setShowUsersModal] = useState(false);
   const [availableUsers, setAvailableUsers] = useState<string[]>([]);
   const [isFetchingUsers, setIsFetchingUsers] = useState(false);
+  const [isTestingAuth, setIsTestingAuth] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   if (!connectedDeviceId) return null;
 
   const handleFetchUsers = async () => {
@@ -79,6 +101,38 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
   const handleUserSelect = (selectedUserId: string) => {
     onSetUserId(selectedUserId);
     setShowUsersModal(false);
+  };
+
+  const handleTestAuth = async () => {
+    setIsTestingAuth(true);
+    try {
+      const success = await onTestAuth();
+      if (success) {
+        Alert.alert('Authentication Test', 'Authentication successful! Token saved.');
+      } else {
+        Alert.alert('Authentication Test', 'Authentication failed. Please check your credentials.');
+      }
+    } catch (error) {
+      console.error('[DeviceDetails] Error testing auth:', error);
+      Alert.alert('Authentication Test', 'Authentication test failed. Please check your backend connection.');
+    } finally {
+      setIsTestingAuth(false);
+    }
+  };
+
+  const handleClearAuth = () => {
+    Alert.alert(
+      'Clear Authentication',
+      'Are you sure you want to clear all authentication data?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: onClearAuthData
+        }
+      ]
+    );
   };
 
   return (
@@ -109,6 +163,95 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
           </View>
         </View>
       )}
+
+      {/* Authentication Section */}
+      <View style={styles.authSection}>
+        <Text style={styles.subSectionTitle}>Backend Authentication</Text>
+        
+        <Text style={styles.inputLabel}>Username (email):</Text>
+        <TextInput
+          style={styles.textInput}
+          value={authUsername}
+          onChangeText={onSetAuthUsername}
+          placeholder="your-email@example.com"
+          autoCapitalize="none"
+          keyboardType="email-address"
+          returnKeyType="next"
+          autoCorrect={false}
+          editable={!isListeningAudio && !isAudioStreaming}
+        />
+        
+        <Text style={styles.inputLabel}>Password:</Text>
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={[styles.textInput, styles.passwordInput]}
+            value={authPassword}
+            onChangeText={onSetAuthPassword}
+            placeholder="Your password"
+            secureTextEntry={!showPassword}
+            returnKeyType="done"
+            autoCorrect={false}
+            editable={!isListeningAudio && !isAudioStreaming}
+          />
+          <TouchableOpacity
+            style={styles.passwordToggle}
+            onPress={() => setShowPassword(!showPassword)}
+          >
+            <Text style={styles.passwordToggleText}>{showPassword ? '🙈' : '👁️'}</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <Text style={styles.inputLabel}>JWT Token (optional):</Text>
+        <TextInput
+          style={[styles.textInput, styles.tokenInput]}
+          value={authToken}
+          onChangeText={onSetAuthToken}
+          placeholder="Paste JWT token here (alternative to username/password)"
+          autoCapitalize="none"
+          returnKeyType="done"
+          autoCorrect={false}
+          multiline={true}
+          numberOfLines={3}
+          editable={!isListeningAudio && !isAudioStreaming}
+        />
+        
+        <View style={styles.authButtonsContainer}>
+          <TouchableOpacity
+            style={[styles.button, styles.buttonAuth, { flex: 1, marginRight: 10 }]}
+            onPress={handleTestAuth}
+            disabled={isTestingAuth || isListeningAudio || isAudioStreaming || (!authUsername || !authPassword) && !authToken}
+          >
+            <Text style={styles.buttonText}>
+              {isTestingAuth ? "Testing..." : "Test Auth"}
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.button, styles.buttonDanger, { flex: 1 }]}
+            onPress={handleClearAuth}
+            disabled={isListeningAudio || isAudioStreaming}
+          >
+            <Text style={styles.buttonText}>Clear</Text>
+          </TouchableOpacity>
+        </View>
+        
+        {authToken && (
+          <View style={styles.infoContainerSM}>
+            <Text style={styles.infoTitle}>Authentication Status:</Text>
+            <Text style={styles.infoValue}>Token Available</Text>
+          </View>
+        )}
+        
+        {authToken && (
+          <TouchableOpacity
+            style={[styles.button, styles.buttonConversations, { marginTop: 15 }]}
+            onPress={onShowConversations}
+            disabled={isListeningAudio || isAudioStreaming}
+          >
+            <Text style={styles.buttonText}>View Conversations</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       {/* User ID Management */}
       <View style={styles.subSection}>
@@ -276,6 +419,9 @@ const styles = StyleSheet.create({
   },
   buttonAuth: {
     backgroundColor: '#34C759',
+  },
+  buttonConversations: {
+    backgroundColor: '#5856D6',
   },
   buttonText: {
     color: 'white',

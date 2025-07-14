@@ -1,5 +1,5 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, Platform, FlatList, ActivityIndicator, Alert, Switch, Button, TouchableOpacity, KeyboardAvoidingView } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, Platform, FlatList, ActivityIndicator, Alert, Switch, Button, TouchableOpacity, KeyboardAvoidingView, Modal } from 'react-native';
 import { OmiConnection } from 'friend-lite-react-native'; // OmiDevice also comes from here
 import { State as BluetoothState } from 'react-native-ble-plx'; // Import State from ble-plx
 
@@ -30,6 +30,7 @@ import BluetoothStatusBanner from './components/BluetoothStatusBanner';
 import ScanControls from './components/ScanControls';
 import DeviceListItem from './components/DeviceListItem';
 import DeviceDetails from './components/DeviceDetails';
+import ConversationsView from './components/ConversationsView';
 
 export default function App() {
   // Initialize OmiConnection
@@ -53,6 +54,9 @@ export default function App() {
   const [authUsername, setAuthUsername] = useState<string>('');
   const [authPassword, setAuthPassword] = useState<string>('');
   const [authToken, setAuthToken] = useState<string>('');
+  
+  // State for Conversations View
+  const [showConversations, setShowConversations] = useState<boolean>(false);
   
   // Bluetooth Management Hook
   const {
@@ -425,6 +429,18 @@ export default function App() {
     }
   }, [webSocketUrl, authUsername, authPassword, authToken, handleSetAndSaveAuthToken]);
 
+  const handleShowConversations = useCallback(() => {
+    if (!authToken) {
+      Alert.alert('Authentication Required', 'Please authenticate first to view conversations.');
+      return;
+    }
+    setShowConversations(true);
+  }, [authToken]);
+
+  const handleCloseConversations = useCallback(() => {
+    setShowConversations(false);
+  }, []);
+
   const fetchUsers = useCallback(async (): Promise<string[]> => {
     if (!webSocketUrl) {
       throw new Error('WebSocket URL not set');
@@ -646,10 +662,32 @@ export default function App() {
               onSetAuthToken={handleSetAndSaveAuthToken}
               onClearAuthData={handleClearAuthData}
               onTestAuth={handleTestAuth}
+              onShowConversations={handleShowConversations}
             />
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Conversations Modal */}
+      <Modal
+        visible={showConversations}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={handleCloseConversations}
+      >
+        {authToken ? (
+          <ConversationsView
+            webSocketUrl={webSocketUrl}
+            authToken={authToken}
+            onClose={handleCloseConversations}
+          />
+        ) : (
+          <View style={styles.centeredMessageContainer}>
+            <Text style={styles.centeredMessageText}>Authentication required</Text>
+            <Button title="Close" onPress={handleCloseConversations} />
+          </View>
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }
