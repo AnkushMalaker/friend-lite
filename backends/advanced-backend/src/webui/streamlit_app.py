@@ -810,7 +810,8 @@ with st.sidebar:
                     st.caption("ℹ️ You can only see and manage your own conversations.")
             
             # Show active clients with conversation status
-            for client_id, client_info in clients.items():
+            for client_info in clients:
+                client_id = client_info.get('client_id')
                 logger.debug(f"👤 Processing client: {client_id} - Active conversation: {client_info.get('has_active_conversation', False)}")
                 
                 col1, col2 = st.columns([2, 1])
@@ -836,7 +837,7 @@ with st.sidebar:
                         
                         if close_btn:
                             logger.info(f"🔒 Closing conversation for client: {client_id}")
-                            result = post_data("/api/close_conversation", params={"client_id": client_id}, require_auth=True)
+                            result = post_data(f"/api/conversations/{client_id}/close", require_auth=True)
                             if result:
                                 st.success(f"✅ Conversation closed for {client_id}")
                                 logger.info(f"✅ Successfully closed conversation for {client_id}")
@@ -2237,8 +2238,8 @@ with tab_manage:
             
             # Filter to only clients with active conversations
             active_conversations = {
-                client_id: client_info 
-                for client_id, client_info in clients.items() 
+                client_info.get('client_id'): client_info 
+                for client_info in clients 
                 if client_info.get("has_active_conversation", False)
             }
             
@@ -2257,7 +2258,7 @@ with tab_manage:
                     close_conversation_btn = st.button("🔒 Close Conversation", key="close_conv_main", type="primary")
                 
                 if close_conversation_btn and selected_client:
-                    result = post_data("/api/close_conversation", params={"client_id": selected_client}, require_auth=True)
+                    result = post_data(f"/api/conversations/{selected_client}/close", require_auth=True)
                     if result:
                         st.success(f"✅ Successfully closed conversation for client '{selected_client}'!")
                         st.info(f"📋 {result.get('message', 'Conversation closed')}")
@@ -2276,7 +2277,8 @@ with tab_manage:
             # Show all clients status (only if there are clients)
             if len(clients) > 0:
                 with st.expander("All Connected Clients Status"):
-                    for client_id, client_info in clients.items():
+                    for client_info in clients:
+                        client_id = client_info.get('client_id')
                         status_icon = "🟢" if client_info.get("has_active_conversation", False) else "⚪"
                         st.write(f"{status_icon} **{client_id}** - {'Active conversation' if client_info.get('has_active_conversation', False) else 'No active conversation'}")
                         if client_info.get("current_audio_uuid"):
