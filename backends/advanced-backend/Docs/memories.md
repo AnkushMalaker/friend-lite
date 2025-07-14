@@ -91,6 +91,51 @@ MEM0_CONFIG = {
 }
 ```
 
+## Mem0 Custom Prompts Configuration
+
+### Understanding Mem0 Prompts
+
+Mem0 uses two types of custom prompts:
+
+1. **`custom_fact_extraction_prompt`**: Controls how facts are extracted from conversations
+2. **`custom_update_memory_prompt`**: Controls how memories are updated/merged
+
+### Key Discovery: Fact Extraction Format
+
+The `custom_fact_extraction_prompt` must follow a specific JSON format with few-shot examples:
+
+```python
+custom_fact_extraction_prompt = """
+Please extract relevant facts from the conversation.
+Here are some few shot examples:
+
+Input: Hi.
+Output: {"facts" : []}
+
+Input: I need to buy groceries tomorrow.
+Output: {"facts" : ["Need to buy groceries tomorrow"]}
+
+Input: The meeting is at 3 PM on Friday.
+Output: {"facts" : ["Meeting scheduled for 3 PM on Friday"]}
+
+Now extract facts from the following conversation. Return only JSON format with "facts" key.
+"""
+```
+
+### Configuration Parameters
+
+Mem0 configuration requires these specific parameters:
+
+- `custom_fact_extraction_prompt`: For fact extraction (if enabled)
+- `version`: Should be set to "v1.1"
+- Standard LLM, embedder, and vector_store configurations
+
+### Common Issues
+
+1. **Using `custom_prompt` instead of `custom_fact_extraction_prompt`**: Will cause empty results
+2. **Missing JSON format examples**: Facts won't be extracted properly
+3. **Setting `custom_fact_extraction_prompt` to empty string**: Disables fact extraction entirely
+
 ## Customization Options
 
 ### 1. LLM Model Configuration
@@ -104,6 +149,45 @@ To use a different Ollama model for memory processing:
 MEM0_CONFIG["llm"]["config"]["model"] = "llama3.2:latest"  # or any other model
 ```
 
+#### Switch to OpenAI GPT-4o (Recommended for JSON Reliability)
+
+For better JSON parsing and reduced errors, switch to OpenAI:
+
+```bash
+# In your .env file
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4o  # Recommended for reliable JSON output
+
+# Alternative models
+# OPENAI_MODEL=gpt-4o-mini  # Faster, cheaper option
+# OPENAI_MODEL=gpt-3.5-turbo  # Budget option
+```
+
+Or configure via `memory_config.yaml`:
+
+```yaml
+memory_extraction:
+  llm_settings:
+    model: "gpt-4o"  # When LLM_PROVIDER=openai
+    temperature: 0.1
+    max_tokens: 2000
+
+action_item_extraction:
+  enabled: true
+  llm_settings:
+    model: "gpt-4o"  # Better JSON reliability
+    temperature: 0.1
+    max_tokens: 1000
+
+fact_extraction:
+  enabled: true  # Safe to enable with GPT-4o
+  llm_settings:
+    model: "gpt-4o"
+    temperature: 0.0
+    max_tokens: 1500
+```
+
 #### Adjust LLM Parameters
 
 ```python
@@ -112,6 +196,32 @@ MEM0_CONFIG["llm"]["config"].update({
     "max_tokens": 4000,      # More tokens for longer memories
     "top_p": 0.9,           # Nucleus sampling
 })
+```
+
+#### Benefits of OpenAI GPT-4o
+
+**Improved JSON Reliability:**
+- Consistent JSON formatting reduces parsing errors
+- Better instruction following for structured output
+- Built-in understanding of JSON requirements
+- Reduced need to disable fact extraction
+
+**When to Use GPT-4o:**
+- Experiencing frequent JSON parsing errors
+- Need reliable action item extraction
+- Want to enable fact extraction safely
+- Require consistent structured output
+
+**Monitoring JSON Success:**
+```bash
+# Check for parsing errors
+docker logs advanced-backend | grep "JSONDecodeError"
+
+# Verify OpenAI usage
+docker logs advanced-backend | grep "Using OpenAI provider"
+
+# Monitor action item extraction
+docker logs advanced-backend | grep "OpenAI response"
 ```
 
 ### 2. Embedding Model Configuration

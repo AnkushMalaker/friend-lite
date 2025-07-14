@@ -76,9 +76,10 @@ docker compose up --build
   - `webui/streamlit_app.py`: Web dashboard for conversation and user management
 
 ### Key Components
-- **Audio Pipeline**: Real-time Opus/PCM → transcription → memory extraction
+- **Audio Pipeline**: Real-time Opus/PCM → Deepgram WebSocket transcription → memory extraction
+- **Transcription**: Deepgram Nova-3 model with Wyoming ASR fallback, auto-reconnection
 - **Authentication**: Email-based login with MongoDB ObjectId user system
-- **Client Management**: Auto-generated client IDs as `{user_id_suffix}-{device_name}`
+- **Client Management**: Auto-generated client IDs as `{user_id_suffix}-{device_name}`, centralized ClientManager
 - **Data Storage**: MongoDB (conversations), Qdrant (vector memory), SQLite (failure recovery)
 - **Web Interface**: Streamlit dashboard with authentication and real-time monitoring
 
@@ -91,7 +92,8 @@ Required:
 Recommended:
   - Qdrant: Vector storage for semantic memory
   - Ollama: LLM for memory extraction and action items
-  - ASR Service: Deepgram API or offline Wyoming ASR
+  - Deepgram: Primary transcription service (Nova-3 WebSocket)
+  - Wyoming ASR: Fallback transcription service (offline)
 
 Optional:
   - Speaker Recognition: Voice identification service
@@ -126,8 +128,8 @@ ADMIN_EMAIL=admin@example.com
 
 ### Optional Service Configuration
 ```bash
-# Transcription
-DEEPGRAM_API_KEY=your-deepgram-key
+# Transcription (Deepgram primary, Wyoming fallback)
+DEEPGRAM_API_KEY=your-deepgram-key-here
 OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
 
 # LLM Processing

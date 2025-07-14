@@ -18,6 +18,9 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
     depends_on:
       qdrant:
         condition: service_started
@@ -28,18 +31,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 5s
     restart: unless-stopped
 
   streamlit:
     build:
-      context: ./webui
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.webui
     ports:
       - "8501:8501"
     environment:
       - BACKEND_API_URL=http://friend-backend:8000
-      - BACKEND_PUBLIC_URL=http://localhost:8000
+      - BACKEND_PUBLIC_URL=http://100.99.62.5:8000 # Your BROWSER should be able to access this (Only for displaying audio)
+      - STREAMLIT_SERVER_ENABLE_CORS=false
     depends_on:
       friend-backend:
         condition: service_healthy
@@ -47,8 +51,6 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
-    volumes:
-      - ./webui:/app
 
   proxy:
     image: nginx:alpine
@@ -117,6 +119,7 @@ services:
     volumes:
       - ./mongo_data:/data/db
 
+  # Use tailscale instead 
   # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
   # ngrok:
   #   image: ngrok/ngrok:latest

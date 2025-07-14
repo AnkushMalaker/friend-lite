@@ -6,20 +6,8 @@ memory_extraction:
   # Whether to extract general memories (conversation summaries, topics, etc.)
   enabled: true
   
-  # Main prompt for memory extraction
-  prompt: |
-    Extract anything relevant about this conversation that would be valuable to remember.
-    Focus on:
-    - Key topics discussed
-    - People mentioned and their roles
-    - Decisions made or plans created
-    - Important dates, deadlines, or events
-    - Emotional context or tone
-    - Any significant insights or learnings
-    
-    Keep memories concise but informative. Include context about when and why things were discussed.
-    
-    If no significant information to remember, return a brief summary of the conversation topic.
+  # Main prompt for memory extraction - MODIFIED to be more aggressive
+  prompt: "Extract key information from this conversation."
   
   # LLM parameters for memory extraction
   # Provider is controlled by LLM_PROVIDER environment variable (ollama/openai)
@@ -28,14 +16,18 @@ memory_extraction:
     max_tokens: 2000
     # Model selection based on provider:
     # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
-    # - OpenAI: "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo", etc.
-    model: "gemma3n:e4b"
+    # - OpenAI: "gpt-4o" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    # 
+    # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
+    # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
+    # model: "gemma3n:e4b"
+    model: "gpt-4o"
 
 # Fact extraction settings (structured information)
 fact_extraction:
   # Whether to extract structured facts separately from general memories
-  # DISABLED: Set to false to avoid JSON parsing issues with LLM responses
-  enabled: false
+  # ENABLED: Using proper fact extraction prompt format
+  enabled: true
   
   # Prompt for extracting structured facts
   prompt: |
@@ -49,26 +41,26 @@ fact_extraction:
     - Project names and code names
     - Technical specifications or requirements
     
-    Format each fact clearly. If no specific facts are mentioned, return empty.
+    Return the facts in JSON format as an array of strings. If no specific facts are mentioned, return an empty JSON array [].
     
-    Examples:
-    - "John Smith works as Software Engineer at Acme Corp"
-    - "Project deadline is December 15th, 2024"
-    - "Meeting scheduled for 2 PM EST on Monday"
-    - "Budget approved for $50,000"
+    Examples of JSON output:
+    ["John Smith works as Software Engineer at Acme Corp", "Project deadline is December 15th, 2024", "Meeting scheduled for 2 PM EST on Monday", "Budget approved for $50,000"]
   
   # LLM parameters for fact extraction
   llm_settings:
     temperature: 0.0  # Very low temperature for factual accuracy
     max_tokens: 1500
-    model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
+    # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
+    # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-4o"
 
 # Action item extraction settings
 action_item_extraction:
-  # Whether to extract action items
+  # Whether to extract action items from conversations
+  # RECOMMENDATION: Works best with OpenAI GPT-4o for reliable JSON parsing
   enabled: true
   
-  # Trigger phrases that indicate explicit action items
+  # Trigger phrases that indicate action items in conversation
   trigger_phrases:
     - "simon says"
     - "action item"
@@ -77,42 +69,32 @@ action_item_extraction:
     - "next step"
     - "homework"
     - "deliverable"
+    - "task"
+    - "assignment"
+    - "need to"
+    - "should do"
+    - "remember to"
   
-  # Main prompt for action item extraction
+  # Prompt for extracting action items
   prompt: |
-    Extract actionable tasks and commitments from this conversation.
+    Extract action items from this conversation. Look for tasks, assignments, or things that need to be done.
     
-    Look for:
-    - Explicit commitments ("I'll send you the report")
-    - Requested actions ("Can you review the document?")
-    - Scheduled tasks ("We need to meet next week")
-    - Follow-up items ("Let's check on this tomorrow")
-    - Deliverables mentioned ("The presentation is due Friday")
+    Return a JSON array where each item has:
+    - description: What needs to be done
+    - assignee: Who should do it ("unassigned" if unclear)
+    - due_date: When it should be done ("not_specified" if not mentioned)
+    - priority: high/medium/low/not_specified
+    - context: Why or how this task came up
+    - tool: Required tool ("check_email", "set_alarm", "none")
     
-    For each action item, determine:
-    - What needs to be done (clear, specific description)
-    - Who is responsible (assignee)
-    - When it's due (deadline if mentioned)
-    - Priority level (high/medium/low)
-    
-    Return ONLY valid JSON array. If no action items found, return [].
-    
-    Example format:
-    [
-      {
-        "description": "Send project status report to team",
-        "assignee": "John",
-        "due_date": "Friday",
-        "priority": "high",
-        "context": "Discussed in weekly team meeting"
-      }
-    ]
+    Return only valid JSON. No explanations or extra text.
   
   # LLM parameters for action item extraction
   llm_settings:
     temperature: 0.1
     max_tokens: 1000
-    model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
+    # RECOMMENDATION: Use "gpt-4o" for reliable JSON output in action items
+    model: "gpt-4o"  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Memory categorization settings
 categorization:
@@ -144,39 +126,42 @@ categorization:
   llm_settings:
     temperature: 0.2
     max_tokens: 100
-    model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
+    # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-4o"  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Quality control settings
 quality_control:
   # Minimum conversation length (in characters) to process
-  min_conversation_length: 50
+  # MODIFIED: Reduced from 50 to 1 to process almost all transcripts
+  min_conversation_length: 1
   
   # Maximum conversation length (in characters) to process
   max_conversation_length: 50000
   
   # Whether to skip conversations that are mostly silence/filler
-  skip_low_content: true
+  # MODIFIED: Disabled to ensure all transcripts are processed
+  skip_low_content: false
   
   # Minimum meaningful content ratio (0.0-1.0)
-  min_content_ratio: 0.3
+  # MODIFIED: Reduced to 0.0 to process all content
+  min_content_ratio: 0.0
   
   # Skip conversations with these patterns
+  # MODIFIED: Removed most patterns to ensure all transcripts are processed
   skip_patterns:
-    - "^(um|uh|hmm|yeah|ok|okay)\\s*$"
-    - "^test\\s*$"
-    - "^hello\\s*$"
-    - "^testing\\s*$"
+    # Only skip completely empty patterns - removed test patterns to ensure all content is processed
+    []
 
 # Processing settings
 processing:
   # Whether to process memories in parallel
   parallel_processing: true
   
-  # Maximum number of concurrent processing tasks
-  max_concurrent_tasks: 3
+  # Maximum number of concurrent processing tasks - reduced to avoid overwhelming Ollama
+  max_concurrent_tasks: 1
   
-  # Timeout for memory processing (seconds)
-  processing_timeout: 300
+  # Timeout for memory processing (seconds) - generous timeout for Ollama processing
+  processing_timeout: 600
   
   # Whether to retry failed extractions
   retry_failed: true

@@ -8,7 +8,7 @@ resolution-markers = [
 [[package]]
 name = "advanced-omi-backend"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "easy-audio-interfaces" },
@@ -24,13 +24,15 @@ dependencies = [
     { name = "wyoming" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 deepgram = [
     { name = "deepgram-sdk" },
 ]
 dev = [
     { name = "black" },
     { name = "isort" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 tests = [
     { name = "pytest" },
@@ -43,30 +45,26 @@ webui = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "easy-audio-interfaces", specifier = ">=0.5.1" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=25.1.0" },
+    { name = "deepgram-sdk", marker = "extra == 'deepgram'", specifier = ">=4.0.0" },
+    { name = "easy-audio-interfaces", specifier = ">=0.7.1" },
     { name = "fastapi", specifier = ">=0.115.12" },
     { name = "fastapi-users", extras = ["beanie"], specifier = ">=14.0.1" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=6.0.1" },
     { name = "mem0ai", specifier = ">=0.1.114" },
     { name = "motor", specifier = ">=3.7.1" },
     { name = "ollama", specifier = ">=0.4.8" },
     { name = "omi-sdk", specifier = ">=0.1.5" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.1" },
+    { name = "pytest", marker = "extra == 'tests'", specifier = ">=8.4.1" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'tests'", specifier = ">=1.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
+    { name = "streamlit", marker = "extra == 'webui'", specifier = ">=1.45.1" },
     { name = "uvicorn", specifier = ">=0.34.2" },
     { name = "wyoming", specifier = ">=1.6.1" },
 ]
-
-[package.metadata.requires-dev]
-deepgram = [{ name = "deepgram-sdk", specifier = ">=4.0.0" }]
-dev = [
-    { name = "black", specifier = ">=25.1.0" },
-    { name = "isort", specifier = ">=6.0.1" },
-]
-tests = [
-    { name = "pytest", specifier = ">=8.4.1" },
-    { name = "pytest-asyncio", specifier = ">=1.0.0" },
-]
-webui = [{ name = "streamlit", specifier = ">=1.45.1" }]
 
 [[package]]
 name = "aenum"
@@ -596,7 +594,7 @@ wheels = [
 
 [[package]]
 name = "easy-audio-interfaces"
-version = "0.5.1"
+version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
@@ -607,9 +605,9 @@ dependencies = [
     { name = "websockets" },
     { name = "wyoming" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/16/6f/12f728ad4f295f6dec764fde9312beeca26233368fd93d01405157bc3a02/easy_audio_interfaces-0.5.1.tar.gz", hash = "sha256:b4969f78c6ac69010be00fca35bab54bac9d3e78e5efe9d7f1ea4ebdaf6824a8", size = 36280 }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/e6/9e3ff12be5b4a3e8579d7504c3f4a8981561ca75339eada4a56452092f98/easy_audio_interfaces-0.7.1.tar.gz", hash = "sha256:04cccc20cf342a89efcf079ab05a4343b57a0be8491f9519cdaf92cd421a8a7f", size = 36620 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/6b/ebb733558b5869615a002a10d33249d2fe33bf49b9e8f1470c7b7c920fa6/easy_audio_interfaces-0.5.1-py3-none-any.whl", hash = "sha256:d3ee1a164924a426bc3f2b2b2be991683170545ef53e3a062fb2c75814767dd4", size = 42365 },
+    { url = "https://files.pythonhosted.org/packages/6f/6c/18de57f237cf90dd32a299365707a31a6b42b7b7fff4593f3867818e6afd/easy_audio_interfaces-0.7.1-py3-none-any.whl", hash = "sha256:6ee94d9636da35a3bd0cafb41498c2d0e5b8d16d746ba8f46392891e956fb199", size = 43112 },
 ]
 
 [[package]]
