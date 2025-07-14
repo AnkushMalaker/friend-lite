@@ -4,6 +4,9 @@ const LAST_CONNECTED_DEVICE_ID_KEY = 'LAST_CONNECTED_DEVICE_ID';
 const WEBSOCKET_URL_KEY = 'WEBSOCKET_URL_KEY';
 const DEEPGRAM_API_KEY_KEY = 'DEEPGRAM_API_KEY_KEY';
 const USER_ID_KEY = 'USER_ID_KEY';
+const AUTH_USERNAME_KEY = 'AUTH_USERNAME_KEY';
+const AUTH_PASSWORD_KEY = 'AUTH_PASSWORD_KEY';
+const AUTH_TOKEN_KEY = 'AUTH_TOKEN_KEY';
 
 export const saveLastConnectedDeviceId = async (deviceId: string | null): Promise<void> => {
   try {
@@ -107,5 +110,97 @@ export const getUserId = async (): Promise<string | null> => {
   } catch (error) {
     console.error('[Storage] Error retrieving User ID:', error);
     return null;
+  }
+};
+
+// Authentication Username
+export const saveAuthUsername = async (username: string | null): Promise<void> => {
+  try {
+    if (username) {
+      await AsyncStorage.setItem(AUTH_USERNAME_KEY, username);
+      console.log('[Storage] Auth username saved:', username);
+    } else {
+      await AsyncStorage.removeItem(AUTH_USERNAME_KEY);
+      console.log('[Storage] Auth username removed.');
+    }
+  } catch (error) {
+    console.error('[Storage] Error saving auth username:', error);
+  }
+};
+
+export const getAuthUsername = async (): Promise<string | null> => {
+  try {
+    const username = await AsyncStorage.getItem(AUTH_USERNAME_KEY);
+    console.log('[Storage] Retrieved auth username:', username);
+    return username;
+  } catch (error) {
+    console.error('[Storage] Error retrieving auth username:', error);
+    return null;
+  }
+};
+
+// Authentication Password
+export const saveAuthPassword = async (password: string | null): Promise<void> => {
+  try {
+    if (password) {
+      await AsyncStorage.setItem(AUTH_PASSWORD_KEY, password);
+      console.log('[Storage] Auth password saved.'); // Don't log password for security
+    } else {
+      await AsyncStorage.removeItem(AUTH_PASSWORD_KEY);
+      console.log('[Storage] Auth password removed.');
+    }
+  } catch (error) {
+    console.error('[Storage] Error saving auth password:', error);
+  }
+};
+
+export const getAuthPassword = async (): Promise<string | null> => {
+  try {
+    const password = await AsyncStorage.getItem(AUTH_PASSWORD_KEY);
+    if (password) {
+      console.log('[Storage] Retrieved auth password.');
+    }
+    return password;
+  } catch (error) {
+    console.error('[Storage] Error retrieving auth password:', error);
+    return null;
+  }
+};
+
+// Authentication Token
+export const saveAuthToken = async (token: string | null): Promise<void> => {
+  try {
+    if (token) {
+      await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
+      console.log('[Storage] Auth token saved.'); // Don't log full token for security
+    } else {
+      await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+      console.log('[Storage] Auth token removed.');
+    }
+  } catch (error) {
+    console.error('[Storage] Error saving auth token:', error);
+  }
+};
+
+export const getAuthToken = async (): Promise<string | null> => {
+  try {
+    const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      console.log('[Storage] Retrieved auth token.');
+    }
+    return token;
+  } catch (error) {
+    console.error('[Storage] Error retrieving auth token:', error);
+    return null;
+  }
+};
+
+// Clear all authentication data
+export const clearAuthData = async (): Promise<void> => {
+  try {
+    await AsyncStorage.multiRemove([AUTH_USERNAME_KEY, AUTH_PASSWORD_KEY, AUTH_TOKEN_KEY]);
+    console.log('[Storage] All auth data cleared.');
+  } catch (error) {
+    console.error('[Storage] Error clearing auth data:', error);
   }
 }; 

@@ -14,6 +14,13 @@ import {
   getWebSocketUrl,
   saveUserId,
   getUserId,
+  saveAuthUsername,
+  getAuthUsername,
+  saveAuthPassword,
+  getAuthPassword,
+  saveAuthToken,
+  getAuthToken,
+  clearAuthData,
 } from './utils/storage';
 import { useAudioListener } from './hooks/useAudioListener';
 import { useAudioStreamer } from './hooks/useAudioStreamer';
@@ -41,6 +48,11 @@ export default function App() {
   
   // State for User ID
   const [userId, setUserId] = useState<string>('');
+  
+  // State for Authentication
+  const [authUsername, setAuthUsername] = useState<string>('');
+  const [authPassword, setAuthPassword] = useState<string>('');
+  const [authToken, setAuthToken] = useState<string>('');
   
   // Bluetooth Management Hook
   const {
@@ -136,6 +148,24 @@ export default function App() {
       if (storedUserId) {
         console.log('[App.tsx] Loaded User ID from storage:', storedUserId);
         setUserId(storedUserId);
+      }
+
+      const storedAuthUsername = await getAuthUsername();
+      if (storedAuthUsername) {
+        console.log('[App.tsx] Loaded auth username from storage:', storedAuthUsername);
+        setAuthUsername(storedAuthUsername);
+      }
+
+      const storedAuthPassword = await getAuthPassword();
+      if (storedAuthPassword) {
+        console.log('[App.tsx] Loaded auth password from storage.');
+        setAuthPassword(storedAuthPassword);
+      }
+
+      const storedAuthToken = await getAuthToken();
+      if (storedAuthToken) {
+        console.log('[App.tsx] Loaded auth token from storage.');
+        setAuthToken(storedAuthToken);
       }
     };
     loadSettings();
@@ -316,6 +346,84 @@ export default function App() {
     setUserId(id);
     await saveUserId(id || null);
   }, []);
+
+  const handleSetAndSaveAuthUsername = useCallback(async (username: string) => {
+    setAuthUsername(username);
+    await saveAuthUsername(username || null);
+  }, []);
+
+  const handleSetAndSaveAuthPassword = useCallback(async (password: string) => {
+    setAuthPassword(password);
+    await saveAuthPassword(password || null);
+  }, []);
+
+  const handleSetAndSaveAuthToken = useCallback(async (token: string) => {
+    setAuthToken(token);
+    await saveAuthToken(token || null);
+  }, []);
+
+  const handleClearAuthData = useCallback(async () => {
+    setAuthUsername('');
+    setAuthPassword('');
+    setAuthToken('');
+    await clearAuthData();
+    console.log('[App.tsx] Authentication data cleared.');
+  }, []);
+
+  const handleTestAuth = useCallback(async (): Promise<boolean> => {
+    if (!webSocketUrl) {
+      throw new Error('WebSocket URL not set');
+    }
+
+    // Convert WebSocket URL to HTTP URL for API call
+    const baseUrl = webSocketUrl.replace('ws://', 'http://').replace('wss://', 'https://').split('/ws')[0];
+    
+    try {
+      // If we already have a token, test it first
+      if (authToken && authToken.trim() !== '') {
+        const response = await fetch(`${baseUrl}/api/users`, {
+          headers: {
+            'Authorization': `Bearer ${authToken.trim()}`,
+          },
+        });
+        
+        if (response.ok) {
+          console.log('[App.tsx] Token authentication successful.');
+          return true;
+        } else {
+          console.log('[App.tsx] Token authentication failed, trying username/password.');
+        }
+      }
+
+      // If no token or token failed, try username/password authentication
+      if (authUsername && authPassword) {
+        const formData = new FormData();
+        formData.append('username', authUsername);
+        formData.append('password', authPassword);
+
+        const response = await fetch(`${baseUrl}/auth/jwt/login`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          const token = result.access_token;
+          if (token) {
+            await handleSetAndSaveAuthToken(token);
+            console.log('[App.tsx] Username/password authentication successful, token saved.');
+            return true;
+          }
+        }
+      }
+
+      console.log('[App.tsx] Authentication failed.');
+      return false;
+    } catch (error) {
+      console.error('[App.tsx] Error testing authentication:', error);
+      throw error;
+    }
+  }, [webSocketUrl, authUsername, authPassword, authToken, handleSetAndSaveAuthToken]);
 
   const fetchUsers = useCallback(async (): Promise<string[]> => {
     if (!webSocketUrl) {
@@ -530,6 +638,14 @@ export default function App() {
               userId={userId}
               onSetUserId={handleSetAndSaveUserId}
               onFetchUsers={fetchUsers}
+              authUsername={authUsername}
+              authPassword={authPassword}
+              authToken={authToken}
+              onSetAuthUsername={handleSetAndSaveAuthUsername}
+              onSetAuthPassword={handleSetAndSaveAuthPassword}
+              onSetAuthToken={handleSetAndSaveAuthToken}
+              onClearAuthData={handleClearAuthData}
+              onTestAuth={handleTestAuth}
             />
           )}
         </ScrollView>

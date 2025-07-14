@@ -271,6 +271,12 @@ const styles = StyleSheet.create({
   buttonSecondaryText: {
     color: 'white',
   },
+  buttonDanger: {
+    backgroundColor: '#FF3B30',
+  },
+  buttonAuth: {
+    backgroundColor: '#34C759',
+  },
   buttonText: {
     color: 'white',
     fontSize: 16,
@@ -371,6 +377,38 @@ const styles = StyleSheet.create({
   statusError: {
     color: 'red',
     fontWeight: 'bold',
+  },
+  // Authentication styles
+  authSection: {
+    marginTop: 20,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  passwordInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  passwordToggle: {
+    position: 'absolute',
+    right: 10,
+    padding: 5,
+  },
+  passwordToggleText: {
+    fontSize: 16,
+  },
+  tokenInput: {
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  authButtonsContainer: {
+    flexDirection: 'row',
+    marginTop: 15,
   },
   // Modal styles
   modalOverlay: {

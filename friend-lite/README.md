@@ -77,23 +77,171 @@ For production deployments, use a more secure network configuration:
 Replace `your-domain.com` with your actual domain name.
 
 
-# URL to put
-The URL you need to put in the APP is any backend that accepts OPUS audio in bytes.
-Currently, there are two backends provided in this repository:
-1. `backends/simple-backend` - This is good for getting started, it simply saves the audio from the app into the backend - you can listen to it and verify if everything sounds good.
-2. `backends/advanced-backend` - This is a more "complete" backend that provides the essentials. A database (mongodb) to store transcripts, a STT (speech to text) connection to transform the audio to transcripts, an LLM connection via ollama to store "memories" from transcripts, etc. 
+# Backend Configuration
 
-Once you start them (instructions should be in their respective readme), you need to do one of two things:
-1. Directly put the local/public IP of the machine where you're hosting the backend. 
-2. Expose the IP via something like ngrok/cloudflare over https 
-For example with ngrok, do:
-`ngrok http 8000`  
-(or if you did docker compose up, you can go to "http://machine-ip:4040/status). This will give you a URL. 
-You need to paste 
+## Available Backends
 
-`<THAT URL>/ws`
+The Friend Lite app supports two backend options:
 
-into the app.
-;_;
-Yeah its ugly 
+1. **`backends/simple-backend`** - Basic audio storage for testing and verification
+2. **`backends/advanced-backend`** - Full-featured backend with authentication, transcription, and memory storage
+
+## Backend URL Configuration
+
+### For Simple Backend
+Enter the WebSocket URL directly:
+```
+ws://your-server-ip:8000/ws
+```
+
+### For Advanced Backend (Recommended)
+The advanced backend requires authentication. Enter the WebSocket URL in the app:
+```
+ws://your-server-ip:8000/ws_pcm
+```
+
+#### Exposing Your Backend
+
+**Option 1: Direct IP Access**
+- Use your machine's local/public IP address
+- Example: `ws://192.168.1.100:8000/ws_pcm`
+
+**Option 2: Using ngrok (Recommended for remote access)**
+```bash
+ngrok http 8000
+```
+This gives you a public URL. Use the WebSocket format:
+```
+wss://your-ngrok-id.ngrok.app/ws_pcm
+```
+
+## Authentication Setup (Advanced Backend)
+
+The Friend Lite app now includes built-in authentication for the advanced backend:
+
+### 1. Backend Authentication
+
+In the app's **Backend Authentication** section, enter your credentials:
+
+- **Username (email)**: Your registered email address
+- **Password**: Your account password  
+- **JWT Token** (optional): Direct token paste for advanced users
+
+### 2. Authentication Methods
+
+**Method A: Username & Password**
+1. Enter your email and password
+2. Tap "Test Auth" to validate credentials
+3. App automatically retrieves and saves JWT token
+
+**Method B: Direct Token**
+1. Get a JWT token from the backend API:
+   ```bash
+   curl -X POST "http://your-server:8000/auth/jwt/login" \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d "username=your-email@example.com&password=your-password"
+   ```
+2. Paste the `access_token` into the JWT Token field
+3. Tap "Test Auth" to validate
+
+### 3. User Account Creation
+
+Create user accounts through the backend:
+
+**Option A: Web Dashboard**
+1. Open `http://your-server:8501`
+2. Login as admin
+3. Create users through the interface
+
+**Option B: API (Admin Token Required)**
+```bash
+export ADMIN_TOKEN="your-admin-jwt-token"
+
+curl -X POST "http://your-server:8000/api/create_user" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "userpass", "display_name": "John Doe"}'
+```
+
+### 4. Admin Credentials
+
+Admin credentials are set in the backend's `.env` file:
+```bash
+ADMIN_PASSWORD=your-secure-admin-password
+ADMIN_EMAIL=admin@example.com
+```
+
+## Authentication Features
+
+### Secure Credential Storage
+- **Automatic Storage**: App saves credentials locally using AsyncStorage
+- **Token Management**: JWT tokens are automatically refreshed
+- **Password Security**: Passwords stored locally with show/hide toggle
+
+### Data Isolation
+- **User-Specific Data**: Each user can only access their own conversations and memories
+- **Multi-Device Support**: Single user can connect multiple devices
+- **Client ID Format**: Auto-generated as `user_id_suffix-device_name`
+
+### WebSocket Authentication
+The app automatically appends authentication to WebSocket URLs:
+```
+ws://your-server:8000/ws_pcm?token=JWT_TOKEN&device_name=phone&user_id=optional_user_id
+```
+
+## Troubleshooting Authentication
+
+### Common Issues
+
+**"Authentication failed"**
+- Verify email/password combination
+- Check backend is running and accessible
+- Ensure user account exists
+
+**"Could not connect to authentication server"**
+- Verify WebSocket URL is correct
+- Check network connectivity
+- Ensure backend authentication endpoints are accessible
+
+**"No access token received"**
+- Check backend logs for authentication errors
+- Verify `AUTH_SECRET_KEY` is set in backend `.env`
+- Ensure user credentials are correct
+
+### Testing Authentication
+
+1. **Test Backend Connection**:
+   ```bash
+   curl http://your-server:8000/health
+   ```
+
+2. **Test Manual Login**:
+   ```bash
+   curl -X POST "http://your-server:8000/auth/jwt/login" \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d "username=your-email@example.com&password=your-password"
+   ```
+
+3. **Verify Token**:
+   ```bash
+   curl -H "Authorization: Bearer YOUR_TOKEN" \
+     http://your-server:8000/api/users
+   ```
+
+## Security Best Practices
+
+- **HTTPS in Production**: Always use `wss://` (secure WebSocket) in production
+- **Strong Passwords**: Use strong, unique passwords for user accounts
+- **Token Expiry**: JWT tokens expire after 1 hour for security
+- **Network Security**: Configure proper firewall rules for backend access
+
+For complete authentication documentation, see [`backends/advanced-backend/Docs/auth.md`](../backends/advanced-backend/Docs/auth.md).
+
+## Getting Started
+
+1. **Set up the backend** (see backend documentation)
+2. **Install the app** using one of the methods above  
+3. **Configure WebSocket URL** in the app
+4. **Set up authentication** (for advanced backend)
+5. **Connect to your OMI device** and start streaming audio 
 
