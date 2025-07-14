@@ -208,12 +208,9 @@ def main():
         print(f"📦 Found specific test file: {specific_file_path}")
     else:
         # Fallback to original directory
-        audio_dir = os.path.expanduser("~/audio-chunks-hangout/")
-        test_files_names = [
-            "1752165526_630729-laptop_69c5d853d7124db7bcf10b3da1a091ba.wav",
-            "1752165255_630729-laptop_3ac1d927396640349725b148e712f656.wav"
-        ]
-        wav_files = collect_wav_files(audio_dir, filter_list=test_files_names)
+        audio_dir = os.path.expanduser("~/Some dir/")
+        # You can specify some test_files list if you want here
+        wav_files = collect_wav_files(audio_dir, filter_list=None)
         if not wav_files:
             sys.exit(1)
         

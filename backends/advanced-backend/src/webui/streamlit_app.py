@@ -793,9 +793,9 @@ with st.sidebar:
         # Get active clients
         logger.debug("📡 Fetching active clients...")
         active_clients_data = get_data("/api/active_clients", require_auth=True)
+        clients = active_clients_data["clients"] if active_clients_data and active_clients_data.get("clients") else {}
         
-        if active_clients_data and active_clients_data.get("clients"):
-            clients = active_clients_data["clients"]
+        if clients:
             logger.info(f"📊 Found {len(clients)} accessible clients")
             
             # Check if user is authenticated to show appropriate messages
