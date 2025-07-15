@@ -8,7 +8,6 @@ services:
     volumes:
       - ./audio_chunks:/app/audio_chunks
       - ./debug_dir:/app/debug_dir
-      - ./data:/app/data
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}

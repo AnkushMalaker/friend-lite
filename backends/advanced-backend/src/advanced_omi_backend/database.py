@@ -40,7 +40,7 @@ def get_collections():
     }
 
 
-class AudioChunksCollection:
+class AudioChunksCollectionHelper:
     """Async helpers for the audio_chunks collection."""
 
     def __init__(self, collection):

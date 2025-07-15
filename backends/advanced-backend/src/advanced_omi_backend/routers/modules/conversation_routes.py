@@ -10,20 +10,20 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
-from advanced_omi_backend.auth import current_active_user, current_superuser
+from advanced_omi_backend.auth import current_active_user
 from advanced_omi_backend.client_manager import (
     ClientManager,
     client_belongs_to_user,
     get_client_manager_dependency,
     get_user_clients_all,
 )
-from advanced_omi_backend.database import AudioChunksCollection, chunks_col
+from advanced_omi_backend.database import AudioChunksCollectionHelper, chunks_col
 from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ audio_logger = logging.getLogger("audio_processing")
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 # Initialize chunk repository
-chunk_repo = AudioChunksCollection(chunks_col)
+chunk_repo = AudioChunksCollectionHelper(chunks_col)
 
 
 @router.post("/{client_id}/close")
