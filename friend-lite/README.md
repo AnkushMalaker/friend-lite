@@ -77,7 +77,42 @@ For production deployments, use a more secure network configuration:
 Replace `your-domain.com` with your actual domain name.
 
 
-# Backend Configuration
+# Backend URL & Authentication Setup
+
+## How to Configure the App
+
+1. **Backend URL:**
+   - Enter the base URL of your Friend-Lite backend (e.g., `http://localhost:8000` or `https://your-server.com`).
+   - **Do NOT** enter a WebSocket URL or include `/ws`, `/ws_pcm`, or `/ws_omi` in the address.
+   - The app will automatically generate the correct WebSocket endpoints as needed.
+
+2. **Authentication:**
+   - Enter your **email address** (not a username) and password.
+   - These credentials must match a user account on the backend.
+   - The app will authenticate and store your token for future requests.
+   - If you don’t have an account, ask your admin to create one.
+
+3. **Example:**
+
+| Field         | Example Value                |
+|---------------|------------------------------|
+| Backend URL   | http://localhost:8000        |
+| Email         | user@example.com (from .env) |
+| Password      | yourpassword (from .env)     |
+
+4. **Quickstart:**
+   - Enter your backend URL, email, and password in the app’s configuration screen.
+   - Tap "Test Auth" to verify your credentials.
+   - The app will handle authentication and connect to the backend automatically.
+
+## Common Issues
+
+- **Login fails:** Double-check your email and password. Make sure the backend is running and accessible from your device.
+- **Backend URL errors:** Ensure you’re using the correct base URL (no trailing slashes, no WebSocket paths).
+- **Token expired:** If you’re logged out, simply re-enter your credentials.
+- **Cannot connect:** Ensure your device is on the same network as the backend, or use a public URL (e.g., via ngrok).
+
+---
 
 ## Available Backends
 
@@ -95,10 +130,9 @@ ws://your-server-ip:8000/ws
 ```
 
 ### For Advanced Backend (Recommended)
-The advanced backend requires authentication. Enter the WebSocket URL in the app:
-```
-ws://your-server-ip:8000/ws_pcm
-```
+The advanced backend requires authentication. **Enter the base backend URL** (e.g., `http://your-server-ip:8000` or `https://your-server.com`).
+
+> **Note:** Do **not** enter a WebSocket URL. The app will generate the correct WebSocket endpoint automatically.
 
 #### Exposing Your Backend
 
@@ -123,13 +157,13 @@ The Friend Lite app now includes built-in authentication for the advanced backen
 
 In the app's **Backend Authentication** section, enter your credentials:
 
-- **Username (email)**: Your registered email address
+- **Email**: Your registered email address
 - **Password**: Your account password  
 - **JWT Token** (optional): Direct token paste for advanced users
 
 ### 2. Authentication Methods
 
-**Method A: Username & Password**
+**Method A: Email & Password**
 1. Enter your email and password
 2. Tap "Test Auth" to validate credentials
 3. App automatically retrieves and saves JWT token

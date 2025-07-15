@@ -31,10 +31,28 @@ import ScanControls from './components/ScanControls';
 import DeviceListItem from './components/DeviceListItem';
 import DeviceDetails from './components/DeviceDetails';
 import ConversationsView from './components/ConversationsView';
+import BackendConfiguration from './components/BackendConfiguration';
+import AudioModeSelector from './components/AudioModeSelector';
+import PhoneAudioControls from './components/PhoneAudioControls';
 
 export default function App() {
-  // Initialize OmiConnection
-  const omiConnection = useRef(new OmiConnection()).current;
+  // Initialize OmiConnection with error handling
+  const omiConnection = useRef<any>(null);
+  
+  if (!omiConnection.current) {
+    try {
+      omiConnection.current = new OmiConnection();
+    } catch (error) {
+      console.error('[App.tsx] Error initializing OmiConnection:', error);
+      // Return a mock object to prevent crashes
+      omiConnection.current = {
+        isConnected: () => false,
+        connectedDeviceId: null,
+        connect: () => Promise.reject(new Error('OmiConnection failed to initialize')),
+        disconnect: () => Promise.resolve(),
+      };
+    }
+  }
 
   // Filter state
   const [showOnlyOmi, setShowOnlyOmi] = useState(false);
@@ -44,19 +62,22 @@ export default function App() {
   const [isAttemptingAutoReconnect, setIsAttemptingAutoReconnect] = useState(false);
   const [triedAutoReconnectForCurrentId, setTriedAutoReconnectForCurrentId] = useState(false);
 
-  // State for WebSocket URL for custom audio streaming
-  const [webSocketUrl, setWebSocketUrl] = useState<string>('');
+  // State for Backend URL for custom audio streaming
+  const [backendUrl, setBackendUrl] = useState<string>('http://100.99.62.5:8000');
   
   // State for User ID
   const [userId, setUserId] = useState<string>('');
   
   // State for Authentication
-  const [authUsername, setAuthUsername] = useState<string>('');
-  const [authPassword, setAuthPassword] = useState<string>('');
+  const [authUsername, setAuthUsername] = useState<string>('admin@example.com');
+  const [authPassword, setAuthPassword] = useState<string>('Getaway-Unplowed-Flaxseed6-Roundup');
   const [authToken, setAuthToken] = useState<string>('');
   
   // State for Conversations View
   const [showConversations, setShowConversations] = useState<boolean>(false);
+  
+  // State for Phone Audio Mode
+  const [phoneAudioMode, setPhoneAudioMode] = useState<boolean>(false);
   
   // Bluetooth Management Hook
   const {
@@ -77,7 +98,7 @@ export default function App() {
     startAudioListener: originalStartAudioListener,
     stopAudioListener: originalStopAudioListener,
   } = useAudioListener(
-    omiConnection,
+    omiConnection.current,
     () => !!deviceConnection.connectedDeviceId
   );
 
@@ -96,7 +117,7 @@ export default function App() {
   // Now define the stable onDeviceConnect and onDeviceDisconnect callbacks
   const onDeviceConnect = useCallback(async () => {
     console.log('[App.tsx] Device connected callback.');
-    const deviceIdToSave = omiConnection.connectedDeviceId; // Corrected: Use property from OmiConnection instance
+    const deviceIdToSave = omiConnection.current.connectedDeviceId; // Corrected: Use property from OmiConnection instance
 
     if (deviceIdToSave) {
       console.log('[App.tsx] Saving connected device ID to storage:', deviceIdToSave);
@@ -104,7 +125,7 @@ export default function App() {
       setLastKnownDeviceId(deviceIdToSave); // Update state for consistency
       setTriedAutoReconnectForCurrentId(false); // Reset if a new device connects successfully
     } else {
-      console.warn('[App.tsx] onDeviceConnect: Could not determine connected device ID to save. omiConnection.connectedDeviceId was null/undefined.');
+      console.warn('[App.tsx] onDeviceConnect: Could not determine connected device ID to save. omiConnection.current.connectedDeviceId was null/undefined.');
     }
     // Actions on connect (e.g., auto-fetch codec/battery)
   }, [omiConnection]); // saveLastConnectedDeviceId is stable, omiConnection is stable ref
@@ -123,7 +144,7 @@ export default function App() {
 
   // Initialize Device Connection hook, passing the memoized callbacks
   const deviceConnection = useDeviceConnection(
-    omiConnection,
+    omiConnection.current,
     onDeviceDisconnect,
     onDeviceConnect
   );
@@ -142,10 +163,10 @@ export default function App() {
         setTriedAutoReconnectForCurrentId(true); // Mark that we shouldn't try (as no ID is known)
       }
 
-      const storedWsUrl = await getWebSocketUrl();
-      if (storedWsUrl) {
-        console.log('[App.tsx] Loaded WebSocket URL from storage:', storedWsUrl);
-        setWebSocketUrl(storedWsUrl);
+      const storedBackendUrl = await getWebSocketUrl(); // Keep same storage key for compatibility
+      if (storedBackendUrl) {
+        console.log('[App.tsx] Loaded Backend URL from storage:', storedBackendUrl);
+        setBackendUrl(storedBackendUrl);
       }
 
       const storedUserId = await getUserId();
@@ -175,16 +196,7 @@ export default function App() {
     loadSettings();
   }, []);
 
-  // Now that deviceConnection is available, we can define the more specific isAudioReadyToListen
-  // for useAudioListener if we were to re-initialize it or if useAudioListener needs it reactively.
-  // However, useAudioListener is already initialized. The key is that callbacks passed to hooks are stable.
-  // The previous tempIsAudioReadyCb is likely sufficient if it broadly gates on omiConnection.
-  // For a more reactive isAudioReadyToListen (if needed by useAudioListener internally beyond init):
-  const refinedIsAudioReadyToListen = useCallback(() => {
-    return omiConnection.isConnected() && !!deviceConnection.connectedDeviceId;
-  }, [omiConnection, deviceConnection.connectedDeviceId]);
-  // If useAudioListener needed to react to deviceId changes for its readiness, its internal structure would need to accommodate that.
-  // For its initial call, tempIsAudioReadyCb was used. This is a common pattern to break dependency cycles.
+  // Device Connection hook is now available for audio readiness checks
 
   // Device Scanning Hook
   const {
@@ -253,28 +265,40 @@ export default function App() {
   ]);
 
   const handleStartAudioListeningAndStreaming = useCallback(async () => {
-    if (!webSocketUrl || webSocketUrl.trim() === '') {
-      Alert.alert('WebSocket URL Required', 'Please enter the WebSocket URL for streaming.');
+    if (!backendUrl || backendUrl.trim() === '') {
+      Alert.alert('Backend URL Required', 'Please enter the Backend URL for streaming.');
       return;
     }
-    if (!omiConnection.isConnected() || !deviceConnection.connectedDeviceId) {
+    if (!omiConnection.current.isConnected() || !deviceConnection.connectedDeviceId) {
       Alert.alert('Device Not Connected', 'Please connect to an OMI device first.');
       return;
     }
 
     try {
-      // Modify WebSocket URL to include user_id if provided
-      let finalWebSocketUrl = webSocketUrl;
+      // Build WebSocket URL for OMI device (use /ws_omi endpoint)
+      let wsUrl = backendUrl;
+      if (wsUrl.startsWith('http://')) {
+        wsUrl = wsUrl.replace('http://', 'ws://');
+      } else if (wsUrl.startsWith('https://')) {
+        wsUrl = wsUrl.replace('https://', 'wss://');
+      } else if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+        wsUrl = 'ws://' + wsUrl;
+      }
+      
+      // Remove any existing WebSocket paths and add /ws_omi for OMI device (Opus audio)
+      wsUrl = wsUrl.replace(/\/(ws_pcm|ws_omi)($|\?.*$)/, '');
+      wsUrl += '/ws_omi';
+      
+      // Add user_id if provided
       if (userId && userId.trim() !== '') {
-        const separator = webSocketUrl.includes('?') ? '&' : '?';
-        finalWebSocketUrl = `${webSocketUrl}${separator}user_id=${encodeURIComponent(userId.trim())}`;
-        console.log('[App.tsx] Using WebSocket URL with user_id:', finalWebSocketUrl);
+        wsUrl += `?user_id=${encodeURIComponent(userId.trim())}`;
+        console.log('[App.tsx] Using WebSocket URL with user_id:', wsUrl);
       } else {
-        console.log('[App.tsx] Using WebSocket URL without user_id:', finalWebSocketUrl);
+        console.log('[App.tsx] Using WebSocket URL without user_id:', wsUrl);
       }
 
       // Start custom WebSocket streaming first
-      await audioStreamer.startStreaming(finalWebSocketUrl);
+      await audioStreamer.startStreaming(wsUrl);
 
       // Then start OMI audio listener
       await originalStartAudioListener((audioBytes) => {
@@ -289,7 +313,7 @@ export default function App() {
       // Ensure cleanup if one part started but the other failed
       if (audioStreamer.isStreaming) audioStreamer.stopStreaming();
     }
-  }, [originalStartAudioListener, audioStreamer, webSocketUrl, userId, omiConnection, deviceConnection.connectedDeviceId]);
+  }, [originalStartAudioListener, audioStreamer, backendUrl, userId, omiConnection, deviceConnection.connectedDeviceId]);
 
   const handleStopAudioListeningAndStreaming = useCallback(async () => {
     console.log('[App.tsx] Stopping audio listening and streaming.');
@@ -304,7 +328,7 @@ export default function App() {
 
     return () => {
       console.log('App unmounting - cleaning up OmiConnection, BleManager, and AudioStreamer');
-      if (omiConnection.isConnected()) {
+      if (omiConnection.current.isConnected()) {
         disconnectFunc().catch(err => console.error("Error disconnecting in cleanup:", err));
       }
       if (bleManager) {
@@ -341,9 +365,9 @@ export default function App() {
     });
   }, [scannedDevices, showOnlyOmi]);
 
-  const handleSetAndSaveWebSocketUrl = useCallback(async (url: string) => {
-    setWebSocketUrl(url);
-    await saveWebSocketUrl(url);
+  const handleSetAndSaveBackendUrl = useCallback(async (url: string) => {
+    setBackendUrl(url);
+    await saveWebSocketUrl(url); // Keep same storage key for compatibility
   }, []);
 
   const handleSetAndSaveUserId = useCallback(async (id: string) => {
@@ -375,41 +399,76 @@ export default function App() {
   }, []);
 
   const handleTestAuth = useCallback(async (): Promise<boolean> => {
-    if (!webSocketUrl) {
-      throw new Error('WebSocket URL not set');
+    if (!backendUrl) {
+      throw new Error('Backend URL not set');
     }
 
-    // Convert WebSocket URL to HTTP URL for API call
-    const baseUrl = webSocketUrl.replace('ws://', 'http://').replace('wss://', 'https://').split('/ws')[0];
+    // Ensure baseUrl is HTTP/HTTPS format
+    let baseUrl = backendUrl;
+    if (baseUrl.startsWith('ws://')) {
+      baseUrl = baseUrl.replace('ws://', 'http://');
+    } else if (baseUrl.startsWith('wss://')) {
+      baseUrl = baseUrl.replace('wss://', 'https://');
+    } else if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+      // Assume http if no protocol specified
+      baseUrl = 'http://' + baseUrl;
+    }
+    // Remove any trailing slash and WebSocket paths (but preserve port numbers)
+    baseUrl = baseUrl.replace(/\/(ws_pcm|ws_omi)($|\?.*$)/, '').replace(/\/$/, '');
     
     try {
+      console.log(`[App.tsx] Testing authentication against: ${baseUrl}`);
+      
       // If we already have a token, test it first
       if (authToken && authToken.trim() !== '') {
-        const response = await fetch(`${baseUrl}/api/users`, {
-          headers: {
-            'Authorization': `Bearer ${authToken.trim()}`,
-          },
-        });
-        
-        if (response.ok) {
-          console.log('[App.tsx] Token authentication successful.');
-          return true;
-        } else {
-          console.log('[App.tsx] Token authentication failed, trying username/password.');
+        console.log('[App.tsx] Testing existing token...');
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+          
+          const response = await fetch(`${baseUrl}/api/users`, {
+            headers: {
+              'Authorization': `Bearer ${authToken.trim()}`,
+            },
+            signal: controller.signal,
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (response.ok) {
+            console.log('[App.tsx] Token authentication successful.');
+            return true;
+          } else {
+            console.log(`[App.tsx] Token authentication failed with status: ${response.status}`);
+            // Clear the invalid token
+            await handleSetAndSaveAuthToken('');
+          }
+        } catch (tokenError) {
+          console.log('[App.tsx] Token test failed with error:', tokenError);
+          // Clear the problematic token
+          await handleSetAndSaveAuthToken('');
         }
       }
 
       // If no token or token failed, try username/password authentication
       if (authUsername && authPassword) {
-        const formData = new FormData();
-        formData.append('username', authUsername);
-        formData.append('password', authPassword);
-
+        console.log(`[App.tsx] Attempting username/password authentication to: ${baseUrl}/auth/jwt/login`);
+        // Use URL-encoded string for body, not FormData
+        const body = `username=${encodeURIComponent(authUsername)}&password=${encodeURIComponent(authPassword)}`;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+        
         const response = await fetch(`${baseUrl}/auth/jwt/login`, {
           method: 'POST',
-          body: formData,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+          signal: controller.signal,
         });
 
+        clearTimeout(timeoutId);
+        console.log(`[App.tsx] Auth response status: ${response.status}`);
+        
         if (response.ok) {
           const result = await response.json();
           const token = result.access_token;
@@ -418,6 +477,9 @@ export default function App() {
             console.log('[App.tsx] Username/password authentication successful, token saved.');
             return true;
           }
+        } else {
+          const errorText = await response.text();
+          console.log(`[App.tsx] Auth failed with status ${response.status}: ${errorText}`);
         }
       }
 
@@ -427,7 +489,7 @@ export default function App() {
       console.error('[App.tsx] Error testing authentication:', error);
       throw error;
     }
-  }, [webSocketUrl, authUsername, authPassword, authToken, handleSetAndSaveAuthToken]);
+  }, [backendUrl, authUsername, authPassword, authToken, handleSetAndSaveAuthToken]);
 
   const handleShowConversations = useCallback(() => {
     if (!authToken) {
@@ -442,12 +504,20 @@ export default function App() {
   }, []);
 
   const fetchUsers = useCallback(async (): Promise<string[]> => {
-    if (!webSocketUrl) {
-      throw new Error('WebSocket URL not set');
+    if (!backendUrl) {
+      throw new Error('Backend URL not set');
     }
     
-    // Convert WebSocket URL to HTTP URL for API call
-    const baseUrl = webSocketUrl.replace('ws://', 'http://').replace('wss://', 'https://').split('/ws')[0];
+    // Ensure baseUrl is HTTP/HTTPS format
+    let baseUrl = backendUrl;
+    if (baseUrl.startsWith('ws://')) {
+      baseUrl = baseUrl.replace('ws://', 'http://');
+    } else if (baseUrl.startsWith('wss://')) {
+      baseUrl = baseUrl.replace('wss://', 'https://');
+    } else if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+      baseUrl = 'http://' + baseUrl;
+    }
+    baseUrl = baseUrl.replace(/\/(ws_pcm|ws_omi)($|\?.*$)/, '').replace(/\/$/, '');
     
     try {
       const response = await fetch(`${baseUrl}/api/users`);
@@ -460,7 +530,7 @@ export default function App() {
       console.error('[App.tsx] Error fetching users:', error);
       throw error;
     }
-  }, [webSocketUrl]);
+  }, [backendUrl]);
 
   const handleCancelAutoReconnect = useCallback(async () => {
     console.log('[App.tsx] Cancelling auto-reconnection attempt.');
@@ -516,22 +586,55 @@ export default function App() {
         >
           <Text style={styles.title}>Friend Lite</Text>
 
-          <BluetoothStatusBanner
-            bluetoothState={bluetoothState}
-            isPermissionsLoading={isPermissionsLoading}
-            permissionGranted={permissionGranted}
-            onRequestPermission={requestBluetoothPermission}
+          {/* Backend Configuration - Always Visible */}
+          <BackendConfiguration
+            backendUrl={backendUrl}
+            onSetBackendUrl={handleSetAndSaveBackendUrl}
+            authUsername={authUsername}
+            authPassword={authPassword}
+            authToken={authToken}
+            onSetAuthUsername={handleSetAndSaveAuthUsername}
+            onSetAuthPassword={handleSetAndSaveAuthPassword}
+            onSetAuthToken={handleSetAndSaveAuthToken}
+            onClearAuthData={handleClearAuthData}
+            onTestAuth={handleTestAuth}
+            onShowConversations={handleShowConversations}
           />
 
-          <ScanControls
-            scanning={scanning}
-            onScanPress={startScan}
-            onStopScanPress={stopDeviceScanAction}
-            canScan={canScan}
+          {/* Audio Source Selection */}
+          <AudioModeSelector
+            phoneAudioMode={phoneAudioMode}
+            onModeChange={setPhoneAudioMode}
+            disabled={deviceConnection.connectedDeviceId !== null || scanning || isAttemptingAutoReconnect}
           />
 
-          {scannedDevices.length > 0 && !deviceConnection.connectedDeviceId && !isAttemptingAutoReconnect && (
-            <View style={styles.section}>
+          {phoneAudioMode ? (
+            /* Phone Audio Recording */
+            <PhoneAudioControls
+              backendUrl={backendUrl}
+              authToken={authToken}
+              userId={userId}
+              disabled={false}
+            />
+          ) : (
+            /* OMI Device Flow */
+            <>
+              <BluetoothStatusBanner
+                bluetoothState={bluetoothState}
+                isPermissionsLoading={isPermissionsLoading}
+                permissionGranted={permissionGranted}
+                onRequestPermission={requestBluetoothPermission}
+              />
+
+              <ScanControls
+                scanning={scanning}
+                onScanPress={startScan}
+                onStopScanPress={stopDeviceScanAction}
+                canScan={canScan}
+              />
+
+              {scannedDevices.length > 0 && !deviceConnection.connectedDeviceId && !isAttemptingAutoReconnect && (
+                <View style={styles.section}>
               <View style={styles.sectionHeaderWithFilter}>
                 <Text style={styles.sectionTitle}>Found Devices</Text>
                 <View style={styles.filterContainer}>
@@ -573,8 +676,8 @@ export default function App() {
             </View>
           )}
           
-          {deviceConnection.connectedDeviceId && filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
-               <View style={styles.section}>
+              {deviceConnection.connectedDeviceId && filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
+                   <View style={styles.section}>
                   <Text style={styles.sectionTitle}>Connected Device</Text>
                   <DeviceListItem
                       device={filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId)!}
@@ -604,9 +707,9 @@ export default function App() {
               </View>
           )}
           
-          {/* Show disconnect button when connected but scan list isn't visible */}
-          {deviceConnection.connectedDeviceId && !filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
-            <View style={styles.section}>
+              {/* Show disconnect button when connected but scan list isn't visible */}
+              {deviceConnection.connectedDeviceId && !filteredDevices.find(d => d.id === deviceConnection.connectedDeviceId) && (
+                <View style={styles.section}>
               <View style={styles.disconnectContainer}>
                 <Text style={styles.connectedText}>
                   Connected to device: {deviceConnection.connectedDeviceId.substring(0, 15)}...
@@ -635,8 +738,8 @@ export default function App() {
             </View>
           )}
 
-          {deviceConnection.connectedDeviceId && (
-            <DeviceDetails
+              {deviceConnection.connectedDeviceId && (
+                <DeviceDetails
               connectedDeviceId={deviceConnection.connectedDeviceId}
               onGetAudioCodec={deviceConnection.getAudioCodec}
               currentCodec={deviceConnection.currentCodec}
@@ -646,8 +749,8 @@ export default function App() {
               onStartAudioListener={handleStartAudioListeningAndStreaming}
               onStopAudioListener={handleStopAudioListeningAndStreaming}
               audioPacketsReceived={audioPacketsReceived}
-              webSocketUrl={webSocketUrl}
-              onSetWebSocketUrl={handleSetAndSaveWebSocketUrl}
+              webSocketUrl={backendUrl}
+              onSetWebSocketUrl={handleSetAndSaveBackendUrl}
               isAudioStreaming={audioStreamer.isStreaming}
               isConnectingAudioStreamer={audioStreamer.isConnecting}
               audioStreamerError={audioStreamer.error}
@@ -663,7 +766,9 @@ export default function App() {
               onClearAuthData={handleClearAuthData}
               onTestAuth={handleTestAuth}
               onShowConversations={handleShowConversations}
-            />
+                />
+              )}
+            </>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -677,7 +782,7 @@ export default function App() {
       >
         {authToken ? (
           <ConversationsView
-            webSocketUrl={webSocketUrl}
+            webSocketUrl={backendUrl}
             authToken={authToken}
             onClose={handleCloseConversations}
           />

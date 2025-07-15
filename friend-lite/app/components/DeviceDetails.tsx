@@ -510,6 +510,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     width: '100%', // Ensure input takes full width of its container
     marginBottom: 10,
+    color: '#000',
   },
   statusText: { // New style for status messages
     marginTop: 8,

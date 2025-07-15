@@ -44,8 +44,16 @@ export class ConversationsApi {
   private token: string;
 
   constructor(baseUrl: string, token: string) {
-    // Convert WebSocket URL to HTTP URL
-    this.baseUrl = baseUrl.replace('ws://', 'http://').replace('wss://', 'https://').split('/ws')[0];
+    // Ensure baseUrl is HTTP/HTTPS format
+    if (baseUrl.startsWith('ws://')) {
+      this.baseUrl = baseUrl.replace('ws://', 'http://');
+    } else if (baseUrl.startsWith('wss://')) {
+      this.baseUrl = baseUrl.replace('wss://', 'https://');
+    } else {
+      this.baseUrl = baseUrl;
+    }
+    // Remove any trailing slash and WebSocket paths (but preserve port numbers)
+    this.baseUrl = this.baseUrl.replace(/\/(ws_pcm|ws_omi)($|\?.*$)/, '').replace(/\/$/, '');
     this.token = token;
   }
 
@@ -73,7 +81,14 @@ export class ConversationsApi {
   }
 
   async getUserInfo(): Promise<UserInfo> {
-    return this.makeRequest<UserInfo>('/api/users/me');
+    // Get all users and find current user (admin only endpoint)
+    const users = await this.getAllUsers();
+    // For now, return the first superuser found (admin)
+    const adminUser = users.find(user => user.is_superuser);
+    if (adminUser) {
+      return adminUser;
+    }
+    throw new Error('Current user not found');
   }
 
   async getAllUsers(): Promise<UserInfo[]> {

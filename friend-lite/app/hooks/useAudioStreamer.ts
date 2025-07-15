@@ -92,6 +92,29 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     // Reset the manually stopped flag when starting a new connection
     manuallyStoppedRef.current = false;
     
+    // Check if already connected to the same URL
+    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && currentUrlRef.current === url.trim()) {
+      console.log('[AudioStreamer] Already connected to this URL, reusing connection');
+      return Promise.resolve();
+    }
+    
+    // Check if already connecting
+    if (isConnecting) {
+      console.log('[AudioStreamer] Connection already in progress, waiting...');
+      return new Promise((resolve, reject) => {
+        const checkConnection = () => {
+          if (websocketRef.current?.readyState === WebSocket.OPEN) {
+            resolve();
+          } else if (!isConnecting) {
+            reject(new Error('Connection attempt failed'));
+          } else {
+            setTimeout(checkConnection, 100);
+          }
+        };
+        checkConnection();
+      });
+    }
+    
     const netState = await NetInfo.fetch();
     if (!netState.isConnected || !netState.isInternetReachable) {
       Alert.alert("No Internet", "Please check your internet connection to stream audio.");
@@ -101,7 +124,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     }
 
     console.log(`[AudioStreamer] Initializing WebSocket connection to: ${url}`);
-    if (websocketRef.current) {
+    if (websocketRef.current && websocketRef.current.readyState !== WebSocket.CLOSED) {
       console.log('[AudioStreamer] Found existing WebSocket. Closing it before creating a new one.');
       stopStreaming(); // Close any existing connection
     }
@@ -111,10 +134,19 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
     return new Promise<void>((resolve, reject) => {
       try {
+        console.log('[AudioStreamer] Creating WebSocket with 30s timeout...');
         const ws = new WebSocket(url.trim());
+        
+        // Set longer timeout for connection
+        const connectionTimeout = setTimeout(() => {
+          console.log('[AudioStreamer] Connection timeout after 30s, closing...');
+          ws.close();
+          reject(new Error('WebSocket connection timeout after 30 seconds'));
+        }, 30000);
 
         ws.onopen = () => {
-          console.log('[AudioStreamer] WebSocket connection established.');
+          console.log('[AudioStreamer] WebSocket connection established to:', url);
+          clearTimeout(connectionTimeout);
           setIsConnecting(false);
           setIsStreaming(true);
           setError(null);
@@ -129,6 +161,8 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         };
 
         ws.onerror = (e) => {
+          console.log('[AudioStreamer] WebSocket error occurred');
+          clearTimeout(connectionTimeout);
           const errorMessage = (e as any).message || 'WebSocket connection error.';
           console.error('[AudioStreamer] WebSocket error:', errorMessage);
           Alert.alert("Streaming Error", `WebSocket error: ${errorMessage}`);
@@ -142,7 +176,8 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         };
 
         ws.onclose = (event) => {
-          console.log('[AudioStreamer] WebSocket connection closed. Code:', event.code, 'Reason:', event.reason);
+          console.log('[AudioStreamer] WebSocket connection closed. URL:', url, 'Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
+          clearTimeout(connectionTimeout);
           const wasSuccessfullyOpened = websocketRef.current === ws;
 
           setIsConnecting(false); // Always ensure connecting is false
@@ -186,7 +221,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const sendAudio = useCallback((audioBytes: Uint8Array) => {
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
       try {
-        // console.debug(`[AudioStreamer] Attempting to send audio: ${audioBytes.length} bytes. WebSocket readyState: ${websocketRef.current?.readyState}`);
+        console.debug(`[AudioStreamer] Sending audio: ${audioBytes.length} bytes`);
         websocketRef.current.send(audioBytes);
       } catch (e) {
         const errorMessage = (e as any).message || 'Error sending audio data.';

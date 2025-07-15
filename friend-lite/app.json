@@ -17,7 +17,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.cupbearer5517.friendlite"
+      "bundleIdentifier": "com.cupbearer5517.friendlite",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "This app needs access to your microphone to record and stream audio for transcription and processing."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -29,8 +32,11 @@
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.ACCESS_NETWORK_STATE"
-      ]
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "usesCleartextTraffic": true,
+      "networkSecurityConfig": "./network_security_config.xml"
     },
     "newArchEnabled": true,
     "plugins": [
@@ -42,6 +48,12 @@
             "central"
           ],
           "bluetoothAlwaysPermission": "This app uses Bluetooth to connect to and interact with nearby BLE devices."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow Friend Lite to access your microphone to record and stream audio for transcription and processing."
         }
       ]
     ]
