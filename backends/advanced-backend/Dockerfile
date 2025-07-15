@@ -16,17 +16,21 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.10 /uv /uvx /bin/
 # Set up the working directory
 WORKDIR /app
 
-# Copy dependency files
-COPY pyproject.toml .
+# Copy package structure and dependency files first
+COPY pyproject.toml README.md ./
+RUN mkdir -p src/advanced_omi_backend
+COPY src/advanced_omi_backend/__init__.py src/advanced_omi_backend/
 
-# Install dependencies using uv
+# Install dependencies using uv with deepgram extra
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync
+    uv sync --extra deepgram
 
-
-# Copy application code
+# Copy all application code
 COPY . .
+
+# Copy memory config to the expected location
+COPY memory_config.yaml src/
 
 
 # Run the application
-CMD ["uv", "run", "python3", "src/main.py"]
+CMD ["uv", "run", "python3", "src/advanced_omi_backend/main.py"]

@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:0.6.10 /uv /uvx /bin/
+
+# Copy pyproject.toml and README.md from the current directory (advanced-backend)
+COPY pyproject.toml README.md ./
+
+# Copy the entire src directory to make advanced_omi_backend package available
+RUN mkdir -p src/advanced_omi_backend
+COPY src/advanced_omi_backend/__init__.py src/advanced_omi_backend/
+
+# Install dependencies using uv with webui extra
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --extra webui
+
+# Set PYTHONPATH so imports work
+COPY src/ /app/src/
+ENV PYTHONPATH=/app/src
+
+CMD ["uv", "run", "streamlit", "run", "src/webui/streamlit_app.py", \
+     "--server.address=0.0.0.0", "--server.port=8501"]

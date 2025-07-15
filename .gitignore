@@ -22,3 +22,11 @@ transcription_results.csv
 *.log
 **/speaker_data/**
 **/.venv/*
+**metrics_report**
+
+*.db
+**/advanced_omi_backend.egg-info/
+**/dist/*
+**/build/*
+
+untracked/*

@@ -8,12 +8,19 @@ services:
     volumes:
       - ./audio_chunks:/app/audio_chunks
       - ./debug_dir:/app/debug_dir
+      - ./data:/app/data
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - HF_TOKEN=${HF_TOKEN}
       - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
     depends_on:
       qdrant:
         condition: service_started
@@ -24,17 +31,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
-  
+      start_period: 5s
+    restart: unless-stopped
+
   streamlit:
     build:
-      context: ./webui
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.webui
     ports:
       - "8501:8501"
     environment:
       - BACKEND_API_URL=http://friend-backend:8000
-      - BACKEND_PUBLIC_URL=http://localhost:8000
+      - BACKEND_PUBLIC_URL=http://100.99.62.5:8000 # Your BROWSER should be able to access this (Only for displaying audio)
+      - STREAMLIT_SERVER_ENABLE_CORS=false
     depends_on:
       friend-backend:
         condition: service_healthy
@@ -42,8 +51,13 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+
+  proxy:
+    image: nginx:alpine
+    depends_on: [friend-backend, streamlit]
     volumes:
-      - ./webui:/app
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports: ["80:80"]          # publish once; ngrok points here
 
   # speaker-recognition:
   #   build:
@@ -89,28 +103,35 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
+
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
       - "6333:6333" # gRPC
       - "6334:6334" # HTTP
     volumes:
-      - ./qdrant_data:/qdrant/storage # Qdrant will store its data in this named volume
+      - ./qdrant_data:/qdrant/storage 
   mongo:
     image: mongo:4.4.18
     ports:
       - "27017:27017"
     volumes:
       - ./mongo_data:/data/db
-  ngrok:
-    image: ngrok/ngrok:latest
-    ports:
-      - "4040:4040" # Ngrok web interface
-    environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    command: "http friend-backend:8000 --url=intelligent-hypervisor.ngrok.app"
-    depends_on:
-      - friend-backend
+
+  # Use tailscale instead 
+  # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
+  # ngrok:
+  #   image: ngrok/ngrok:latest
+  #   depends_on: [friend-backend, proxy]
+  #   ports:
+  #     - "4040:4040" # Ngrok web interface
+  #   environment:
+  #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+  #   command: "http proxy:80 --url=${NGROK_URL} --basic-auth=${NGROK_BASIC_AUTH}"
+
+
+# Question: These are named volumes, but they are not being used, right? Can we remove them?
 volumes:
   ollama_data:
     driver: local
