@@ -21,7 +21,6 @@ from functools import partial
 from pathlib import Path
 from typing import Optional
 
-import ollama
 
 # Import Beanie for user management
 from beanie import init_beanie
@@ -39,7 +38,6 @@ from omi.decoder import OmiOpusDecoder
 from wyoming.audio import AudioChunk
 from wyoming.client import AsyncTcpClient
 
-from advanced_omi_backend.action_items_service import ActionItemsService
 from advanced_omi_backend.client import ClientState
 
 # Import authentication components
@@ -102,7 +100,6 @@ db = mongo_client.get_default_database("friend-lite")
 chunks_col = db["audio_chunks"]
 users_col = db["users"]
 speakers_col = db["speakers"]
-action_items_col = db["action_items"]
 
 # Audio Configuration
 OMI_SAMPLE_RATE = 16_000  # Hz
@@ -135,13 +132,11 @@ OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://localhost:8765")
 deepgram_client = None
 
 # Ollama & Qdrant Configuration
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 
 # Memory configuration is now handled in the memory module
 # Initialize it with our Ollama and Qdrant URLs
 init_memory_config(
-    ollama_base_url=OLLAMA_BASE_URL,
     qdrant_base_url=QDRANT_BASE_URL,
 )
 
@@ -153,11 +148,8 @@ _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="opus_io",
 )
 
-# Initialize memory service, speaker service, and ollama client
+# Initialize memory service
 memory_service = get_memory_service()
-ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
-
-action_items_service = ActionItemsService(action_items_col, ollama_client)
 
 ###############################################################################
 # UTILITY FUNCTIONS & HELPER CLASSES
@@ -165,7 +157,7 @@ action_items_service = ActionItemsService(action_items_col, ollama_client)
 
 
 # Initialize repository and global state
-audio_chunks_db_collection = AudioChunksCollectionHelper(chunks_col)
+ac_db_collection_helper = AudioChunksCollectionHelper(chunks_col)
 active_clients: dict[str, ClientState] = {}
 
 # Client-to-user mapping for reliable permission checking
@@ -208,7 +200,7 @@ async def create_client_state(
     client_id: str, user: User, device_name: Optional[str] = None
 ) -> ClientState:
     """Create and register a new client state."""
-    client_state = ClientState(client_id, audio_chunks_db_collection, action_items_service, CHUNK_DIR, user.user_id, user.email)
+    client_state = ClientState(client_id, ac_db_collection_helper, CHUNK_DIR, user.user_id, user.email)
     active_clients[client_id] = client_state
 
     # Register client-user mapping (for active clients)
@@ -508,7 +500,6 @@ async def health_check():
         "services": {},
         "config": {
             "mongodb_uri": MONGODB_URI,
-            "ollama_url": OLLAMA_BASE_URL,
             "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
             "transcription_service": ("Deepgram WebSocket" if USE_DEEPGRAM else "Offline ASR"),
             "asr_uri": (OFFLINE_ASR_TCP_URI if not USE_DEEPGRAM else "wss://api.deepgram.com"),
@@ -516,10 +507,10 @@ async def health_check():
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
             "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
-            "action_items_enabled": True,
             "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
-            "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
-            "llm_model": os.getenv("OPENAI_MODEL" if os.getenv("LLM_PROVIDER", "ollama").lower() == "openai" else "OLLAMA_MODEL", "gpt-4o" if os.getenv("LLM_PROVIDER", "ollama").lower() == "openai" else "gemma3n:e4b"),
+            "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
+            "llm_model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+            "llm_base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         },
     }
 
@@ -551,27 +542,27 @@ async def health_check():
         overall_healthy = False
         critical_services_healthy = False
 
-    # Check Ollama (non-critical service - may not be running)
+    # Check LLM service (non-critical service - may not be running)
     try:
-        # Run in executor to avoid blocking the main thread
-        loop = asyncio.get_running_loop()
-        models = await asyncio.wait_for(loop.run_in_executor(None, ollama_client.list), timeout=8.0)
-        model_count = len(models.get("models", []))
-        health_status["services"]["ollama"] = {
-            "status": "✅ Connected",
-            "healthy": True,
-            "models": model_count,
+        from advanced_omi_backend.llm_client import async_health_check
+        
+        llm_health = await asyncio.wait_for(async_health_check(), timeout=8.0)
+        health_status["services"]["llm"] = {
+            "status": llm_health.get("status", "❌ Unknown"),
+            "healthy": "✅" in llm_health.get("status", ""),
+            "base_url": llm_health.get("base_url", ""),
+            "model": llm_health.get("default_model", ""),
             "critical": False,
         }
     except asyncio.TimeoutError:
-        health_status["services"]["ollama"] = {
+        health_status["services"]["llm"] = {
             "status": "⚠️ Connection Timeout (8s) - Service may not be running",
             "healthy": False,
             "critical": False,
         }
         overall_healthy = False
     except Exception as e:
-        health_status["services"]["ollama"] = {
+        health_status["services"]["llm"] = {
             "status": f"⚠️ Connection Failed: {str(e)} - Service may not be running",
             "healthy": False,
             "critical": False,

@@ -20,6 +20,7 @@ from mem0 import Memory
 # Import debug tracker and config loader
 from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
 from advanced_omi_backend.memory_config_loader import get_config_loader
+from advanced_omi_backend.users import User
 
 # Configure Mem0 telemetry based on environment variable
 # Set default to False for privacy unless explicitly enabled
@@ -47,7 +48,6 @@ MEM0_PROJECT_ID = os.getenv("MEM0_PROJECT_ID", "audio-conversations")
 MEM0_APP_ID = os.getenv("MEM0_APP_ID", "omi-backend")
 
 # Ollama & Qdrant Configuration (these should match main config)
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 
 # Timeout configurations
@@ -66,11 +66,11 @@ def _build_mem0_config() -> dict:
     llm_settings = memory_config.get("llm_settings", {})
 
     # Get LLM provider from environment or config
-    llm_provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+    llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
 
-    # Build LLM configuration based on provider
+    # Build LLM configuration based on provider using standard environment variables
     if llm_provider == "openai":
-        # Use dedicated OPENAI_MODEL environment variable with GPT-4o as default for better JSON parsing
+        # Use standard OPENAI_MODEL environment variable
         openai_model = os.getenv("OPENAI_MODEL", "gpt-4o")
         
         # Allow YAML config to override environment variable
@@ -83,6 +83,7 @@ def _build_mem0_config() -> dict:
             "config": {
                 "model": model,
                 "api_key": os.getenv("OPENAI_API_KEY"),
+                "base_url": os.getenv("OPENAI_BASE_URL"),  # Support custom base URL
                 "temperature": llm_settings.get("temperature", 0.1),
                 "max_tokens": llm_settings.get("max_tokens", 2000),
             },
@@ -94,37 +95,62 @@ def _build_mem0_config() -> dict:
                 "model": "text-embedding-3-small",
                 "embedding_dims": 1536,
                 "api_key": os.getenv("OPENAI_API_KEY"),
+                "base_url": os.getenv("OPENAI_BASE_URL"),  # Support custom base URL
             },
         }
         embedding_dims = 1536
-    else:  # Default to ollama
-        # Use dedicated OLLAMA_MODEL environment variable with fallback
-        ollama_model = os.getenv("OLLAMA_MODEL", "gemma3n:e4b")
+    elif llm_provider == "ollama":
+        # Use standard OPENAI_MODEL environment variable (Ollama as OpenAI-compatible)
+        ollama_model = os.getenv("OPENAI_MODEL", "llama3.1:latest")
         
         # Allow YAML config to override environment variable
         model = llm_settings.get("model", ollama_model)
         
         memory_logger.info(f"Using Ollama provider with model: {model}")
         
+        # Use OpenAI-compatible configuration for Ollama
         llm_config = {
-            "provider": "ollama",
+            "provider": "openai",  # Use OpenAI provider for Ollama compatibility
             "config": {
                 "model": model,
-                "ollama_base_url": OLLAMA_BASE_URL,
+                "api_key": os.getenv("OPENAI_API_KEY", "dummy"),  # Ollama doesn't need real key
+                "base_url": os.getenv("OPENAI_BASE_URL", "http://ollama:11434/v1"),
                 "temperature": llm_settings.get("temperature", 0.1),
                 "max_tokens": llm_settings.get("max_tokens", 2000),
             },
         }
-        # For Ollama, use Ollama embeddings
+        # For Ollama, use Ollama embeddings with OpenAI-compatible config
         embedder_config = {
             "provider": "ollama",
             "config": {
                 "model": "nomic-embed-text:latest",
                 "embedding_dims": 768,
-                "ollama_base_url": OLLAMA_BASE_URL,
+                "ollama_base_url": os.getenv("OPENAI_BASE_URL", "http://ollama:11434"),
             },
         }
         embedding_dims = 768
+    else:
+        raise ValueError(f"Unsupported LLM provider: {llm_provider}")
+
+    # Build Neo4j graph store configuration
+    neo4j_config = None
+    neo4j_host = os.getenv("NEO4J_HOST", "neo4j-mem0")
+    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+    neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+    
+    if neo4j_host and neo4j_user and neo4j_password:
+        neo4j_config = {
+            "provider": "neo4j",
+            "config": {
+                "url": f"bolt://{neo4j_host}:7687",
+                "username": neo4j_user,
+                "password": neo4j_password,
+                "database": "neo4j",
+            },
+        }
+        memory_logger.info(f"Neo4j graph store configured: {neo4j_host}")
+    else:
+        memory_logger.warning("Neo4j configuration incomplete - graph store disabled")
 
     # Valid mem0 configuration format based on official documentation
     # See: https://docs.mem0.ai/platform/quickstart and https://github.com/mem0ai/mem0
@@ -142,6 +168,10 @@ def _build_mem0_config() -> dict:
         },
         "version": "v1.1"
     }
+
+    # Add graph store configuration if available
+    if neo4j_config:
+        mem0_config["graph_store"] = neo4j_config
 
     # Configure fact extraction - ALWAYS ENABLE for proper memory creation
     fact_enabled = config_loader.is_fact_extraction_enabled()
@@ -194,7 +224,6 @@ _process_memory = None  # For worker processes
 
 
 def init_memory_config(
-    ollama_base_url: Optional[str] = None,
     qdrant_base_url: Optional[str] = None,
     organization_id: Optional[str] = None,
     project_id: Optional[str] = None,
@@ -786,7 +815,7 @@ class MemoryService:
         user_id: str,
         user_email: str,
         allow_update: bool = False,
-        chunk_repo=None,
+        db_helper=None,
     ) -> bool:
         """Add memory in background process (non-blocking).
 
@@ -827,15 +856,15 @@ class MemoryService:
                     f"Added transcript for {audio_uuid} to mem0 (user: {user_email}, client: {client_id})"
                 )
                 # Update the database relationship if memories were created and chunk_repo is available
-                if created_memory_ids and chunk_repo:
+                if created_memory_ids and db_helper:
                     try:
                         for memory_id in created_memory_ids:
-                            await chunk_repo.add_memory_reference(audio_uuid, memory_id, "created")
+                            await db_helper.add_memory_reference(audio_uuid, memory_id, "created")
                             memory_logger.info(f"Added memory reference {memory_id} to audio chunk {audio_uuid}")
                     except Exception as db_error:
                         memory_logger.error(f"Failed to update database relationship for {audio_uuid}: {db_error}")
                         # Don't fail the entire operation if database update fails
-                elif created_memory_ids and not chunk_repo:
+                elif created_memory_ids and not db_helper:
                     memory_logger.warning(f"Created memories {created_memory_ids} for {audio_uuid} but no chunk_repo provided to update database relationship")
             else:
                 memory_logger.error(f"Failed to add memory for {audio_uuid}")
@@ -1065,31 +1094,17 @@ class MemoryService:
             memory_logger.error(f"Error deleting memory {memory_id}: {e}")
             raise
 
-    def get_all_memories_debug(self, limit: int = 200) -> list:
+    async def get_all_memories_debug(self, limit: int = 200) -> list:
         """Get all memories across all users for admin debugging. Admin only."""
         if not self._initialized:
-            # This is a sync method, so we need to handle initialization differently
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, we can't call initialize() directly
-                # This should be handled by the caller
-                raise Exception("Memory service not initialized - call await initialize() first")
-            else:
-                # We're in a sync context, run the async initialize
-                loop.run_until_complete(self.initialize())
+            await self.initialize()
 
         assert self.memory is not None, "Memory service not initialized"
         try:
             all_memories = []
             
-            # First, we need to get a list of all users who have memories
-            # We'll do this by getting user_ids from the database or using a small Qdrant query
-            # to find unique user_ids, then use the proper memory service methods
-            
-            from advanced_omi_backend.users import get_all_users
-            
             # Get all users from the database
-            users = get_all_users()
+            users = await User.find_all().to_list()
             memory_logger.info(f"🔍 Found {len(users)} users for admin debug")
             
             for user in users:

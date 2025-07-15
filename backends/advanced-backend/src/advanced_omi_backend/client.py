@@ -42,11 +42,10 @@ memory_service = get_memory_service()
 class ClientState:
     """Manages all state for a single client connection."""
 
-    def __init__(self, client_id: str, audio_chunks_db_collection, action_items_service, chunk_dir: Path, user_id: Optional[str] = None, user_email: Optional[str] = None):
+    def __init__(self, client_id: str, ac_db_collection_helper, chunk_dir: Path, user_id: Optional[str] = None, user_email: Optional[str] = None):
         self.client_id = client_id
         self.connected = True
-        self.chunk_repo = audio_chunks_db_collection
-        self.action_items_service = action_items_service
+        self.db_helper = ac_db_collection_helper
         self.chunk_dir = chunk_dir
         # Store minimal user data needed for memory processing (avoids tight coupling to User model)
         self.user_id = user_id
@@ -423,7 +422,7 @@ class ClientState:
             # Add general memory with fallback handling
             memory_result = await memory_service.add_memory(
                 full_conversation, self.client_id, audio_uuid, user_id, user_email, 
-                chunk_repo=self.chunk_repo
+                db_helper=self.db_helper
             )
 
             if memory_result:
@@ -490,7 +489,7 @@ class ClientState:
                         # Reset conversation closure flag when starting new audio
                         self.conversation_closed = False
 
-                        await self.chunk_repo.create_chunk(
+                        await self.db_helper.create_chunk(
                             audio_uuid=self.current_audio_uuid,
                             audio_path=wav_filename,
                             client_id=self.client_id,
@@ -547,7 +546,7 @@ class ClientState:
 
                             self.transcription_manager = TranscriptionManager(
                                 action_item_callback=action_item_callback,
-                                chunk_repo=self.chunk_repo
+                                chunk_repo=self.db_helper
                             )
                             try:
                                 await self.transcription_manager.connect(self.client_id)
@@ -671,45 +670,10 @@ class ClientState:
                         self.action_item_queue.task_done()
                         break
 
-                    try:
-                        # Resolve client_id to user information
-                        user = await get_user_by_client_id(client_id)
-                        if not user:
-                            audio_logger.error(
-                                f"Could not resolve client_id {client_id} to user for action item processing"
-                            )
-                            continue
-
-                        # Track action item processing start
-
-                        try:
-                            # Delegate action item processing to the service
-                            action_item_count = (
-                                await self.action_items_service.process_transcript_for_action_items(
-                                    transcript_text, client_id, audio_uuid, user.user_id, user.email
-                                )
-                            )
-
-                            if action_item_count > 0:
-                                audio_logger.info(
-                                    f"🎯 Action item processor completed: {action_item_count} items processed for {audio_uuid}"
-                                )
-                            else:
-                                audio_logger.debug(
-                                    f"ℹ️ Action item processor completed: no items found for {audio_uuid}"
-                                )
-
-                        except Exception as e:
-                            audio_logger.error(
-                                f"Error processing action item for client {self.client_id}: {e}"
-                            )
-                    except Exception as e:
-                        audio_logger.error(
-                            f"Error processing action item for client {self.client_id}: {e}"
-                        )
-                    finally:
-                        # Always mark task as done
-                        self.action_item_queue.task_done()
+                    audio_logger.info(f"📝 Transcript processed for {audio_uuid}")
+                    
+                    # Always mark task as done
+                    self.action_item_queue.task_done()
 
                 except asyncio.CancelledError:
                     # Handle cancellation gracefully
