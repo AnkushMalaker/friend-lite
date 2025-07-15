@@ -6,3 +6,5 @@
 !pyproject.blackwell.toml
 !README.md
 !src
+!.env
+!memory_config.yaml
