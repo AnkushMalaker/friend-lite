@@ -24,14 +24,14 @@ logger = logging.getLogger(__name__)
 class TranscriptionManager:
     """Manages transcription using either Deepgram batch API or offline ASR service."""
 
-    def __init__(self, action_item_callback=None, chunk_repo=None):
+    # TODO: Accept callbacks list
+    def __init__(self, chunk_repo=None):
         self.client = None
         self._current_audio_uuid = None
         self.use_deepgram = USE_DEEPGRAM
         self._audio_buffer = []  # Buffer for collecting audio chunks
         self._audio_start_time = None  # Track when audio collection started
         self._max_collection_time = 90.0  # 1.5 minutes timeout
-        self.action_item_callback = action_item_callback  # Callback to queue action items
         self._current_transaction_id = None  # Track current debug transaction
         self.chunk_repo = chunk_repo  # Database repository for chunks
         self.client_manager = get_client_manager()  # Cached client manager instance

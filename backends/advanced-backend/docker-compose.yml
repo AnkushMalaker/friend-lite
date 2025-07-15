@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     volumes:
       - ./audio_chunks:/app/audio_chunks
       - ./debug_dir:/app/debug_dir
@@ -20,11 +22,17 @@ services:
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
       - OPENAI_MODEL=${OPENAI_MODEL}
+      - NEO4J_HOST=${NEO4J_HOST}
+      - NEO4J_USER=${NEO4J_USER}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
     depends_on:
       qdrant:
         condition: service_started
       mongo:
+        condition: service_started
+      neo4j-mem0:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
@@ -112,6 +120,22 @@ services:
       - "6334:6334" # HTTP
     volumes:
       - ./qdrant_data:/qdrant/storage 
+  
+  neo4j-mem0:
+    image: neo4j:5.15-community
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+    volumes:
+      - ./neo4j_data:/data
+      - ./neo4j_logs:/logs
+    restart: unless-stopped
+
   mongo:
     image: mongo:4.4.18
     ports:
@@ -132,8 +156,12 @@ services:
 
 
 # Question: These are named volumes, but they are not being used, right? Can we remove them?
-volumes:
-  ollama_data:
-    driver: local
-  mongo_data:
-    driver: local
+# volumes:
+#   ollama_data:
+#     driver: local
+#   mongo_data:
+#     driver: local
+#   neo4j_data:
+#     driver: local
+#   neo4j_logs:
+#     driver: local

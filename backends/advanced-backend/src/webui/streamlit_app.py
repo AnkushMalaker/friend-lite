@@ -1355,15 +1355,15 @@ with tab_convos:
 
 with tab_mem:
     logger.debug("🧠 Loading memories tab...")
-    st.header("Memories & Action Items")
+    st.header("Memories")
     
     # Use session state for selected user if available
     default_user = st.session_state.get('selected_user', '')
     
-    # User selection for memories and action items
+    # User selection for memories
     col1, col2 = st.columns([2, 1])
     with col1:
-        user_id_input = st.text_input("Enter username to view memories & action items:", 
+        user_id_input = st.text_input("Enter username to view memories:", 
                                     value=default_user,
                                     placeholder="e.g., john_doe, alice123")
     with col2:
@@ -1378,23 +1378,15 @@ with tab_mem:
         logger.info("🔄 Manual memories refresh requested")
         st.rerun()
 
-    # Get memories and action items based on user selection
+    # Get memories based on user selection
     if user_id_input.strip():
         logger.info(f"🧠 Loading data for user: {user_id_input.strip()}")
         st.info(f"Showing data for user: **{user_id_input.strip()}**")
         
-        # Load both memories and action items
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            with st.spinner("Loading memories..."):
-                logger.debug(f"📡 Fetching memories for user: {user_id_input.strip()}")
-                memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}", require_auth=True)
-        
-        with col2:
-            with st.spinner("Loading action items..."):
-                logger.debug(f"📡 Fetching action items for user: {user_id_input.strip()}")
-                action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}", require_auth=True)
+        # Load memories
+        with st.spinner("Loading memories..."):
+            logger.debug(f"📡 Fetching memories for user: {user_id_input.strip()}")
+            memories_response = get_data(f"/api/memories?user_id={user_id_input.strip()}", require_auth=True)
         
         # Handle the API response format with "results" wrapper for memories
         if memories_response and isinstance(memories_response, dict) and "results" in memories_response:
@@ -1404,19 +1396,11 @@ with tab_mem:
             memories = memories_response
             logger.debug(f"🧠 Memories response format: {type(memories_response)}")
             
-        # Handle action items response
-        if action_items_response and isinstance(action_items_response, dict) and "action_items" in action_items_response:
-            action_items = action_items_response["action_items"]
-            logger.debug(f"🎯 Action items response has 'action_items' wrapper, extracted {len(action_items)} items")
-        else:
-            action_items = action_items_response if action_items_response else []
-            logger.debug(f"🎯 Action items response format: {type(action_items_response)}")
     else:
         # Show instruction to enter a username
         memories = None
-        action_items = None
         logger.debug("👆 No user ID provided, showing instructions")
-        st.info("👆 Please enter a username above to view their memories and action items.")
+        st.info("👆 Please enter a username above to view their memories.")
         st.markdown("💡 **Tip:** You can find existing usernames in the 'User Management' tab.")
 
     # Admin Debug Section - Show before regular memories
@@ -1788,244 +1772,6 @@ with tab_mem:
             logger.info(f"🧠 No memories found for user {user_id_input.strip()}")
             st.info("No memories found for this user.")
     
-    # Display Action Items Section
-    if action_items is not None:
-        logger.debug("🎯 Displaying action items section...")
-        st.subheader("🎯 Action Items")
-        
-        if action_items:
-            logger.info(f"🎯 Displaying {len(action_items)} action items for user {user_id_input.strip()}")
-            
-            # Status filter for action items
-            col1, col2, col3 = st.columns([2, 1, 1])
-            with col1:
-                status_filter = st.selectbox(
-                    "Filter by status:",
-                    options=["All", "open", "in_progress", "completed", "cancelled"],
-                    index=0,
-                    key="action_items_filter"
-                )
-            with col2:
-                show_stats = st.button("📊 Show Stats", key="show_action_stats")
-            with col3:
-                # Manual action item creation button
-                if st.button("➕ Add Item", key="add_action_item"):
-                    logger.info("➕ Manual action item creation requested")
-                    st.session_state['show_add_action_item'] = True
-            
-            # Filter action items by status
-            if status_filter != "All":
-                filtered_items = [item for item in action_items if item.get('status') == status_filter]
-                logger.debug(f"🎯 Filtered action items by status '{status_filter}': {len(filtered_items)} items")
-            else:
-                filtered_items = action_items
-                logger.debug(f"🎯 Showing all action items: {len(filtered_items)} items")
-            
-            # Show statistics if requested
-            if show_stats:
-                logger.info("📊 Action items statistics requested")
-                stats_response = get_data(f"/api/action-items/stats?user_id={user_id_input.strip()}", require_auth=True)
-                if stats_response and "statistics" in stats_response:
-                    stats = stats_response["statistics"]
-                    logger.debug(f"📊 Action items statistics: {stats}")
-                    
-                    # Display stats in columns
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total", stats["total"])
-                        st.metric("Open", stats["open"])
-                    with col2:
-                        st.metric("In Progress", stats["in_progress"])
-                        st.metric("Completed", stats["completed"])
-                    with col3:
-                        st.metric("Cancelled", stats["cancelled"])
-                        st.metric("Overdue", stats.get("overdue", 0))
-                    with col4:
-                        st.write("**By Priority:**")
-                        for priority, count in stats.get("by_priority", {}).items():
-                            if count > 0:
-                                st.write(f"• {priority.title()}: {count}")
-                    
-                    # Assignee breakdown
-                    if stats.get("by_assignee"):
-                        st.write("**By Assignee:**")
-                        assignee_df = pd.DataFrame(list(stats["by_assignee"].items()), columns=["Assignee", "Count"])
-                        st.dataframe(assignee_df, hide_index=True, use_container_width=True)
-                else:
-                    logger.warning("📊 Action items statistics not available")
-            
-            # Manual action item creation form
-            if st.session_state.get('show_add_action_item', False):
-                logger.debug("➕ Showing action item creation form")
-                with st.expander("➕ Create New Action Item", expanded=True):
-                    with st.form("create_action_item"):
-                        description = st.text_input("Description*:", placeholder="e.g., Send quarterly report to management")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            assignee = st.text_input("Assignee:", placeholder="e.g., john_doe", value="unassigned")
-                            priority = st.selectbox("Priority:", options=["high", "medium", "low", "not_specified"], index=1)
-                        with col2:
-                            due_date = st.text_input("Due Date:", placeholder="e.g., Friday, 2024-01-15", value="not_specified")
-                            context = st.text_input("Context:", placeholder="e.g., Mentioned in team meeting")
-                        
-                        submitted = st.form_submit_button("Create Action Item")
-                        
-                        if submitted:
-                            logger.info(f"➕ Creating action item for user {user_id_input.strip()}")
-                            if description.strip():
-                                create_data = {
-                                    "description": description.strip(),
-                                    "assignee": assignee.strip() if assignee.strip() else "unassigned",
-                                    "due_date": due_date.strip() if due_date.strip() else "not_specified",
-                                    "priority": priority,
-                                    "context": context.strip()
-                                }
-                                
-                                try:
-                                    logger.debug(f"📤 Creating action item with data: {create_data}")
-                                    response = requests.post(
-                                        f"{BACKEND_API_URL}/api/action-items",
-                                        json=create_data,
-                                        headers=get_auth_headers()
-                                    )
-                                    response.raise_for_status()
-                                    result = response.json()
-                                    st.success(f"✅ Action item created: {result['action_item']['description']}")
-                                    logger.info(f"✅ Action item created successfully: {result['action_item']['description']}")
-                                    st.session_state['show_add_action_item'] = False
-                                    st.rerun()
-                                except requests.exceptions.RequestException as e:
-                                    logger.error(f"❌ Error creating action item: {e}")
-                                    st.error(f"Error creating action item: {e}")
-                            else:
-                                logger.warning("⚠️ Action item creation attempted without description")
-                                st.error("Please enter a description for the action item")
-                    
-                    if st.button("❌ Cancel", key="cancel_add_action"):
-                        logger.debug("❌ Action item creation cancelled")
-                        st.session_state['show_add_action_item'] = False
-                        st.rerun()
-            
-            # Display action items
-            if filtered_items:
-                logger.debug(f"🎯 Displaying {len(filtered_items)} filtered action items")
-                st.write(f"**Showing {len(filtered_items)} action items** (filtered by: {status_filter})")
-                
-                for i, item in enumerate(filtered_items):
-                    logger.debug(f"🎯 Processing action item {i+1}: {item.get('description', 'No description')[:50]}...")
-                    
-                    with st.container():
-                        # Create columns for action item display
-                        col1, col2, col3 = st.columns([3, 1, 1])
-                        
-                        with col1:
-                            # Description with status badge
-                            status = item.get('status', 'open')
-                            status_emoji = {
-                                'open': '🔵',
-                                'in_progress': '🟡', 
-                                'completed': '✅',
-                                'cancelled': '❌'
-                            }.get(status, '🔵')
-                            
-                            st.write(f"**{status_emoji} {item.get('description', 'No description')}**")
-                            
-                            # Additional details
-                            details = []
-                            if item.get('assignee') and item.get('assignee') != 'unassigned':
-                                details.append(f"👤 {item['assignee']}")
-                            if item.get('due_date') and item.get('due_date') != 'not_specified':
-                                details.append(f"📅 {item['due_date']}")
-                            if item.get('priority') and item.get('priority') != 'not_specified':
-                                priority_emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}.get(item['priority'], '⚪')
-                                details.append(f"{priority_emoji} {item['priority']}")
-                            if item.get('context'):
-                                details.append(f"💭 {item['context']}")
-                            
-                            if details:
-                                st.caption(" | ".join(details))
-                            
-                            # Creation info
-                            created_at = item.get('created_at')
-                            if created_at:
-                                try:
-                                    if isinstance(created_at, (int, float)):
-                                        created_time = datetime.fromtimestamp(created_at)
-                                    else:
-                                        created_time = pd.to_datetime(created_at)
-                                    st.caption(f"Created: {created_time.strftime('%Y-%m-%d %H:%M:%S')}")
-                                except:
-                                    st.caption(f"Created: {created_at}")
-                        
-                        with col2:
-                            # Status update
-                            new_status = st.selectbox(
-                                "Status:",
-                                options=["open", "in_progress", "completed", "cancelled"],
-                                index=["open", "in_progress", "completed", "cancelled"].index(status),
-                                key=f"status_{i}_{item.get('memory_id', i)}"
-                            )
-                            
-                            if new_status != status:
-                                if st.button("Update", key=f"update_{i}_{item.get('memory_id', i)}"):
-                                    memory_id = item.get('memory_id')
-                                    if memory_id:
-                                        logger.info(f"🔄 Updating action item {memory_id} status from {status} to {new_status}")
-                                        try:
-                                            response = requests.put(
-                                                f"{BACKEND_API_URL}/api/action-items/{memory_id}",
-                                                json={"status": new_status},
-                                                headers=get_auth_headers()
-                                            )
-                                            response.raise_for_status()
-                                            st.success(f"Status updated to {new_status}")
-                                            logger.info(f"✅ Action item status updated successfully")
-                                            st.rerun()
-                                        except requests.exceptions.RequestException as e:
-                                            logger.error(f"❌ Error updating action item status: {e}")
-                                            st.error(f"Error updating status: {e}")
-                                    else:
-                                        logger.error(f"❌ No memory ID found for action item")
-                                        st.error("No memory ID found for this action item")
-                        
-                        with col3:
-                            # Delete button
-                            if st.button("🗑️ Delete", key=f"delete_{i}_{item.get('memory_id', i)}", type="secondary"):
-                                memory_id = item.get('memory_id')
-                                if memory_id:
-                                    logger.info(f"🗑️ Deleting action item {memory_id}")
-                                    try:
-                                        response = requests.delete(f"{BACKEND_API_URL}/api/action-items/{memory_id}", headers=get_auth_headers())
-                                        response.raise_for_status()
-                                        st.success("Action item deleted")
-                                        logger.info(f"✅ Action item deleted successfully")
-                                        st.rerun()
-                                    except requests.exceptions.RequestException as e:
-                                        logger.error(f"❌ Error deleting action item: {e}")
-                                        st.error(f"Error deleting action item: {e}")
-                                else:
-                                    logger.error(f"❌ No memory ID found for action item")
-                                    st.error("No memory ID found for this action item")
-                        
-                        st.divider()
-                
-                st.caption(f"💡 **Tip:** Action items are automatically extracted from conversations at the end of each session")
-            else:
-                if status_filter == "All":
-                    logger.info(f"🎯 No action items found for user {user_id_input.strip()}")
-                    st.info("No action items found for this user.")
-                else:
-                    logger.info(f"🎯 No action items found with status '{status_filter}' for user {user_id_input.strip()}")
-                    st.info(f"No action items found with status '{status_filter}' for this user.")
-        else:
-            logger.info(f"🎯 No action items found for user {user_id_input.strip()}")
-            st.info("No action items found for this user.")
-            
-            # Show option to create manual action item even when none exist
-            if user_id_input.strip() and st.button("➕ Create First Action Item", key="create_first_item"):
-                logger.info("➕ Creating first action item for user")
-                st.session_state['show_add_action_item'] = True
-                st.rerun()
 
 with tab_users:
     st.header("User Management")
