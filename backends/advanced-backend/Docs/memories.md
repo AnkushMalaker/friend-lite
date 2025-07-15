@@ -173,12 +173,6 @@ memory_extraction:
     temperature: 0.1
     max_tokens: 2000
 
-action_item_extraction:
-  enabled: true
-  llm_settings:
-    model: "gpt-4o"  # Better JSON reliability
-    temperature: 0.1
-    max_tokens: 1000
 
 fact_extraction:
   enabled: true  # Safe to enable with GPT-4o
@@ -208,7 +202,6 @@ MEM0_CONFIG["llm"]["config"].update({
 
 **When to Use GPT-4o:**
 - Experiencing frequent JSON parsing errors
-- Need reliable action item extraction
 - Want to enable fact extraction safely
 - Require consistent structured output
 
@@ -220,7 +213,6 @@ docker logs advanced-backend | grep "JSONDecodeError"
 # Verify OpenAI usage
 docker logs advanced-backend | grep "Using OpenAI provider"
 
-# Monitor action item extraction
 docker logs advanced-backend | grep "OpenAI response"
 ```
 
@@ -305,7 +297,7 @@ MEM0_CONFIG["vector_store"]["config"].update({
 
 ```python
 def search_memories_with_filters(self, query: str, user_id: str, topic: str = None):
-    filters = {"metadata.type": {"$ne": "action_item"}}
+    filters = {}
     
     if topic:
         filters["metadata.topics"] = {"$in": [topic]}
@@ -393,27 +385,6 @@ process_memory.add(
 }
 ```
 
-### Action Item Memory Structure
-
-```json
-{
-    "id": "5e8db55f-1234-5678-9abc-def012345678",
-    "memory": "Action Item: Complete user authentication module (Status: open)",
-    "user_id": "abc123",
-    "metadata": {
-        "type": "action_item",
-        "client_id": "abc123-laptop",
-        "user_email": "user@example.com",
-        "action_item_data": {
-            "description": "Complete user authentication module",
-            "assignee": "development_team",
-            "due_date": "not_specified",
-            "priority": "high",
-            "status": "open"
-        }
-    }
-}
-```
 
 ## Advanced Customization
 

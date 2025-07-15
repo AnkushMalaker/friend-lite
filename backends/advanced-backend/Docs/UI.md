@@ -16,7 +16,7 @@ The Friend-Lite web dashboard provides a comprehensive interface for managing co
 3. **Google OAuth**: Social login integration (if configured)
 
 ### User Roles
-- **Regular Users**: Access to own conversations, memories, and action items
+- **Regular Users**: Access to own conversations and memories
 - **Admin Users**: Full system access including debug tools and user management
 
 ## Dashboard Sections
@@ -91,7 +91,6 @@ The Friend-Lite web dashboard provides a comprehensive interface for managing co
 
 #### System Configuration (Click "📋 Load Memory Config")
 - **Memory Config**: Current memory extraction settings and LLM configuration
-- **Action Item Config**: Action item detection configuration and trigger phrases
 - **Debug Settings**: System debug mode, logging levels, and performance settings
 - **Live Config**: Real-time configuration without restart required
 
@@ -192,7 +191,6 @@ ADMIN_PASSWORD=your-admin-password
 1. **Authentication**: Login via sidebar
 2. **View Conversations**: Browse recent audio sessions
 3. **Search Memories**: Find relevant conversation insights
-4. **Manage Action Items**: Track and update tasks
 5. **Connect Clients**: Use provided tokens for audio devices
 
 ## Security Considerations

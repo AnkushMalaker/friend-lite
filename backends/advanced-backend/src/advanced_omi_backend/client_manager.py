@@ -136,9 +136,6 @@ class ClientManager:
                     "memory_queue_size": (
                         client_state.memory_queue.qsize()
                     ),
-                    "action_item_queue_size": (
-                        client_state.action_item_queue.qsize()
-                    ),
                 },
             }
             client_info.append(client_data)

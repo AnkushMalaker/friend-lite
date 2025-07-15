@@ -29,8 +29,6 @@ class PipelineStage(Enum):
     TRANSCRIPTION_COMPLETED = "transcription_completed"
     MEMORY_STARTED = "memory_started"
     MEMORY_COMPLETED = "memory_completed"
-    ACTION_ITEMS_STARTED = "action_items_started"
-    ACTION_ITEMS_COMPLETED = "action_items_completed"
     CONVERSATION_ENDED = "conversation_ended"
 
 
@@ -134,7 +132,6 @@ class SystemMetrics:
     total_audio_chunks_processed: int = 0
     total_transcriptions: int = 0
     total_memories_created: int = 0
-    total_action_items_created: int = 0
     last_activity: Optional[datetime] = None
 
     def uptime_hours(self) -> float:
@@ -258,8 +255,6 @@ class DebugSystemTracker:
                     self.metrics.total_transcriptions += 1
                 elif stage == PipelineStage.MEMORY_COMPLETED:
                     self.metrics.total_memories_created += 1
-                elif stage == PipelineStage.ACTION_ITEMS_COMPLETED:
-                    self.metrics.total_action_items_created += 1
                 elif stage == PipelineStage.CONVERSATION_ENDED:
                     self.metrics.completed_transactions += 1
                     self.metrics.active_transactions -= 1
@@ -329,7 +324,6 @@ class DebugSystemTracker:
                     "total_audio_chunks": self.metrics.total_audio_chunks_processed,
                     "total_transcriptions": self.metrics.total_transcriptions,
                     "total_memories": self.metrics.total_memories_created,
-                    "total_action_items": self.metrics.total_action_items_created,
                     "last_activity": (
                         self.metrics.last_activity.isoformat()
                         if self.metrics.last_activity

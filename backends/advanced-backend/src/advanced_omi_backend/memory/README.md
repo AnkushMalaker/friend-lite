@@ -1,7 +1,7 @@
 # Disclaimer - AI generated during development
 # Memory Service
 
-The Memory Service is a core component of the Friend-Lite backend that provides persistent memory and action item management capabilities using [Mem0](https://mem0.ai/) with local storage.
+The Memory Service is a core component of the Friend-Lite backend that provides persistent memory capabilities using [Mem0](https://mem0.ai/) with local storage.
 
 ## Features
 
@@ -11,14 +11,6 @@ The Memory Service is a core component of the Friend-Lite backend that provides 
 - **User-Scoped Storage**: Memories are isolated per user for privacy and organization
 - **Metadata Support**: Rich metadata storage for enhanced filtering and retrieval
 
-### 🎯 **Action Items**
-- **Automatic Extraction**: Extract action items from conversation transcripts using LLM
-- **Manual Creation**: Create action items directly via API
-- **Status Management**: Track action item progress (open, in_progress, completed, cancelled)
-- **Priority & Assignment**: Set priority levels and assign to specific users
-- **Due Date Tracking**: Basic due date support for task management
-- **Search & Filtering**: Find action items by text content or filter by status
-- **Statistics**: Get comprehensive statistics and breakdowns by status, priority, assignee
 
 ## Architecture
 
@@ -81,39 +73,6 @@ all_memories = memory_service.get_all_memories(
 )
 ```
 
-### Action Item Operations
-
-```python
-# Extract action items from transcript
-count = memory_service.extract_and_store_action_items(
-    transcript="I'll send the report by Friday and schedule a meeting",
-    client_id="user123", 
-    audio_uuid="conv_456"
-)
-
-# Get action items
-action_items = memory_service.get_action_items(
-    user_id="user123",
-    status_filter="open",  # Optional: filter by status
-    limit=50
-)
-
-# Search action items
-results = memory_service.search_action_items(
-    query="report",
-    user_id="user123",
-    limit=20
-)
-
-# Update action item status
-success = memory_service.update_action_item_status(
-    memory_id="mem_789",
-    new_status="completed"
-)
-
-# Delete action item
-success = memory_service.delete_action_item(memory_id="mem_789")
-```
 
 ## REST API Endpoints
 
@@ -122,85 +81,23 @@ success = memory_service.delete_action_item(memory_id="mem_789")
 - `GET /api/memories/search?user_id={user_id}&query={query}` - Search memories
 - `DELETE /api/memories/{memory_id}` - Delete specific memory
 
-### Action Item Endpoints
-- `GET /api/action-items?user_id={user_id}` - Get action items
-- `POST /api/action-items?user_id={user_id}` - Create action item
-- `PUT /api/action-items/{memory_id}` - Update action item status
-- `DELETE /api/action-items/{memory_id}` - Delete action item
-- `GET /api/action-items/search?user_id={user_id}&query={query}` - Search action items
-- `GET /api/action-items/stats?user_id={user_id}` - Get statistics
-- `POST /api/conversations/{audio_uuid}/extract-action-items` - Extract from conversation
 
-## Action Item Schema
-
-Action items are stored with the following structure:
-
-```json
-{
-  "memory_id": "unique_memory_identifier",
-  "description": "Task description",
-  "assignee": "person_responsible", 
-  "due_date": "deadline_or_not_specified",
-  "priority": "high|medium|low|not_specified",
-  "status": "open|in_progress|completed|cancelled",
-  "context": "when/why_mentioned",
-  "created_at": 1234567890,
-  "updated_at": 1234567890,
-  "source": "manual_creation|transcript_extraction",
-  "audio_uuid": "conversation_id_if_extracted"
-}
-```
 
 ## Local Storage Stack
 
 The service uses a completely local storage stack:
 
-- **Ollama**: Local LLM for action item extraction and embeddings
+- **Ollama**: Local LLM for embeddings
   - Model: `llama3.1:latest` for text processing
   - Embeddings: `nomic-embed-text:latest` for vector representations
 - **Qdrant**: Local vector database for memory storage and semantic search
 - **No External APIs**: Everything runs locally for privacy and control
 
-## Action Item Extraction
-
-Action items are automatically extracted from conversations using a specialized LLM prompt that looks for:
-
-- Task commitments ("I'll send the report by Friday")
-- Requests ("Can you review the document?")
-- Scheduling needs ("Let's schedule a meeting")
-- Follow-up actions ("We need to contact the client")
-
-The extraction happens at the end of each conversation session and is stored with full context.
 
 ## ⚠️ **Important Limitations**
 
 ### Mem0 Update Method Warning
 
-**CRITICAL**: The Mem0 `memory.update()` method has a significant limitation - **it destroys all metadata** when updating memory content. This breaks action item functionality since we rely on metadata for:
-
-- Action item identification (`metadata.type = "action_item"`)
-- Structured data storage (`metadata.action_item_data`)
-- Source tracking and timestamps
-
-**Current Workaround**: The `update_action_item_status()` method uses Mem0's `update()` which will work for text content but will break subsequent retrievals due to metadata loss.
-
-**Symptoms of this issue**:
-- Update appears successful (HTTP 200)
-- Verification fails (HTTP 500) 
-- Action items become unretievable
-- Search returns 0 results
-
-**Future Solution**: When Mem0 fixes the update method or provides metadata-preserving updates, the implementation should be updated accordingly.
-
-### Recommended Practices
-
-1. **Testing Updates**: Always test action item retrieval after status updates
-2. **Backup Strategy**: Consider implementing a backup/restore mechanism for critical action items
-3. **Alternative Approach**: For production use, consider implementing a custom update that:
-   - Creates new memory with updated data
-   - Preserves all metadata
-   - Deletes old memory
-   - Updates references to use new memory_id
 
 ## Development
 
@@ -209,13 +106,12 @@ The extraction happens at the end of each conversation session and is stored wit
 ```bash
 # Run the comprehensive API test suite
 cd backends/advanced-backend
-uv run python3 test_action_items.py
+uv run python3 test_memory_service.py
 ```
 
 The test suite covers:
 - Backend health checks
 - User management
-- Action item CRUD operations
 - Status updates and verification
 - Search functionality
 - Statistics generation
@@ -232,7 +128,6 @@ logging.getLogger("memory_service").setLevel(logging.DEBUG)
 
 Key metrics to monitor:
 - Memory creation success rate
-- Action item extraction accuracy
 - Search response times
 - Update operation failures
 
@@ -245,10 +140,6 @@ Key metrics to monitor:
    - Verify environment variables
    - Check service startup logs
 
-2. **Action Items Not Found**
-   - Verify metadata structure
-   - Check for update method metadata loss
-   - Confirm user_id consistency
 
 3. **Search Returns Empty Results** 
    - Check embedding model availability
@@ -275,14 +166,9 @@ curl http://localhost:8000/health
 
 ## Future Enhancements
 
-- [ ] Fix Mem0 update metadata preservation
-- [ ] Add bulk operations for action items
-- [ ] Implement action item dependencies
-- [ ] Add deadline notifications
 - [ ] Enhanced search with filters
 - [ ] Export/import functionality
 - [ ] Integration with calendar systems
-- [ ] Action item templates
 
 ## License
 
