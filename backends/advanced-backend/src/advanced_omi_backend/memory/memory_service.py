@@ -861,7 +861,80 @@ class MemoryService:
     # search_action_items and delete_action_item methods removed - now handled by ActionItemsService
 
     def get_all_memories(self, user_id: str, limit: int = 100) -> list:
-        """Get all memories for a user."""
+        """Get all memories for a user, filtering and prioritizing semantic memories over fallback transcript memories."""
+        if not self._initialized:
+            # This is a sync method, so we need to handle initialization differently
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, we can't call initialize() directly
+                # This should be handled by the caller
+                raise Exception("Memory service not initialized - call await initialize() first")
+            else:
+                # We're in a sync context, run the async initialize
+                loop.run_until_complete(self.initialize())
+
+        assert self.memory is not None, "Memory service not initialized"
+        try:
+            # Get more memories than requested to account for filtering
+            fetch_limit = min(limit * 3, 500)  # Get up to 3x requested amount for filtering
+            memories_response = self.memory.get_all(user_id=user_id, limit=fetch_limit)
+
+            # Handle different response formats from Mem0
+            raw_memories = []
+            if isinstance(memories_response, dict):
+                if "results" in memories_response:
+                    # New paginated format - return the results list
+                    raw_memories = memories_response["results"]
+                else:
+                    # Old format - convert dict values to list
+                    raw_memories = list(memories_response.values()) if memories_response else []
+            elif isinstance(memories_response, list):
+                # Already a list
+                raw_memories = memories_response
+            else:
+                memory_logger.warning(
+                    f"Unexpected memory response format: {type(memories_response)}"
+                )
+                return []
+
+            # Filter and prioritize memories
+            semantic_memories = []
+            fallback_memories = []
+            
+            for memory in raw_memories:
+                metadata = memory.get("metadata", {})
+                memory_id = memory.get("id", "")
+                
+                # Check if this is a fallback transcript memory
+                is_fallback = (
+                    metadata.get("empty_results") == True or
+                    metadata.get("reason") == "llm_returned_empty_results" or
+                    str(memory_id).startswith("transcript_")
+                )
+                
+                if is_fallback:
+                    fallback_memories.append(memory)
+                else:
+                    semantic_memories.append(memory)
+            
+            # Prioritize semantic memories, but include fallback if no semantic memories exist
+            if semantic_memories:
+                # Return semantic memories first, up to the limit
+                result = semantic_memories[:limit]
+                memory_logger.info(f"Returning {len(result)} semantic memories for user {user_id} (filtered out {len(fallback_memories)} fallback memories)")
+            else:
+                # If no semantic memories, return fallback memories
+                result = fallback_memories[:limit]
+                memory_logger.info(f"No semantic memories found for user {user_id}, returning {len(result)} fallback memories")
+            
+            return result
+
+        except Exception as e:
+            memory_logger.error(f"Error fetching memories for user {user_id}: {e}")
+            raise
+
+    def get_all_memories_unfiltered(self, user_id: str, limit: int = 100) -> list:
+        """Get all memories for a user without filtering fallback memories (for debugging)."""
         if not self._initialized:
             # This is a sync method, so we need to handle initialization differently
             loop = asyncio.get_event_loop()
@@ -895,11 +968,11 @@ class MemoryService:
                 return []
 
         except Exception as e:
-            memory_logger.error(f"Error fetching memories for user {user_id}: {e}")
+            memory_logger.error(f"Error fetching unfiltered memories for user {user_id}: {e}")
             raise
 
     def search_memories(self, query: str, user_id: str, limit: int = 10) -> list:
-        """Search memories using semantic similarity."""
+        """Search memories using semantic similarity, prioritizing semantic memories over fallback."""
         if not self._initialized:
             # This is a sync method, so we need to handle initialization differently
             loop = asyncio.get_event_loop()
@@ -913,24 +986,58 @@ class MemoryService:
 
         assert self.memory is not None, "Memory service not initialized"
         try:
-            memories_response = self.memory.search(query=query, user_id=user_id, limit=limit)
+            # Get more results than requested to account for filtering
+            search_limit = min(limit * 3, 100)
+            memories_response = self.memory.search(query=query, user_id=user_id, limit=search_limit)
 
             # Handle different response formats from Mem0
+            raw_memories = []
             if isinstance(memories_response, dict):
                 if "results" in memories_response:
                     # New paginated format - return the results list
-                    return memories_response["results"]
+                    raw_memories = memories_response["results"]
                 else:
                     # Old format - convert dict values to list
-                    return list(memories_response.values()) if memories_response else []
+                    raw_memories = list(memories_response.values()) if memories_response else []
             elif isinstance(memories_response, list):
                 # Already a list
-                return memories_response
+                raw_memories = memories_response
             else:
                 memory_logger.warning(
                     f"Unexpected search response format: {type(memories_response)}"
                 )
                 return []
+
+            # Filter and prioritize memories
+            semantic_memories = []
+            fallback_memories = []
+            
+            for memory in raw_memories:
+                metadata = memory.get("metadata", {})
+                memory_id = memory.get("id", "")
+                
+                # Check if this is a fallback transcript memory
+                is_fallback = (
+                    metadata.get("empty_results") == True or
+                    metadata.get("reason") == "llm_returned_empty_results" or
+                    str(memory_id).startswith("transcript_")
+                )
+                
+                if is_fallback:
+                    fallback_memories.append(memory)
+                else:
+                    semantic_memories.append(memory)
+            
+            # Prioritize semantic memories in search results
+            if semantic_memories:
+                result = semantic_memories[:limit]
+                memory_logger.info(f"Search returned {len(result)} semantic memories for query '{query}' (filtered out {len(fallback_memories)} fallback memories)")
+            else:
+                # If no semantic memories match, include fallback memories
+                result = fallback_memories[:limit]
+                memory_logger.info(f"Search found no semantic memories for query '{query}', returning {len(result)} fallback memories")
+            
+            return result
 
         except Exception as e:
             memory_logger.error(f"Error searching memories for user {user_id}: {e}")
@@ -1090,26 +1197,18 @@ class MemoryService:
         self._initialized = False
         memory_logger.info("Memory service shut down")
 
-    def get_memories_with_transcripts(self, user_id: str, limit: int = 100) -> list:
+    async def get_memories_with_transcripts(self, user_id: str, limit: int = 100) -> list:
         """Get memories with their source transcripts using database relationship."""
         if not self._initialized:
-            # This is a sync method, so we need to handle initialization differently
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, we can't call initialize() directly
-                # This should be handled by the caller
-                raise Exception("Memory service not initialized - call await initialize() first")
-            else:
-                # We're in a sync context, run the async initialize
-                loop.run_until_complete(self.initialize())
+            await self.initialize()
 
         assert self.memory is not None, "Memory service not initialized"
         
         try:
-            # Get all memories for the user
+            # Get all memories for the user (this is sync)
             memories = self.get_all_memories(user_id, limit)
             
-            # Import here to avoid circular imports
+            # Import Motor connection here to avoid circular imports
             from advanced_omi_backend.database import chunks_col
             
             enriched_memories = []
@@ -1139,25 +1238,15 @@ class MemoryService:
                     enriched_memory["client_id"] = metadata.get("client_id")
                     enriched_memory["user_email"] = metadata.get("user_email")
                     
-                    # Get transcript from database using audio_uuid
-                    # Note: This is a sync method, so we need to use synchronous database access
-                    # In a real implementation, you might want to make this async
+                    # Get transcript from database using Motor (async)
                     try:
-                        # We need to use the sync version of MongoDB operations
-                        # Since this is running in an executor, we can use motor's sync methods
-                        import pymongo
-                        import os
+                        memory_logger.debug(f"🔍 Looking up transcript for audio_uuid: {audio_uuid}")
                         
-                        # Create sync MongoDB client
-                        MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
-                        sync_client = pymongo.MongoClient(MONGODB_URI)
-                        sync_db = sync_client.get_database("friend-lite")
-                        sync_chunks_col = sync_db["audio_chunks"]
-                        
-                        # Find the chunk by audio_uuid
-                        chunk = sync_chunks_col.find_one({"audio_uuid": audio_uuid})
+                        # Use existing Motor connection instead of creating new PyMongo clients
+                        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
                         
                         if chunk:
+                            memory_logger.debug(f"🔍 Found chunk for {audio_uuid}, extracting transcript segments")
                             # Extract transcript from chunk
                             transcript_segments = chunk.get("transcript", [])
                             if transcript_segments:
@@ -1180,9 +1269,13 @@ class MemoryService:
                                         enriched_memory["compression_ratio"] = round(
                                             (len(memory_text) / len(full_transcript)) * 100, 1
                                         )
-                        
-                        # Close sync client
-                        sync_client.close()
+                                    memory_logger.debug(f"✅ Successfully enriched memory {audio_uuid} with {len(full_transcript)} char transcript")
+                                else:
+                                    memory_logger.debug(f"⚠️ Empty transcript found for {audio_uuid}")
+                            else:
+                                memory_logger.debug(f"⚠️ No transcript segments found for {audio_uuid}")
+                        else:
+                            memory_logger.debug(f"⚠️ No chunk found for audio_uuid: {audio_uuid}")
                         
                     except Exception as db_error:
                         memory_logger.warning(f"Failed to get transcript for audio_uuid {audio_uuid}: {db_error}")
@@ -1190,7 +1283,8 @@ class MemoryService:
                 
                 enriched_memories.append(enriched_memory)
             
-            memory_logger.info(f"Enriched {len(enriched_memories)} memories with transcripts for user {user_id}")
+            transcript_count = sum(1 for m in enriched_memories if m.get("transcript"))
+            memory_logger.info(f"Enriched {len(enriched_memories)} memories with transcripts for user {user_id} ({transcript_count} with actual transcript data)")
             return enriched_memories
             
         except Exception as e:
