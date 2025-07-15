@@ -521,9 +521,6 @@ class ClientState:
                         break
 
                     try:
-                        # Track audio processing
-                        user = await get_user_by_client_id(self.client_id)
-                        transaction_id = None
 
                         # Get or create transcription manager
                         if self.transcription_manager is None:

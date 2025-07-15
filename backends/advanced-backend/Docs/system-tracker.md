@@ -1,11 +1,11 @@
 # Debug System Tracker
 
-The **Debug System Tracker** provides centralized monitoring and debugging for the audio processing pipeline in the Friend-Lite backend. It tracks transactions through the complete pipeline from audio reception to memory/action item creation, giving you comprehensive visibility into system health and bottlenecks.
+The **Debug System Tracker** provides centralized monitoring and debugging for the audio processing pipeline in the Friend-Lite backend. It tracks transactions through the complete pipeline from audio reception to memory creation, giving you comprehensive visibility into system health and bottlenecks.
 
 ## Overview
 
 The Debug System Tracker replaces scattered debug systems with a unified approach that:
-- **Tracks complete pipeline transactions** from audio → transcription → memory → action items
+- **Tracks complete pipeline transactions** from audio → transcription → memory
 - **Provides real-time monitoring** via the Streamlit dashboard  
 - **Captures detailed failure information** for debugging
 - **Detects stalled transactions** automatically
@@ -15,9 +15,9 @@ The Debug System Tracker replaces scattered debug systems with a unified approac
 ## Architecture
 
 ```
-Audio Ingestion → Transcription → Memory → Action Items
-      ↓               ↓            ↓          ↓
-  AUDIO_RECEIVED → TRANSCRIPTION_* → MEMORY_* → ACTION_ITEMS_*
+Audio Ingestion → Transcription → Memory
+      ↓               ↓            ↓
+  AUDIO_RECEIVED → TRANSCRIPTION_* → MEMORY_*
       ↓               ↓            ↓          ↓
          Debug System Tracker Events
               ↓
@@ -37,8 +37,6 @@ class PipelineStage(Enum):
     TRANSCRIPTION_COMPLETED = "transcription_completed"
     MEMORY_STARTED = "memory_started"
     MEMORY_COMPLETED = "memory_completed"
-    ACTION_ITEMS_STARTED = "action_items_started"
-    ACTION_ITEMS_COMPLETED = "action_items_completed"
     CONVERSATION_ENDED = "conversation_ended"
 ```
 
@@ -134,7 +132,7 @@ The Debug System Tracker integrates with the Streamlit dashboard to provide real
 - **Active Transactions** - Currently in progress
 - **Completed/Failed/Stalled** - Transaction outcomes
 - **Active WebSockets** - Current connections
-- **Processing Counts** - Audio chunks, transcriptions, memories, action items
+- **Processing Counts** - Audio chunks, transcriptions, memories
 
 ### Recent Activity
 - **Recent Transactions** - Last 10 transactions with status and timing

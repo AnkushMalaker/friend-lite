@@ -48,7 +48,7 @@ This is a real-time audio processing backend built with FastAPI that handles con
 - **streamlit**: Web UI for conversation management, speaker enrollment, and system monitoring  
 - **proxy**: Nginx reverse proxy handling external requests
 - **qdrant**: Vector database for semantic memory storage and retrieval
-- **mongo**: Document database for conversations, users, speakers, and action items
+- **mongo**: Document database for conversations, users, and speakers
 - **Optional services**: speaker-recognition (GPU-based), ollama (LLM inference)
 
 ## Audio Processing Flow
@@ -95,7 +95,6 @@ The system runs multiple async consumers processing audio in parallel:
 
 **Action Items Extraction**:
 - Uses LLM (Ollama) to extract tasks from conversations
-- Tracks action item status and assignments
 - Provides API for task management
 
 **Conversation Management**:
@@ -109,7 +108,6 @@ The system runs multiple async consumers processing audio in parallel:
 - `audio_chunks`: Audio file metadata, transcripts, timing, speakers
 - `users`: User profiles and settings
 - `speakers`: Voice enrollment data and models
-- `action_items`: Extracted tasks with status tracking
 
 **File System**:
 - `./audio_chunks/`: Raw and cropped WAV files

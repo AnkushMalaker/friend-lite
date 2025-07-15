@@ -111,7 +111,6 @@ backends/advanced-backend/
 │   ├── quickstart.md              # System overview & setup
 │   ├── architecture.md            # Technical architecture
 │   ├── memories.md                # Memory system details
-│   ├── action-items.md            # Action items system
 │   └── auth.md                    # Authentication system
 │
 ├── src/                           # 🔧 Source Code
@@ -126,7 +125,6 @@ backends/advanced-backend/
 │
 ├── memory_config.yaml             # 📋 Central configuration
 ├── MEMORY_DEBUG_IMPLEMENTATION.md # Debug system details
-└── ACTION_ITEMS_CLEANUP_SUMMARY.md # Architecture cleanup
 ```
 
 ---
