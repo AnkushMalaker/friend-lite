@@ -3,7 +3,6 @@
 This module provides:
 - Memory configuration and initialization
 - Memory operations (add, get, search, delete)
-- Action item extraction and management
 - Debug tracking and configurable extraction
 """
 
@@ -215,8 +214,6 @@ Now extract facts from the following conversation. Return only JSON format with 
 # Global memory configuration - built dynamically from YAML config
 MEM0_CONFIG = _build_mem0_config()
 
-# Action item extraction is now handled by ActionItemsService
-# using configuration from memory_config.yaml
 
 # Global instances
 _memory_service = None
@@ -233,12 +230,10 @@ def init_memory_config(
     global MEM0_CONFIG, MEM0_ORGANIZATION_ID, MEM0_PROJECT_ID, MEM0_APP_ID
 
     memory_logger.info(
-        f"Initializing MemoryService with Qdrant URL: {qdrant_base_url} and Ollama base URL: {ollama_base_url}"
+        f"Initializing MemoryService with Qdrant URL: {qdrant_base_url}"
     )
 
-    if ollama_base_url:
-        MEM0_CONFIG["llm"]["config"]["ollama_base_url"] = ollama_base_url
-        MEM0_CONFIG["embedder"]["config"]["ollama_base_url"] = ollama_base_url
+    # Configuration updates would go here if needed
 
     if qdrant_base_url:
         MEM0_CONFIG["vector_store"]["config"]["host"] = qdrant_base_url
@@ -760,12 +755,8 @@ def _add_memory_to_store(
         return False, []
 
 
-# Action item extraction functions removed - now handled by ActionItemsService
-# See action_items_service.py for the main action item processing logic
 
 
-# Action item storage functions removed - now handled by ActionItemsService
-# See action_items_service.py for the main action item processing logic
 
 
 class MemoryService:
@@ -878,16 +869,6 @@ class MemoryService:
             memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
             return False
 
-    # Action item methods removed - now handled by ActionItemsService
-    # See action_items_service.py for the main action item processing logic
-
-    # get_action_items method removed - now handled by ActionItemsService
-
-    # update_action_item_status method removed - now handled by ActionItemsService
-
-    # search_action_items method removed - now handled by ActionItemsService
-
-    # search_action_items and delete_action_item methods removed - now handled by ActionItemsService
 
     def get_all_memories(self, user_id: str, limit: int = 100) -> list:
         """Get all memories for a user, filtering and prioritizing semantic memories over fallback transcript memories."""

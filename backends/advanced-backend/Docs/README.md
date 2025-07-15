@@ -2,7 +2,7 @@
 
 ## 📖 **New Developer Reading Order**
 
-Welcome to friend-lite! This guide provides the optimal reading sequence to understand the complete voice → transcript → memories + action items system.
+Welcome to friend-lite! This guide provides the optimal reading sequence to understand the complete voice → transcript → memories system.
 
 ---
 
@@ -10,7 +10,7 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 
 ### 1. **[Overview & Quick Start](./quickstart.md)** ⭐ *START HERE*
 **Read first** - Complete system overview and setup guide
-- What the system does (voice → memories + action items)
+- What the system does (voice → memories)
 - Key features and capabilities
 - Basic setup and configuration
 - **Code References**: `main.py`, `memory_config.yaml`, `docker-compose.yml`
@@ -36,17 +36,7 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
   - `main.py:1047-1065` (conversation end trigger)
   - `main.py:1163-1195` (background processing)
 
-### 4. **[Action Items System](./action-items.md)**
-**Real-time task extraction and management**
-- How action items are detected and extracted
-- MongoDB storage and CRUD operations
-- Trigger phrases and configuration
-- **Code References**:
-  - `src/action_items_service.py` (primary handler)
-  - `main.py:1341-1378` (real-time processing)
-  - `main.py:2671-2800` (API endpoints)
-
-### 5. **[Authentication System](./auth.md)**
+### 4. **[Authentication System](./auth.md)**
 **User management and security**
 - Dual authentication (email + user_id)
 - JWT tokens and OAuth integration
@@ -60,7 +50,7 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 
 ## 🐛 **Advanced Topics**
 
-### 6. **Memory Debug System** → `../MEMORY_DEBUG_IMPLEMENTATION.md`
+### 5. **Memory Debug System** → `../MEMORY_DEBUG_IMPLEMENTATION.md`
 **Pipeline tracking and debugging**
 - How to track transcript → memory conversion
 - Debug database schema and API endpoints
@@ -70,21 +60,13 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
   - `src/memory_debug_api.py` (debug endpoints)
   - `main.py:1562-1563` (debug router integration)
 
-### 7. **Action Items Architecture** → `../ACTION_ITEMS_CLEANUP_SUMMARY.md`
-**Clean architecture explanation**
-- Why action items were moved out of memory service
-- Current single-responsibility design
-- How components interact
-- **Code References**: `src/action_items_service.py` vs removed functions
-
 ---
 
 ## 🔍 **Configuration & Customization**
 
-### 8. **Configuration File** → `../memory_config.yaml`
+### 6. **Configuration File** → `../memory_config.yaml`
 **Central configuration for all extraction**
 - Memory extraction settings and prompts
-- Action item triggers and configuration  
 - Quality control and debug settings
 - **Code References**:
   - `src/memory_config_loader.py` (config loading)
@@ -105,12 +87,6 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 2. `../memory_config.yaml` - Memory configuration
 3. `src/memory/memory_service.py` - Implementation
 4. `main.py:1047-1065, 1163-1195` - Processing triggers
-
-### **"I want to work on action items"**
-1. [action-items.md](./action-items.md) - Action items system
-2. `../memory_config.yaml` - Action item configuration
-3. `src/action_items_service.py` - Implementation  
-4. `main.py:1341-1378` - Real-time processing
 
 ### **"I want to debug pipeline issues"**
 1. `../MEMORY_DEBUG_IMPLEMENTATION.md` - Debug system overview
@@ -142,7 +118,6 @@ backends/advanced-backend/
 │   ├── main.py                    # Core application (WebSocket, API)
 │   ├── auth.py                    # Authentication system
 │   ├── users.py                   # User management
-│   ├── action_items_service.py    # Action items (MongoDB)
 │   ├── memory/
 │   │   └── memory_service.py      # Memory system (Mem0)
 │   ├── memory_debug.py            # Debug tracking (SQLite)
@@ -162,11 +137,9 @@ backends/advanced-backend/
 - **Entry**: WebSocket endpoints in `main.py:1562+`
 - **Transcription**: `main.py:1258-1340` (transcription processor)
 - **Memory Trigger**: `main.py:1047-1065` (conversation end)
-- **Action Items**: `main.py:1341-1378` (real-time processing)
 
 ### **Data Storage**
 - **Memories**: `src/memory/memory_service.py` → Mem0 → Qdrant
-- **Action Items**: `src/action_items_service.py` → MongoDB
 - **Debug Data**: `src/memory_debug.py` → SQLite
 
 ### **Configuration**
@@ -186,7 +159,7 @@ backends/advanced-backend/
 1. **Follow the references**: Each doc links to specific code files and line numbers
 2. **Use the debug API**: `GET /api/debug/memory/stats` shows live system status
 3. **Check configuration first**: Many behaviors are controlled by `memory_config.yaml`
-4. **Understand the dual pipeline**: Memories (end-of-conversation) vs Action Items (real-time)
+4. **Understand the memory pipeline**: Memories (end-of-conversation)
 5. **Test with curl**: All API endpoints have curl examples in the docs
 
 ---
@@ -206,7 +179,7 @@ backends/advanced-backend/
 - **Add code references**: When updating docs, include file paths and line numbers
 - **Test your changes**: Use the debug API to verify your modifications work
 - **Update configuration**: Add new settings to `memory_config.yaml` when needed
-- **Follow the architecture**: Keep memories and action items in their respective services
+- **Follow the architecture**: Keep memories in their respective services
 
 ### **Getting Help**
 

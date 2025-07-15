@@ -72,12 +72,6 @@ class MemoryConfigLoader:
                 "prompt": "Extract specific facts from this conversation.",
                 "llm_settings": {"temperature": 0.0, "max_tokens": 1500, "model": default_model},
             },
-            "action_item_extraction": {
-                "enabled": True,
-                "trigger_phrases": ["simon says", "action item", "todo"],
-                "prompt": "Extract action items from this conversation.",
-                "llm_settings": {"temperature": 0.1, "max_tokens": 1000, "model": default_model},
-            },
             "categorization": {
                 "enabled": False,
                 "categories": ["work", "personal", "meeting", "other"],
@@ -132,9 +126,6 @@ class MemoryConfigLoader:
         """Get fact extraction configuration."""
         return self.config.get("fact_extraction", {})
 
-    def get_action_item_extraction_config(self) -> Dict[str, Any]:
-        """Get action item extraction configuration."""
-        return self.config.get("action_item_extraction", {})
 
     def get_categorization_config(self) -> Dict[str, Any]:
         """Get categorization configuration."""
@@ -164,9 +155,6 @@ class MemoryConfigLoader:
         """Check if fact extraction is enabled."""
         return self.get_fact_extraction_config().get("enabled", False)
 
-    def is_action_item_extraction_enabled(self) -> bool:
-        """Check if action item extraction is enabled."""
-        return self.get_action_item_extraction_config().get("enabled", True)
 
     def is_categorization_enabled(self) -> bool:
         """Check if categorization is enabled."""
@@ -188,11 +176,6 @@ class MemoryConfigLoader:
             "prompt", "Extract specific facts from this conversation."
         )
 
-    def get_action_item_prompt(self) -> str:
-        """Get the action item extraction prompt."""
-        return self.get_action_item_extraction_config().get(
-            "prompt", "Extract action items from this conversation."
-        )
 
     def get_categorization_prompt(self) -> str:
         """Get the categorization prompt."""
@@ -203,15 +186,13 @@ class MemoryConfigLoader:
         Get LLM settings for a specific extraction type.
 
         Args:
-            extraction_type: One of 'memory', 'fact', 'action_item', 'categorization'
+            extraction_type: One of 'memory', 'fact', 'categorization'
         """
         config_key = f"{extraction_type}_extraction"
         if extraction_type == "memory":
             config_key = "memory_extraction"
         elif extraction_type == "fact":
             config_key = "fact_extraction"
-        elif extraction_type == "action_item":
-            config_key = "action_item_extraction"
         elif extraction_type == "categorization":
             config_key = "categorization"
 
@@ -289,20 +270,6 @@ class MemoryConfigLoader:
 
         return False
 
-    def get_action_item_triggers(self) -> list[str]:
-        """Get action item trigger phrases."""
-        return self.get_action_item_extraction_config().get("trigger_phrases", [])
-
-    def has_action_item_triggers(self, conversation_text: str) -> bool:
-        """Check if conversation contains action item trigger phrases."""
-        triggers = self.get_action_item_triggers()
-        conversation_lower = conversation_text.lower()
-
-        for trigger in triggers:
-            if trigger.lower() in conversation_lower:
-                return True
-
-        return False
 
     def get_categories(self) -> list[str]:
         """Get available categories for classification."""

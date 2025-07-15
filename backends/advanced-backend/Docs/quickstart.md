@@ -19,7 +19,7 @@ At the moment, the basic functionalities are:
 
 - Docker and Docker Compose
 - (Optional) Deepgram API key for high-quality cloud transcription
-- (Optional) Ollama for local LLM processing (memory extraction, action items)
+- (Optional) Ollama for local LLM processing (memory extraction)
 - (Optional) Wyoming ASR for offline speech-to-text processing
 
 ## Quick Start
@@ -95,7 +95,6 @@ For self-hosted speech recognition, see instructions in `extras/asr-services/`:
 
 - **Conversations**: View audio recordings, transcripts, and cropped audio
 - **Memories**: Search extracted conversation memories
-- **Action Items**: Manage automatically detected tasks
 - **User Management**: Create/delete users and their data
 - **Client Management**: View active connections and close conversations
 
@@ -221,19 +220,17 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 
 ### Memory & Intelligence
 - **Enhanced Memory Extraction**: Improved fact extraction with granular, specific memories instead of generic transcript storage
-- **User-centric storage**: All memories and action items keyed by database user_id
+- **User-centric storage**: All memories keyed by database user_id
 - **Memory extraction**: Automatic conversation summaries using LLM with enhanced prompts
 - **Semantic search**: Vector-based memory retrieval
-- **Action item detection**: Automatic task extraction with "Simon says" triggers
-- **Configurable extraction**: YAML-based configuration for memory and action item extraction
-- **Debug tracking**: SQLite-based tracking of transcript → memory/action item conversion
+- **Configurable extraction**: YAML-based configuration for memory extraction
+- **Debug tracking**: SQLite-based tracking of transcript → memory conversion
 - **Client metadata**: Device information preserved for debugging and reference
 - **User isolation**: All data scoped to individual users with multi-device support
 - **No more fallbacks**: System now creates proper memories instead of generic transcript placeholders
 
 **Implementation**: 
 - **Memory System**: `src/memory/memory_service.py` + `main.py:1047-1065, 1163-1195`
-- **Action Items**: `src/action_items_service.py` + `main.py:1341-1378`
 - **Configuration**: `memory_config.yaml` + `src/memory_config_loader.py`
 - **Debug Tracking**: `src/memory_debug.py` + API endpoints at `/api/debug/memory/*`
 
@@ -320,7 +317,7 @@ uv sync --group (whatever group you want to sync)
 
 The friend-lite backend uses a **user-centric data architecture**:
 
-- **All memories and action items are keyed by database user_id** (not client_id)
+- **All memories are keyed by database user_id** (not client_id)
 - **Client information is stored in metadata** for reference and debugging
 - **User email is included** for easy identification in admin interfaces
 - **Multi-device support**: Users can access their data from any registered device
@@ -329,7 +326,7 @@ For detailed information, see [User Data Architecture](user-data-architecture.md
 
 ## Memory & Action Item Configuration
 
-The system uses **centralized configuration** via `memory_config.yaml` for all memory and action item extraction settings. All hardcoded values have been removed from the code to ensure consistent, configurable behavior.
+The system uses **centralized configuration** via `memory_config.yaml` for all memory extraction settings. All hardcoded values have been removed from the code to ensure consistent, configurable behavior.
 
 ### Configuration File Location
 - **Path**: `backends/advanced-backend/memory_config.yaml`
@@ -383,23 +380,6 @@ fact_extraction:
     temperature: 0.0  # Lower for factual accuracy
     max_tokens: 1500
 
-action_item_extraction:
-  enabled: true
-  # RECOMMENDATION: Works best with OpenAI GPT-4o for reliable JSON parsing
-  trigger_phrases:
-    - "simon says"
-    - "action item" 
-    - "todo"
-    - "follow up"
-    - "next step"
-    - "homework"
-    - "deliverable"
-    - "task"
-    - "assignment"
-  llm_settings:
-    model: "gemma3n:e4b"  # Auto-switches based on LLM_PROVIDER
-    temperature: 0.1
-    max_tokens: 1000
 ```
 
 **Provider-Specific Behavior:**
@@ -409,7 +389,7 @@ action_item_extraction:
 
 #### Fixing JSON Parsing Errors
 
-If you experience JSON parsing errors in action items or fact extraction:
+If you experience JSON parsing errors in fact extraction:
 
 1. **Switch to OpenAI GPT-4o** (recommended solution):
    ```bash

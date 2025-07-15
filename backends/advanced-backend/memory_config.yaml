@@ -54,47 +54,6 @@ fact_extraction:
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
     model: "gpt-4o"
 
-# Action item extraction settings
-action_item_extraction:
-  # Whether to extract action items from conversations
-  # RECOMMENDATION: Works best with OpenAI GPT-4o for reliable JSON parsing
-  enabled: true
-  
-  # Trigger phrases that indicate action items in conversation
-  trigger_phrases:
-    - "simon says"
-    - "action item"
-    - "todo"
-    - "follow up"
-    - "next step"
-    - "homework"
-    - "deliverable"
-    - "task"
-    - "assignment"
-    - "need to"
-    - "should do"
-    - "remember to"
-  
-  # Prompt for extracting action items
-  prompt: |
-    Extract action items from this conversation. Look for tasks, assignments, or things that need to be done.
-    
-    Return a JSON array where each item has:
-    - description: What needs to be done
-    - assignee: Who should do it ("unassigned" if unclear)
-    - due_date: When it should be done ("not_specified" if not mentioned)
-    - priority: high/medium/low/not_specified
-    - context: Why or how this task came up
-    - tool: Required tool ("check_email", "set_alarm", "none")
-    
-    Return only valid JSON. No explanations or extra text.
-  
-  # LLM parameters for action item extraction
-  llm_settings:
-    temperature: 0.1
-    max_tokens: 1000
-    # RECOMMENDATION: Use "gpt-4o" for reliable JSON output in action items
-    model: "gpt-4o"  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Memory categorization settings
 categorization:

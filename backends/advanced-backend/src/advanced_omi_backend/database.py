@@ -22,7 +22,6 @@ db = mongo_client.get_default_database("friend-lite")
 chunks_col = db["audio_chunks"]
 users_col = db["users"]
 speakers_col = db["speakers"]
-action_items_col = db["action_items"]
 
 
 def get_database():
@@ -36,7 +35,6 @@ def get_collections():
         "chunks_col": chunks_col,
         "users_col": users_col,
         "speakers_col": speakers_col,
-        "action_items_col": action_items_col,
     }
 
 
