@@ -26,7 +26,6 @@ import ollama
 # Import Beanie for user management
 from beanie import init_beanie
 from dotenv import load_dotenv
-from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from fastapi import (
     FastAPI,
     Query,
