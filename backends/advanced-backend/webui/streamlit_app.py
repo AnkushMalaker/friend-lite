@@ -32,7 +32,7 @@ logger.info("🚀 Starting Friend-Lite Streamlit Dashboard")
 # ---- Configuration ---- #
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://192.168.0.110:8000")
 # For browser-accessible URLs (audio files), use localhost instead of Docker service name
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://${NGROK_PUBLIC_URL}")
 
 logger.info(f"🔧 Configuration loaded - Backend API: {BACKEND_API_URL}, Public URL: {BACKEND_PUBLIC_URL}")
 
@@ -333,7 +333,7 @@ Backend API: {BACKEND_API_URL}
 Backend Public: {BACKEND_PUBLIC_URL}
 Active Clients: {config.get('active_clients', 'Unknown')}
 MongoDB URI: {config.get('mongodb_uri', 'Unknown')[:30]}...
-Ollama URL: {config.get('ollama_url', 'Unknown')}
+LLM URL: {config.get('llm_url', 'Unknown')}
 Qdrant URL: {config.get('qdrant_url', 'Unknown')}
 ASR URI: {config.get('asr_uri', 'Unknown')}
 Chunk Directory: {config.get('chunk_dir', 'Unknown')}
@@ -485,7 +485,10 @@ with tab_convos:
                             # Display audio with label and cache-busting
                             st.write(audio_label)
                             audio_url = f"{BACKEND_PUBLIC_URL}/audio/{selected_audio_path}{cache_buster}"
-                            st.audio(audio_url, format="audio/wav")
+                            audio_placeholder = st.empty()
+                            # Add a small delay to ensure the file is fully ready for the browser
+                            # time.sleep(0.1) # This might block the UI, so use with caution
+                            audio_placeholder.audio(audio_url, format="audio/wav")
                             logger.debug(f"🎵 Audio URL: {audio_url}")
                             
                             # Show additional info in debug mode or when both versions exist
@@ -639,7 +642,7 @@ with tab_mem:
         with col2:
             with st.spinner("Loading action items..."):
                 logger.debug(f"📡 Fetching action items for user: {user_id_input.strip()}")
-                action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}")
+                # action_items_response = get_data(f"/api/action-items?user_id={user_id_input.strip()}")
         
         # Handle the API response format with "results" wrapper for memories
         if memories_response and isinstance(memories_response, dict) and "results" in memories_response:
@@ -649,13 +652,13 @@ with tab_mem:
             memories = memories_response
             logger.debug(f"🧠 Memories response format: {type(memories_response)}")
             
-        # Handle action items response
-        if action_items_response and isinstance(action_items_response, dict) and "action_items" in action_items_response:
-            action_items = action_items_response["action_items"]
-            logger.debug(f"🎯 Action items response has 'action_items' wrapper, extracted {len(action_items)} items")
-        else:
-            action_items = action_items_response if action_items_response else []
-            logger.debug(f"🎯 Action items response format: {type(action_items_response)}")
+        # # Handle action items response
+        # if action_items_response and isinstance(action_items_response, dict) and "action_items" in action_items_response:
+        #     action_items = action_items_response["action_items"]
+        #     logger.debug(f"🎯 Action items response has 'action_items' wrapper, extracted {len(action_items)} items")
+        # else:
+        #     action_items = action_items_response if action_items_response else []
+        #     logger.debug(f"🎯 Action items response format: {type(action_items_response)}")
     else:
         # Show instruction to enter a username
         memories = None
@@ -711,7 +714,7 @@ with tab_mem:
         else:
             logger.info(f"🧠 No memories found for user {user_id_input.strip()}")
             st.info("No memories found for this user.")
-    
+    action_items = None  # Initialize action_items to None for clarity
     # Display Action Items Section
     if action_items is not None:
         logger.debug("🎯 Displaying action items section...")

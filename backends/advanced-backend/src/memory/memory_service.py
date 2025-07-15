@@ -39,14 +39,17 @@ QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 _memory_service = None
 _process_memory = None  # For worker processes
 
-
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
 
 
 def _init_process_memory():
     """Initialize memory instance once per worker process."""
     global _process_memory
     if _process_memory is None:
-        _process_memory = get_memory_client
+        _process_memory = get_memory_client()
     return _process_memory
 
 
@@ -58,21 +61,23 @@ def _add_memory_to_store(transcript: str, client_id: str, audio_uuid: str) -> bo
     """
     try:
         # Get or create the persistent memory instance for this process
-        process_memory = _init_process_memory()
-        process_memory.add(
+        mem0_client = _init_process_memory()
+        response = mem0_client.add(
             transcript,
             user_id=client_id,
-            metadata={
-                "source": "offline_streaming",
-                "audio_uuid": audio_uuid,
-                "timestamp": int(time.time()),
-                "conversation_context": "audio_transcription",
-                "device_type": "audio_recording",
-                "organization_id": MEM0_ORGANIZATION_ID,
-                "project_id": MEM0_PROJECT_ID,
-                "app_id": MEM0_APP_ID,
-            },
+            # metadata={
+            #     "source": "offline_streaming",
+            #     "audio_uuid": audio_uuid,
+            #     "timestamp": int(time.time()),
+            #     "conversation_context": "audio_transcription",
+            #     "device_type": "audio_recording",
+            #     "organization_id": MEM0_ORGANIZATION_ID,
+            #     "project_id": MEM0_PROJECT_ID,
+            #     "app_id": MEM0_APP_ID,
+            # },
         )
+        memory_logger.info(f"Added transcript {transcript} for {audio_uuid} to mem0 (client: {client_id})")
+        memory_logger.info(f"Memory add response: {response}")
         return True
     except Exception as e:
         memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")

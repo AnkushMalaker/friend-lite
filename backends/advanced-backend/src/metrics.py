@@ -351,20 +351,19 @@ class MetricsCollector:
 # Global metrics collector instance
 _metrics_collector: Optional[MetricsCollector] = None
 
-def get_metrics_collector() -> MetricsCollector:
+def get_metrics_collector(debug_dir: str | Path = "/app/debug_dir") -> MetricsCollector:
     """Get the global metrics collector instance"""
     global _metrics_collector
     if _metrics_collector is None:
-        debug_dir = "/app/debug_dir" # this is only for docker right now
         _metrics_collector = MetricsCollector(debug_dir)
     return _metrics_collector
 
-async def start_metrics_collection():
+async def start_metrics_collection(debug_dir: str | Path):
     """Start metrics collection"""
-    collector = get_metrics_collector()
+    collector = get_metrics_collector(debug_dir)
     await collector.start()
 
-async def stop_metrics_collection():
+async def stop_metrics_collection(debug_dir: str | Path):
     """Stop metrics collection"""
-    collector = get_metrics_collector()
-    await collector.stop() 
+    collector = get_metrics_collector(debug_dir)
+    await collector.stop()
