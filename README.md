@@ -30,7 +30,7 @@ Regardless - this repo will try to do the minimal of this - multiple OMI-like au
 
 ## Arch description
 The current DevKit2 streams audio via Bluetooth to some device in the OPUS codec.
-Once you have audio, you need trascription (you need speech to text AKA STT or automatic speech recognition AKA ASR. Deepgram is an API based service where you stream your audio to them and they give you transcripts. You can host this locally) from it and then any other things you want, such as -
+Once you have audio, you need transcription (you need speech to text AKA STT or automatic speech recognition AKA ASR. Deepgram is an API based service where you stream your audio to them and they give you transcripts. You can host this locally) from it and then any other things you want, such as -
 Conversation summarization (typically done via LLMs, so ollama or call OpenAI)
 You also need to store these things somewhere - and you need to store different things -
 1. Transcript
