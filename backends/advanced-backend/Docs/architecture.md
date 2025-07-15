@@ -4,7 +4,7 @@
 
 ## System Overview
 
-Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, extracts memories, and generates action items. The system features a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard for management, and complete user authentication with role-based access control.
+Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, and extracts memories. The system features a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard for management, and complete user authentication with role-based access control.
 
 **Core Implementation**: The complete system is implemented in `src/main.py` with supporting services in dedicated modules.
 
@@ -34,7 +34,6 @@ graph TB
     
     %% Business Logic Services
     subgraph "Intelligence Services"
-        ActionItems[action_items_service.py<br/>Task Extraction]
         Memory[memory/<br/>Conversation Memory]
         Metrics[metrics.py<br/>System Monitoring]
     end
@@ -81,9 +80,7 @@ graph TB
     Main -->|/api/* endpoints| WebUI
     
     %% Service Integration
-    Transcription -->|Transcript Text| ActionItems
     Transcription -->|Conversation Data| Memory
-    ActionItems -->|Tasks| MongoDB
     Memory -->|Memory Storage| Ollama
     Memory -->|Vector Storage| Qdrant
     
@@ -91,7 +88,6 @@ graph TB
     Main -->|User & Conversation Data| MongoDB
     Transcription -->|Speech Processing| ASR
     Memory -->|Embeddings| Qdrant
-    ActionItems -->|LLM Analysis| Ollama
     
     %% Monitoring & Metrics
     Main -->|System Metrics| Metrics
@@ -113,7 +109,7 @@ graph TB
 - **Authentication-First Design**: All endpoints require JWT authentication
 - **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation (`main.py:1562+`)
 - **Conversation Management**: Automatic conversation lifecycle with timeout handling (`main.py:1018-1149`)
-- **REST API Suite**: Comprehensive endpoints for user, conversation, memory, and action item management (`main.py:1700+`)
+- **REST API Suite**: Comprehensive endpoints for user, conversation, and memory management (`main.py:1700+`)
 - **Health Monitoring**: Detailed service health checks and performance metrics (`main.py:2500+`)
 - **Audio Cropping**: Intelligent speech segment extraction using FFmpeg (`main.py:174-200`)
 
@@ -132,7 +128,7 @@ graph TB
 - **User-Friendly Interface**: Complete web-based management interface
 - **Authentication Integration**: Login with backend JWT tokens or Google OAuth
 - **Real-Time Monitoring**: Live client status and conversation management
-- **Data Management**: User, conversation, memory, and action item interfaces
+- **Data Management**: User, conversation, and memory interfaces
 - **Audio Playback**: Smart audio player with original/cropped audio options
 - **System Health**: Visual service status and configuration display
 
@@ -160,7 +156,6 @@ The system implements a dual transcription approach with Deepgram as primary and
 ```python
 # Clean dependency injection pattern
 TranscriptionManager(
-    action_item_callback=callback_func,
     chunk_repo=database_repo,
     # Uses get_client_manager() singleton for client state access
 )
@@ -179,7 +174,6 @@ client_manager = get_client_manager()
 client_state = ClientState(
     client_id="user_id_suffix-device_name",
     chunk_repo=database_repo,
-    action_items_service=action_service,
     chunk_dir=audio_storage_path
 )
 ```
@@ -218,7 +212,6 @@ stateDiagram-v2
 - **Chunk Queue**: Raw audio buffering with client isolation
 - **Transcription Queue**: Audio chunks for real-time ASR processing with quality validation
 - **Memory Queue**: Completed conversations for LLM memory extraction (with transcript validation)
-- **Action Item Queue**: Transcript analysis for task detection
 - **Quality Control**: Multi-stage validation prevents empty/invalid transcripts from consuming LLM resources
 
 #### Speech Processing Features
@@ -229,15 +222,6 @@ stateDiagram-v2
 
 ### Intelligence Services
 
-#### Action Items Service (`action_items_service.py`)
-- **User-Centric Storage**: Action items stored with database user_id (not client_id)
-- **LLM-Powered Extraction**: Uses Ollama for intelligent task identification
-- **Trigger Recognition**: Special "Simon says" keyphrase detection for explicit task creation
-- **Task Management**: Full CRUD operations with status tracking (open, in-progress, completed, cancelled)
-- **Client Metadata**: Client and user information stored for reference and debugging
-- **Context Preservation**: Links action items to original conversations and audio segments
-
-> 📖 **Read more**: [Action Items Documentation](./action-items.md) for detailed task extraction features
 
 #### Memory Management (`src/memory/memory_service.py`)
 - **User-Centric Storage**: All memories keyed by database user_id (not client_id)
@@ -264,14 +248,13 @@ stateDiagram-v2
 - **Authentication Data**: Secure password hashing, email verification, email-based login
 - **Profile Management**: User preferences, display names, and permissions
 - **Client Registration**: Tracking of registered clients per user with device names
-- **Data Ownership**: All data (conversations, memories, action items) associated via user_id
+- **Data Ownership**: All data (conversations, memories) associated via user_id
 - **Client ID Generation**: Helper functions for `objectid_suffix-device_name` format
 
 #### Conversation Data Access (`ChunkRepo`)
 - **Audio Metadata**: File paths, timestamps, duration tracking
 - **Transcript Management**: Speaker identification and timing information
 - **Memory Links**: Connection between conversations and extracted memories
-- **Action Item Relations**: Task tracking per conversation
 
 #### Permission System
 - **Dictionary-Based Mapping**: Clean client-user relationship tracking via in-memory dictionaries
@@ -334,6 +317,7 @@ graph LR
 #### Infrastructure Containers
 - **MongoDB 4.4.18**: Primary data storage with persistence
 - **Qdrant Latest**: Vector database for memory embeddings
+- **Neo4j 5.15**: Graph database for memory relationships and entity connections
 - **Nginx Alpine**: Reverse proxy and load balancing
 
 ## Detailed Data Flow Architecture
@@ -385,10 +369,6 @@ flowchart TB
             VectorStore[Qdrant Vector Store<br/>🔍 Semantic search]
         end
         
-        subgraph "✅ Action Items Pipeline"
-            ActionService[Action Items Service<br/>🔍 "Simon says" detection]
-            TaskExtraction[Task Extraction<br/>🤖 LLM-powered analysis]
-        end
     end
 
     %% Failure Recovery System
@@ -441,10 +421,6 @@ flowchart TB
     LLMProcessor -->|✅ Memory extracted| VectorStore
     MemoryService -->|📊 Track processing| QueueTracker
     
-    %% Action Items Flow
-    TranscriptValidation -->|📝 Valid transcript| ActionService
-    ActionService -->|🔍 "Simon says" detected| TaskExtraction
-    TaskExtraction -->|✅ Task extracted| MongoDB
 
     %% Failure Recovery Integration
     QueueTracker -->|📊 Track all items| PersistentQueue
@@ -465,7 +441,6 @@ flowchart TB
     VectorStore -->|💾 Embeddings| QdrantDB
     QueueTracker -->|📊 Metrics & tracking| SQLiteTracking
     ClientState -->|📁 Audio segments| AudioFiles
-    ActionService -->|📝 Tasks| MongoDB
 
     %% Web Dashboard Flow
     WebUI -->|🔐 Cookie/JWT auth<br/>🕐 1hr lifetime| AuthGW
@@ -515,9 +490,8 @@ flowchart TB
 3. **User Resolution**: Client-ID to database user mapping for proper data association
 4. **LLM Processing**: Ollama-based conversation summarization with user context (only for validated transcripts)
 5. **Vector Storage**: Semantic embeddings stored in Qdrant keyed by user_id
-6. **Action Item Analysis**: Automatic task detection with user-centric storage
-7. **Metadata Enhancement**: Client information and user email stored in metadata
-8. **Search & Retrieval**: User-scoped semantic memory search capabilities
+6. **Metadata Enhancement**: Client information and user email stored in metadata
+7. **Search & Retrieval**: User-scoped semantic memory search capabilities
 
 ### User Management & Security
 1. **Registration**: Admin-controlled user creation with email/password and auto-generated user_id
@@ -546,7 +520,6 @@ flowchart TB
 | System Administration | Health Check Only | Full Access |
 | Active Client Management | Own Clients Only | All Clients |
 | Memory Management | Own Memories Only | All Memories (with client info) |
-| Action Items | Own Items Only | All Items (with client info) |
 
 ### Data Protection
 - **Encryption**: JWT token signing with configurable secret keys
@@ -575,6 +548,11 @@ OLLAMA_BASE_URL=http://ollama:11434
 # Vector Storage
 QDRANT_BASE_URL=qdrant
 
+# Graph Storage for Memory Relationships
+NEO4J_HOST=neo4j-mem0
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your-neo4j-password
+
 # Transcription Services (Deepgram Primary, Wyoming Fallback)
 DEEPGRAM_API_KEY=your-deepgram-api-key-here
 OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
@@ -584,12 +562,13 @@ OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
 ### Service Dependencies
 
 #### Critical Services (Required for Core Functionality)
-- **MongoDB**: User data, conversations, action items
+- **MongoDB**: User data, conversations
 - **Authentication**: JWT token validation and user sessions
 
 #### Enhanced Services (Optional but Recommended)
-- **Ollama**: Memory processing and action item extraction
+- **Ollama**: Memory processing
 - **Qdrant**: Vector storage for semantic memory search
+- **Neo4j**: Graph database for memory relationships and entity connections
 - **Deepgram**: Primary speech-to-text transcription service (WebSocket streaming)
 - **Wyoming ASR**: Fallback transcription service (self-hosted)
 
@@ -619,7 +598,6 @@ The system provides a comprehensive REST API organized into functional modules:
 ├── /memories               # Memory management and search
 │   ├── /admin              # Admin view (all users)
 │   └── /search             # Semantic memory search
-├── /action_items           # Task management
 ├── /admin/                 # Admin compatibility endpoints
 │   ├── /memories           # Consolidated admin memory view
 │   └── /memories/debug     # Legacy debug endpoint

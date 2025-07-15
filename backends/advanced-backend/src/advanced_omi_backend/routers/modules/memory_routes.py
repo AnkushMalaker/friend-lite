@@ -183,9 +183,7 @@ async def get_all_memories_admin(current_user: User = Depends(current_superuser)
         debug_tracker = get_debug_tracker()
 
         # Get all memories without user filtering
-        all_memories = await asyncio.get_running_loop().run_in_executor(
-            None, memory_service.get_all_memories_debug, limit
-        )
+        all_memories = await memory_service.get_all_memories_debug(limit)
 
         # Group by user for easier admin review
         user_memories = {}

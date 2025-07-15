@@ -42,11 +42,10 @@ memory_service = get_memory_service()
 class ClientState:
     """Manages all state for a single client connection."""
 
-    def __init__(self, client_id: str, audio_chunks_db_collection, action_items_service, chunk_dir: Path, user_id: Optional[str] = None, user_email: Optional[str] = None):
+    def __init__(self, client_id: str, ac_db_collection_helper, chunk_dir: Path, user_id: Optional[str] = None, user_email: Optional[str] = None):
         self.client_id = client_id
         self.connected = True
-        self.chunk_repo = audio_chunks_db_collection
-        self.action_items_service = action_items_service
+        self.db_helper = ac_db_collection_helper
         self.chunk_dir = chunk_dir
         # Store minimal user data needed for memory processing (avoids tight coupling to User model)
         self.user_id = user_id
@@ -58,9 +57,6 @@ class ClientState:
         self.memory_queue = asyncio.Queue[
             Tuple[Optional[str], Optional[str], Optional[str]]
         ]()  # (transcript, client_id, audio_uuid)
-        self.action_item_queue = asyncio.Queue[
-            Tuple[Optional[str], Optional[str], Optional[str]]
-        ]()  # (transcript_text, client_id, audio_uuid)
 
         # Per-client file sink
         self.file_sink: Optional[LocalFileSink] = None
@@ -91,7 +87,6 @@ class ClientState:
         self.saver_task: Optional[asyncio.Task] = None
         self.transcription_task: Optional[asyncio.Task] = None
         self.memory_task: Optional[asyncio.Task] = None
-        self.action_item_task: Optional[asyncio.Task] = None
         self.background_memory_task: Optional[asyncio.Task] = None
 
         # Debug tracking
@@ -137,7 +132,6 @@ class ClientState:
         self.saver_task = asyncio.create_task(self._audio_saver())
         self.transcription_task = asyncio.create_task(self._transcription_processor())
         self.memory_task = asyncio.create_task(self._memory_processor())
-        self.action_item_task = asyncio.create_task(self._action_item_processor())
         audio_logger.info(f"Started processing tasks for client {self.client_id}")
 
     async def disconnect(self):
@@ -155,7 +149,6 @@ class ClientState:
         await self.chunk_queue.put(None)
         await self.transcription_queue.put((None, None))
         await self.memory_queue.put((None, None, None))
-        await self.action_item_queue.put((None, None, None))
 
         # Wait for tasks to complete gracefully, with cancellation fallback
         # Use longer timeouts for transcription tasks that may be waiting on Deepgram API
@@ -170,8 +163,6 @@ class ClientState:
             tasks_to_cleanup.append(("transcription", self.transcription_task, transcription_timeout))
         if self.memory_task:
             tasks_to_cleanup.append(("memory", self.memory_task, default_timeout))
-        if self.action_item_task:
-            tasks_to_cleanup.append(("action_item", self.action_item_task, default_timeout))
 
         # Background memory task gets much longer timeout since it could be doing Ollama processing
         if self.background_memory_task:
@@ -423,7 +414,7 @@ class ClientState:
             # Add general memory with fallback handling
             memory_result = await memory_service.add_memory(
                 full_conversation, self.client_id, audio_uuid, user_id, user_email, 
-                chunk_repo=self.chunk_repo
+                db_helper=self.db_helper
             )
 
             if memory_result:
@@ -490,7 +481,7 @@ class ClientState:
                         # Reset conversation closure flag when starting new audio
                         self.conversation_closed = False
 
-                        await self.chunk_repo.create_chunk(
+                        await self.db_helper.create_chunk(
                             audio_uuid=self.current_audio_uuid,
                             audio_path=wav_filename,
                             client_id=self.client_id,
@@ -536,18 +527,8 @@ class ClientState:
 
                         # Get or create transcription manager
                         if self.transcription_manager is None:
-                            # Create callback function to queue action items
-                            async def action_item_callback(transcript_text, client_id, audio_uuid):
-                                try:
-                                    await self.action_item_queue.put(
-                                        (transcript_text, client_id, audio_uuid)
-                                    )
-                                except Exception:
-                                    pass  # Ignore errors during shutdown
-
                             self.transcription_manager = TranscriptionManager(
-                                action_item_callback=action_item_callback,
-                                chunk_repo=self.chunk_repo
+                                chunk_repo=self.db_helper
                             )
                             try:
                                 await self.transcription_manager.connect(self.client_id)
@@ -653,82 +634,3 @@ class ClientState:
         finally:
             audio_logger.debug(f"Memory processor stopped for client {self.client_id}")
 
-    async def _action_item_processor(self):
-        """
-        Processes transcript segments from the per-client action item queue.
-
-        This processor handles queue management and delegates the actual
-        action item processing to the ActionItemsService.
-        """
-        try:
-            while self.connected:
-                try:
-                    transcript_text, client_id, audio_uuid = await self.action_item_queue.get()
-
-                    if (
-                        transcript_text is None or client_id is None or audio_uuid is None
-                    ):  # Disconnect signal
-                        self.action_item_queue.task_done()
-                        break
-
-                    try:
-                        # Resolve client_id to user information
-                        user = await get_user_by_client_id(client_id)
-                        if not user:
-                            audio_logger.error(
-                                f"Could not resolve client_id {client_id} to user for action item processing"
-                            )
-                            continue
-
-                        # Track action item processing start
-
-                        try:
-                            # Delegate action item processing to the service
-                            action_item_count = (
-                                await self.action_items_service.process_transcript_for_action_items(
-                                    transcript_text, client_id, audio_uuid, user.user_id, user.email
-                                )
-                            )
-
-                            if action_item_count > 0:
-                                audio_logger.info(
-                                    f"🎯 Action item processor completed: {action_item_count} items processed for {audio_uuid}"
-                                )
-                            else:
-                                audio_logger.debug(
-                                    f"ℹ️ Action item processor completed: no items found for {audio_uuid}"
-                                )
-
-                        except Exception as e:
-                            audio_logger.error(
-                                f"Error processing action item for client {self.client_id}: {e}"
-                            )
-                    except Exception as e:
-                        audio_logger.error(
-                            f"Error processing action item for client {self.client_id}: {e}"
-                        )
-                    finally:
-                        # Always mark task as done
-                        self.action_item_queue.task_done()
-
-                except asyncio.CancelledError:
-                    # Handle cancellation gracefully
-                    audio_logger.debug(
-                        f"Action item processor cancelled for client {self.client_id}"
-                    )
-                    break
-                except Exception as e:
-                    audio_logger.error(
-                        f"Error in action item processor loop for client {self.client_id}: {e}",
-                        exc_info=True,
-                    )
-
-        except asyncio.CancelledError:
-            audio_logger.debug(f"Action item processor cancelled for client {self.client_id}")
-        except Exception as e:
-            audio_logger.error(
-                f"Error in action item processor for client {self.client_id}: {e}",
-                exc_info=True,
-            )
-        finally:
-            audio_logger.debug(f"Action item processor stopped for client {self.client_id}")
