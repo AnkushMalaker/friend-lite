@@ -5,7 +5,6 @@ Upload audio files to the Friend-Lite backend for processing.
 
 import os
 import sys
-import glob
 import requests
 from pathlib import Path
 from typing import Optional
@@ -213,11 +212,6 @@ def main():
         wav_files = collect_wav_files(audio_dir, filter_list=None)
         if not wav_files:
             sys.exit(1)
-        
-        # Upload files - use a small subset for testing
-        # Select a few files that likely contain speech based on file sizes and timing
-        
-        
     
     if not wav_files:
         print("❌ None of the test files were found")

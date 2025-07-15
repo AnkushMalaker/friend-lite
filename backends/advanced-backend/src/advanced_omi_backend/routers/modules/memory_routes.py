@@ -65,13 +65,11 @@ async def get_memories_with_transcripts(
         if current_user.is_superuser and user_id:
             target_user_id = user_id
 
-        # Execute memory retrieval in thread pool to avoid blocking
-        memories_with_transcripts = await asyncio.get_running_loop().run_in_executor(
-            None, memory_service.get_memories_with_transcripts, target_user_id, limit
-        )
+        # Execute memory retrieval directly (now async)
+        memories_with_transcripts = await memory_service.get_memories_with_transcripts(target_user_id, limit)
 
         return {
-            "memories_with_transcripts": memories_with_transcripts,
+            "memories": memories_with_transcripts,  # Streamlit expects 'memories' key
             "count": len(memories_with_transcripts),
             "user_id": target_user_id,
         }
@@ -146,6 +144,33 @@ async def delete_memory(memory_id: str, current_user: User = Depends(current_act
     except Exception as e:
         audio_logger.error(f"Error deleting memory: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"message": "Error deleting memory"})
+
+
+@router.get("/unfiltered")
+async def get_memories_unfiltered(
+    current_user: User = Depends(current_active_user),
+    limit: int = Query(default=50, ge=1, le=1000),
+    user_id: Optional[str] = Query(default=None, description="User ID filter (admin only)"),
+):
+    """Get all memories including fallback transcript memories (for debugging). Users see only their own memories, admins can see all or filter by user."""
+    try:
+        memory_service = get_memory_service()
+
+        # Determine which user's memories to fetch
+        target_user_id = current_user.user_id
+        if current_user.is_superuser and user_id:
+            target_user_id = user_id
+
+        # Execute memory retrieval in thread pool to avoid blocking
+        memories = await asyncio.get_running_loop().run_in_executor(
+            None, memory_service.get_all_memories_unfiltered, target_user_id, limit
+        )
+
+        return {"memories": memories, "count": len(memories), "user_id": target_user_id, "includes_fallback": True}
+
+    except Exception as e:
+        audio_logger.error(f"Error fetching unfiltered memories: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"message": "Error fetching unfiltered memories"})
 
 
 @router.get("/admin")

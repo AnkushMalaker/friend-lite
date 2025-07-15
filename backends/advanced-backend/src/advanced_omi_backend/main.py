@@ -290,16 +290,8 @@ async def lifespan(app: FastAPI):
             f"Memory service pre-initialization failed: {e} - will initialize on first use"
         )
 
-    # Initialize failure recovery system
-    try:
-        # Old failure recovery system removed - using SystemTracker instead
-        audio_logger.info("Using SystemTracker for monitoring and debugging")
-
-        # SystemTracker initialization happens automatically on first import
-
-    except Exception as e:
-        audio_logger.error(f"Failed to initialize failure recovery system: {e}")
-        # Don't raise here as this is not critical for basic operation
+    # SystemTracker is used for monitoring and debugging
+    audio_logger.info("Using SystemTracker for monitoring and debugging")
 
     audio_logger.info("Application ready - clients will have individual processing pipelines.")
 
@@ -322,11 +314,6 @@ async def lifespan(app: FastAPI):
         shutdown_memory_service()
         audio_logger.info("Memory and speaker services shut down.")
 
-        # Shutdown failure recovery system
-        try:
-            audio_logger.info("Failure recovery system shut down.")
-        except Exception as e:
-            audio_logger.error(f"Error shutting down failure recovery system: {e}")
 
         audio_logger.info("Shutdown complete.")
 

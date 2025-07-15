@@ -3050,85 +3050,6 @@ if tab_debug is not None:
             
             st.divider()
             
-            # Failure Recovery Section  
-            st.subheader("🛠️ Failure Recovery System")
-            
-            if st.button("📊 Load System Overview", key="load_system_overview"):
-                with st.spinner("Loading failure recovery system overview..."):
-                    try:
-                        system_overview = get_data("/api/failure-recovery/system-overview", require_auth=True)
-                        
-                        if system_overview:
-                            st.success("✅ Failure recovery system data loaded successfully")
-                            
-                            # Overall system status
-                            system_status = system_overview.get('system_status', 'unknown')
-                            if system_status == 'healthy':
-                                st.success(f"🟢 System Status: **{system_status.upper()}**")
-                            elif system_status == 'degraded':
-                                st.warning(f"🟡 System Status: **{system_status.upper()}**")
-                            else:
-                                st.error(f"🔴 System Status: **{system_status.upper()}**")
-                            
-                            # Display key metrics from summary
-                            summary = system_overview.get('summary', {})
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("Queue Items", summary.get('total_queue_items', 0))
-                            with col2:
-                                healthy = summary.get('healthy_services', 0)
-                                total = summary.get('total_services', 0)
-                                st.metric("Service Health", f"{healthy}/{total}", 
-                                         delta=f"{'✅' if healthy == total else '⚠️'}")
-                            with col3:
-                                st.metric("Open Circuits", summary.get('open_circuits', 0))
-                            with col4:
-                                recoveries = summary.get('recoveries_successful', 0)
-                                attempted = summary.get('recoveries_attempted', 0)
-                                if attempted > 0:
-                                    recovery_rate = (recoveries / attempted) * 100
-                                    st.metric("Recovery Rate", f"{recovery_rate:.1f}%")
-                                else:
-                                    st.metric("Recovery Rate", "N/A")
-                            
-                            # Detailed overview
-                            with st.expander("📋 Complete System Overview Data", expanded=False):
-                                st.json(system_overview)
-                        else:
-                            st.error("❌ Failed to load system overview - No data received")
-                    except Exception as e:
-                        st.error(f"❌ Error loading system overview: {str(e)}")
-            
-            # Service Health
-            st.subheader("🏥 Service Health")
-            
-            if st.button("🔍 Check Service Health", key="check_service_health"):
-                with st.spinner("Checking service health..."):
-                    health_data = get_data("/api/failure-recovery/health", require_auth=True)
-                    
-                    if health_data:
-                        services = health_data.get('services', {})
-                        
-                        # Display service status
-                        cols = st.columns(min(len(services), 4))
-                        for i, (service, status) in enumerate(services.items()):
-                            with cols[i % 4]:
-                                if status.get('status') == 'healthy':
-                                    st.success(f"✅ {service}")
-                                    st.caption(f"⏱️ {status.get('response_time', 0)*1000:.1f}ms")
-                                else:
-                                    st.error(f"❌ {service}")
-                                    failures = status.get('consecutive_failures', 0)
-                                    st.caption(f"🔄 {failures} failures")
-                        
-                        # Detailed health info
-                        with st.expander("🏥 Detailed Health Information", expanded=False):
-                            st.json(health_data)
-                    else:
-                        st.error("Failed to check service health")
-            
-            st.divider()
-            
             # Help Section
             st.subheader("📚 Debug API Reference")
             
@@ -3142,13 +3063,7 @@ if tab_debug is not None:
                 - `GET /api/debug/memory/config` - Memory configuration
                 - `GET /api/debug/memory/pipeline/{uuid}` - Processing pipeline trace
                 
-                **Failure Recovery APIs:**
-                - `GET /api/failure-recovery/system-overview` - System overview
-                - `GET /api/failure-recovery/queue-stats` - Queue statistics  
-                - `GET /api/failure-recovery/health` - Service health
-                - `GET /api/failure-recovery/circuit-breakers` - Circuit breaker status
-                
                 All endpoints require authentication.
                 """)
                 
-            st.info("💡 **Tip**: Use these debug tools to monitor system performance and troubleshoot issues with memory extraction and failure recovery.")
+            st.info("💡 **Tip**: Use these debug tools to monitor system performance and troubleshoot issues with memory extraction.")

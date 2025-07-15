@@ -340,7 +340,6 @@ graph LR
 
 > 📖 **Reference Documentation**: 
 > - [Authentication Details](./auth.md) - Complete authentication system documentation
-> - [Failure Recovery System](./failure-recovery.md) - Robust error handling and recovery
 
 ### Complete System Data Flow Diagram
 
@@ -496,7 +495,6 @@ flowchart TB
 3. **Service Failure**: Circuit breaker protection and alternative routing
 4. **Authentication Expiry**: Forced re-authentication with clear error codes
 
-> 📖 **Read more**: [Failure Recovery System](./failure-recovery.md) for complete error handling details
 
 ### Audio Ingestion & Processing
 1. **Client Authentication**: JWT token validation for WebSocket connection (email or user_id based)
@@ -700,8 +698,6 @@ The system provides a comprehensive REST API organized into functional modules:
 - **Performance Metrics**: Audio processing latency, transcription accuracy
 - **Resource Tracking**: Memory usage, connection counts, processing queues
 - **Error Handling**: Graceful degradation with detailed logging
-- **Failure Recovery**: Automatic retry, circuit breakers, and persistent queue management
-
-> 📖 **Read more**: [Failure Recovery System](./failure-recovery.md) for complete error handling and monitoring capabilities
+- **System Tracking**: Debug tracking and monitoring via SystemTracker
 
 This architecture supports a fully-featured conversation processing system with enterprise-grade authentication, real-time audio processing, and intelligent content analysis, all deployable via a single Docker Compose command. 
