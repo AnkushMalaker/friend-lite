@@ -16,11 +16,10 @@ import asyncio
 import concurrent.futures
 import os
 import time
-import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import ollama
 
@@ -52,7 +51,7 @@ from advanced_omi_backend.auth import (
     fastapi_users,
     websocket_auth,
 )
-from advanced_omi_backend.database import AudioChunksCollection
+from advanced_omi_backend.database import AudioChunksCollectionHelper
 from advanced_omi_backend.debug_system_tracker import (
     get_debug_tracker,
     init_debug_tracker,
@@ -167,7 +166,7 @@ action_items_service = ActionItemsService(action_items_col, ollama_client)
 
 
 # Initialize repository and global state
-audio_chunks_db_collection = AudioChunksCollection(chunks_col)
+audio_chunks_db_collection = AudioChunksCollectionHelper(chunks_col)
 active_clients: dict[str, ClientState] = {}
 
 # Client-to-user mapping for reliable permission checking
@@ -180,8 +179,6 @@ init_client_manager(active_clients)
 
 # Initialize client utilities with the mapping dictionaries
 from advanced_omi_backend.client_manager import (
-    client_belongs_to_user,
-    get_user_clients_all,
     init_client_user_mapping,
     register_client_user_mapping,
     track_client_user_relationship,
