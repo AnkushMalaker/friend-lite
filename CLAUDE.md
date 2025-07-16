@@ -38,7 +38,7 @@ sudo rm -rf ./audio_chunks/ ./mongo_data/ ./qdrant_data/
 
 ### Mobile App Development
 ```bash
-cd friend-lite
+cd app
 
 # Start Expo development server
 npm start
