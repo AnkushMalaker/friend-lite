@@ -3,20 +3,22 @@ import logging
 import os
 import time
 from typing import Optional
-import httpx
 
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
-from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
 from advanced_omi_backend.client_manager import get_client_manager
+from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
+from advanced_omi_backend.transcription_providers import (
+    OnlineTranscriptionProvider,
+    get_transcription_provider,
+)
 
 # ASR Configuration
 OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://192.168.0.110:8765/")
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-USE_DEEPGRAM = bool(DEEPGRAM_API_KEY)
+TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")  # Optional: 'deepgram' or 'mistral'
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +30,13 @@ class TranscriptionManager:
     def __init__(self, chunk_repo=None):
         self.client = None
         self._current_audio_uuid = None
-        self.use_deepgram = USE_DEEPGRAM
+        self.online_provider: Optional[OnlineTranscriptionProvider] = get_transcription_provider(
+            TRANSCRIPTION_PROVIDER
+        )
+        self.use_online_transcription = self.online_provider is not None
         self._audio_buffer = []  # Buffer for collecting audio chunks
         self._audio_start_time = None  # Track when audio collection started
-        self._max_collection_time = 90.0  # 1.5 minutes timeout
+        self._max_collection_time = 600.0  # 10 minutes timeout - allow longer conversations
         self._current_transaction_id = None  # Track current debug transaction
         self.chunk_repo = chunk_repo  # Database repository for chunks
         self.client_manager = get_client_manager()  # Cached client manager instance
@@ -41,7 +46,7 @@ class TranscriptionManager:
         self._event_reader_task = None
         self._stop_event = asyncio.Event()
         self._client_id = None
-        
+
         # Collection state tracking
         self._collecting = False
         self._collection_task = None
@@ -75,11 +80,13 @@ class TranscriptionManager:
         """Initialize transcription service for the client."""
         self._client_id = client_id
 
-        if self.use_deepgram:
-            # For Deepgram batch processing, we just need to validate the API key
-            if not DEEPGRAM_API_KEY:
-                raise Exception("DEEPGRAM_API_KEY is required for Deepgram transcription")
-            logger.info(f"Deepgram batch transcription initialized for client {self._client_id}")
+        if self.use_online_transcription:
+            # For online batch processing, we just need to ensure we have a provider
+            if not self.online_provider:
+                raise Exception("No online transcription provider configured")
+            logger.info(
+                f"{self.online_provider.name} batch transcription initialized for client {self._client_id}"
+            )
             return
 
         try:
@@ -97,7 +104,7 @@ class TranscriptionManager:
 
     async def flush_final_transcript(self, audio_duration_seconds: Optional[float] = None):
         """Process collected audio and generate final transcript."""
-        if self.use_deepgram:
+        if self.use_online_transcription:
             await self._process_collected_audio()
         else:
             await self._flush_offline_asr(audio_duration_seconds)
@@ -107,23 +114,30 @@ class TranscriptionManager:
         if not self._audio_buffer:
             logger.info(f"No audio data collected for client {self._client_id}")
             return
-            
+
         try:
-            logger.info(f"Processing {len(self._audio_buffer)} audio chunks for client {self._client_id}")
-            
+            logger.info(
+                f"Processing {len(self._audio_buffer)} audio chunks for client {self._client_id}"
+            )
+
             # Combine all audio chunks into a single buffer
-            combined_audio = b''.join(chunk.audio for chunk in self._audio_buffer if chunk.audio)
-            
+            combined_audio = b"".join(chunk.audio for chunk in self._audio_buffer if chunk.audio)
+
             if not combined_audio:
                 logger.warning(f"No valid audio data found for client {self._client_id}")
                 return
-                
-            # Send to Deepgram using file upload API
-            transcript_text = await self._transcribe_with_deepgram_api(combined_audio)
-            
+
+            # Send to online provider for transcription
+            if self.online_provider is None:
+                logger.error("Online provider is None, this shouldn't happen")
+                return
+            transcript_text = await self.online_provider.transcribe(combined_audio)
+
             if transcript_text and self._current_audio_uuid:
-                logger.info(f"Deepgram batch transcript for {self._current_audio_uuid}: {transcript_text}")
-                
+                logger.info(
+                    f"{self.online_provider.name} batch transcript for {self._current_audio_uuid}: {transcript_text}"
+                )
+
                 # Create transcript segment
                 transcript_segment = {
                     "speaker": f"speaker_{self._client_id}",
@@ -131,22 +145,26 @@ class TranscriptionManager:
                     "start": 0.0,
                     "end": 0.0,
                 }
-                
+
                 # Store in database
                 if self.chunk_repo:
                     await self.chunk_repo.add_transcript_segment(
                         self._current_audio_uuid, transcript_segment
                     )
-                    await self.chunk_repo.add_speaker(self._current_audio_uuid, f"speaker_{self._client_id}")
-                    
+                    await self.chunk_repo.add_speaker(
+                        self._current_audio_uuid, f"speaker_{self._client_id}"
+                    )
+
                 # Update client state
                 current_client = self._get_current_client()
                 if current_client:
                     current_client.last_transcript_time = time.time()
                     current_client.conversation_transcripts.append(transcript_text)
-                    
-                logger.info(f"Added Deepgram batch transcript for {self._current_audio_uuid} to DB")
-                
+
+                logger.info(
+                    f"Added {self.online_provider.name} batch transcript for {self._current_audio_uuid} to DB"
+                )
+
         except Exception as e:
             logger.error(f"Error processing collected audio: {e}")
         finally:
@@ -224,11 +242,11 @@ class TranscriptionManager:
 
     async def disconnect(self):
         """Cleanly disconnect from ASR service."""
-        if self.use_deepgram:
+        if self.use_online_transcription:
             # For batch processing, just process any remaining audio
             if self._collecting or self._audio_buffer:
                 await self._process_collected_audio()
-            
+
             # Cancel collection task if running
             if self._collection_task and not self._collection_task.done():
                 self._collection_task.cancel()
@@ -236,8 +254,10 @@ class TranscriptionManager:
                     await self._collection_task
                 except asyncio.CancelledError:
                     pass
-                    
-            logger.info(f"Deepgram batch transcription disconnected for client {self._client_id}")
+
+            logger.info(
+                f"{self.online_provider.name if self.online_provider else 'Online'} batch transcription disconnected for client {self._client_id}"
+            )
             return
 
         # Stop the background event reader task
@@ -382,110 +402,21 @@ class TranscriptionManager:
         try:
             await asyncio.sleep(self._max_collection_time)
             if self._collecting and self._audio_buffer:
-                logger.info(f"Collection timeout reached for client {self._client_id}, processing audio")
+                logger.info(
+                    f"Collection timeout reached for client {self._client_id}, processing audio"
+                )
                 await self._process_collected_audio()
         except asyncio.CancelledError:
             logger.debug(f"Collection timeout cancelled for client {self._client_id}")
         except Exception as e:
             logger.error(f"Error in collection timeout handler: {e}")
 
-    async def _transcribe_with_deepgram_api(self, audio_data: bytes) -> str:
-        """Transcribe audio using Deepgram's REST API."""
-        try:
-            url = "https://api.deepgram.com/v1/listen"
-            
-            params = {
-                "model": "nova-3",
-                "language": "multi",
-                "smart_format": "true",
-                "punctuate": "true",
-                "diarize": "true",
-                "encoding": "linear16",
-                "sample_rate": "16000",
-                "channels": "1",
-            }
-            
-            headers = {
-                "Authorization": f"Token {DEEPGRAM_API_KEY}",
-                "Content-Type": "audio/raw"
-            }
-            
-            logger.info(f"Sending {len(audio_data)} bytes to Deepgram API for client {self._client_id}")
-            
-            # Calculate dynamic timeout based on audio file size
-            # Estimate: ~1-2 seconds processing time per second of audio
-            # Audio duration estimate: bytes / (sample_rate * sample_width * channels)
-            estimated_duration = len(audio_data) / (16000 * 2 * 1)  # 16kHz, 16-bit, mono
-            processing_timeout = max(120, int(estimated_duration * 3))  # Minimum 2 minutes, 3x audio duration
-            
-            # Configure differentiated timeouts for different phases
-            # The issue was using a single timeout - large files need more time to WRITE (upload)
-            timeout_config = httpx.Timeout(
-                connect=30.0,  # 30 seconds to establish connection
-                read=processing_timeout,  # Dynamic timeout for reading response (based on audio length)
-                write=max(180.0, int(len(audio_data) / 16000)),  # Upload timeout: 3 min minimum, or 1 sec per KB
-                pool=10.0  # 10 seconds to acquire connection from pool
-            )
-            
-            logger.info(f"Estimated audio duration: {estimated_duration:.1f}s")
-            logger.info(f"Timeout config - read: {processing_timeout}s, write: {timeout_config.write}s, connect: {timeout_config.connect}s")
-            
-            async with httpx.AsyncClient(timeout=timeout_config) as client:
-                response = await client.post(
-                    url,
-                    params=params,
-                    headers=headers,
-                    content=audio_data
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    
-                    # Extract transcript from response
-                    if (result.get("results", {}).get("channels", []) and 
-                        result["results"]["channels"][0].get("alternatives", [])):
-                        
-                        alternative = result["results"]["channels"][0]["alternatives"][0]
-                        transcript = alternative.get("transcript", "").strip()
-                        
-                        if transcript:
-                            logger.info(f"Deepgram API transcription successful: {len(transcript)} characters")
-                            return transcript
-                        else:
-                            logger.warning("Deepgram API returned empty transcript")
-                            return ""
-                    else:
-                        logger.warning("Deepgram API response missing expected transcript structure")
-                        return ""
-                else:
-                    logger.error(f"Deepgram API error: {response.status_code} - {response.text}")
-                    return ""
-                    
-        except asyncio.TimeoutError:
-            logger.error(f"Deepgram API timeout for {len(audio_data)} bytes - check timeout configuration")
-            return ""
-        except httpx.TimeoutException as e:
-            # More specific timeout error reporting
-            timeout_type = "unknown"
-            if "connect" in str(e).lower():
-                timeout_type = "connection"
-            elif "read" in str(e).lower():
-                timeout_type = "read"
-            elif "write" in str(e).lower():
-                timeout_type = "write (upload)"
-            elif "pool" in str(e).lower():
-                timeout_type = "connection pool"
-            logger.error(f"HTTP {timeout_type} timeout during Deepgram API call for {len(audio_data)} bytes: {e}")
-            return ""
-        except Exception as e:
-            logger.error(f"Error calling Deepgram API: {e}")
-            return ""
-
-
+    # Note: The Deepgram-specific implementation has been moved to transcription_providers.py
+    # This allows for a cleaner provider-based architecture supporting multiple ASR services
 
     async def transcribe_chunk(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
         """Collect audio chunk for batch processing or transcribe using offline ASR."""
-        if self.use_deepgram:
+        if self.use_online_transcription:
             await self._collect_audio_chunk(audio_uuid, chunk, client_id)
         else:
             await self._transcribe_chunk_offline(audio_uuid, chunk, client_id)
@@ -496,13 +427,15 @@ class TranscriptionManager:
             # Update current audio UUID
             if self._current_audio_uuid != audio_uuid:
                 self._current_audio_uuid = audio_uuid
-                logger.info(f"New audio_uuid for Deepgram batch: {audio_uuid}")
-                
+                logger.info(
+                    f"New audio_uuid for {self.online_provider.name if self.online_provider else 'online'} batch: {audio_uuid}"
+                )
+
                 # Reset collection state for new audio session
                 self._audio_buffer.clear()
                 self._audio_start_time = time.time()
                 self._collecting = True
-                
+
                 # Start collection timeout task
                 if self._collection_task and not self._collection_task.done():
                     self._collection_task.cancel()
@@ -511,10 +444,12 @@ class TranscriptionManager:
             # Add chunk to buffer if we have audio data
             if chunk.audio and len(chunk.audio) > 0:
                 self._audio_buffer.append(chunk)
-                logger.debug(f"Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})")
+                logger.debug(
+                    f"Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"
+                )
             else:
                 logger.warning(f"Empty audio chunk received for {audio_uuid}")
-                
+
         except Exception as e:
             logger.error(f"Error collecting audio chunk for {audio_uuid}: {e}")
 
@@ -556,12 +491,13 @@ class TranscriptionManager:
             # Attempt to reconnect on error
             await self._reconnect()
 
-
     async def _reconnect(self):
         """Attempt to reconnect to ASR service."""
-        if self.use_deepgram:
+        if self.use_online_transcription:
             # For batch processing, no reconnection needed
-            logger.info("Deepgram batch processing - no reconnection required")
+            logger.info(
+                f"{self.online_provider.name if self.online_provider else 'Online'} batch processing - no reconnection required"
+            )
             return
 
         logger.info("Attempting to reconnect to ASR service...")

@@ -65,7 +65,7 @@ The system runs multiple async consumers processing audio in parallel:
 
 **Audio Saver Consumer** (`_audio_saver`):
 - Buffers incoming PCM audio data
-- Writes 60-second WAV chunks to `./audio_chunks/` directory
+- Writes 60-second WAV chunks to `./data/audio_chunks/` directory
 - Tracks speech segments for audio cropping
 - Generates unique audio UUIDs for each chunk
 
@@ -110,9 +110,11 @@ The system runs multiple async consumers processing audio in parallel:
 - `speakers`: Voice enrollment data and models
 
 **File System**:
-- `./audio_chunks/`: Raw and cropped WAV files
-- `./qdrant_data/`: Vector database storage
-- `./mongo_data/`: Document database storage
+- `./data/audio_chunks/`: Raw and cropped WAV files
+- `./data/qdrant_data/`: Vector database storage
+- `./data/mongo_data/`: Document database storage
+- `./data/neo4j_data/`: Graph database storage
+- `./data/debug_dir/`: Debug and system tracking data
 
 ### 5. Health & Monitoring
 
@@ -156,4 +158,4 @@ The primary goal is to achieve at least 24 hours of continuous audio recording a
 - Transcription success rate and latency
 - Memory storage success rate
 
-On the happy path, you could do `sudo rm -rf ./audio_chunks/ ./mongo_data/ ./qdrant_data/` to reset the system.
+On the happy path, you could do `sudo rm -rf ./data/` to reset all system data.

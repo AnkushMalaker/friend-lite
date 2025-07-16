@@ -88,8 +88,7 @@ class AudioChunksCollectionHelper:
             "updated_at": datetime.now(UTC).isoformat(),
         }
         result = await self.col.update_one(
-            {"audio_uuid": audio_uuid},
-            {"$push": {"memories": memory_ref}}
+            {"audio_uuid": audio_uuid}, {"$push": {"memories": memory_ref}}
         )
         if result.modified_count > 0:
             logger.info(f"Added memory reference {memory_id} to audio {audio_uuid}")
@@ -99,10 +98,12 @@ class AudioChunksCollectionHelper:
         """Update memory status in audio chunk."""
         result = await self.col.update_one(
             {"audio_uuid": audio_uuid, "memories.memory_id": memory_id},
-            {"$set": {
-                "memories.$.status": status,
-                "memories.$.updated_at": datetime.now(UTC).isoformat()
-            }}
+            {
+                "$set": {
+                    "memories.$.status": status,
+                    "memories.$.updated_at": datetime.now(UTC).isoformat(),
+                }
+            },
         )
         if result.modified_count > 0:
             logger.info(f"Updated memory {memory_id} status to {status} for audio {audio_uuid}")
@@ -111,8 +112,7 @@ class AudioChunksCollectionHelper:
     async def remove_memory_reference(self, audio_uuid: str, memory_id: str):
         """Remove memory reference from audio chunk."""
         result = await self.col.update_one(
-            {"audio_uuid": audio_uuid},
-            {"$pull": {"memories": {"memory_id": memory_id}}}
+            {"audio_uuid": audio_uuid}, {"$pull": {"memories": {"memory_id": memory_id}}}
         )
         if result.modified_count > 0:
             logger.info(f"Removed memory reference {memory_id} from audio {audio_uuid}")
@@ -122,12 +122,19 @@ class AudioChunksCollectionHelper:
         """Get a chunk document by audio_uuid."""
         return await self.col.find_one({"audio_uuid": audio_uuid})
 
+    async def get_transcript_segments(self, audio_uuid: str):
+        """Get transcript segments for a specific audio UUID."""
+        document = await self.col.find_one({"audio_uuid": audio_uuid}, {"transcript": 1})
+        if document and "transcript" in document:
+            return document["transcript"]
+        return []
+
     async def get_chunks_with_memories(self, client_ids: list = None, limit: int = 100):
         """Get chunks that have memory references, optionally filtered by client IDs."""
         query = {"memories": {"$exists": True, "$not": {"$size": 0}}}
         if client_ids:
             query["client_id"] = {"$in": client_ids}
-        
+
         cursor = self.col.find(query).sort("timestamp", -1).limit(limit)
         return await cursor.to_list()
 

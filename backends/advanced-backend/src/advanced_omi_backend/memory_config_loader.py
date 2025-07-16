@@ -126,7 +126,6 @@ class MemoryConfigLoader:
         """Get fact extraction configuration."""
         return self.config.get("fact_extraction", {})
 
-
     def get_categorization_config(self) -> Dict[str, Any]:
         """Get categorization configuration."""
         return self.config.get("categorization", {})
@@ -155,7 +154,6 @@ class MemoryConfigLoader:
         """Check if fact extraction is enabled."""
         return self.get_fact_extraction_config().get("enabled", False)
 
-
     def is_categorization_enabled(self) -> bool:
         """Check if categorization is enabled."""
         return self.get_categorization_config().get("enabled", False)
@@ -175,7 +173,6 @@ class MemoryConfigLoader:
         return self.get_fact_extraction_config().get(
             "prompt", "Extract specific facts from this conversation."
         )
-
 
     def get_categorization_prompt(self) -> str:
         """Get the categorization prompt."""
@@ -269,7 +266,6 @@ class MemoryConfigLoader:
                     return True
 
         return False
-
 
     def get_categories(self) -> list[str]:
         """Get available categories for classification."""

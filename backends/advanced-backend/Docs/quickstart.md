@@ -50,16 +50,25 @@ OLLAMA_BASE_URL=http://ollama:11434
 **Transcription Services (Choose One):**
 ```bash
 # Option 1: Deepgram (Recommended for best transcription quality)
+TRANSCRIPTION_PROVIDER=deepgram
 DEEPGRAM_API_KEY=your-deepgram-api-key-here
 
-# Option 2: Local ASR service
+# Option 2: Mistral (Voxtral models for transcription)
+TRANSCRIPTION_PROVIDER=mistral
+MISTRAL_API_KEY=your-mistral-api-key-here
+MISTRAL_MODEL=voxtral-mini-2507
+
+# Option 3: Local ASR service
 OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
 ```
 
 **Important Notes:**
 - **OpenAI is strongly recommended** for LLM processing as it provides much better memory extraction and eliminates JSON parsing errors
-- If `DEEPGRAM_API_KEY` is provided, the system automatically uses Deepgram's Nova-3 model for transcription
-- The system falls back to offline services if cloud APIs are not configured
+- **TRANSCRIPTION_PROVIDER** determines which service to use:
+  - `deepgram`: Uses Deepgram's Nova-3 model for high-quality transcription
+  - `mistral`: Uses Mistral's Voxtral models for transcription
+  - If not set, system falls back to offline ASR service
+- The system requires either online API keys or offline ASR service configuration
 
 ### 2. Start the System
 
@@ -209,8 +218,9 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 
 ### Transcription Options
 - **Deepgram API**: Cloud-based batch processing, high accuracy (recommended)
+- **Mistral API**: Voxtral models for transcription with REST API processing
 - **Self-hosted ASR**: Local Wyoming protocol services with real-time processing
-- **Collection timeout**: 1.5 minute collection for optimal Deepgram quality
+- **Collection timeout**: 1.5 minute collection for optimal online processing quality
 
 ### Conversation Management
 - **Automatic chunking**: 60-second audio segments
@@ -298,10 +308,11 @@ uv sync --group (whatever group you want to sync)
 - Check admin credentials match `.env` file
 - Ensure user email/password combinations are correct
 
-**ASR Issues:**
-- **Deepgram**: Verify API key is valid
+**Transcription Issues:**
+- **Deepgram**: Verify API key is valid and `TRANSCRIPTION_PROVIDER=deepgram`
+- **Mistral**: Verify API key is valid and `TRANSCRIPTION_PROVIDER=mistral`
 - **Self-hosted**: Ensure ASR service is running on port 8765
-- Check ASR connection in health endpoint
+- Check transcription service connection in health endpoint
 
 **Memory Issues:**
 - Ensure Ollama is running and model is pulled
@@ -325,6 +336,8 @@ The friend-lite backend uses a **user-centric data architecture**:
 For detailed information, see [User Data Architecture](user-data-architecture.md).
 
 ## Memory & Action Item Configuration
+
+> 🎯 **New to memory configuration?** Read our [Memory Configuration Guide](./memory-configuration-guide.md) for a step-by-step setup guide with examples.
 
 The system uses **centralized configuration** via `memory_config.yaml` for all memory extraction settings. All hardcoded values have been removed from the code to ensure consistent, configurable behavior.
 

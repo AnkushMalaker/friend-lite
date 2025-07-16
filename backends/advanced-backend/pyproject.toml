@@ -8,6 +8,7 @@ dependencies = [
     "easy-audio-interfaces>=0.7.1",
     "fastapi>=0.115.12",
     "mem0ai>=0.1.114",
+    "langchain_neo4j",
     "motor>=3.7.1",
     "ollama>=0.4.8",
     "omi-sdk>=0.1.5",
@@ -23,18 +24,8 @@ dependencies = [
 deepgram = [
     "deepgram-sdk>=4.0.0",
 ]
-dev = [
-    "black>=25.1.0",
-    "isort>=6.0.1",
-    "pytest>=8.4.1",
-    "pytest-asyncio>=1.0.0",
-]
 webui = [
     "streamlit>=1.45.1",
-]
-tests = [
-    "pytest>=8.4.1",
-    "pytest-asyncio>=1.0.0",
 ]
 
 [build-system]
@@ -54,3 +45,15 @@ profile = "black"
 
 [tool.black]
 line-length = 100
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "pre-commit>=4.2.0",
+    "pre-commit-uv>=4.1.4",
+]
+test = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+]

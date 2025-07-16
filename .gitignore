@@ -30,3 +30,4 @@ transcription_results.csv
 **/build/*
 
 untracked/*
+backends/advanced-backend/data/*

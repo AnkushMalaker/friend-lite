@@ -3,7 +3,7 @@
 
 * Accepts Opus packets over a WebSocket (`/ws`) or PCM over a WebSocket (`/ws_pcm`).
 * Uses a central queue to decouple audio ingestion from processing.
-* A saver consumer buffers PCM and writes 30-second WAV chunks to `./audio_chunks/`.
+* A saver consumer buffers PCM and writes 30-second WAV chunks to `./data/audio_chunks/`.
 * A transcription consumer sends each chunk to a Wyoming ASR service.
 * The transcript is stored in **mem0** and MongoDB.
 
@@ -21,24 +21,16 @@ from functools import partial
 from pathlib import Path
 from typing import Optional
 
-
 # Import Beanie for user management
 from beanie import init_beanie
 from dotenv import load_dotenv
-from fastapi import (
-    FastAPI,
-    Query,
-    WebSocket,
-    WebSocketDisconnect,
-)
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
 from omi.decoder import OmiOpusDecoder
 from wyoming.audio import AudioChunk
 from wyoming.client import AsyncTcpClient
-
-from advanced_omi_backend.client import ClientState
 
 # Import authentication components
 from advanced_omi_backend.auth import (
@@ -48,6 +40,7 @@ from advanced_omi_backend.auth import (
     fastapi_users,
     websocket_auth,
 )
+from advanced_omi_backend.client import ClientState
 from advanced_omi_backend.database import AudioChunksCollectionHelper
 from advanced_omi_backend.debug_system_tracker import (
     get_debug_tracker,
@@ -59,11 +52,8 @@ from advanced_omi_backend.memory import (
     init_memory_config,
     shutdown_memory_service,
 )
-from advanced_omi_backend.users import (
-    User,
-    generate_client_id,
-    register_client_to_user,
-)
+from advanced_omi_backend.transcription_providers import get_transcription_provider
+from advanced_omi_backend.users import User, generate_client_id, register_client_to_user
 
 ###############################################################################
 # SETUP
@@ -119,17 +109,26 @@ CROPPING_CONTEXT_PADDING = float(
 )  # seconds of padding around speech
 
 # Directory where WAV chunks are written
-CHUNK_DIR = Path("./audio_chunks")
+CHUNK_DIR = Path("./audio_chunks")  # This will be mounted to ./data/audio_chunks by Docker
 CHUNK_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ASR Configuration
+# Transcription Configuration
+TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-USE_DEEPGRAM = bool(DEEPGRAM_API_KEY)
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://localhost:8765")
 
-# Deepgram client placeholder (not needed for WebSocket implementation)
-deepgram_client = None
+# Determine which transcription service to use
+USE_ONLINE_TRANSCRIPTION = bool(TRANSCRIPTION_PROVIDER and (DEEPGRAM_API_KEY or MISTRAL_API_KEY))
+USE_OFFLINE_ASR = not USE_ONLINE_TRANSCRIPTION and bool(OFFLINE_ASR_TCP_URI)
+
+
+transcription_provider = get_transcription_provider(TRANSCRIPTION_PROVIDER)
+if transcription_provider:
+    logger.info(f"✅ Using {transcription_provider.name} transcription provider")
+else:
+    logger.info("⚠️ No online transcription provider configured")
 
 # Ollama & Qdrant Configuration
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
@@ -200,7 +199,9 @@ async def create_client_state(
     client_id: str, user: User, device_name: Optional[str] = None
 ) -> ClientState:
     """Create and register a new client state."""
-    client_state = ClientState(client_id, ac_db_collection_helper, CHUNK_DIR, user.user_id, user.email)
+    client_state = ClientState(
+        client_id, ac_db_collection_helper, CHUNK_DIR, user.user_id, user.email
+    )
     active_clients[client_id] = client_state
 
     # Register client-user mapping (for active clients)
@@ -301,7 +302,6 @@ async def lifespan(app: FastAPI):
         # Shutdown memory service and speaker service
         shutdown_memory_service()
         audio_logger.info("Memory and speaker services shut down.")
-
 
         audio_logger.info("Shutdown complete.")
 
@@ -501,9 +501,23 @@ async def health_check():
         "config": {
             "mongodb_uri": MONGODB_URI,
             "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
-            "transcription_service": ("Deepgram WebSocket" if USE_DEEPGRAM else "Offline ASR"),
-            "asr_uri": (OFFLINE_ASR_TCP_URI if not USE_DEEPGRAM else "wss://api.deepgram.com"),
-            "deepgram_enabled": USE_DEEPGRAM,
+            "transcription_service": (
+                f"Speech to Text ({transcription_provider.name})"
+                if transcription_provider
+                else (
+                    "Speech to Text (Offline ASR)"
+                    if USE_OFFLINE_ASR
+                    else "Speech to Text (Not Configured)"
+                )
+            ),
+            "asr_uri": (
+                f"REST API ({transcription_provider.name})"
+                if transcription_provider
+                else OFFLINE_ASR_TCP_URI if USE_OFFLINE_ASR else "Not configured"
+            ),
+            "transcription_provider": TRANSCRIPTION_PROVIDER or "offline",
+            "online_transcription_enabled": USE_ONLINE_TRANSCRIPTION,
+            "offline_asr_enabled": USE_OFFLINE_ASR,
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
             "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
@@ -545,26 +559,29 @@ async def health_check():
     # Check LLM service (non-critical service - may not be running)
     try:
         from advanced_omi_backend.llm_client import async_health_check
-        
+
         llm_health = await asyncio.wait_for(async_health_check(), timeout=8.0)
-        health_status["services"]["llm"] = {
+        health_status["services"]["audioai"] = {
             "status": llm_health.get("status", "❌ Unknown"),
             "healthy": "✅" in llm_health.get("status", ""),
             "base_url": llm_health.get("base_url", ""),
             "model": llm_health.get("default_model", ""),
+            "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
         }
     except asyncio.TimeoutError:
-        health_status["services"]["llm"] = {
+        health_status["services"]["audioai"] = {
             "status": "⚠️ Connection Timeout (8s) - Service may not be running",
             "healthy": False,
+            "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
         }
         overall_healthy = False
     except Exception as e:
-        health_status["services"]["llm"] = {
+        health_status["services"]["audioai"] = {
             "status": f"⚠️ Connection Failed: {str(e)} - Service may not be running",
             "healthy": False,
+            "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
         }
         overall_healthy = False
@@ -601,52 +618,90 @@ async def health_check():
         }
         overall_healthy = False
 
-    # Check ASR service based on configuration
-    if USE_DEEPGRAM:
-        # Check Deepgram WebSocket connectivity
-        if DEEPGRAM_API_KEY:
-            health_status["services"]["deepgram"] = {
-                "status": "✅ API Key Configured",
-                "healthy": True,
-                "type": "WebSocket",
-                "critical": False,
-            }
-        else:
-            health_status["services"]["deepgram"] = {
-                "status": "❌ API Key Missing",
+    # Check Speech to Text service based on configuration
+    if USE_ONLINE_TRANSCRIPTION and transcription_provider:
+        # Check online transcription provider
+        try:
+            # For online providers, we just check that API keys are configured
+            provider_name = transcription_provider.name
+            if provider_name == "Deepgram" and DEEPGRAM_API_KEY:
+                health_status["services"]["speech_to_text"] = {
+                    "status": "✅ API Key Configured",
+                    "healthy": True,
+                    "type": "REST API",
+                    "provider": "Deepgram",
+                    "critical": False,
+                }
+            elif provider_name == "Mistral" and MISTRAL_API_KEY:
+                health_status["services"]["speech_to_text"] = {
+                    "status": "✅ API Key Configured",
+                    "healthy": True,
+                    "type": "REST API",
+                    "provider": "Mistral",
+                    "critical": False,
+                }
+            else:
+                health_status["services"]["speech_to_text"] = {
+                    "status": f"❌ API Key Missing for {provider_name}",
+                    "healthy": False,
+                    "type": "REST API",
+                    "provider": provider_name,
+                    "critical": False,
+                }
+                overall_healthy = False
+        except Exception as e:
+            health_status["services"]["speech_to_text"] = {
+                "status": f"⚠️ Provider Error: {str(e)}",
                 "healthy": False,
-                "type": "WebSocket",
+                "type": "REST API",
+                "provider": TRANSCRIPTION_PROVIDER,
                 "critical": False,
             }
             overall_healthy = False
-    else:
+    elif USE_OFFLINE_ASR:
         # Check offline ASR service (non-critical - may be external)
         try:
             test_client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
             await asyncio.wait_for(test_client.connect(), timeout=5.0)
             await test_client.disconnect()
-            health_status["services"]["asr"] = {
+            health_status["services"]["speech_to_text"] = {
                 "status": "✅ Connected",
                 "healthy": True,
+                "type": "Offline TCP",
+                "provider": "Wyoming ASR",
                 "uri": OFFLINE_ASR_TCP_URI,
                 "critical": False,
             }
         except asyncio.TimeoutError:
-            health_status["services"]["asr"] = {
+            health_status["services"]["speech_to_text"] = {
                 "status": f"⚠️ Connection Timeout (5s) - Check external ASR service",
                 "healthy": False,
+                "type": "Offline TCP",
+                "provider": "Wyoming ASR",
                 "uri": OFFLINE_ASR_TCP_URI,
                 "critical": False,
             }
             overall_healthy = False
         except Exception as e:
-            health_status["services"]["asr"] = {
+            health_status["services"]["speech_to_text"] = {
                 "status": f"⚠️ Connection Failed: {str(e)} - Check external ASR service",
                 "healthy": False,
+                "type": "Offline TCP",
+                "provider": "Wyoming ASR",
                 "uri": OFFLINE_ASR_TCP_URI,
                 "critical": False,
             }
             overall_healthy = False
+    else:
+        # No transcription service configured
+        health_status["services"]["speech_to_text"] = {
+            "status": "❌ No transcription service configured",
+            "healthy": False,
+            "type": "None",
+            "provider": "None",
+            "critical": False,
+        }
+        overall_healthy = False
 
     # Track health check results in debug tracker
     try:

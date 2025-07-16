@@ -127,15 +127,9 @@ class ClientManager:
                     getattr(client_state, "conversation_transcripts", [])
                 ),
                 "queues": {
-                    "chunk_queue_size": (
-                        client_state.chunk_queue.qsize()
-                    ),
-                    "transcription_queue_size": (
-                        client_state.transcription_queue.qsize()
-                    ),
-                    "memory_queue_size": (
-                        client_state.memory_queue.qsize()
-                    ),
+                    "chunk_queue_size": (client_state.chunk_queue.qsize()),
+                    "transcription_queue_size": (client_state.transcription_queue.qsize()),
+                    "memory_queue_size": (client_state.memory_queue.qsize()),
                 },
             }
             client_info.append(client_data)

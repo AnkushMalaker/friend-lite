@@ -151,7 +151,7 @@ debug:
   enabled: true
   
   # Debug database path
-  db_path: "/app/debug/memory_debug.db"
+  db_path: "/app/data/debug_dir/memory_debug.db"
   
   # Log level for memory processing
   log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
