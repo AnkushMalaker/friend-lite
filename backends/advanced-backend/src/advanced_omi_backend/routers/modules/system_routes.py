@@ -17,7 +17,6 @@ from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.auth import current_superuser
 from advanced_omi_backend.debug_system_tracker import get_debug_tracker
-from advanced_omi_backend.main import cleanup_client_state, create_client_state
 from advanced_omi_backend.users import User, generate_client_id
 
 logger = logging.getLogger(__name__)
@@ -77,6 +76,9 @@ async def process_audio_files(
     auto_generate_client: bool = Query(default=True),
 ):
     """Process uploaded audio files through the transcription pipeline. Admin only."""
+    # Need to import here because we import the routes into main, causing circular imports
+    from advanced_omi_backend.main import cleanup_client_state, create_client_state
+
     # Process files through complete transcription pipeline like WebSocket clients
     try:
         if not files:

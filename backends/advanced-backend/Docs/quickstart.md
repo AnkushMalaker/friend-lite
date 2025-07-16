@@ -265,9 +265,6 @@ curl http://localhost:8000/health
 open http://localhost:8501
 
 # View active clients (requires auth token)
-curl -H "Authorization: Bearer your-token" http://localhost:8000/api/active_clients
-
-# Alternative endpoint (same data)
 curl -H "Authorization: Bearer your-token" http://localhost:8000/api/clients/active
 ```
 

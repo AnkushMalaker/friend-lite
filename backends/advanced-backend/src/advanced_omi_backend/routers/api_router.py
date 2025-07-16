@@ -102,49 +102,7 @@ async def get_admin_memories_debug(
     return await get_admin_memories(current_user, limit)
 
 
-# Active clients compatibility endpoint
-@router.get("/active_clients")
-async def get_active_clients_compat(current_user: User = Depends(current_active_user)):
-    """Get active clients. Compatibility endpoint for Streamlit UI."""
-    try:
-        from advanced_omi_backend.client_manager import (
-            get_client_manager,
-            get_user_clients_active,
-        )
-
-        client_manager = get_client_manager()
-
-        if not client_manager.is_initialized():
-            return JSONResponse(
-                status_code=503,
-                content={"error": "Client manager not available"},
-            )
-
-        if current_user.is_superuser:
-            # Admin: return all active clients
-            clients_info = client_manager.get_client_info_summary()
-        else:
-            # Regular user: return only their own clients
-            user_active_clients = get_user_clients_active(current_user.user_id)
-            all_clients = client_manager.get_client_info_summary()
-
-            # Filter to only the user's clients
-            clients_info = [
-                client for client in all_clients if client["client_id"] in user_active_clients
-            ]
-
-        return {
-            "clients": clients_info,
-            "active_clients_count": len(clients_info),
-            "total_count": len(clients_info),
-        }
-
-    except Exception as e:
-        audio_logger.error(f"Error getting active clients: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to get active clients"},
-        )
+# Compatibility endpoint removed - use /api/clients/active instead
 
 
 logger.info("API router initialized with all sub-modules")
