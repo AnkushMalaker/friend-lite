@@ -48,7 +48,7 @@ jobs:
         run: eas init --force --non-interactive
 
       - name: Build Android APK
-        run: eas build --platform android --profile local --local --output /home/runner/work/friend-lite/friend-lite/app/app-release.apk --non-interactive
+        run: eas build --platform android --profile local --local --output ${{ github.workspace }}/app-release.apk --non-interactive
                             
       - name: Generate release tag
         id: tag
@@ -82,6 +82,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /home/runner/work/friend-lite/friend-lite/app/app-release.apk
+          asset_path: ${{ github.workspace }}/app-release.apk
           asset_name: friend-lite-android.apk
           asset_content_type: application/vnd.android.package-archive 
