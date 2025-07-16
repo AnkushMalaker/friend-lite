@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "friend-lite",
-    "slug": "friend-lite",
+    "name": "friend-lite-app",
+    "slug": "friend-lite-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
