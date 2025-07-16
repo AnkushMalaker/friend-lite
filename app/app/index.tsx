@@ -69,6 +69,8 @@ export default function App() {
     audioPacketsReceived,
     startAudioListener: originalStartAudioListener,
     stopAudioListener: originalStopAudioListener,
+    isRetrying: isAudioListenerRetrying,
+    retryAttempts: audioListenerRetryAttempts,
   } = useAudioListener(
     omiConnection,
     () => !!deviceConnection.connectedDeviceId
@@ -139,6 +141,12 @@ export default function App() {
       if (storedWsUrl) {
         console.log('[App.tsx] Loaded WebSocket URL from storage:', storedWsUrl);
         setWebSocketUrl(storedWsUrl);
+      } else {
+        // Set default to simple backend
+        const defaultUrl = 'ws://localhost:8000/ws';
+        console.log('[App.tsx] No stored WebSocket URL, setting default for simple backend:', defaultUrl);
+        setWebSocketUrl(defaultUrl);
+        await saveWebSocketUrl(defaultUrl);
       }
 
       const storedUserId = await getUserId();
@@ -160,16 +168,6 @@ export default function App() {
     loadSettings();
   }, []);
 
-  // Now that deviceConnection is available, we can define the more specific isAudioReadyToListen
-  // for useAudioListener if we were to re-initialize it or if useAudioListener needs it reactively.
-  // However, useAudioListener is already initialized. The key is that callbacks passed to hooks are stable.
-  // The previous tempIsAudioReadyCb is likely sufficient if it broadly gates on omiConnection.
-  // For a more reactive isAudioReadyToListen (if needed by useAudioListener internally beyond init):
-  const refinedIsAudioReadyToListen = useCallback(() => {
-    return omiConnection.isConnected() && !!deviceConnection.connectedDeviceId;
-  }, [omiConnection, deviceConnection.connectedDeviceId]);
-  // If useAudioListener needed to react to deviceId changes for its readiness, its internal structure would need to accommodate that.
-  // For its initial call, tempIsAudioReadyCb was used. This is a common pattern to break dependency cycles.
 
   // Device Scanning Hook
   const {
@@ -248,28 +246,31 @@ export default function App() {
     }
 
     try {
-      // Modify WebSocket URL to include JWT token and optional user_id
-      let finalWebSocketUrl = webSocketUrl;
+      let finalWebSocketUrl = webSocketUrl.trim();
       
-      if (!jwtToken) {
-        Alert.alert('Authentication Required', 'Please login first before starting audio streaming.');
-        return;
-      }
+      // Check if this is the advanced backend (requires authentication) or simple backend
+      const isAdvancedBackend = jwtToken && isAuthenticated;
       
-      const params = new URLSearchParams();
-      params.append('token', jwtToken);
-      
-      if (userId && userId.trim() !== '') {
-        params.append('device_name', userId.trim());
-        console.log('[App.tsx] Using WebSocket URL with token and device_name:', userId.trim());
+      if (isAdvancedBackend) {
+        // Advanced backend: include JWT token and device parameters
+        const params = new URLSearchParams();
+        params.append('token', jwtToken);
+        
+        if (userId && userId.trim() !== '') {
+          params.append('device_name', userId.trim());
+          console.log('[App.tsx] Using advanced backend with token and device_name:', userId.trim());
+        } else {
+          params.append('device_name', 'phone'); // Default device name
+          console.log('[App.tsx] Using advanced backend with token and default device_name');
+        }
+        
+        const separator = webSocketUrl.includes('?') ? '&' : '?';
+        finalWebSocketUrl = `${webSocketUrl}${separator}${params.toString()}`;
+        console.log('[App.tsx] Advanced backend WebSocket URL constructed (token hidden for security)');
       } else {
-        params.append('device_name', 'phone'); // Default device name
-        console.log('[App.tsx] Using WebSocket URL with token and default device_name');
+        // Simple backend: use URL as-is without authentication
+        console.log('[App.tsx] Using simple backend without authentication:', finalWebSocketUrl);
       }
-      
-      const separator = webSocketUrl.includes('?') ? '&' : '?';
-      finalWebSocketUrl = `${webSocketUrl}${separator}${params.toString()}`;
-      console.log('[App.tsx] Final WebSocket URL constructed (token hidden for security)');
 
       // Start custom WebSocket streaming first
       await audioStreamer.startStreaming(finalWebSocketUrl);
@@ -287,7 +288,7 @@ export default function App() {
       // Ensure cleanup if one part started but the other failed
       if (audioStreamer.isStreaming) audioStreamer.stopStreaming();
     }
-  }, [originalStartAudioListener, audioStreamer, webSocketUrl, userId, omiConnection, deviceConnection.connectedDeviceId, jwtToken]);
+  }, [originalStartAudioListener, audioStreamer, webSocketUrl, userId, omiConnection, deviceConnection.connectedDeviceId, jwtToken, isAuthenticated]);
 
   const handleStopAudioListeningAndStreaming = useCallback(async () => {
     console.log('[App.tsx] Stopping audio listening and streaming.');
@@ -318,8 +319,8 @@ export default function App() {
     !isAttemptingAutoReconnect &&
     !deviceConnection.isConnecting &&
     !deviceConnection.connectedDeviceId &&
-    (triedAutoReconnectForCurrentId || !lastKnownDeviceId) &&
-    isAuthenticated // Require authentication to scan
+    (triedAutoReconnectForCurrentId || !lastKnownDeviceId)
+    // Removed authentication requirement for scanning
   ), [
     permissionGranted,
     bluetoothState,
@@ -328,7 +329,6 @@ export default function App() {
     deviceConnection.connectedDeviceId,
     triedAutoReconnectForCurrentId,
     lastKnownDeviceId,
-    isAuthenticated,
   ]);
 
   const filteredDevices = React.useMemo(() => {
@@ -445,7 +445,7 @@ export default function App() {
           {!isAuthenticated && (
             <View style={styles.authWarning}>
               <Text style={styles.authWarningText}>
-                🔐 Please login to enable device scanning and audio streaming.
+                💡 Login is required for advanced backend features. Simple backend can be used without authentication.
               </Text>
             </View>
           )}
@@ -573,6 +573,8 @@ export default function App() {
               audioStreamerError={audioStreamer.error}
               userId={userId}
               onSetUserId={handleSetAndSaveUserId}
+              isAudioListenerRetrying={isAudioListenerRetrying}
+              audioListenerRetryAttempts={audioListenerRetryAttempts}
             />
           )}
         </ScrollView>

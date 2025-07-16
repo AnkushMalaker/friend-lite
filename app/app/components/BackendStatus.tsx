@@ -169,7 +169,7 @@ export const BackendStatus: React.FC<BackendStatusProps> = ({
         style={styles.textInput}
         value={backendUrl}
         onChangeText={onBackendUrlChange}
-        placeholder="ws://localhost:8000/ws"
+        placeholder="ws://localhost:8000/ws (simple) or ws://localhost:8080/v1/listen (advanced)"
         autoCapitalize="none"
         keyboardType="url"
         returnKeyType="done"
@@ -208,8 +208,8 @@ export const BackendStatus: React.FC<BackendStatusProps> = ({
       </TouchableOpacity>
 
       <Text style={styles.helpText}>
-        Enter the HTTP URL of your backend server (e.g., http://localhost:8000 or http://100.99.62.5:8000). 
-        The connection status will be automatically checked.
+        Enter the WebSocket URL of your backend server. Simple backend: ws://localhost:8000/ws (no auth). 
+        Advanced backend: ws://localhost:8080/v1/listen (requires login). Status is automatically checked.
       </Text>
     </View>
   );
@@ -248,6 +248,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     width: '100%',
     marginBottom: 15,
+    color: '#333',
   },
   statusContainer: {
     marginBottom: 15,
