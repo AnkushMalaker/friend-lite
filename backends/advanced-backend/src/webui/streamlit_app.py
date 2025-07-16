@@ -1295,7 +1295,7 @@ with tab_convos:
                                     key=f"refresh_{cache_key}_{hash(str(memories))}",
                                 ):
                                     st.session_state[cache_key] = get_data(
-                                        "/api/memories?limit=500", require_auth=True
+                                        "/api/memories/unfiltered?limit=500", require_auth=True
                                     )
                                 user_memories_response = st.session_state.get(cache_key)
                                 memory_contents = {}
@@ -1325,7 +1325,18 @@ with tab_convos:
                                         and memory_text != "Memory content not found"
                                         and memory_text != "No content available"
                                     ):
-                                        st.info(f"💭 {memory_text}")
+                                        # Check if this is a transcript-based fallback memory
+                                        if str(memory_id).startswith(
+                                            "transcript_"
+                                        ) or memory_text.startswith("Conversation transcript:"):
+                                            st.warning(
+                                                f"📝 **Transcript-based memory:** {memory_text}"
+                                            )
+                                            st.caption(
+                                                "💡 This memory was created from the full transcript when LLM extraction returned no results"
+                                            )
+                                        else:
+                                            st.info(f"💭 {memory_text}")
                                     else:
                                         st.warning(f"🔍 ID: `{memory_id}`")
                                         st.caption(
@@ -1491,7 +1502,9 @@ with tab_convos:
                             f"📋 View Memory Details ({memory_count} items)", expanded=False
                         ):
                             # Fetch actual memory content from the API
-                            user_memories_response = get_data("/api/memories", require_auth=True)
+                            user_memories_response = get_data(
+                                "/api/memories/unfiltered", require_auth=True
+                            )
                             memory_contents = {}
 
                             if user_memories_response and "memories" in user_memories_response:
@@ -1519,7 +1532,16 @@ with tab_convos:
                                     and memory_text != "Memory content not found"
                                     and memory_text != "No content available"
                                 ):
-                                    st.info(f"💭 {memory_text}")
+                                    # Check if this is a transcript-based fallback memory
+                                    if str(memory_id).startswith(
+                                        "transcript_"
+                                    ) or memory_text.startswith("Conversation transcript:"):
+                                        st.warning(f"📝 **Transcript-based memory:** {memory_text}")
+                                        st.caption(
+                                            "💡 This memory was created from the full transcript when LLM extraction returned no results"
+                                        )
+                                    else:
+                                        st.info(f"💭 {memory_text}")
                                 else:
                                     st.warning(f"🔍 ID: `{memory_id}`")
                                     st.caption(
@@ -1582,7 +1604,7 @@ with tab_mem:
         with st.spinner("Loading memories..."):
             logger.debug(f"📡 Fetching memories for user: {user_id_input.strip()}")
             memories_response = get_data(
-                f"/api/memories?user_id={user_id_input.strip()}", require_auth=True
+                f"/api/memories/unfiltered?user_id={user_id_input.strip()}", require_auth=True
             )
 
         # Handle the API response format with "results" wrapper for memories
@@ -1645,7 +1667,9 @@ with tab_mem:
                     logger.debug("📋 Fetching memories for admin view")
 
                     # Use the working user memories endpoint since admin is a user too
-                    user_memories_response = get_data("/api/memories?limit=500", require_auth=True)
+                    user_memories_response = get_data(
+                        "/api/memories/unfiltered?limit=500", require_auth=True
+                    )
 
                     if user_memories_response and "memories" in user_memories_response:
                         # Get current user info
