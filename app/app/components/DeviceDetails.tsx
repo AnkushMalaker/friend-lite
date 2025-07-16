@@ -28,6 +28,10 @@ interface DeviceDetailsProps {
   // User ID Management  
   userId: string;
   onSetUserId: (userId: string) => void;
+
+  // Audio Listener Retry State
+  isAudioListenerRetrying?: boolean;
+  audioListenerRetryAttempts?: number;
 }
 
 export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
@@ -46,7 +50,9 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
   isConnectingAudioStreamer,
   audioStreamerError,
   userId,
-  onSetUserId
+  onSetUserId,
+  isAudioListenerRetrying,
+  audioListenerRetryAttempts
 }) => {
   if (!connectedDeviceId) return null;
 
@@ -107,13 +113,27 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
       {/* Audio Controls */}
       <View style={styles.subSection}>
         <TouchableOpacity
-          style={[styles.button, isListeningAudio ? styles.buttonWarning : null, { marginTop: 15 } ]}
-          onPress={isListeningAudio ? onStopAudioListener : onStartAudioListener}
+          style={[
+            styles.button, 
+            isListeningAudio || isAudioListenerRetrying ? styles.buttonWarning : null, 
+            { marginTop: 15 }
+          ]}
+          onPress={isListeningAudio || isAudioListenerRetrying ? onStopAudioListener : onStartAudioListener}
         >
           <Text style={styles.buttonText}>
-            {isListeningAudio ? "Stop Audio Listener" : "Start Audio Listener"}
+            {isListeningAudio ? "Stop Audio Listener" : 
+             isAudioListenerRetrying ? "Stop Retry" : "Start Audio Listener"}
           </Text>
         </TouchableOpacity>
+        
+        {isAudioListenerRetrying && (
+          <View style={styles.retryContainer}>
+            <Text style={styles.retryText}>
+              🔄 Retrying audio listener... (Attempt {audioListenerRetryAttempts || 0}/10)
+            </Text>
+          </View>
+        )}
+        
         {isListeningAudio && (
           <View style={styles.infoContainerSM}>
             <Text style={styles.infoTitle}>Audio Packets Received:</Text>
@@ -289,6 +309,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     width: '100%', // Ensure input takes full width of its container
     marginBottom: 10,
+    color: '#333',
   },
   statusText: { // New style for status messages
     marginTop: 8,
@@ -302,6 +323,20 @@ const styles = StyleSheet.create({
   statusError: {
     color: 'red',
     fontWeight: 'bold',
+  },
+  retryContainer: {
+    marginTop: 10,
+    padding: 12,
+    backgroundColor: '#FFF3CD',
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9500',
+  },
+  retryText: {
+    fontSize: 14,
+    color: '#856404',
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });
 
