@@ -112,6 +112,38 @@ class DeepgramProvider(OnlineTranscriptionProvider):
                             )
 
                         if transcript:
+                            # Extract speech timing information for logging
+                            words = alternative.get("words", [])
+                            if words:
+                                first_word_start = words[0].get("start", 0)
+                                last_word_end = words[-1].get("end", 0)
+                                speech_duration = last_word_end - first_word_start
+
+                                # Calculate audio duration from data size
+                                audio_duration = len(audio_data) / (
+                                    sample_rate * 2 * 1
+                                )  # 16-bit mono
+                                speech_percentage = (
+                                    (speech_duration / audio_duration) * 100
+                                    if audio_duration > 0
+                                    else 0
+                                )
+
+                                logger.info(
+                                    f"Deepgram speech analysis: {speech_duration:.1f}s speech detected in {audio_duration:.1f}s audio ({speech_percentage:.1f}%)"
+                                )
+
+                                # Check confidence levels
+                                confidences = [
+                                    w.get("confidence", 0) for w in words if "confidence" in w
+                                ]
+                                if confidences:
+                                    avg_confidence = sum(confidences) / len(confidences)
+                                    low_confidence_count = sum(1 for c in confidences if c < 0.5)
+                                    logger.info(
+                                        f"Deepgram confidence: avg={avg_confidence:.2f}, {low_confidence_count}/{len(words)} words <0.5 confidence"
+                                    )
+
                             # Clean up speaker labels
                             cleaned_transcript = re.sub(
                                 r"^[\s\n]*Speaker \d+:\s*", "", transcript, flags=re.MULTILINE
