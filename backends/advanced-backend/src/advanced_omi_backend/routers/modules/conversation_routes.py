@@ -138,7 +138,9 @@ async def get_conversations(current_user: User = Depends(current_active_user)):
                     "cropped_audio_path": chunk.get("cropped_audio_path"),
                     "speech_segments": chunk.get("speech_segments"),
                     "cropped_duration": chunk.get("cropped_duration"),
-                    "memories": chunk.get("memories", []),  # Include memory references if they exist
+                    "memories": chunk.get(
+                        "memories", []
+                    ),  # Include memory references if they exist
                     "has_memory": bool(chunk.get("memories", [])),  # Quick boolean check for UI
                 }
             )

@@ -66,7 +66,9 @@ async def get_memories_with_transcripts(
             target_user_id = user_id
 
         # Execute memory retrieval directly (now async)
-        memories_with_transcripts = await memory_service.get_memories_with_transcripts(target_user_id, limit)
+        memories_with_transcripts = await memory_service.get_memories_with_transcripts(
+            target_user_id, limit
+        )
 
         return {
             "memories": memories_with_transcripts,  # Streamlit expects 'memories' key
@@ -166,11 +168,18 @@ async def get_memories_unfiltered(
             None, memory_service.get_all_memories_unfiltered, target_user_id, limit
         )
 
-        return {"memories": memories, "count": len(memories), "user_id": target_user_id, "includes_fallback": True}
+        return {
+            "memories": memories,
+            "count": len(memories),
+            "user_id": target_user_id,
+            "includes_fallback": True,
+        }
 
     except Exception as e:
         audio_logger.error(f"Error fetching unfiltered memories: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"message": "Error fetching unfiltered memories"})
+        return JSONResponse(
+            status_code=500, content={"message": "Error fetching unfiltered memories"}
+        )
 
 
 @router.get("/admin")
@@ -189,15 +198,15 @@ async def get_all_memories_admin(current_user: User = Depends(current_superuser)
         user_memories = {}
         users_with_memories = set()
         client_ids_with_memories = set()
-        
+
         for memory in all_memories:
             user_id = memory.get("user_id", "unknown")
             client_id = memory.get("client_id", "unknown")
-            
+
             if user_id not in user_memories:
                 user_memories[user_id] = []
             user_memories[user_id].append(memory)
-            
+
             # Track users and clients for debug info
             users_with_memories.add(user_id)
             client_ids_with_memories.add(client_id)

@@ -12,10 +12,7 @@ from wyoming.audio import AudioChunk
 from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
-from advanced_omi_backend.debug_system_tracker import (
-    PipelineStage,
-    get_debug_tracker,
-)
+from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
 from advanced_omi_backend.memory import get_memory_service
 from advanced_omi_backend.transcription import TranscriptionManager
 from advanced_omi_backend.users import get_user_by_client_id
@@ -39,10 +36,18 @@ TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 # Get services
 memory_service = get_memory_service()
 
+
 class ClientState:
     """Manages all state for a single client connection."""
 
-    def __init__(self, client_id: str, ac_db_collection_helper, chunk_dir: Path, user_id: Optional[str] = None, user_email: Optional[str] = None):
+    def __init__(
+        self,
+        client_id: str,
+        ac_db_collection_helper,
+        chunk_dir: Path,
+        user_id: Optional[str] = None,
+        user_email: Optional[str] = None,
+    ):
         self.client_id = client_id
         self.connected = True
         self.db_helper = ac_db_collection_helper
@@ -68,7 +73,7 @@ class ClientState:
         # Conversation timeout tracking
         self.last_transcript_time: Optional[float] = None
         self.conversation_start_time: float = time.time()
-        
+
         # Prevent double conversation closure
         self.conversation_closed: bool = False
 
@@ -152,15 +157,21 @@ class ClientState:
 
         # Wait for tasks to complete gracefully, with cancellation fallback
         # Use longer timeouts for transcription tasks that may be waiting on Deepgram API
-        transcription_timeout = 60.0  # 1 minute for transcription (Deepgram can take time for large files)
-        saver_timeout = 60.0  # 1 minute for saver (handles conversation closure and memory processing)
+        transcription_timeout = (
+            60.0  # 1 minute for transcription (Deepgram can take time for large files)
+        )
+        saver_timeout = (
+            60.0  # 1 minute for saver (handles conversation closure and memory processing)
+        )
         default_timeout = 15.0  # 15 seconds for other tasks (increased from 3s)
-        
+
         tasks_to_cleanup = []
         if self.saver_task:
             tasks_to_cleanup.append(("saver", self.saver_task, saver_timeout))
         if self.transcription_task:
-            tasks_to_cleanup.append(("transcription", self.transcription_task, transcription_timeout))
+            tasks_to_cleanup.append(
+                ("transcription", self.transcription_task, transcription_timeout)
+            )
         if self.memory_task:
             tasks_to_cleanup.append(("memory", self.memory_task, default_timeout))
 
@@ -221,11 +232,13 @@ class ClientState:
         """Close the current conversation with proper cleanup including audio cropping and speaker processing."""
         # Prevent double closure
         if self.conversation_closed:
-            audio_logger.debug(f"🔒 Conversation already closed for client {self.client_id}, skipping")
+            audio_logger.debug(
+                f"🔒 Conversation already closed for client {self.client_id}, skipping"
+            )
             return
-            
+
         self.conversation_closed = True
-        
+
         if self.file_sink:
             # Store current audio info before closing
             current_uuid = self.current_audio_uuid
@@ -256,13 +269,39 @@ class ClientState:
                     f"Transcription queue join timed out after 15 seconds for {current_uuid}"
                 )
 
-            # Small delay to allow final processing to complete
-            await asyncio.sleep(0.5)
+            # Allow more time for batch transcript processing to complete and be stored in database
+            # This helps prevent race conditions where transcription completes after conversation close
+            await asyncio.sleep(2.0)
 
             # Process memory at end of conversation if we have transcripts
+            # First check conversation_transcripts list, then fall back to database
+            full_conversation = ""
+            transcript_source = ""
+
             if self.conversation_transcripts and current_uuid:
                 full_conversation = " ".join(self.conversation_transcripts).strip()
+                transcript_source = f"memory ({len(self.conversation_transcripts)} segments)"
+            elif current_uuid and self.db_helper:
+                # Fallback: get transcripts from database if conversation_transcripts is empty
+                # This handles the race condition where transcript processing completes after conversation close
+                try:
+                    audio_logger.info(
+                        f"💭 Conversation transcripts list empty, checking database for {current_uuid}"
+                    )
+                    db_transcripts = await self.db_helper.get_transcript_segments(current_uuid)
+                    if db_transcripts:
+                        transcript_texts = [segment.get("text", "") for segment in db_transcripts]
+                        full_conversation = " ".join(transcript_texts).strip()
+                        transcript_source = f"database ({len(db_transcripts)} segments)"
+                        audio_logger.info(
+                            f"💭 Retrieved {len(db_transcripts)} transcript segments from database"
+                        )
+                except Exception as e:
+                    audio_logger.error(
+                        f"💭 Error retrieving transcripts from database for {current_uuid}: {e}"
+                    )
 
+            if full_conversation and current_uuid:
                 # MODIFIED: Process all transcripts for memory storage, regardless of length
                 # Additional safety check - ensure we have some content
                 if len(full_conversation) < 1:
@@ -272,9 +311,8 @@ class ClientState:
                 else:
                     # Process even very short conversations to ensure all transcripts are stored
                     audio_logger.info(
-                        f"💭 Queuing memory processing for conversation {current_uuid} with {len(self.conversation_transcripts)} transcript segments (length: {len(full_conversation)} chars)"
+                        f"💭 Queuing memory processing for conversation {current_uuid} from {transcript_source} (length: {len(full_conversation)} chars)"
                     )
-                    audio_logger.info(f"💭 Individual transcripts: {self.conversation_transcripts}")
                     audio_logger.info(
                         f"💭 Full conversation text: {full_conversation[:200]}..."
                     )  # Log first 200 chars
@@ -284,7 +322,9 @@ class ClientState:
                     if self.user_id and self.user_email:
                         # Process memory in background to avoid blocking conversation close
                         self.background_memory_task = asyncio.create_task(
-                            self._process_memory_background(full_conversation, current_uuid, self.user_id, self.user_email)
+                            self._process_memory_background(
+                                full_conversation, current_uuid, self.user_id, self.user_email
+                            )
                         )
                     else:
                         audio_logger.error(
@@ -393,7 +433,9 @@ class ClientState:
             original_path, speech_segments, output_path, audio_uuid
         )
 
-    async def _process_memory_background(self, full_conversation: str, audio_uuid: str, user_id: str, user_email: str):
+    async def _process_memory_background(
+        self, full_conversation: str, audio_uuid: str, user_id: str, user_email: str
+    ):
         """Background task for memory processing to avoid blocking conversation close."""
         start_time = time.time()
 
@@ -413,8 +455,12 @@ class ClientState:
 
             # Add general memory with fallback handling
             memory_result = await memory_service.add_memory(
-                full_conversation, self.client_id, audio_uuid, user_id, user_email, 
-                db_helper=self.db_helper
+                full_conversation,
+                self.client_id,
+                audio_uuid,
+                user_id,
+                user_email,
+                db_helper=self.db_helper,
             )
 
             if memory_result:
@@ -475,9 +521,11 @@ class ClientState:
                         audio_logger.info(
                             f"Creating file sink with: rate={int(OMI_SAMPLE_RATE)}, channels={int(OMI_CHANNELS)}, width={int(OMI_SAMPLE_WIDTH)}"
                         )
-                        self.file_sink = self._new_local_file_sink(f"{self.chunk_dir}/{wav_filename}")
+                        self.file_sink = self._new_local_file_sink(
+                            f"{self.chunk_dir}/{wav_filename}"
+                        )
                         await self.file_sink.open()
-                        
+
                         # Reset conversation closure flag when starting new audio
                         self.conversation_closed = False
 
@@ -630,4 +678,3 @@ class ClientState:
             )
         finally:
             audio_logger.debug(f"Memory processor stopped for client {self.client_id}")
-

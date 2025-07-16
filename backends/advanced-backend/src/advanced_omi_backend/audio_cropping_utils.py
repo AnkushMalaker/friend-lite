@@ -3,8 +3,8 @@
 ###############################################################################
 
 import asyncio
-import os
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +64,7 @@ async def _process_audio_cropping_with_relative_timestamps(
 
             relative_segments.append((start_rel, end_rel))
 
-        logger.info(
-            f"🕐 Converting timestamps for {audio_uuid}: file_start={file_start_timestamp}"
-        )
+        logger.info(f"🕐 Converting timestamps for {audio_uuid}: file_start={file_start_timestamp}")
         logger.info(f"🕐 Absolute segments: {speech_segments}")
         logger.info(f"🕐 Relative segments: {relative_segments}")
 
@@ -96,9 +94,7 @@ async def _crop_audio_with_ffmpeg(
     original_path: str, speech_segments: list[tuple[float, float]], output_path: str
 ) -> bool:
     """Use ffmpeg to crop audio - runs as async subprocess, no GIL issues"""
-    logger.info(
-        f"Cropping audio {original_path} with {len(speech_segments)} speech segments"
-    )
+    logger.info(f"Cropping audio {original_path} with {len(speech_segments)} speech segments")
 
     if not speech_segments:
         logger.warning(f"No speech segments to crop for {original_path}")

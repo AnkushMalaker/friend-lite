@@ -7,23 +7,18 @@ Handles metrics, auth config, file processing, and other system utilities.
 import asyncio
 import io
 import logging
-import os
 import time
-import uuid
 import wave
-from pathlib import Path
-from typing import Any, Dict
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse
 from wyoming.audio import AudioChunk
 
-from advanced_omi_backend.auth import current_active_user, current_superuser
-from advanced_omi_backend.database import chunks_col
+from advanced_omi_backend.auth import current_superuser
 from advanced_omi_backend.debug_system_tracker import get_debug_tracker
+from advanced_omi_backend.main import cleanup_client_state, create_client_state
 from advanced_omi_backend.users import User, generate_client_id
-
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -82,8 +77,6 @@ async def process_audio_files(
     auto_generate_client: bool = Query(default=True),
 ):
     """Process uploaded audio files through the transcription pipeline. Admin only."""
-    # Import client state management functions
-    from advanced_omi_backend.main import create_client_state, cleanup_client_state
     # Process files through complete transcription pipeline like WebSocket clients
     try:
         if not files:

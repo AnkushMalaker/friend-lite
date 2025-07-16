@@ -12,9 +12,10 @@ import asyncio
 import logging
 import pathlib
 from typing import Optional
+import random
 
 import numpy as np
-import requests
+import httpx
 from wyoming.audio import AudioChunk
 
 from easy_audio_interfaces import RollingFileSink
@@ -27,7 +28,8 @@ CHANNELS = 1
 SAMP_WIDTH = 2  # bytes (16-bit)
 RECONNECT_DELAY = 5  # seconds
 
-# Authentication configuration
+# Authentication configuration 
+# The below two are deliberately different so that someone who wants to skip auth with simple-backend can do so
 BACKEND_URL = "http://host.docker.internal:8000"  # Backend API URL
 BACKEND_WS_URL = "ws://host.docker.internal:8000"  # Backend WebSocket URL
 AUTH_USERNAME = os.getenv("AUTH_USERNAME")  # Can be email or 6-character user_id
@@ -36,6 +38,23 @@ DEVICE_NAME = "havpe"  # Device name for client ID generation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+async def exponential_backoff_sleep(attempt: int, base_delay: float = 1.0, max_delay: float = 30.0) -> None:
+    """
+    Sleep with exponential backoff and jitter.
+    
+    Args:
+        attempt: Current attempt number (0-based)
+        base_delay: Base delay in seconds
+        max_delay: Maximum delay in seconds
+    """
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    # Add jitter to prevent thundering herd
+    jitter = random.uniform(0.1, 0.3) * delay
+    total_delay = delay + jitter
+    logger.debug(f"⏳ Waiting {total_delay:.1f}s before retry (attempt {attempt + 1})")
+    await asyncio.sleep(total_delay)
 
 
 async def get_jwt_token(username: str, password: str, backend_url: str) -> Optional[str]:
@@ -53,17 +72,12 @@ async def get_jwt_token(username: str, password: str, backend_url: str) -> Optio
     try:
         logger.info(f"🔐 Authenticating with backend as: {username}")
         
-        # Run the blocking request in a thread pool to avoid blocking the event loop
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: requests.post(
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
                 f"{backend_url}/auth/jwt/login",
                 data={'username': username, 'password': password},
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                timeout=10
+                headers={'Content-Type': 'application/x-www-form-urlencoded'}
             )
-        )
         
         if response.status_code == 200:
             auth_data = response.json()
@@ -85,10 +99,10 @@ async def get_jwt_token(username: str, password: str, backend_url: str) -> Optio
             logger.error(f"❌ Authentication failed: {error_msg}")
             return None
             
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.error("❌ Authentication request timed out")
         return None
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e:
         logger.error(f"❌ Authentication request failed: {e}")
         return None
     except Exception as e:
@@ -223,7 +237,7 @@ class ESP32TCPServer(TCPServer):
 
 
 async def ensure_socket_connection(socket_client: SocketClient) -> bool:
-    """Ensure socket client is connected, with retry logic."""
+    """Ensure socket client is connected, with exponential backoff retry logic."""
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -234,8 +248,7 @@ async def ensure_socket_connection(socket_client: SocketClient) -> bool:
         except Exception as e:
             logger.error(f"❌ Failed to connect to WebSocket: {e}")
             if attempt < max_retries - 1:
-                logger.info(f"Retrying in {RECONNECT_DELAY} seconds...")
-                await asyncio.sleep(RECONNECT_DELAY)
+                await exponential_backoff_sleep(attempt)
             else:
                 logger.error("❌ All WebSocket connection attempts failed")
                 return False
@@ -317,13 +330,25 @@ async def process_esp32_audio(
         raise ValueError("Either socket_client or asr_client must be provided")
 
     try:
+        import time
+        start_time = time.time()
         logger.info("🎵 Starting to process ESP32 audio with authentication...")
         chunk_count = 0
         failed_sends = 0
         auth_failures = 0
+        successful_sends = 0
         
         async for chunk in esp32_server:
             chunk_count += 1
+            
+            # Health logging every 1000 chunks (~30 seconds at 16kHz)
+            if chunk_count % 1000 == 0:
+                elapsed = time.time() - start_time
+                uptime_mins = elapsed / 60
+                success_rate = (successful_sends / chunk_count * 100) if chunk_count > 0 else 0
+                logger.info(f"💓 Health: {uptime_mins:.1f}min uptime, {chunk_count} chunks, "
+                          f"{success_rate:.1f}% success, {auth_failures} auth failures")
+            
             if chunk_count % 100 == 1:  # Log every 100th chunk to reduce spam
                 logger.debug(
                     f"📦 Processed {chunk_count} chunks from ESP32, current chunk size: {len(chunk.audio)} bytes"
@@ -341,6 +366,7 @@ async def process_esp32_audio(
                 success, needs_reconnect = await send_with_retry(socket_client, chunk)
                 
                 if success:
+                    successful_sends += 1
                     failed_sends = 0
                     auth_failures = 0
                 elif needs_reconnect:
@@ -357,6 +383,7 @@ async def process_esp32_audio(
                         # Retry sending this chunk with new client
                         retry_success, _ = await send_with_retry(socket_client, chunk)
                         if retry_success:
+                            successful_sends += 1
                             logger.debug("✅ Chunk sent successfully after re-authentication")
                         else:
                             logger.warning("⚠️ Failed to send chunk even after re-authentication")
@@ -384,6 +411,7 @@ async def process_esp32_audio(
 
 async def run_audio_processor(args, esp32_file_sink):
     """Run the audio processor with authentication and reconnect logic."""
+    retry_attempt = 0
     while True:
         try:
             # Create ESP32 TCP server with automatic I²S swap detection
@@ -405,8 +433,13 @@ async def run_audio_processor(args, esp32_file_sink):
             socket_client = await create_and_connect_socket_client()
             if not socket_client:
                 logger.error("❌ Failed to create authenticated WebSocket client, retrying...")
-                await asyncio.sleep(RECONNECT_DELAY)
+                await exponential_backoff_sleep(retry_attempt)
+                retry_attempt += 1
                 continue
+
+            # Reset retry counter on successful connection
+            retry_attempt = 0
+            logger.info("💚 Authenticated connection established successfully!")
 
             # Start ESP32 server
             async with esp32_server:
@@ -420,14 +453,16 @@ async def run_audio_processor(args, esp32_file_sink):
                     asr_client=None,
                     file_sink=esp32_file_sink
                 )
+                logger.info("🏁 Audio processing session ended")
 
         except KeyboardInterrupt:
             logger.info("🛑 Interrupted – stopping")
             break
         except Exception as e:
             logger.error(f"❌ Audio processor error: {e}")
-            logger.info(f"🔄 Restarting in {RECONNECT_DELAY} seconds...")
-            await asyncio.sleep(RECONNECT_DELAY)
+            logger.info(f"🔄 Restarting with exponential backoff...")
+            await exponential_backoff_sleep(retry_attempt)
+            retry_attempt += 1
 
 
 async def main():
