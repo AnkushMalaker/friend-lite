@@ -249,7 +249,8 @@ def register_client_user_mapping(client_id: str, user_id: str):
         user_id: The user ID that owns this client
     """
     _client_to_user_mapping[client_id] = user_id
-    logger.debug(f"Registered active client {client_id} to user {user_id}")
+    logger.info(f"✅ Registered active client {client_id} to user {user_id}")
+    logger.info(f"📊 Active client mappings: {len(_client_to_user_mapping)} total")
 
 
 def unregister_client_user_mapping(client_id: str):
@@ -261,7 +262,10 @@ def unregister_client_user_mapping(client_id: str):
     """
     if client_id in _client_to_user_mapping:
         user_id = _client_to_user_mapping.pop(client_id)
-        logger.debug(f"Unregistered active client {client_id} from user {user_id}")
+        logger.info(f"❌ Unregistered active client {client_id} from user {user_id}")
+        logger.info(f"📊 Active client mappings: {len(_client_to_user_mapping)} remaining")
+    else:
+        logger.warning(f"⚠️ Attempted to unregister non-existent client {client_id}")
 
 
 def track_client_user_relationship(client_id: str, user_id: str):
@@ -323,11 +327,17 @@ def get_user_clients_active(user_id: str) -> list[str]:
     Returns:
         List of active client IDs belonging to the user
     """
-    return [
+    logger.debug(f"🔍 Looking for active clients for user {user_id}")
+    logger.debug(f"🔍 Available mappings: {_client_to_user_mapping}")
+
+    user_clients = [
         client_id
         for client_id, mapped_user_id in _client_to_user_mapping.items()
         if mapped_user_id == user_id
     ]
+
+    logger.debug(f"🔍 Found {len(user_clients)} active clients for user {user_id}: {user_clients}")
+    return user_clients
 
 
 def get_client_owner(client_id: str) -> Optional[str]:

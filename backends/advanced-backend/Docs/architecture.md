@@ -612,8 +612,7 @@ The system provides a comprehensive REST API organized into functional modules:
 - `POST /api/create_user` - User creation (admin only)
 
 #### Client Management
-- `GET /api/clients/active` - Active client monitoring
-- `GET /api/active_clients` - Compatibility endpoint for Streamlit UI
+- `GET /api/clients/active` - Active client monitoring (unified endpoint)
 
 #### Memory Management
 - `GET /api/memories` - User memories (with user_id filter for admin)

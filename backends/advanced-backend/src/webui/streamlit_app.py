@@ -871,10 +871,10 @@ with st.sidebar:
     with st.expander("Active Clients & Close Conversation", expanded=True):
         # Get active clients
         logger.debug("📡 Fetching active clients...")
-        active_clients_data = get_data("/api/active_clients", require_auth=True)
+        active_clients_data = get_data("/api/clients/active", require_auth=True)
         clients = (
-            active_clients_data["clients"]
-            if active_clients_data and active_clients_data.get("clients")
+            active_clients_data["active_clients"]
+            if active_clients_data and active_clients_data.get("active_clients")
             else {}
         )
 
@@ -943,7 +943,7 @@ with st.sidebar:
 
             if len(clients) > 0:
                 st.info(
-                    f"💡 **Total accessible clients:** {active_clients_data.get('active_clients_count', 0)}"
+                    f"💡 **Total accessible clients:** {active_clients_data.get('total_count', 0)}"
                 )
         else:
             if st.session_state.get("authenticated", False):
@@ -2296,10 +2296,10 @@ with tab_manage:
             st.write("Close the current active conversation for your connected clients.")
 
         # Get active clients for the dropdown
-        active_clients_data = get_data("/api/active_clients", require_auth=True)
+        active_clients_data = get_data("/api/clients/active", require_auth=True)
 
-        if active_clients_data and active_clients_data.get("clients"):
-            clients = active_clients_data["clients"]
+        if active_clients_data and active_clients_data.get("active_clients"):
+            clients = active_clients_data["active_clients"]
 
             # Filter to only clients with active conversations
             active_conversations = {
