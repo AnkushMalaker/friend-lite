@@ -177,40 +177,47 @@ def _build_mem0_config() -> dict:
     if neo4j_config:
         mem0_config["graph_store"] = neo4j_config
 
-    # Configure fact extraction - ALWAYS ENABLE for proper memory creation
+    # Configure fact extraction based on YAML config
     fact_enabled = config_loader.is_fact_extraction_enabled()
     memory_logger.info(f"YAML fact extraction enabled: {fact_enabled}")
 
-    # FORCE ENABLE fact extraction with working prompt format - UPDATED for more inclusive extraction
-    # Using custom_fact_extraction_prompt as documented in mem0 repo: https://github.com/mem0ai/mem0
-    #     formatted_fact_prompt = """
-    # Please extract ALL relevant facts from the conversation, including topics discussed, activities mentioned, people referenced, emotions expressed, and any other notable details.
-    # Extract granular, specific facts rather than broad summaries. Be inclusive and extract multiple facts even from casual conversations.
+    # IMPORTANT: mem0 appears to require fact extraction to be enabled for memory creation to work
+    # When fact extraction is disabled, mem0 skips memory creation entirely
+    # This is a limitation of the mem0 library architecture
+    if fact_enabled:
+        # Use inclusive fact extraction prompt that ensures some facts are always extracted
+        formatted_fact_prompt = """
+        Please extract ALL relevant facts from the conversation, including topics discussed, activities mentioned, people referenced, emotions expressed, and any other notable details.
+        Extract granular, specific facts rather than broad summaries. Be inclusive and extract multiple facts even from casual conversations.
 
-    # Here are some few shot examples:
+        Here are some few shot examples:
 
-    # Input: Hi.
-    # Output: {"facts" : ["Greeting exchanged"]}
+        Input: Hi.
+        Output: {"facts" : ["Greeting exchanged"]}
 
-    # Input: I need to buy groceries tomorrow.
-    # Output: {"facts" : ["Need to buy groceries tomorrow", "Shopping task mentioned", "Time reference to tomorrow"]}
+        Input: I need to buy groceries tomorrow.
+        Output: {"facts" : ["Need to buy groceries tomorrow", "Shopping task mentioned", "Time reference to tomorrow"]}
 
-    # Input: The meeting is at 3 PM on Friday.
-    # Output: {"facts" : ["Meeting scheduled for 3 PM on Friday", "Business meeting mentioned", "Specific time commitment", "Friday scheduling"]}
+        Input: The meeting is at 3 PM on Friday.
+        Output: {"facts" : ["Meeting scheduled for 3 PM on Friday", "Business meeting mentioned", "Specific time commitment", "Friday scheduling"]}
 
-    # Input: We are talking about unicorns.
-    # Output: {"facts" : ["Conversation about unicorns", "Fantasy topic discussed", "Mythical creatures mentioned"]}
+        Input: We are talking about unicorns.
+        Output: {"facts" : ["Conversation about unicorns", "Fantasy topic discussed", "Mythical creatures mentioned"]}
 
-    # Input: My alarm keeps ringing.
-    # Output: {"facts" : ["Alarm is ringing", "Audio disturbance mentioned", "Repetitive sound issue", "Device malfunction or setting"]}
+        Input: My alarm keeps ringing.
+        Output: {"facts" : ["Alarm is ringing", "Audio disturbance mentioned", "Repetitive sound issue", "Device malfunction or setting"]}
 
-    # Input: Bro, he just did it for the funny. Every move does not need to be perfect.
-    # Output: {"facts" : ["Gaming strategy discussed", "Casual conversation with friend", "Philosophy about game moves", "Humorous game action mentioned", "Perfectionism topic", "Gaming advice given"]}
+        Input: Bro, he just did it for the funny. Every move does not need to be perfect.
+        Output: {"facts" : ["Gaming strategy discussed", "Casual conversation with friend", "Philosophy about game moves", "Humorous game action mentioned", "Perfectionism topic", "Gaming advice given"]}
 
-    # Now extract facts from the following conversation. Return only JSON format with "facts" key. Be thorough and extract multiple specific facts. ALWAYS extract at least one fact unless the input is completely empty or meaningless.
-    # """
-    #     mem0_config["custom_fact_extraction_prompt"] = formatted_fact_prompt
-    memory_logger.info(f"✅ FORCED fact extraction enabled with working JSON prompt format")
+        Now extract facts from the following conversation. Return only JSON format with "facts" key. Be thorough and extract multiple specific facts. ALWAYS extract at least one fact unless the input is completely empty or meaningless.
+        """
+        mem0_config["custom_fact_extraction_prompt"] = formatted_fact_prompt
+        memory_logger.info(f"✅ Fact extraction enabled with inclusive prompt")
+    else:
+        memory_logger.warning(
+            f"⚠️ Fact extraction disabled - this may prevent mem0 from creating memories due to library limitations"
+        )
 
     memory_logger.debug(f"Final mem0_config: {json.dumps(mem0_config, indent=2)}")
     return mem0_config
@@ -318,7 +325,7 @@ def _add_memory_to_store(
 
         # Check if transcript is empty or too short to be meaningful
         # MODIFIED: Reduced minimum length from 10 to 1 character to process almost all transcripts
-        if not transcript or len(transcript.strip()) < 1:
+        if not transcript or len(transcript.strip()) < 10:
             debug_tracker.track_event(
                 transaction_id,
                 PipelineStage.MEMORY_COMPLETED,
@@ -388,83 +395,6 @@ def _add_memory_to_store(
         memory_logger.info(f"Starting mem0 processing for {audio_uuid}...")
         mem0_start_time = time.time()
 
-        # DEBUGGING: Test OpenAI directly before Mem0 call
-        memory_logger.info(f"🔍 DEBUGGING: Testing OpenAI connection directly...")
-        try:
-            import os
-
-            import openai
-
-            openai_api_key = os.getenv("OPENAI_API_KEY")
-            llm_provider = os.getenv("LLM_PROVIDER", "").lower()
-            openai_model = os.getenv("OPENAI_MODEL", "gpt-4o")
-
-            memory_logger.info(f"🔍 OpenAI API Key present: {bool(openai_api_key)}")
-            memory_logger.info(f"🔍 LLM Provider: {llm_provider}")
-            memory_logger.info(f"🔍 OpenAI Model: {openai_model}")
-            memory_logger.info(f"🔍 Full prompt being sent: {prompt}")
-            memory_logger.info(f"🔍 Full transcript being processed: {transcript}")
-
-            if llm_provider == "openai" and openai_api_key:
-                # Test direct OpenAI call with same system prompt mem0 uses
-                client = openai.OpenAI(api_key=openai_api_key)
-
-                # Try the exact same call that mem0 would make for memory extraction
-                memory_extraction_prompt = f"""
-                You are an expert at extracting memories from conversations.
-
-                Instructions:
-                1. Extract key facts, topics, and insights from the conversation
-                2. Focus on memorable information that could be useful later
-                3. Include names, places, events, preferences, and important details
-                4. Format as clear, concise memories
-                5. If the conversation contains meaningful content, always extract something
-
-                Custom prompt: {prompt}
-
-                Extract memories from this conversation:
-                """
-
-                test_response = client.chat.completions.create(
-                    model=openai_model,
-                    messages=[
-                        {"role": "system", "content": memory_extraction_prompt},
-                        {"role": "user", "content": transcript},
-                    ],
-                    temperature=0.1,
-                    max_tokens=1000,
-                )
-
-                response_content = test_response.choices[0].message.content
-                memory_logger.info(f"🔍 DIRECT OpenAI Response: {response_content}")
-                memory_logger.info(f"🔍 OpenAI Response Usage: {test_response.usage}")
-                memory_logger.info(
-                    f"🔍 Response Length: {len(response_content) if response_content else 0} chars"
-                )
-
-                # Also test with a simpler prompt to see if it's a prompt issue
-                simple_response = client.chat.completions.create(
-                    model=openai_model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "Extract key information from this conversation as bullet points:",
-                        },
-                        {"role": "user", "content": transcript},
-                    ],
-                    temperature=0.1,
-                    max_tokens=500,
-                )
-
-                simple_content = simple_response.choices[0].message.content
-                memory_logger.info(f"🔍 SIMPLE OpenAI Response: {simple_content}")
-
-            else:
-                memory_logger.warning(f"🔍 OpenAI not configured properly for direct test")
-
-        except Exception as e:
-            memory_logger.error(f"🔍 Direct OpenAI test failed: {e}")
-
         try:
             memory_logger.info(f"🔍 Now calling Mem0 with the same transcript...")
 
@@ -504,9 +434,10 @@ def _add_memory_to_store(
             memory_logger.info(f"🔍   - metadata: {json.dumps(metadata, indent=2)}")
             memory_logger.info(f"🔍   - prompt: {prompt}")
 
+            memory_logger.info(f"🧪 TEST_1: Calling with original prompt")
             result = process_memory.add(
                 transcript,
-                user_id=user_id,  # Use database user_id instead of client_id
+                user_id=user_id,
                 metadata=metadata,
                 prompt=prompt,
             )
@@ -545,56 +476,11 @@ def _add_memory_to_store(
                 memory_logger.info(
                     f"Mem0 returned empty results for {audio_uuid} - LLM determined no memorable content"
                 )
-                # Create a minimal tracking entry for debugging purposes
-                # MODIFIED: Enhanced to create a proper memory entry that will be visible in UI
-                import uuid
 
-                unique_suffix = str(uuid.uuid4())[:8]
-
-                # Create a more descriptive memory entry for transcripts without memorable content
-                memory_text = f"Conversation transcript: {transcript}"
-                if len(memory_text) > 200:
-                    memory_text = f"Conversation transcript: {transcript[:180]}... (truncated)"
-
-                fallback_memory_id = (
-                    f"transcript_{audio_uuid}_{int(time.time() * 1000)}_{unique_suffix}"
-                )
-                created_memory_ids.append(fallback_memory_id)
-
-                result = {
-                    "id": fallback_memory_id,
-                    "memory": memory_text,
-                    "user_id": user_id,  # Ensure user_id is included for proper retrieval
-                    "metadata": {
-                        "empty_results": True,
-                        "audio_uuid": audio_uuid,
-                        "client_id": client_id,
-                        "user_email": user_email,
-                        "timestamp": int(time.time()),
-                        "llm_model": model_name,
-                        "reason": "llm_returned_empty_results",
-                        "source": "offline_streaming",
-                        "conversation_context": "audio_transcription",
-                        "device_type": "audio_recording",
-                        "organization_id": MEM0_ORGANIZATION_ID,
-                        "project_id": MEM0_PROJECT_ID,
-                        "app_id": MEM0_APP_ID,
-                        "full_transcript": transcript,  # Store full transcript for reference
-                        "transcript_length": len(transcript),
-                        "processing_forced": True,  # Indicate this was processed despite empty results
-                    },
-                    "results": [],  # Keep the original empty results for consistency
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                }
-                memory_logger.info(
-                    f"Created enhanced memory entry for transcript without memorable content: {result['id']}"
-                )
-
-                # Also try to store this in the actual mem0 system as a basic memory
+                # Store using mem0 direct API without LLM processing
                 try:
-                    # Create a simple memory entry that mem0 can store
-                    fallback_result = process_memory.add(
-                        f"Transcript recorded: {transcript[:100]}{'...' if len(transcript) > 100 else ''}",
+                    direct_result = process_memory.add(
+                        transcript,
                         user_id=user_id,
                         metadata={
                             "source": "offline_streaming",
@@ -607,29 +493,29 @@ def _add_memory_to_store(
                             "organization_id": MEM0_ORGANIZATION_ID,
                             "project_id": MEM0_PROJECT_ID,
                             "app_id": MEM0_APP_ID,
-                            "forced_storage": True,
-                            "original_transcript": transcript,
-                            "processing_reason": "ensure_all_transcripts_stored",
+                            "storage_reason": "empty_llm_results",
+                            "original_error": "LLM returned no memorable content",
+                            "processing_bypassed": True,
                         },
-                        prompt="Store this transcript as a basic memory entry.",
+                        infer=False,
                     )
-                    if fallback_result and isinstance(fallback_result, dict):
-                        fallback_memory_id = fallback_result.get("id")
-                        if fallback_memory_id and fallback_memory_id not in created_memory_ids:
-                            created_memory_ids.append(fallback_memory_id)
+                    if direct_result and isinstance(direct_result, dict):
+                        direct_memory_id = direct_result.get("id")
+                        if direct_memory_id:
+                            created_memory_ids.append(direct_memory_id)
                         memory_logger.info(
-                            f"Successfully stored fallback memory entry for {audio_uuid}"
+                            f"Successfully stored direct memory for {audio_uuid} after empty LLM results"
                         )
-                        result = fallback_result  # Use the successful mem0 result
+                        result = direct_result  # Use the successful mem0 result
                     else:
-                        memory_logger.info(
-                            f"Fallback memory storage failed, using tracking entry for {audio_uuid}"
+                        memory_logger.warning(
+                            f"Direct memory storage also failed for {audio_uuid} - no memory will be stored"
                         )
-                except Exception as fallback_error:
-                    memory_logger.warning(
-                        f"Failed to store fallback memory for {audio_uuid}: {fallback_error}"
+                except Exception as direct_error:
+                    memory_logger.error(
+                        f"Failed to store direct memory for {audio_uuid} after empty LLM results: {direct_error}"
                     )
-                    # Continue with the tracking entry we created above
+                    # Continue with the empty results - this is legitimate when LLM finds no memorable content
 
             if isinstance(result, dict):
                 results_list = result.get("results", [])
@@ -670,76 +556,93 @@ def _add_memory_to_store(
                         memory_logger.info(f"Additional result key '{key}': {str(value)[:100]}...")
 
         except TimeoutError:
-            # Handle timeout gracefully
-            error_type = "TimeoutError"
+            # Handle timeout gracefully by using direct mem0 storage
             memory_logger.error(f"Timeout while adding memory for {audio_uuid}")
 
-            # Create a fallback memory entry
             try:
-                # Store the transcript as a basic memory without using mem0
-                import uuid
-
-                unique_suffix = str(uuid.uuid4())[:8]
-                fallback_memory_id = (
-                    f"fallback_{audio_uuid}_{int(time.time() * 1000)}_{unique_suffix}"
-                )
-                created_memory_ids.append(fallback_memory_id)
-
-                result = {
-                    "id": fallback_memory_id,
-                    "memory": f"Conversation summary: {transcript[:500]}{'...' if len(transcript) > 500 else ''}",
-                    "metadata": {
-                        "fallback_reason": error_type,
-                        "original_error": "Timeout during memory processing",
-                        "audio_uuid": audio_uuid,
+                # Store using mem0 direct API without LLM processing
+                timeout_result = process_memory.add(
+                    transcript,
+                    user_id=user_id,
+                    metadata={
+                        "source": "offline_streaming",
                         "client_id": client_id,
                         "user_email": user_email,
+                        "audio_uuid": audio_uuid,
                         "timestamp": int(time.time()),
-                        "mem0_bypassed": True,
+                        "conversation_context": "audio_transcription",
+                        "device_type": "audio_recording",
+                        "organization_id": MEM0_ORGANIZATION_ID,
+                        "project_id": MEM0_PROJECT_ID,
+                        "app_id": MEM0_APP_ID,
+                        "storage_reason": "timeout_fallback",
+                        "original_error": "Timeout during LLM memory processing",
+                        "processing_bypassed": True,
                     },
-                }
-                memory_logger.warning(f"Created fallback memory for {audio_uuid} due to timeout")
+                    infer=False,
+                )
+                if timeout_result and isinstance(timeout_result, dict):
+                    timeout_memory_id = timeout_result.get("id")
+                    if timeout_memory_id:
+                        created_memory_ids.append(timeout_memory_id)
+                    memory_logger.info(
+                        f"Successfully stored direct memory for {audio_uuid} after timeout"
+                    )
+                    result = timeout_result
+                else:
+                    memory_logger.error(
+                        f"Direct memory storage failed for {audio_uuid} after timeout"
+                    )
+                    raise TimeoutError(f"Memory processing timeout for {audio_uuid}")
             except Exception as fallback_error:
                 memory_logger.error(
-                    f"Failed to create fallback memory for {audio_uuid}: {fallback_error}"
+                    f"Failed to store direct memory for {audio_uuid} after timeout: {fallback_error}"
                 )
                 raise TimeoutError(f"Memory processing timeout for {audio_uuid}")
 
         except Exception as error:
-            # Handle other errors gracefully
+            # Handle other errors gracefully by using direct mem0 storage
             error_type = type(error).__name__
             memory_logger.error(f"Error while adding memory for {audio_uuid}: {error}")
 
-            # Create a fallback memory entry
             try:
-                # Store the transcript as a basic memory without using mem0
-                import uuid
-
-                unique_suffix = str(uuid.uuid4())[:8]
-                fallback_memory_id = (
-                    f"fallback_{audio_uuid}_{int(time.time() * 1000)}_{unique_suffix}"
-                )
-                created_memory_ids.append(fallback_memory_id)
-
-                result = {
-                    "id": fallback_memory_id,
-                    "memory": f"Conversation summary: {transcript[:500]}{'...' if len(transcript) > 500 else ''}",
-                    "metadata": {
-                        "fallback_reason": error_type,
-                        "original_error": str(error),
-                        "audio_uuid": audio_uuid,
+                # Store using mem0 direct API without LLM processing
+                error_result = process_memory.add(
+                    transcript,
+                    user_id=user_id,
+                    metadata={
+                        "source": "offline_streaming",
                         "client_id": client_id,
                         "user_email": user_email,
+                        "audio_uuid": audio_uuid,
                         "timestamp": int(time.time()),
-                        "mem0_bypassed": True,
+                        "conversation_context": "audio_transcription",
+                        "device_type": "audio_recording",
+                        "organization_id": MEM0_ORGANIZATION_ID,
+                        "project_id": MEM0_PROJECT_ID,
+                        "app_id": MEM0_APP_ID,
+                        "storage_reason": "error_fallback",
+                        "original_error": f"{error_type}: {str(error)}",
+                        "processing_bypassed": True,
                     },
-                }
-                memory_logger.warning(
-                    f"Created fallback memory for {audio_uuid} due to mem0 error: {error_type}"
+                    infer=False,
                 )
+                if error_result and isinstance(error_result, dict):
+                    error_memory_id = error_result.get("id")
+                    if error_memory_id:
+                        created_memory_ids.append(error_memory_id)
+                    memory_logger.info(
+                        f"Successfully stored direct memory for {audio_uuid} after error: {error_type}"
+                    )
+                    result = error_result
+                else:
+                    memory_logger.error(
+                        f"Direct memory storage failed for {audio_uuid} after error"
+                    )
+                    raise error  # Re-raise original error if direct storage fails
             except Exception as fallback_error:
                 memory_logger.error(
-                    f"Failed to create fallback memory for {audio_uuid}: {fallback_error}"
+                    f"Failed to store direct memory for {audio_uuid} after error: {fallback_error}"
                 )
                 raise error  # Re-raise original error if fallback fails
 
@@ -1258,6 +1161,22 @@ class MemoryService:
             # Import Motor connection here to avoid circular imports
             from advanced_omi_backend.database import chunks_col
 
+            # PERFORMANCE OPTIMIZATION: Extract all audio_uuids first for bulk query
+            audio_uuids = []
+            for memory in memories:
+                metadata = memory.get("metadata", {})
+                audio_uuid = metadata.get("audio_uuid")
+                if audio_uuid:
+                    audio_uuids.append(audio_uuid)
+
+            # Bulk query for all chunks at once instead of individual queries
+            memory_logger.debug(f"🔍 Bulk lookup for {len(audio_uuids)} audio UUIDs")
+            chunks_cursor = chunks_col.find({"audio_uuid": {"$in": audio_uuids}})
+            chunks_by_uuid = {}
+            async for chunk in chunks_cursor:
+                chunks_by_uuid[chunk["audio_uuid"]] = chunk
+            memory_logger.debug(f"✅ Found {len(chunks_by_uuid)} chunks in bulk query")
+
             enriched_memories = []
 
             for memory in memories:
@@ -1285,62 +1204,45 @@ class MemoryService:
                     enriched_memory["client_id"] = metadata.get("client_id")
                     enriched_memory["user_email"] = metadata.get("user_email")
 
-                    # Get transcript from database using Motor (async)
-                    try:
+                    # Get transcript from bulk-loaded chunks (PERFORMANCE OPTIMIZED)
+                    chunk = chunks_by_uuid.get(audio_uuid)
+                    if chunk:
                         memory_logger.debug(
-                            f"🔍 Looking up transcript for audio_uuid: {audio_uuid}"
+                            f"🔍 Found chunk for {audio_uuid}, extracting transcript segments"
                         )
-
-                        # Use existing Motor connection instead of creating new PyMongo clients
-                        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-
-                        if chunk:
-                            memory_logger.debug(
-                                f"🔍 Found chunk for {audio_uuid}, extracting transcript segments"
+                        # Extract transcript from chunk
+                        transcript_segments = chunk.get("transcript", [])
+                        if transcript_segments:
+                            # Combine all transcript segments into a single text
+                            full_transcript = " ".join(
+                                [
+                                    segment.get("text", "")
+                                    for segment in transcript_segments
+                                    if isinstance(segment, dict) and segment.get("text")
+                                ]
                             )
-                            # Extract transcript from chunk
-                            transcript_segments = chunk.get("transcript", [])
-                            if transcript_segments:
-                                # Combine all transcript segments into a single text
-                                full_transcript = " ".join(
-                                    [
-                                        segment.get("text", "")
-                                        for segment in transcript_segments
-                                        if isinstance(segment, dict) and segment.get("text")
-                                    ]
-                                )
 
-                                if full_transcript.strip():
-                                    enriched_memory["transcript"] = full_transcript
-                                    enriched_memory["transcript_length"] = len(full_transcript)
+                            if full_transcript.strip():
+                                enriched_memory["transcript"] = full_transcript
+                                enriched_memory["transcript_length"] = len(full_transcript)
 
-                                    memory_text = enriched_memory["memory_text"]
-                                    enriched_memory["memory_length"] = len(memory_text)
+                                memory_text = enriched_memory["memory_text"]
+                                enriched_memory["memory_length"] = len(memory_text)
 
-                                    # Calculate compression ratio
-                                    if len(full_transcript) > 0:
-                                        enriched_memory["compression_ratio"] = round(
-                                            (len(memory_text) / len(full_transcript)) * 100, 1
-                                        )
-                                    memory_logger.debug(
-                                        f"✅ Successfully enriched memory {audio_uuid} with {len(full_transcript)} char transcript"
+                                # Calculate compression ratio
+                                if len(full_transcript) > 0:
+                                    enriched_memory["compression_ratio"] = round(
+                                        (len(memory_text) / len(full_transcript)) * 100, 1
                                     )
-                                else:
-                                    memory_logger.debug(
-                                        f"⚠️ Empty transcript found for {audio_uuid}"
-                                    )
-                            else:
                                 memory_logger.debug(
-                                    f"⚠️ No transcript segments found for {audio_uuid}"
+                                    f"✅ Successfully enriched memory {audio_uuid} with {len(full_transcript)} char transcript"
                                 )
+                            else:
+                                memory_logger.debug(f"⚠️ Empty transcript found for {audio_uuid}")
                         else:
-                            memory_logger.debug(f"⚠️ No chunk found for audio_uuid: {audio_uuid}")
-
-                    except Exception as db_error:
-                        memory_logger.warning(
-                            f"Failed to get transcript for audio_uuid {audio_uuid}: {db_error}"
-                        )
-                        # Continue processing other memories even if one fails
+                            memory_logger.debug(f"⚠️ No transcript segments found for {audio_uuid}")
+                    else:
+                        memory_logger.debug(f"⚠️ No chunk found for audio_uuid: {audio_uuid}")
 
                 enriched_memories.append(enriched_memory)
 
