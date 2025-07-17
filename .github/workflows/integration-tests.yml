@@ -51,10 +51,16 @@ jobs:
         uv sync --dev --group test
         
     - name: Set up environment variables
+      env:
+        DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
         cd backends/advanced-backend
-        echo "DEEPGRAM_API_KEY=${{ secrets.DEEPGRAM_API_KEY }}" >> .env.test
-        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env.test
+        echo "Setting up environment variables..."
+        echo "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
+        echo "OPENAI_API_KEY length: ${#OPENAI_API_KEY}"
+        echo "DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY" >> .env.test
+        echo "OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.test
         echo "AUTH_SECRET_KEY=test-jwt-signing-key-for-integration-tests" >> .env.test
         echo "ADMIN_PASSWORD=test-admin-password-123" >> .env.test
         echo "ADMIN_EMAIL=test-admin@example.com" >> .env.test
@@ -62,6 +68,8 @@ jobs:
         echo "OPENAI_MODEL=gpt-4o-mini" >> .env.test
         echo "MONGODB_URI=mongodb://localhost:27018/test_db" >> .env.test
         echo "QDRANT_BASE_URL=localhost" >> .env.test
+        echo "Created .env.test file with contents:"
+        cat .env.test
         
     - name: Clean test environment
       run: |
