@@ -1,5 +1,19 @@
 # Memory Extraction Configuration
 # This file controls how memories and facts are extracted from conversations
+#
+# REQUIRED ENVIRONMENT VARIABLES:
+# - LLM_PROVIDER: Set to "openai" or "ollama" 
+# - For OpenAI: OPENAI_API_KEY (required), OPENAI_MODEL (optional, defaults to config)
+# - For Ollama: OPENAI_BASE_URL or OLLAMA_BASE_URL (required), OPENAI_MODEL (optional, defaults to config)
+# - QDRANT_BASE_URL: Qdrant service URL (e.g., "qdrant" for Docker)
+#
+# OPTIONAL ENVIRONMENT VARIABLES:
+# - MEM0_ORGANIZATION_ID: Organization ID for mem0 (default: "friend-lite-org")
+# - MEM0_PROJECT_ID: Project ID for mem0 (default: "audio-conversations") 
+# - MEM0_APP_ID: Application ID for mem0 (default: "omi-backend")
+# - OPENAI_EMBEDDER_MODEL: OpenAI embedder model (default: "text-embedding-3-small")
+# - OLLAMA_EMBEDDER_MODEL: Ollama embedder model (default: "nomic-embed-text:latest")
+# - NEO4J_HOST, NEO4J_USER, NEO4J_PASSWORD: For graph storage (optional)
 
 # General memory extraction settings
 memory_extraction:
@@ -32,7 +46,7 @@ fact_extraction:
   # Prompt for extracting structured facts
   prompt: |
     Extract specific, verifiable facts from this conversation. Focus on:
-    - Names of people and their roles/titles
+    - Names of people and their roles/titles. Ensure to extract the names all all existing participants in the conversation, even if they're only mentioned once.
     - Company names and organizations
     - Dates and specific times
     - Locations and addresses
@@ -40,15 +54,20 @@ fact_extraction:
     - Contact information (emails, phone numbers)
     - Project names and code names
     - Technical specifications or requirements
+    - Contributions by each participant to the conversation or to the task
     
     Return the facts in JSON format as an array of strings. If no specific facts are mentioned, return an empty JSON array [].
     
     Examples of JSON output:
-    ["John Smith works as Software Engineer at Acme Corp", "Project deadline is December 15th, 2024", "Meeting scheduled for 2 PM EST on Monday", "Budget approved for $50,000"]
+    ["John Smith works as Software Engineer at Acme Corp",
+    "Project deadline is December 15th, 2024",
+    "Meeting scheduled for 2 PM EST on Monday",
+    "Budget approved for $50,000",
+    "The participants in the conversation were John and Rose."]
   
   # LLM parameters for fact extraction
   llm_settings:
-    temperature: 0.0  # Very low temperature for factual accuracy
+    temperature: 0.05  # Very low temperature for factual accuracy
     max_tokens: 1500
     # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)

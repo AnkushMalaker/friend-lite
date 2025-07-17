@@ -47,7 +47,7 @@ async def get_memories(
 
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"message": "Error fetching memories"})
+        return JSONResponse(status_code=500, content={"message": f"Error fetching memories: {str(e)}"})
 
 
 @router.get("/with-transcripts")
@@ -79,7 +79,7 @@ async def get_memories_with_transcripts(
     except Exception as e:
         audio_logger.error(f"Error fetching memories with transcripts: {e}", exc_info=True)
         return JSONResponse(
-            status_code=500, content={"message": "Error fetching memories with transcripts"}
+            status_code=500, content={"message": f"Error fetching memories with transcripts: {str(e)}"}
         )
 
 
@@ -113,7 +113,7 @@ async def search_memories(
 
     except Exception as e:
         audio_logger.error(f"Error searching memories: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"message": "Error searching memories"})
+        return JSONResponse(status_code=500, content={"message": f"Error searching memories: {str(e)}"})
 
 
 @router.delete("/{memory_id}")
@@ -145,7 +145,7 @@ async def delete_memory(memory_id: str, current_user: User = Depends(current_act
 
     except Exception as e:
         audio_logger.error(f"Error deleting memory: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"message": "Error deleting memory"})
+        return JSONResponse(status_code=500, content={"message": f"Error deleting memory: {str(e)}"})
 
 
 @router.get("/unfiltered")
@@ -178,7 +178,7 @@ async def get_memories_unfiltered(
     except Exception as e:
         audio_logger.error(f"Error fetching unfiltered memories: {e}", exc_info=True)
         return JSONResponse(
-            status_code=500, content={"message": "Error fetching unfiltered memories"}
+            status_code=500, content={"message": f"Error fetching unfiltered memories: {str(e)}"}
         )
 
 
@@ -231,4 +231,4 @@ async def get_all_memories_admin(current_user: User = Depends(current_superuser)
 
     except Exception as e:
         audio_logger.error(f"Error fetching admin memories: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"message": "Error fetching admin memories"})
+        return JSONResponse(status_code=500, content={"message": f"Error fetching admin memories: {str(e)}"})
