@@ -66,17 +66,13 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         self, user: User, token: str, request: Optional[Request] = None
     ):
         """Called after a user requests password reset."""
-        logger.info(
-            f"User {user.user_id} ({user.email}) has forgot their password. Reset token: {token}"
-        )
+        logger.info(f"User {user.user_id} ({user.email}) has requested password reset")
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Optional[Request] = None
     ):
         """Called after a user requests verification."""
-        logger.info(
-            f"Verification requested for user {user.user_id} ({user.email}). Verification token: {token}"
-        )
+        logger.info(f"Verification requested for user {user.user_id} ({user.email})")
 
 
 async def get_user_manager(user_db=Depends(get_user_db)):

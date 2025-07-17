@@ -294,7 +294,7 @@ class MistralProvider(OnlineTranscriptionProvider):
 
 def get_transcription_provider(
     provider_name: Optional[str] = None,
-) -> Optional[OnlineTranscriptionProvider]:
+) -> OnlineTranscriptionProvider:
     """
     Factory function to get the appropriate transcription provider.
 
@@ -303,7 +303,10 @@ def get_transcription_provider(
                       If None, will check environment for available keys.
 
     Returns:
-        An instance of OnlineTranscriptionProvider or None if no provider is available.
+        An instance of OnlineTranscriptionProvider.
+        
+    Raises:
+        RuntimeError: If no transcription provider is configured or requested provider is unavailable.
     """
     import os
 
@@ -328,4 +331,13 @@ def get_transcription_provider(
             logger.info(f"Using Mistral transcription provider with model: {mistral_model}")
             return MistralProvider(mistral_key, mistral_model)
 
-    return None
+    # No provider available or configured
+    if provider_name:
+        if provider_name == "deepgram":
+            raise RuntimeError(f"Deepgram transcription provider requested but DEEPGRAM_API_KEY not configured")
+        elif provider_name == "mistral":
+            raise RuntimeError(f"Mistral transcription provider requested but MISTRAL_API_KEY not configured")
+        else:
+            raise RuntimeError(f"Unknown transcription provider '{provider_name}'. Supported: 'deepgram', 'mistral'")
+    else:
+        raise RuntimeError("No transcription provider configured. Please set DEEPGRAM_API_KEY or MISTRAL_API_KEY environment variable")

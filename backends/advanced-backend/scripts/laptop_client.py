@@ -125,9 +125,7 @@ async def main():
     if args.token:
         # Use provided token directly
         token = args.token
-        print(
-            f"Using provided JWT token: {token[:20]}...{token[-10:] if len(token) > 30 else token}"
-        )
+        print(f"Using provided JWT token: {token[:8]}...")
 
     elif args.username and args.password:
         # Authenticate with username/password to get token
@@ -136,9 +134,7 @@ async def main():
             token = await authenticate_with_credentials(
                 args.host, args.port, args.username, args.password
             )
-            print(
-                f"Authentication successful! Received token: {token[:20]}...{token[-10:] if len(token) > 30 else token}"
-            )
+            print(f"Authentication successful! Received token: {token[:8]}...")
         except Exception as e:
             logger.error(f"Authentication failed: {e}")
             return

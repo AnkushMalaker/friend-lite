@@ -8,6 +8,7 @@ RUN apt-get update && \
     git \
     curl \
     ffmpeg \
+    portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv

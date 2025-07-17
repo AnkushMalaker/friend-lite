@@ -56,11 +56,14 @@ class ClientManager:
             client_id: The client ID to lookup
 
         Returns:
-            ClientState object if found, None otherwise
+            ClientState object if found, None if client not found
+            
+        Raises:
+            RuntimeError: If ClientManager is not initialized
         """
         if not self._initialized:
-            logger.warning("ClientManager not initialized, cannot get client")
-            return None
+            logger.error("ClientManager not initialized, cannot get client")
+            raise RuntimeError("ClientManager not initialized - call initialize() first before accessing clients")
         return self._active_clients.get(client_id)
 
     def has_client(self, client_id: str) -> bool:
