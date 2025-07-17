@@ -45,79 +45,87 @@ memory_logger = logging.getLogger("memory_service")
 def _parse_mem0_response(response, operation: str) -> list:
     """
     Parse mem0 response with explicit format handling based on mem0ai>=0.1.114 API.
-    
+
     Args:
         response: Raw mem0 response from add/get_all/search operations
         operation: Operation name for error context ("add", "get_all", "search", "delete")
-    
+
     Returns:
         list: Standardized list of memory objects with consistent format
-        
+
     Raises:
         ValueError: Invalid/empty response or missing expected keys
         RuntimeError: Mem0 API error in response
         TypeError: Unexpected response format that cannot be handled
-        
+
     Expected mem0 response formats:
         # add() - Returns single result or results array:
-        {"results": [{"id": "...", "memory": "...", "metadata": {...}}]} 
+        {"results": [{"id": "...", "memory": "...", "metadata": {...}}]}
         OR {"id": "...", "memory": "...", "metadata": {...}}
-        
+
         # get_all() - Returns paginated format or legacy dict:
         {"results": [{"id": "...", "memory": "...", ...}]}
         OR {"memory_id_1": {"memory": "...", ...}, "memory_id_2": {...}}
-        
+
         # search() - Returns results array or direct list:
         {"results": [{"id": "...", "memory": "...", "score": 0.85, ...}]}
         OR [{"id": "...", "memory": "...", "score": 0.85}]
     """
     if not response:
         raise ValueError(f"Mem0 {operation} returned None/empty response")
-    
+
     # Handle dict responses (most common format)
     if isinstance(response, dict):
         # Check for explicit error responses
         if "error" in response:
             raise RuntimeError(f"Mem0 {operation} error: {response['error']}")
-            
+
         # NEW paginated format with results key (mem0ai>=0.1.114)
         if "results" in response:
-            memory_logger.debug(f"Mem0 {operation} using paginated format with {len(response['results'])} results")
+            memory_logger.debug(
+                f"Mem0 {operation} using paginated format with {len(response['results'])} results"
+            )
             return response["results"]
-            
-        # Legacy format for get_all() - dict values are memory objects  
+
+        # Legacy format for get_all() - dict values are memory objects
         if operation == "get_all" and all(isinstance(v, dict) for v in response.values() if v):
-            memory_logger.debug(f"Mem0 {operation} using legacy dict format with {len(response)} entries")
+            memory_logger.debug(
+                f"Mem0 {operation} using legacy dict format with {len(response)} entries"
+            )
             return list(response.values())
-            
+
         # Single memory result (common for add operation)
         if "id" in response and "memory" in response:
             memory_logger.debug(f"Mem0 {operation} returned single memory object")
             return [response]
-            
+
         # Check for single memory with different field names
         if "id" in response and any(key in response for key in ["text", "content"]):
-            memory_logger.debug(f"Mem0 {operation} returned single memory with alternative field names")
+            memory_logger.debug(
+                f"Mem0 {operation} returned single memory with alternative field names"
+            )
             return [response]
-            
+
         # Unexpected dict format - provide helpful error
         available_keys = list(response.keys())
-        raise ValueError(f"Mem0 {operation} returned dict without expected keys. Available keys: {available_keys}, Expected: 'results', 'id'+'memory', or memory dict values")
-    
+        raise ValueError(
+            f"Mem0 {operation} returned dict without expected keys. Available keys: {available_keys}, Expected: 'results', 'id'+'memory', or memory dict values"
+        )
+
     # Handle direct list responses (legacy/alternative format)
     if isinstance(response, list):
         memory_logger.debug(f"Mem0 {operation} returned direct list with {len(response)} items")
         return response
-    
+
     # Handle single memory object (some edge cases)
-    if hasattr(response, 'get') and response.get('id'):
+    if hasattr(response, "get") and response.get("id"):
         memory_logger.debug(f"Mem0 {operation} returned single object with get method")
         return [response]
-    
+
     # Handle primitive types that shouldn't happen
     if isinstance(response, (str, int, float, bool)):
         raise TypeError(f"Mem0 {operation} returned primitive type {type(response)}: {response}")
-    
+
     # Completely unexpected format
     raise TypeError(f"Mem0 {operation} returned unexpected type {type(response)}: {response}")
 
@@ -125,11 +133,11 @@ def _parse_mem0_response(response, operation: str) -> list:
 def _extract_memory_ids(parsed_memories: list, audio_uuid: str) -> list:
     """
     Extract memory IDs from parsed memory objects.
-    
+
     Args:
         parsed_memories: List of memory objects from _parse_mem0_response
         audio_uuid: Audio UUID for logging context
-        
+
     Returns:
         list: List of extracted memory IDs
     """
@@ -141,19 +149,22 @@ def _extract_memory_ids(parsed_memories: list, audio_uuid: str) -> list:
                 memory_ids.append(memory_id)
                 memory_logger.info(f"Extracted memory ID: {memory_id} for {audio_uuid}")
             else:
-                memory_logger.warning(f"Memory item missing 'id' field for {audio_uuid}: {memory_item}")
+                memory_logger.warning(
+                    f"Memory item missing 'id' field for {audio_uuid}: {memory_item}"
+                )
         else:
             memory_logger.warning(f"Non-dict memory item for {audio_uuid}: {memory_item}")
-    
+
     return memory_ids
 
-# Memory configuration
+
+# Memory configuration - Optional for tracking/organization
 MEM0_ORGANIZATION_ID = os.getenv("MEM0_ORGANIZATION_ID", "friend-lite-org")
 MEM0_PROJECT_ID = os.getenv("MEM0_PROJECT_ID", "audio-conversations")
 MEM0_APP_ID = os.getenv("MEM0_APP_ID", "omi-backend")
 
-# Ollama & Qdrant Configuration (these should match main config)
-QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
+# Qdrant Configuration - Required for vector storage
+QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL")
 
 # Timeout configurations
 OLLAMA_TIMEOUT_SECONDS = 1200  # Timeout for Ollama operations
@@ -170,16 +181,29 @@ def _build_mem0_config() -> dict:
     fact_config = config_loader.get_fact_extraction_config()
     llm_settings = memory_config.get("llm_settings", {})
 
-    # Get LLM provider from environment or config
-    llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    # Get LLM provider from environment - required
+    llm_provider = os.getenv("LLM_PROVIDER")
+    if not llm_provider:
+        raise ValueError(
+            "LLM_PROVIDER environment variable is required. " "Set to 'openai' or 'ollama'"
+        )
+    llm_provider = llm_provider.lower()
 
     # Build LLM configuration based on provider using standard environment variables
     if llm_provider == "openai":
-        # Use standard OPENAI_MODEL environment variable
-        openai_model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        # Get OpenAI API key - required for OpenAI provider
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is required when using OpenAI provider"
+            )
 
-        # Allow YAML config to override environment variable
-        model = llm_settings.get("model", openai_model)
+        # Get model from YAML config or environment variable
+        model = llm_settings.get("model") or os.getenv("OPENAI_MODEL")
+        if not model:
+            raise ValueError(
+                "Model must be specified either in memory_config.yaml or OPENAI_MODEL environment variable"
+            )
 
         memory_logger.info(f"Using OpenAI provider with model: {model}")
 
@@ -187,34 +211,48 @@ def _build_mem0_config() -> dict:
             "provider": "openai",
             "config": {
                 "model": model,
-                "api_key": os.getenv("OPENAI_API_KEY"),
-                "temperature": llm_settings.get("temperature", 0.1),
-                "max_tokens": llm_settings.get("max_tokens", 2000),
+                "api_key": openai_api_key,
+                "temperature": llm_settings.get(
+                    "temperature", 0.1
+                ),  # Default from YAML is acceptable
+                "max_tokens": llm_settings.get(
+                    "max_tokens", 2000
+                ),  # Default from YAML is acceptable
             },
         }
-        # Only add base_url if it's set
-        openai_base_url = os.getenv("OPENAI_BASE_URL")
-        if openai_base_url:
-            llm_config["config"]["base_url"] = openai_base_url
+        # NOTE: base_url not supported in current mem0 version for OpenAI provider
+        # OpenAI provider always uses https://api.openai.com/v1
         # For OpenAI, use OpenAI embeddings
+        # Note: embedder uses standard OpenAI API endpoint, base_url only applies to LLM
+        # For OpenAI, use OpenAI embeddings - model can be configured via env var
+        embedder_model = os.getenv("OPENAI_EMBEDDER_MODEL", "text-embedding-3-small")
         embedder_config = {
             "provider": "openai",
             "config": {
-                "model": "text-embedding-3-small",
-                "embedding_dims": 1536,
-                "api_key": os.getenv("OPENAI_API_KEY"),
+                "model": embedder_model,
+                "embedding_dims": (
+                    1536 if "small" in embedder_model else 3072
+                ),  # Adjust based on model
+                "api_key": openai_api_key,
             },
         }
-        # Only add base_url if it's set
-        if openai_base_url:
-            embedder_config["config"]["base_url"] = openai_base_url
+        # NOTE: base_url not supported in embedder config for current mem0 version
+        # Embedder will use standard OpenAI API endpoint: https://api.openai.com/v1
         embedding_dims = 1536
     elif llm_provider == "ollama":
-        # Use standard OPENAI_MODEL environment variable (Ollama as OpenAI-compatible)
-        ollama_model = os.getenv("OPENAI_MODEL", "llama3.1:latest")
+        # Get Ollama base URL - required for Ollama provider
+        ollama_base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OLLAMA_BASE_URL")
+        if not ollama_base_url:
+            raise ValueError(
+                "OPENAI_BASE_URL or OLLAMA_BASE_URL environment variable is required when using Ollama provider"
+            )
 
-        # Allow YAML config to override environment variable
-        model = llm_settings.get("model", ollama_model)
+        # Get model from YAML config or environment variable
+        model = llm_settings.get("model") or os.getenv("OPENAI_MODEL")
+        if not model:
+            raise ValueError(
+                "Model must be specified either in memory_config.yaml or OPENAI_MODEL environment variable"
+            )
 
         memory_logger.info(f"Using Ollama provider with model: {model}")
 
@@ -224,18 +262,28 @@ def _build_mem0_config() -> dict:
             "config": {
                 "model": model,
                 "api_key": os.getenv("OPENAI_API_KEY", "dummy"),  # Ollama doesn't need real key
-                "base_url": os.getenv("OPENAI_BASE_URL", "http://ollama:11434/v1"),
-                "temperature": llm_settings.get("temperature", 0.1),
-                "max_tokens": llm_settings.get("max_tokens", 2000),
+                "base_url": (
+                    f"{ollama_base_url}/v1"
+                    if not ollama_base_url.endswith("/v1")
+                    else ollama_base_url
+                ),
+                "temperature": llm_settings.get(
+                    "temperature", 0.1
+                ),  # Default from YAML is acceptable
+                "max_tokens": llm_settings.get(
+                    "max_tokens", 2000
+                ),  # Default from YAML is acceptable
             },
         }
         # For Ollama, use Ollama embeddings with OpenAI-compatible config
+        # For Ollama, use Ollama embeddings - model can be configured via env var
+        embedder_model = os.getenv("OLLAMA_EMBEDDER_MODEL", "nomic-embed-text:latest")
         embedder_config = {
             "provider": "ollama",
             "config": {
-                "model": "nomic-embed-text:latest",
-                "embedding_dims": 768,
-                "ollama_base_url": os.getenv("OPENAI_BASE_URL", "http://ollama:11434"),
+                "model": embedder_model,
+                "embedding_dims": 768,  # Most Ollama embedders use 768
+                "ollama_base_url": ollama_base_url.rstrip("/v1"),  # Remove /v1 suffix for embedder
             },
         }
         embedding_dims = 768
@@ -272,7 +320,7 @@ def _build_mem0_config() -> dict:
             "config": {
                 "collection_name": "omi_memories",
                 "embedding_model_dims": embedding_dims,
-                "host": QDRANT_BASE_URL,
+                "host": QDRANT_BASE_URL or "qdrant",  # Fallback to service name for Docker
                 "port": 6333,
             },
         },
@@ -291,42 +339,48 @@ def _build_mem0_config() -> dict:
     # When fact extraction is disabled, mem0 skips memory creation entirely
     # This is a limitation of the mem0 library architecture
     if fact_enabled:
-        # Use inclusive fact extraction prompt that ensures some facts are always extracted
-        formatted_fact_prompt = """
-        Please extract ALL relevant facts from the conversation, including topics discussed, activities mentioned, people referenced, emotions expressed, and any other notable details.
-        Extract granular, specific facts rather than broad summaries. Be inclusive and extract multiple facts even from casual conversations.
-
-        Here are some few shot examples:
-
-        Input: Hi.
-        Output: {"facts" : ["Greeting exchanged"]}
-
-        Input: I need to buy groceries tomorrow.
-        Output: {"facts" : ["Need to buy groceries tomorrow", "Shopping task mentioned", "Time reference to tomorrow"]}
-
-        Input: The meeting is at 3 PM on Friday.
-        Output: {"facts" : ["Meeting scheduled for 3 PM on Friday", "Business meeting mentioned", "Specific time commitment", "Friday scheduling"]}
-
-        Input: We are talking about unicorns.
-        Output: {"facts" : ["Conversation about unicorns", "Fantasy topic discussed", "Mythical creatures mentioned"]}
-
-        Input: My alarm keeps ringing.
-        Output: {"facts" : ["Alarm is ringing", "Audio disturbance mentioned", "Repetitive sound issue", "Device malfunction or setting"]}
-
-        Input: Bro, he just did it for the funny. Every move does not need to be perfect.
-        Output: {"facts" : ["Gaming strategy discussed", "Casual conversation with friend", "Philosophy about game moves", "Humorous game action mentioned", "Perfectionism topic", "Gaming advice given"]}
-
-        Now extract facts from the following conversation. Return only JSON format with "facts" key. Be thorough and extract multiple specific facts. ALWAYS extract at least one fact unless the input is completely empty or meaningless.
-        """
-        mem0_config["custom_fact_extraction_prompt"] = formatted_fact_prompt
-        memory_logger.info(f"✅ Fact extraction enabled with inclusive prompt")
+        # Use fact extraction prompt from configuration file
+        fact_prompt = config_loader.get_fact_prompt()
+        mem0_config["custom_fact_extraction_prompt"] = fact_prompt
+        memory_logger.info(f"✅ Fact extraction enabled with config prompt")
+        memory_logger.info(f"🔍 FULL FACT EXTRACTION PROMPT:")
+        memory_logger.info(f"=== PROMPT START ===")
+        memory_logger.info(fact_prompt)
+        memory_logger.info(f"=== PROMPT END ===")
+        memory_logger.info(f"Prompt length: {len(fact_prompt)} characters")
     else:
         memory_logger.warning(
             f"⚠️ Fact extraction disabled - this may prevent mem0 from creating memories due to library limitations"
         )
 
-    memory_logger.debug(f"Final mem0_config: {json.dumps(mem0_config, indent=2)}")
+    memory_logger.debug(
+        f"Final mem0_config: {json.dumps(_filter_sensitive_config_fields(mem0_config), indent=2)}"
+    )
     return mem0_config
+
+
+def _filter_sensitive_config_fields(config_value):
+    """Filter sensitive fields from configuration values before logging."""
+    if isinstance(config_value, dict):
+        filtered = {}
+        for key, value in config_value.items():
+            # Filter out sensitive field names
+            if key.lower() in [
+                "api_key",
+                "password",
+                "token",
+                "secret",
+                "auth_token",
+                "bearer_token",
+            ]:
+                filtered[key] = "***REDACTED***"
+            else:
+                filtered[key] = _filter_sensitive_config_fields(value)
+        return filtered
+    elif isinstance(config_value, list):
+        return [_filter_sensitive_config_fields(item) for item in config_value]
+    else:
+        return config_value
 
 
 # Global memory configuration - built dynamically from YAML config
@@ -372,10 +426,11 @@ def _init_process_memory():
     if _process_memory is None:
         # Build fresh config to ensure we get latest YAML settings
         config = _build_mem0_config()
-        # Log config in chunks to avoid truncation
+        # Log config in chunks to avoid truncation (filter sensitive fields)
         memory_logger.info("=== MEM0 CONFIG START ===")
         for key, value in config.items():
-            memory_logger.info(f"  {key}: {json.dumps(value, indent=4)}")
+            filtered_value = _filter_sensitive_config_fields(value)
+            memory_logger.info(f"  {key}: {json.dumps(filtered_value, indent=4)}")
         memory_logger.info("=== MEM0 CONFIG END ===")
         _process_memory = Memory.from_config(config)
     return _process_memory
@@ -556,18 +611,18 @@ def _add_memory_to_store(
 
             # Log detailed memory result to understand what's being stored
             memory_logger.info(f"Raw mem0 result for {audio_uuid}: {result}")
-            
+
             # Parse response using standardized parser
             try:
                 parsed_memories = _parse_mem0_response(result, "add")
                 created_memory_ids = _extract_memory_ids(parsed_memories, audio_uuid)
-                
+
                 # Check if mem0 returned empty results (this can be legitimate)
                 if not parsed_memories:
                     memory_logger.info(
                         f"Mem0 returned empty results for {audio_uuid} - LLM determined no memorable content"
                     )
-                    
+
                     # Store using mem0 direct API without LLM processing
                     try:
                         direct_result = process_memory.add(
@@ -614,16 +669,16 @@ def _add_memory_to_store(
                         )
                         # Continue with the empty results - this is legitimate when LLM finds no memorable content
             except (ValueError, RuntimeError, TypeError) as parse_error:
-                memory_logger.error(f"Failed to parse mem0 response for {audio_uuid}: {parse_error}")
+                memory_logger.error(
+                    f"Failed to parse mem0 response for {audio_uuid}: {parse_error}"
+                )
                 # Re-raise to surface the actual parsing error instead of hiding it
                 raise
 
             # Log details of created memories (we already parsed them above)
             if created_memory_ids:
                 memory_count = len(created_memory_ids)
-                memory_logger.info(
-                    f"Successfully created {memory_count} memories for {audio_uuid}"
-                )
+                memory_logger.info(f"Successfully created {memory_count} memories for {audio_uuid}")
 
                 # Log details of each memory from parsed results
                 try:
@@ -641,10 +696,12 @@ def _add_memory_to_store(
                                 f"UPDATE Event: Memory {memory_id[:8]} was updated from '{previous_memory[:50]}...' to '{memory_text[:50]}...'"
                             )
                 except (ValueError, RuntimeError, TypeError) as detail_parse_error:
-                    memory_logger.warning(f"Could not parse result details for logging: {detail_parse_error}")
-                    
+                    memory_logger.warning(
+                        f"Could not parse result details for logging: {detail_parse_error}"
+                    )
+
             # Log raw metadata for debugging
-            if hasattr(result, 'get'):
+            if hasattr(result, "get"):
                 memory_logger.info(f"Memory metadata: {result.get('metadata', {})}")
 
                 # Check for other possible keys in result
@@ -689,9 +746,13 @@ def _add_memory_to_store(
                         )
                         result = timeout_result
                     else:
-                        memory_logger.warning(f"Timeout fallback returned no memory IDs for {audio_uuid}")
+                        memory_logger.warning(
+                            f"Timeout fallback returned no memory IDs for {audio_uuid}"
+                        )
                 except (ValueError, RuntimeError, TypeError) as timeout_parse_error:
-                    memory_logger.warning(f"Failed to parse timeout result for {audio_uuid}: {timeout_parse_error}")
+                    memory_logger.warning(
+                        f"Failed to parse timeout result for {audio_uuid}: {timeout_parse_error}"
+                    )
                 else:
                     memory_logger.error(
                         f"Direct memory storage failed for {audio_uuid} after timeout"
@@ -741,9 +802,13 @@ def _add_memory_to_store(
                         )
                         result = error_result
                     else:
-                        memory_logger.warning(f"Error fallback returned no memory IDs for {audio_uuid}")
+                        memory_logger.warning(
+                            f"Error fallback returned no memory IDs for {audio_uuid}"
+                        )
                 except (ValueError, RuntimeError, TypeError) as error_parse_error:
-                    memory_logger.warning(f"Failed to parse error fallback result for {audio_uuid}: {error_parse_error}")
+                    memory_logger.warning(
+                        f"Failed to parse error fallback result for {audio_uuid}: {error_parse_error}"
+                    )
                 else:
                     memory_logger.error(
                         f"Direct memory storage failed for {audio_uuid} after error"
@@ -1015,7 +1080,9 @@ class MemoryService:
             try:
                 return _parse_mem0_response(memories_response, "get_all")
             except (ValueError, RuntimeError, TypeError) as e:
-                memory_logger.error(f"Failed to parse get_all_unfiltered response for user {user_id}: {e}")
+                memory_logger.error(
+                    f"Failed to parse get_all_unfiltered response for user {user_id}: {e}"
+                )
                 raise
 
         except Exception as e:
@@ -1045,7 +1112,9 @@ class MemoryService:
             try:
                 raw_memories = _parse_mem0_response(memories_response, "search")
             except (ValueError, RuntimeError, TypeError) as e:
-                memory_logger.error(f"Failed to parse search response for user {user_id}, query '{query}': {e}")
+                memory_logger.error(
+                    f"Failed to parse search response for user {user_id}, query '{query}': {e}"
+                )
                 raise
 
             # Filter and prioritize memories
@@ -1182,13 +1251,15 @@ class MemoryService:
             assert self.memory is not None, "Memory service not initialized"
             # Get all memories first to count them
             user_memories_response = self.memory.get_all(user_id=user_id)
-            
+
             # Parse response using standardized parser to count memories
             try:
                 user_memories = _parse_mem0_response(user_memories_response, "get_all")
                 memory_count = len(user_memories)
             except (ValueError, RuntimeError, TypeError) as e:
-                memory_logger.error(f"Failed to parse get_all response for user {user_id} during delete: {e}")
+                memory_logger.error(
+                    f"Failed to parse get_all response for user {user_id} during delete: {e}"
+                )
                 # Continue with deletion attempt even if count failed
                 memory_count = 0
 

@@ -371,21 +371,11 @@ flowchart TB
         
     end
 
-    %% Failure Recovery System
-    subgraph "🛡️ Failure Recovery System"
-        QueueTracker[Queue Tracker<br/>📊 SQLite tracking]
-        PersistentQueue[Persistent Queue<br/>💾 Survives restarts]
-        RecoveryManager[Recovery Manager<br/>🔄 Auto-retry with backoff]
-        HealthMonitor[Health Monitor<br/>🏥 Service health checks]
-        CircuitBreaker[Circuit Breaker<br/>⚡ Fast-fail protection]
-        DeadLetter[Dead Letter Queue<br/>💀 Persistent failures]
-    end
 
     %% Data Storage
     subgraph "💾 Data Storage Layer"
         MongoDB[(MongoDB<br/>Users & Conversations<br/>🕐 Health check: 5s)]
         QdrantDB[(Qdrant<br/>Vector Embeddings<br/>🔍 Semantic memory)]
-        SQLiteTracking[(SQLite<br/>Failure Recovery Tracking<br/>📊 Performance metrics)]
         AudioFiles[Audio Files<br/>📁 Chunk storage + cropping]
     end
 
@@ -421,14 +411,6 @@ flowchart TB
     LLMProcessor -->|✅ Memory extracted| VectorStore
     MemoryService -->|📊 Track processing| QueueTracker
     
-
-    %% Failure Recovery Integration
-    QueueTracker -->|📊 Track all items| PersistentQueue
-    PersistentQueue -->|🔄 Failed items| RecoveryManager
-    RecoveryManager -->|🔄 Exponential backoff retry| MemoryService
-    RecoveryManager -->|💀 Max retries exceeded| DeadLetter
-    HealthMonitor -->|🏥 Service health checks<br/>🕐 5s MongoDB<br/>🕐 8s Ollama<br/>🕐 5s ASR| CircuitBreaker
-    CircuitBreaker -->|⚡ Service unavailable<br/>🔄 Fast-fail mode| RecoveryManager
 
     %% Disconnect and Cleanup Flow
     Client -->|🔌 Disconnect| ClientState
