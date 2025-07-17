@@ -48,7 +48,7 @@ jobs:
     - name: Install dependencies with uv
       run: |
         cd backends/advanced-backend
-        uv sync --dev
+        uv sync --dev --group test
         
     - name: Set up environment variables
       run: |
