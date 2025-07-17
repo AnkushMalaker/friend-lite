@@ -147,16 +147,27 @@ class IntegrationTestRunner:
         # Load .env.test file to get CI credentials
         try:
             # Try to load .env.test first (CI environment), then fall back to .env (local development)
-            if os.path.exists('.env.test'):
-                logger.info("Found .env.test file, loading it...")
-                load_dotenv('.env.test')
+            env_test_path = '.env.test'
+            env_path = '.env'
+            
+            # Check if we're in the right directory (tests directory vs backend directory)
+            if not os.path.exists(env_test_path) and os.path.exists('../.env.test'):
+                env_test_path = '../.env.test'
+                logger.info("Found .env.test in parent directory")
+            if not os.path.exists(env_path) and os.path.exists('../.env'):
+                env_path = '../.env'
+                logger.info("Found .env in parent directory")
+            
+            if os.path.exists(env_test_path):
+                logger.info(f"Found .env.test file at {env_test_path}, loading it...")
+                load_dotenv(env_test_path)
                 logger.info("✓ Loaded .env.test file (CI environment)")
-            elif os.path.exists('.env'):
-                logger.info("Found .env file, loading it...")
-                load_dotenv()
+            elif os.path.exists(env_path):
+                logger.info(f"Found .env file at {env_path}, loading it...")
+                load_dotenv(env_path)
                 logger.info("✓ Loaded .env file (local development)")
             else:
-                logger.warning("⚠️ No .env.test or .env file found")
+                logger.warning("⚠️ No .env.test or .env file found in current or parent directory")
         except ImportError:
             logger.warning("⚠️ python-dotenv not available, relying on shell environment")
             # why would this ever happen?
@@ -775,6 +786,15 @@ def test_runner():
 def test_full_pipeline_integration(test_runner):
     """Test the complete audio processing pipeline."""
     try:
+        # Immediate logging to debug environment
+        logger.info("=" * 80)
+        logger.info("🚀 STARTING INTEGRATION TEST")
+        logger.info("=" * 80)
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Files in directory: {os.listdir('.')}")
+        logger.info(f"CI environment: {os.environ.get('CI', 'NOT SET')}")
+        logger.info(f"GITHUB_ACTIONS: {os.environ.get('GITHUB_ACTIONS', 'NOT SET')}")
+        
         # Setup
         test_runner.setup_environment()
         test_runner.start_services()
