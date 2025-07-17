@@ -153,7 +153,7 @@ class IntegrationTestRunner:
         missing_keys = [key for key in required_keys if not os.environ.get(key)]
         
         if missing_keys:
-            pytest.skip(f"Missing required environment variables: {', '.join(missing_keys)}")
+            raise RuntimeError(f"Missing required environment variables: {', '.join(missing_keys)}. These should be set as GitHub secrets in the CI environment.")
         
         # Pass through API keys
         for key in required_keys:
