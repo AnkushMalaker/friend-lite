@@ -8,6 +8,13 @@ dependencies = [
     "easy-audio-interfaces>=0.5",
     "httpx>=0.27.0",
     "websockets>=15.0.1",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+]
+
+[project.optional-dependencies]
+esphome = [
+    "esphome>=2025.7.0",
 ]
 
 [dependency-groups]

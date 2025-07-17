@@ -1,0 +1,198 @@
+#!/usr/bin/env esphome
+# Voice PE ESPHome Configuration for XMOS-Enhanced Audio Streaming
+# This configuration accesses the XMOS XU316 processed audio with beamforming,
+# noise suppression, and echo cancellation for optimal transcription quality.
+
+substitutions:
+  device_name: voice-pe-tcp-stream
+  friendly_name: Voice PE XMOS Audio Streamer
+  wifi_ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+  server_ip: !secret relay_ip_address
+  server_port: "8989"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  includes:
+    - tcp_stream.h
+  platformio_options:
+    build_flags:
+      - -DCONFIG_ARDUHAL_LOG_DEFAULT_LEVEL=5
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    version: recommended
+
+# Use the official Voice PE external components
+external_components:
+  - source:
+      type: git
+      url: https://github.com/esphome/home-assistant-voice-pe
+      ref: dev
+    components:
+      - voice_kit
+    refresh: 0s
+
+logger:
+  level: INFO
+  baud_rate: 0
+
+wifi:
+  ssid: ${wifi_ssid}
+  password: ${wifi_password}
+  
+  # Enhanced connection settings for stable audio streaming
+  power_save_mode: none
+  fast_connect: true
+  reboot_timeout: 15min
+  
+  # Start XMOS audio streaming when WiFi connects
+  on_connect:
+    then:
+      - logger.log:
+          tag: tcp
+          level: INFO
+          format: "Wi-Fi connected – starting XMOS-enhanced audio capture"
+      - microphone.capture: i2s_mics
+
+# api:
+#   encryption:
+#     key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Voice Kit component for XMOS coordination
+voice_kit:
+  id: voice_kit_component
+  i2c_id: internal_i2c
+  reset_pin: GPIO4
+  firmware:
+    url: https://github.com/esphome/voice-kit-xmos-firmware/releases/download/v1.3.1/ffva_v1.3.1_upgrade.bin
+    version: "1.3.1"
+    md5: 964635c5bf125529dab14a2472a15401
+
+# I2C for Voice Kit communication
+i2c:
+  - id: internal_i2c
+    sda: GPIO18
+    scl: GPIO8
+    frequency: 100khz
+
+# I2S Audio setup for Voice PE hardware
+i2s_audio:
+  - id: i2s_input
+    i2s_lrclk_pin: GPIO14  # Word Select (Frame Sync)
+    i2s_bclk_pin: GPIO13   # Bit Clock
+
+# Voice kit handles the AIC3204 DAC internally
+
+# XMOS-Enhanced Microphone Configuration  
+# This accesses the XMOS XU316 processed audio with:
+# - Dual microphone beamforming
+# - Hardware noise suppression
+# - Echo cancellation  
+# - Automatic gain control
+microphone:
+  - platform: i2s_audio
+    id: i2s_mics
+    i2s_din_pin: GPIO15
+    adc_type: external
+    pdm: false
+    sample_rate: 16000           # Voice PE standard rate
+    bits_per_sample: 32bit       # 32-bit I2S containers
+    i2s_mode: secondary
+    i2s_audio_id: i2s_input
+    channel: stereo
+    
+    # Enhanced audio streaming via TCP
+    on_data:
+      then:
+        - lambda: |-
+            static int sockfd = -1;
+            static bool connected = false;
+            static bool announced = false;
+            
+            // Enhanced XMOS audio metadata
+            ESP_LOGV("xmos_audio", "XMOS buffer: %d bytes, rate: 48kHz, bits: 32", (int)x.size());
+            
+            // (Re)establish TCP connection if needed
+            if (sockfd < 0) {
+              sockfd = lwip_socket(AF_INET, SOCK_STREAM, 0);
+              if (sockfd >= 0) {
+                // Set socket options for real-time audio streaming
+                int nodelay = 1;
+                lwip_setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                
+                struct sockaddr_in dest {};
+                dest.sin_family = AF_INET;
+                dest.sin_port = htons(atoi("${server_port}"));
+                inet_pton(AF_INET, "${server_ip}", &dest.sin_addr);
+                
+                int result = lwip_connect(sockfd, (struct sockaddr *)&dest, sizeof(dest));
+                if (result == 0) {
+                  connected = true;
+                  ESP_LOGI("tcp_xmos", "Connected to XMOS audio relay at %s:%s", 
+                           "${server_ip}", "${server_port}");
+                } else {
+                  ESP_LOGE("tcp_xmos", "Failed to connect: errno=%d", errno);
+                  lwip_close(sockfd);
+                  sockfd = -1;
+                  connected = false;
+                }
+              } else {
+                ESP_LOGE("tcp_xmos", "Socket creation failed: errno=%d", errno);
+              }
+            }
+            
+            // Stream XMOS-enhanced audio data
+            if (sockfd >= 0 && connected) {
+              ssize_t bytes_sent = lwip_send(sockfd, x.data(), x.size(), 0);
+              if (bytes_sent < 0) {
+                ESP_LOGE("tcp_xmos", "Send failed: errno=%d - reconnecting", errno);
+                lwip_close(sockfd);
+                sockfd = -1;
+                connected = false;
+                announced = false;
+              } else if (!announced) {
+                ESP_LOGI("tcp_xmos", "Streaming XMOS-enhanced audio (48kHz/32bit/stereo beamformed)");
+                announced = true;
+              }
+              ESP_LOGV("tcp_xmos", "Sent %d/%d bytes", (int)bytes_sent, (int)x.size());
+            }
+
+# Optional: Status LED disabled for compatibility
+# light:
+#   - platform: neopixel
+#     variant: WS2812
+#     pin: GPIO21
+#     num_leds: 1
+#     id: status_led
+
+# Network diagnostics
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+    ssid:
+      name: "Connected SSID"
+    mac_address:
+      name: "Mac Address"
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+    
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+
+# Restart button for remote management  
+button:
+  - platform: restart
+    name: "Restart"

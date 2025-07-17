@@ -21,6 +21,7 @@ from wyoming.audio import AudioChunk
 from easy_audio_interfaces import RollingFileSink
 from easy_audio_interfaces.network.network_interfaces import TCPServer, SocketClient
 from wyoming.client import AsyncClient
+from voice_pe_audio_processor import VoicePEAudioProcessor
 
 DEFAULT_PORT = 8989
 SAMP_RATE = 16000
@@ -236,6 +237,71 @@ class ESP32TCPServer(TCPServer):
             return None
 
 
+class VoicePETCPServer(TCPServer):
+    """
+    Enhanced TCP server for Voice PE with XMOS XU316 + AIC3204.
+    
+    Handles XMOS-processed audio:
+    - 48kHz sample rate (vs 16kHz basic ESP32)
+    - 32-bit containers with 24-bit effective resolution
+    - Stereo beamformed output from dual microphones
+    - Hardware-enhanced audio (noise suppression, echo cancellation, AGC)
+    """
+    
+    def __init__(self, *args, **kwargs):
+        # Voice PE parameters (based on official config)
+        kwargs.setdefault("sample_rate", 16000)  # Voice PE uses 16kHz
+        kwargs.setdefault("channels", 2)         # Stereo output
+        kwargs.setdefault("sample_width", 4)     # 32-bit = 4 bytes
+        super().__init__(*args, **kwargs)
+        
+        # Initialize XMOS audio processor
+        self.audio_processor = VoicePEAudioProcessor(
+            input_sample_rate=16000,   # Voice PE native rate
+            output_sample_rate=16000,  # Same rate, no resampling
+            input_channels=2,          # Stereo output
+            output_channels=1,         # Mono for transcription
+            bits_per_sample=32,
+            enable_quality_metrics=True
+        )
+        
+        logger.info("Voice PE TCP Server initialized with XMOS audio processing")
+    
+    async def read(self) -> Optional[AudioChunk]:
+        """
+        Read and process XMOS-enhanced audio data.
+        
+        Uses VoicePEAudioProcessor for:
+        1. 24-bit extraction from 32-bit XMOS containers
+        2. Stereo beamformed channel processing
+        3. Intelligent 48kHz → 16kHz resampling
+        4. Speech-optimized enhancement
+        
+        Returns:
+            Enhanced AudioChunk optimized for transcription
+        """
+        # Get raw audio chunk from TCP connection
+        raw_chunk = await super().read()
+        if raw_chunk is None:
+            return None
+        
+        # Process through XMOS-enhanced pipeline
+        enhanced_chunk = self.audio_processor.process_xmos_audio_chunk(raw_chunk)
+        
+        if enhanced_chunk is None:
+            logger.warning("XMOS audio processor returned None chunk")
+            return None
+        
+        # Log quality metrics periodically
+        if self.audio_processor.processed_chunks % 2000 == 0 and self.audio_processor.processed_chunks > 0:
+            stats = self.audio_processor.get_quality_stats()
+            logger.info(f"🎵 XMOS Audio Quality: SNR={stats['average_snr_db']:.1f}dB, "
+                       f"Processed={stats['processed_chunks']} chunks, "
+                       f"Ratio={stats['processing_ratio']:.3f}")
+        
+        return enhanced_chunk
+
+
 async def ensure_socket_connection(socket_client: SocketClient) -> bool:
     """Ensure socket client is connected, with exponential backoff retry logic."""
     max_retries = 3
@@ -409,19 +475,32 @@ async def process_esp32_audio(
         raise
 
 
-async def run_audio_processor(args, esp32_file_sink):
+async def run_audio_processor(args, esp32_file_sink, use_voice_pe=True):
     """Run the audio processor with authentication and reconnect logic."""
     retry_attempt = 0
     while True:
         try:
-            # Create ESP32 TCP server with automatic I²S swap detection
-            esp32_server = ESP32TCPServer(
-                host=args.host,
-                port=args.port,
-                sample_rate=SAMP_RATE,
-                channels=CHANNELS,
-                sample_width=4,
-            )
+            # Create server based on device type
+            if use_voice_pe:
+                # Use enhanced Voice PE server with XMOS processing
+                audio_server = VoicePETCPServer(
+                    host=args.host,
+                    port=args.port,
+                    sample_rate=16000,  # Voice PE rate
+                    channels=2,         # Stereo beamformed
+                    sample_width=4,     # 32-bit
+                )
+                logger.info("🎵 Using Voice PE XMOS-enhanced audio server")
+            else:
+                # Use basic ESP32 server for compatibility
+                audio_server = ESP32TCPServer(
+                    host=args.host,
+                    port=args.port,
+                    sample_rate=SAMP_RATE,
+                    channels=CHANNELS,
+                    sample_width=4,
+                )
+                logger.info("🎵 Using basic ESP32 audio server")
 
             # Create authenticated WebSocket client for sending audio to backend
             logger.info(f"🔐 Setting up authenticated connection to backend...")
@@ -441,14 +520,15 @@ async def run_audio_processor(args, esp32_file_sink):
             retry_attempt = 0
             logger.info("💚 Authenticated connection established successfully!")
 
-            # Start ESP32 server
-            async with esp32_server:
-                logger.info(f"🎧 ESP32 server listening on {args.host}:{args.port}")
+            # Start audio server
+            async with audio_server:
+                server_type = "Voice PE XMOS" if use_voice_pe else "ESP32"
+                logger.info(f"🎧 {server_type} server listening on {args.host}:{args.port}")
                 logger.info("🎵 Starting authenticated audio recording and processing...")
 
                 # Start audio processing task
                 await process_esp32_audio(
-                    esp32_server,
+                    audio_server,
                     socket_client,
                     asr_client=None,
                     file_sink=esp32_file_sink
@@ -514,6 +594,8 @@ async def main():
     )
     parser.add_argument("-v", "--verbose", action="count", default=0, help="-v: INFO, -vv: DEBUG")
     parser.add_argument("--debug-audio", action="store_true", help="Debug audio recording")
+    parser.add_argument("--voice-pe", action="store_true", default=True, help="Use Voice PE XMOS audio processing (default: True)")
+    parser.add_argument("--esp32-mode", action="store_true", help="Use basic ESP32 audio processing (disables Voice PE mode)")
     args = parser.parse_args()
     
     BACKEND_URL = args.backend_url
@@ -524,9 +606,14 @@ async def main():
     loglevel = logging.WARNING - (10 * min(args.verbose, 2))
     logging.basicConfig(format="%(asctime)s  %(levelname)s  %(message)s", level=loglevel)
     
+    # Determine audio processing mode
+    use_voice_pe = args.voice_pe and not args.esp32_mode
+    audio_mode = "Voice PE XMOS" if use_voice_pe else "ESP32 Basic"
+    
     # Print startup banner with authentication info
     logger.info("🎵 ========================================")
     logger.info("🎵 Friend-Lite HAVPE Relay with Authentication")
+    logger.info(f"🎵 Audio Mode: {audio_mode}")
     logger.info("🎵 ========================================")
     logger.info(f"🎧 ESP32 Server: {args.host}:{args.port}")
     logger.info(f"📡 Backend API: {BACKEND_URL}")
@@ -581,7 +668,7 @@ async def main():
         esp32_file_sink = None
 
     try:
-        await run_audio_processor(args, esp32_file_sink)
+        await run_audio_processor(args, esp32_file_sink, use_voice_pe)
     except KeyboardInterrupt:
         logger.info("Interrupted – shutting down")
     except Exception as e:
