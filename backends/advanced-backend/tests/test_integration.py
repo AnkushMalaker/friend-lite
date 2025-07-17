@@ -140,24 +140,44 @@ class IntegrationTestRunner:
         """Set up environment variables for CI testing."""
         logger.info("Setting up CI environment variables...")
         
+        # Debug: Check current working directory and files
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Files in current directory: {os.listdir('.')}")
+        
         # Load .env.test file to get CI credentials
         try:
             # Try to load .env.test first (CI environment), then fall back to .env (local development)
             if os.path.exists('.env.test'):
+                logger.info("Found .env.test file, loading it...")
                 load_dotenv('.env.test')
                 logger.info("✓ Loaded .env.test file (CI environment)")
-            else:
+            elif os.path.exists('.env'):
+                logger.info("Found .env file, loading it...")
                 load_dotenv()
                 logger.info("✓ Loaded .env file (local development)")
+            else:
+                logger.warning("⚠️ No .env.test or .env file found")
         except ImportError:
             logger.warning("⚠️ python-dotenv not available, relying on shell environment")
             # why would this ever happen?
+        
+        # Debug: Log all environment variables (masked for security)
+        logger.info("Environment variables after loading:")
+        for key in ["DEEPGRAM_API_KEY", "OPENAI_API_KEY", "CI", "GITHUB_ACTIONS"]:
+            value = os.environ.get(key)
+            if value:
+                masked_value = value[:4] + "*" * (len(value) - 8) + value[-4:] if len(value) > 8 else "***"
+                logger.info(f"  {key}: {masked_value}")
+            else:
+                logger.info(f"  {key}: NOT SET")
         
         # Get API keys from environment (GitHub secrets)
         required_keys = ["DEEPGRAM_API_KEY", "OPENAI_API_KEY"]
         missing_keys = [key for key in required_keys if not os.environ.get(key)]
         
         if missing_keys:
+            logger.error(f"❌ Missing environment variables: {missing_keys}")
+            logger.error(f"Available environment variables: {list(os.environ.keys())}")
             raise RuntimeError(f"Missing required environment variables: {', '.join(missing_keys)}. These should be set as GitHub secrets in the CI environment.")
         
         # Pass through API keys
