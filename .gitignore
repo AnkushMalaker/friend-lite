@@ -31,3 +31,4 @@ transcription_results.csv
 
 untracked/*
 backends/advanced-backend/data/*
+extras/havpe-relay/firmware/secrets.yaml
