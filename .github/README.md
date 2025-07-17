@@ -26,7 +26,7 @@ Regardless - this repo will try to do the minimal of this - multiple OMI-like au
 - Home automation
 
 # Arch
-![Architecture Diagram](.assets/plan.png)
+Checkout arch.md in backends/advanced-backends/Docs/arch.md
 
 ## Arch description
 The current DevKit2 streams audio via Bluetooth to some device in the OPUS codec.
