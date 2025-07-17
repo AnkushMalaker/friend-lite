@@ -41,6 +41,112 @@ httpx_logger.setLevel(logging.DEBUG)
 # Logger for memory operations
 memory_logger = logging.getLogger("memory_service")
 
+
+def _parse_mem0_response(response, operation: str) -> list:
+    """
+    Parse mem0 response with explicit format handling based on mem0ai>=0.1.114 API.
+    
+    Args:
+        response: Raw mem0 response from add/get_all/search operations
+        operation: Operation name for error context ("add", "get_all", "search", "delete")
+    
+    Returns:
+        list: Standardized list of memory objects with consistent format
+        
+    Raises:
+        ValueError: Invalid/empty response or missing expected keys
+        RuntimeError: Mem0 API error in response
+        TypeError: Unexpected response format that cannot be handled
+        
+    Expected mem0 response formats:
+        # add() - Returns single result or results array:
+        {"results": [{"id": "...", "memory": "...", "metadata": {...}}]} 
+        OR {"id": "...", "memory": "...", "metadata": {...}}
+        
+        # get_all() - Returns paginated format or legacy dict:
+        {"results": [{"id": "...", "memory": "...", ...}]}
+        OR {"memory_id_1": {"memory": "...", ...}, "memory_id_2": {...}}
+        
+        # search() - Returns results array or direct list:
+        {"results": [{"id": "...", "memory": "...", "score": 0.85, ...}]}
+        OR [{"id": "...", "memory": "...", "score": 0.85}]
+    """
+    if not response:
+        raise ValueError(f"Mem0 {operation} returned None/empty response")
+    
+    # Handle dict responses (most common format)
+    if isinstance(response, dict):
+        # Check for explicit error responses
+        if "error" in response:
+            raise RuntimeError(f"Mem0 {operation} error: {response['error']}")
+            
+        # NEW paginated format with results key (mem0ai>=0.1.114)
+        if "results" in response:
+            memory_logger.debug(f"Mem0 {operation} using paginated format with {len(response['results'])} results")
+            return response["results"]
+            
+        # Legacy format for get_all() - dict values are memory objects  
+        if operation == "get_all" and all(isinstance(v, dict) for v in response.values() if v):
+            memory_logger.debug(f"Mem0 {operation} using legacy dict format with {len(response)} entries")
+            return list(response.values())
+            
+        # Single memory result (common for add operation)
+        if "id" in response and "memory" in response:
+            memory_logger.debug(f"Mem0 {operation} returned single memory object")
+            return [response]
+            
+        # Check for single memory with different field names
+        if "id" in response and any(key in response for key in ["text", "content"]):
+            memory_logger.debug(f"Mem0 {operation} returned single memory with alternative field names")
+            return [response]
+            
+        # Unexpected dict format - provide helpful error
+        available_keys = list(response.keys())
+        raise ValueError(f"Mem0 {operation} returned dict without expected keys. Available keys: {available_keys}, Expected: 'results', 'id'+'memory', or memory dict values")
+    
+    # Handle direct list responses (legacy/alternative format)
+    if isinstance(response, list):
+        memory_logger.debug(f"Mem0 {operation} returned direct list with {len(response)} items")
+        return response
+    
+    # Handle single memory object (some edge cases)
+    if hasattr(response, 'get') and response.get('id'):
+        memory_logger.debug(f"Mem0 {operation} returned single object with get method")
+        return [response]
+    
+    # Handle primitive types that shouldn't happen
+    if isinstance(response, (str, int, float, bool)):
+        raise TypeError(f"Mem0 {operation} returned primitive type {type(response)}: {response}")
+    
+    # Completely unexpected format
+    raise TypeError(f"Mem0 {operation} returned unexpected type {type(response)}: {response}")
+
+
+def _extract_memory_ids(parsed_memories: list, audio_uuid: str) -> list:
+    """
+    Extract memory IDs from parsed memory objects.
+    
+    Args:
+        parsed_memories: List of memory objects from _parse_mem0_response
+        audio_uuid: Audio UUID for logging context
+        
+    Returns:
+        list: List of extracted memory IDs
+    """
+    memory_ids = []
+    for memory_item in parsed_memories:
+        if isinstance(memory_item, dict):
+            memory_id = memory_item.get("id")
+            if memory_id:
+                memory_ids.append(memory_id)
+                memory_logger.info(f"Extracted memory ID: {memory_id} for {audio_uuid}")
+            else:
+                memory_logger.warning(f"Memory item missing 'id' field for {audio_uuid}: {memory_item}")
+        else:
+            memory_logger.warning(f"Non-dict memory item for {audio_uuid}: {memory_item}")
+    
+    return memory_ids
+
 # Memory configuration
 MEM0_ORGANIZATION_ID = os.getenv("MEM0_ORGANIZATION_ID", "friend-lite-org")
 MEM0_PROJECT_ID = os.getenv("MEM0_PROJECT_ID", "audio-conversations")
@@ -304,34 +410,34 @@ def _add_memory_to_store(
     try:
         # Get configuration and debug tracker
         config_loader = get_config_loader()
-        debug_tracker = get_debug_tracker()
+        # debug_tracker = get_debug_tracker()
 
         # Create a transaction for memory processing tracking
-        transaction_id = debug_tracker.create_transaction(
-            user_id=user_id,
-            client_id=client_id,
-            conversation_id=audio_uuid,  # Use audio_uuid as conversation_id
-        )
+        # transaction_id = debug_tracker.create_transaction(
+        #     user_id=user_id,
+        #     client_id=client_id,
+        #     conversation_id=audio_uuid,  # Use audio_uuid as conversation_id
+        # )
 
-        # Start memory processing stage
-        debug_tracker.track_event(
-            transaction_id,
-            PipelineStage.MEMORY_STARTED,
-            True,
-            transcript_length=len(transcript) if transcript else 0,
-            user_email=user_email,
-            audio_uuid=audio_uuid,
-        )
+        # # Start memory processing stage
+        # debug_tracker.track_event(
+        #     transaction_id,
+        #     PipelineStage.MEMORY_STARTED,
+        #     True,
+        #     transcript_length=len(transcript) if transcript else 0,
+        #     user_email=user_email,
+        #     audio_uuid=audio_uuid,
+        # )
 
-        # Check if transcript is empty or too short to be meaningful
+        # # Check if transcript is empty or too short to be meaningful
         # MODIFIED: Reduced minimum length from 10 to 1 character to process almost all transcripts
         if not transcript or len(transcript.strip()) < 10:
-            debug_tracker.track_event(
-                transaction_id,
-                PipelineStage.MEMORY_COMPLETED,
-                False,
-                error_message=f"Transcript empty: {len(transcript.strip()) if transcript else 0} chars",
-            )
+            # debug_tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_COMPLETED,
+            #     False,
+            #     error_message=f"Transcript empty: {len(transcript.strip()) if transcript else 0} chars",
+            # )
             memory_logger.info(
                 f"Skipping memory processing for {audio_uuid} - transcript completely empty: {len(transcript.strip()) if transcript else 0} chars"
             )
@@ -346,12 +452,12 @@ def _add_memory_to_store(
                     f"Overriding quality control skip for short transcript {audio_uuid} - ensuring all transcripts are stored"
                 )
             else:
-                debug_tracker.track_event(
-                    transaction_id,
-                    PipelineStage.MEMORY_COMPLETED,
-                    False,
-                    error_message="Conversation skipped due to quality control",
-                )
+                # debug_tracker.track_event(
+                #     transaction_id,
+                #     PipelineStage.MEMORY_COMPLETED,
+                #     False,
+                #     error_message="Conversation skipped due to quality control",
+                # )
                 memory_logger.info(
                     f"Skipping memory processing for {audio_uuid} due to quality control"
                 )
@@ -360,12 +466,12 @@ def _add_memory_to_store(
         # Get memory extraction configuration
         memory_config = config_loader.get_memory_extraction_config()
         if not memory_config.get("enabled", True):
-            debug_tracker.track_event(
-                transaction_id,
-                PipelineStage.MEMORY_COMPLETED,
-                False,
-                error_message="Memory extraction disabled",
-            )
+            # debug_tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_COMPLETED,
+            #     False,
+            #     error_message="Memory extraction disabled",
+            # )
             memory_logger.info(f"Memory extraction disabled for {audio_uuid}")
             return True, []
 
@@ -450,83 +556,79 @@ def _add_memory_to_store(
 
             # Log detailed memory result to understand what's being stored
             memory_logger.info(f"Raw mem0 result for {audio_uuid}: {result}")
-            memory_logger.info(
-                f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'not a dict'}"
-            )
+            
+            # Parse response using standardized parser
+            try:
+                parsed_memories = _parse_mem0_response(result, "add")
+                created_memory_ids = _extract_memory_ids(parsed_memories, audio_uuid)
+                
+                # Check if mem0 returned empty results (this can be legitimate)
+                if not parsed_memories:
+                    memory_logger.info(
+                        f"Mem0 returned empty results for {audio_uuid} - LLM determined no memorable content"
+                    )
+                    
+                    # Store using mem0 direct API without LLM processing
+                    try:
+                        direct_result = process_memory.add(
+                            transcript,
+                            user_id=user_id,
+                            metadata={
+                                "source": "offline_streaming",
+                                "client_id": client_id,
+                                "user_email": user_email,
+                                "audio_uuid": audio_uuid,
+                                "timestamp": int(time.time()),
+                                "conversation_context": "audio_transcription",
+                                "device_type": "audio_recording",
+                                "organization_id": MEM0_ORGANIZATION_ID,
+                                "project_id": MEM0_PROJECT_ID,
+                                "app_id": MEM0_APP_ID,
+                                "storage_reason": "empty_llm_results",
+                                "original_error": "LLM returned no memorable content",
+                                "processing_bypassed": True,
+                            },
+                            infer=False,
+                        )
+                        # Parse direct result using standardized parser
+                        try:
+                            direct_parsed = _parse_mem0_response(direct_result, "add")
+                            direct_memory_ids = _extract_memory_ids(direct_parsed, audio_uuid)
+                            if direct_memory_ids:
+                                created_memory_ids.extend(direct_memory_ids)
+                                memory_logger.info(
+                                    f"Successfully stored direct memory for {audio_uuid} after empty LLM results"
+                                )
+                                result = direct_result  # Use the successful mem0 result
+                            else:
+                                memory_logger.warning(
+                                    f"Direct memory storage returned no IDs for {audio_uuid}"
+                                )
+                        except (ValueError, RuntimeError, TypeError) as direct_parse_error:
+                            memory_logger.warning(
+                                f"Failed to parse direct memory result for {audio_uuid}: {direct_parse_error}"
+                            )
+                    except Exception as direct_error:
+                        memory_logger.error(
+                            f"Failed to store direct memory for {audio_uuid} after empty LLM results: {direct_error}"
+                        )
+                        # Continue with the empty results - this is legitimate when LLM finds no memorable content
+            except (ValueError, RuntimeError, TypeError) as parse_error:
+                memory_logger.error(f"Failed to parse mem0 response for {audio_uuid}: {parse_error}")
+                # Re-raise to surface the actual parsing error instead of hiding it
+                raise
 
-            # Extract memory IDs from the result
-            if isinstance(result, dict):
-                # Check for multiple memories in results list
-                results_list = result.get("results", [])
-                if results_list:
-                    for memory_item in results_list:
-                        memory_id = memory_item.get("id")
-                        if memory_id:
-                            created_memory_ids.append(memory_id)
-                            memory_logger.info(f"Extracted memory ID: {memory_id}")
-                else:
-                    # Check for single memory (old format or fallback)
-                    memory_id = result.get("id")
-                    if memory_id:
-                        created_memory_ids.append(memory_id)
-                        memory_logger.info(f"Extracted single memory ID: {memory_id}")
-
-            # Check if mem0 returned empty results (this can be legitimate)
-            if isinstance(result, dict) and result.get("results") == []:
+            # Log details of created memories (we already parsed them above)
+            if created_memory_ids:
+                memory_count = len(created_memory_ids)
                 memory_logger.info(
-                    f"Mem0 returned empty results for {audio_uuid} - LLM determined no memorable content"
+                    f"Successfully created {memory_count} memories for {audio_uuid}"
                 )
 
-                # Store using mem0 direct API without LLM processing
+                # Log details of each memory from parsed results
                 try:
-                    direct_result = process_memory.add(
-                        transcript,
-                        user_id=user_id,
-                        metadata={
-                            "source": "offline_streaming",
-                            "client_id": client_id,
-                            "user_email": user_email,
-                            "audio_uuid": audio_uuid,
-                            "timestamp": int(time.time()),
-                            "conversation_context": "audio_transcription",
-                            "device_type": "audio_recording",
-                            "organization_id": MEM0_ORGANIZATION_ID,
-                            "project_id": MEM0_PROJECT_ID,
-                            "app_id": MEM0_APP_ID,
-                            "storage_reason": "empty_llm_results",
-                            "original_error": "LLM returned no memorable content",
-                            "processing_bypassed": True,
-                        },
-                        infer=False,
-                    )
-                    if direct_result and isinstance(direct_result, dict):
-                        direct_memory_id = direct_result.get("id")
-                        if direct_memory_id:
-                            created_memory_ids.append(direct_memory_id)
-                        memory_logger.info(
-                            f"Successfully stored direct memory for {audio_uuid} after empty LLM results"
-                        )
-                        result = direct_result  # Use the successful mem0 result
-                    else:
-                        memory_logger.warning(
-                            f"Direct memory storage also failed for {audio_uuid} - no memory will be stored"
-                        )
-                except Exception as direct_error:
-                    memory_logger.error(
-                        f"Failed to store direct memory for {audio_uuid} after empty LLM results: {direct_error}"
-                    )
-                    # Continue with the empty results - this is legitimate when LLM finds no memorable content
-
-            if isinstance(result, dict):
-                results_list = result.get("results", [])
-                if results_list:
-                    memory_count = len(results_list)
-                    memory_logger.info(
-                        f"Successfully created {memory_count} memories for {audio_uuid}"
-                    )
-
-                    # Log details of each memory
-                    for i, memory_item in enumerate(results_list):
+                    final_parsed = _parse_mem0_response(result, "add")
+                    for i, memory_item in enumerate(final_parsed):
                         memory_id = memory_item.get("id", "unknown")
                         memory_text = memory_item.get("memory", "unknown")
                         event_type = memory_item.get("event", "unknown")
@@ -538,16 +640,11 @@ def _add_memory_to_store(
                             memory_logger.warning(
                                 f"UPDATE Event: Memory {memory_id[:8]} was updated from '{previous_memory[:50]}...' to '{memory_text[:50]}...'"
                             )
-                else:
-                    # Check for old format (direct id/memory keys)
-                    memory_id = result.get("id", result.get("memory_id", "unknown"))
-                    memory_text = result.get(
-                        "memory", result.get("text", result.get("content", "unknown"))
-                    )
-                    memory_logger.info(
-                        f"Single memory - ID: {memory_id}, Text: {memory_text[:100] if isinstance(memory_text, str) else memory_text}..."
-                    )
-
+                except (ValueError, RuntimeError, TypeError) as detail_parse_error:
+                    memory_logger.warning(f"Could not parse result details for logging: {detail_parse_error}")
+                    
+            # Log raw metadata for debugging
+            if hasattr(result, 'get'):
                 memory_logger.info(f"Memory metadata: {result.get('metadata', {})}")
 
                 # Check for other possible keys in result
@@ -581,14 +678,20 @@ def _add_memory_to_store(
                     },
                     infer=False,
                 )
-                if timeout_result and isinstance(timeout_result, dict):
-                    timeout_memory_id = timeout_result.get("id")
-                    if timeout_memory_id:
-                        created_memory_ids.append(timeout_memory_id)
-                    memory_logger.info(
-                        f"Successfully stored direct memory for {audio_uuid} after timeout"
-                    )
-                    result = timeout_result
+                # Parse timeout result using standardized parser
+                try:
+                    timeout_parsed = _parse_mem0_response(timeout_result, "add")
+                    timeout_memory_ids = _extract_memory_ids(timeout_parsed, audio_uuid)
+                    if timeout_memory_ids:
+                        created_memory_ids.extend(timeout_memory_ids)
+                        memory_logger.info(
+                            f"Successfully stored direct memory for {audio_uuid} after timeout"
+                        )
+                        result = timeout_result
+                    else:
+                        memory_logger.warning(f"Timeout fallback returned no memory IDs for {audio_uuid}")
+                except (ValueError, RuntimeError, TypeError) as timeout_parse_error:
+                    memory_logger.warning(f"Failed to parse timeout result for {audio_uuid}: {timeout_parse_error}")
                 else:
                     memory_logger.error(
                         f"Direct memory storage failed for {audio_uuid} after timeout"
@@ -627,14 +730,20 @@ def _add_memory_to_store(
                     },
                     infer=False,
                 )
-                if error_result and isinstance(error_result, dict):
-                    error_memory_id = error_result.get("id")
-                    if error_memory_id:
-                        created_memory_ids.append(error_memory_id)
-                    memory_logger.info(
-                        f"Successfully stored direct memory for {audio_uuid} after error: {error_type}"
-                    )
-                    result = error_result
+                # Parse error fallback result using standardized parser
+                try:
+                    error_parsed = _parse_mem0_response(error_result, "add")
+                    error_memory_ids = _extract_memory_ids(error_parsed, audio_uuid)
+                    if error_memory_ids:
+                        created_memory_ids.extend(error_memory_ids)
+                        memory_logger.info(
+                            f"Successfully stored direct memory for {audio_uuid} after error: {error_type}"
+                        )
+                        result = error_result
+                    else:
+                        memory_logger.warning(f"Error fallback returned no memory IDs for {audio_uuid}")
+                except (ValueError, RuntimeError, TypeError) as error_parse_error:
+                    memory_logger.warning(f"Failed to parse error fallback result for {audio_uuid}: {error_parse_error}")
                 else:
                     memory_logger.error(
                         f"Direct memory storage failed for {audio_uuid} after error"
@@ -649,20 +758,25 @@ def _add_memory_to_store(
         # Record successful memory completion
         processing_time_ms = (time.time() - start_time) * 1000
 
-        # Record the memory extraction
-        memory_id = result.get("id") if isinstance(result, dict) else str(result)
-        memory_text = result.get("memory") if isinstance(result, dict) else str(result)
+        # Record the memory extraction for logging
+        try:
+            final_parsed = _parse_mem0_response(result, "add")
+            memory_id = final_parsed[0].get("id", "unknown") if final_parsed else "unknown"
+            memory_text = final_parsed[0].get("memory", "unknown") if final_parsed else "unknown"
+        except (ValueError, RuntimeError, TypeError, IndexError):
+            memory_id = str(result) if result else "unknown"
+            memory_text = str(result) if result else "unknown"
 
-        debug_tracker.track_event(
-            transaction_id,
-            PipelineStage.MEMORY_COMPLETED,
-            True,
-            processing_time_ms=processing_time_ms,
-            memory_id=memory_id,
-            memory_text=str(memory_text)[:100] if memory_text else "none",
-            transcript_length=len(transcript),
-            llm_model=memory_config.get("llm_settings", {}).get("model", "llama3.1:latest"),
-        )
+        # debug_tracker.track_event(
+        #     transaction_id,
+        #     PipelineStage.MEMORY_COMPLETED,
+        #     True,
+        #     processing_time_ms=processing_time_ms,
+        #     memory_id=memory_id,
+        #     memory_text=str(memory_text)[:100] if memory_text else "none",
+        #     transcript_length=len(transcript),
+        #     llm_model=memory_config.get("llm_settings", {}).get("model", "llama3.1:latest"),
+        # )
 
         memory_logger.info(
             f"Successfully processed memory for {audio_uuid}, created {len(created_memory_ids)} memories: {created_memory_ids}"
@@ -674,14 +788,14 @@ def _add_memory_to_store(
         memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
 
         # Record debug information for failure
-        debug_tracker.track_event(
-            transaction_id,
-            PipelineStage.MEMORY_COMPLETED,
-            False,
-            error_message=str(e),
-            processing_time_ms=processing_time_ms,
-            transcript_length=len(transcript) if transcript else 0,
-        )
+        # debug_tracker.track_event(
+        #     transaction_id,
+        #     PipelineStage.MEMORY_COMPLETED,
+        #     False,
+        #     error_message=str(e),
+        #     processing_time_ms=processing_time_ms,
+        #     transcript_length=len(transcript) if transcript else 0,
+        # )
 
         return False, []
 
@@ -833,23 +947,12 @@ class MemoryService:
             fetch_limit = min(limit * 3, 500)  # Get up to 3x requested amount for filtering
             memories_response = self.memory.get_all(user_id=user_id, limit=fetch_limit)
 
-            # Handle different response formats from Mem0
-            raw_memories = []
-            if isinstance(memories_response, dict):
-                if "results" in memories_response:
-                    # New paginated format - return the results list
-                    raw_memories = memories_response["results"]
-                else:
-                    # Old format - convert dict values to list
-                    raw_memories = list(memories_response.values()) if memories_response else []
-            elif isinstance(memories_response, list):
-                # Already a list
-                raw_memories = memories_response
-            else:
-                memory_logger.warning(
-                    f"Unexpected memory response format: {type(memories_response)}"
-                )
-                return []
+            # Parse response using standardized parser
+            try:
+                raw_memories = _parse_mem0_response(memories_response, "get_all")
+            except (ValueError, RuntimeError, TypeError) as e:
+                memory_logger.error(f"Failed to parse get_all response for user {user_id}: {e}")
+                raise
 
             # Filter and prioritize memories
             semantic_memories = []
@@ -908,22 +1011,12 @@ class MemoryService:
         try:
             memories_response = self.memory.get_all(user_id=user_id, limit=limit)
 
-            # Handle different response formats from Mem0
-            if isinstance(memories_response, dict):
-                if "results" in memories_response:
-                    # New paginated format - return the results list
-                    return memories_response["results"]
-                else:
-                    # Old format - convert dict values to list
-                    return list(memories_response.values()) if memories_response else []
-            elif isinstance(memories_response, list):
-                # Already a list
-                return memories_response
-            else:
-                memory_logger.warning(
-                    f"Unexpected memory response format: {type(memories_response)}"
-                )
-                return []
+            # Parse response using standardized parser
+            try:
+                return _parse_mem0_response(memories_response, "get_all")
+            except (ValueError, RuntimeError, TypeError) as e:
+                memory_logger.error(f"Failed to parse get_all_unfiltered response for user {user_id}: {e}")
+                raise
 
         except Exception as e:
             memory_logger.error(f"Error fetching unfiltered memories for user {user_id}: {e}")
@@ -948,23 +1041,12 @@ class MemoryService:
             search_limit = min(limit * 3, 100)
             memories_response = self.memory.search(query=query, user_id=user_id, limit=search_limit)
 
-            # Handle different response formats from Mem0
-            raw_memories = []
-            if isinstance(memories_response, dict):
-                if "results" in memories_response:
-                    # New paginated format - return the results list
-                    raw_memories = memories_response["results"]
-                else:
-                    # Old format - convert dict values to list
-                    raw_memories = list(memories_response.values()) if memories_response else []
-            elif isinstance(memories_response, list):
-                # Already a list
-                raw_memories = memories_response
-            else:
-                memory_logger.warning(
-                    f"Unexpected search response format: {type(memories_response)}"
-                )
-                return []
+            # Parse response using standardized parser
+            try:
+                raw_memories = _parse_mem0_response(memories_response, "search")
+            except (ValueError, RuntimeError, TypeError) as e:
+                memory_logger.error(f"Failed to parse search response for user {user_id}, query '{query}': {e}")
+                raise
 
             # Filter and prioritize memories
             semantic_memories = []
@@ -1080,8 +1162,8 @@ class MemoryService:
 
         except Exception as e:
             memory_logger.error(f"Error fetching all memories for admin: {e}")
-            # Return empty list instead of raising to avoid breaking admin interface
-            return []
+            # Re-raise to surface real errors instead of hiding them
+            raise
 
     def delete_all_user_memories(self, user_id: str) -> int:
         """Delete all memories for a user and return count of deleted memories."""
@@ -1100,20 +1182,14 @@ class MemoryService:
             assert self.memory is not None, "Memory service not initialized"
             # Get all memories first to count them
             user_memories_response = self.memory.get_all(user_id=user_id)
-            memory_count = 0
-
-            # Handle different response formats from get_all
-            if isinstance(user_memories_response, dict):
-                if "results" in user_memories_response:
-                    # New paginated format
-                    memory_count = len(user_memories_response["results"])
-                else:
-                    # Old dict format (deprecated)
-                    memory_count = len(user_memories_response)
-            elif isinstance(user_memories_response, list):
-                # Just in case it returns a list
-                memory_count = len(user_memories_response)
-            else:
+            
+            # Parse response using standardized parser to count memories
+            try:
+                user_memories = _parse_mem0_response(user_memories_response, "get_all")
+                memory_count = len(user_memories)
+            except (ValueError, RuntimeError, TypeError) as e:
+                memory_logger.error(f"Failed to parse get_all response for user {user_id} during delete: {e}")
+                # Continue with deletion attempt even if count failed
                 memory_count = 0
 
             # Delete all memories for this user
