@@ -89,7 +89,8 @@ async def delete_user(
         # Validate ObjectId format
         try:
             object_id = ObjectId(user_id)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Invalid ObjectId format for user_id {user_id}: {e}")
             return JSONResponse(
                 status_code=400,
                 content={

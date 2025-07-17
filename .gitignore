@@ -33,3 +33,4 @@ untracked/*
 backends/advanced-backend/data/*
 extras/havpe-relay/firmware/secrets.yaml
 extras/havpe-relay/firmware/.esphome/*
+extras/test-audios/*

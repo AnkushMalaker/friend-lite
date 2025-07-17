@@ -3,18 +3,23 @@
 Upload audio files to the Friend-Lite backend for processing.
 """
 
+import logging
 import os
 import sys
 import requests
 from pathlib import Path
 from typing import Optional
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 
 def load_env_variables() -> Optional[str]:
     """Load ADMIN_PASSWORD from .env file."""
     env_file = Path(".env")
     if not env_file.exists():
-        print("❌ .env file not found. Please create it with ADMIN_PASSWORD.")
+        logger.error(".env file not found. Please create it with ADMIN_PASSWORD.")
         return None
     
     admin_password = None
@@ -26,7 +31,7 @@ def load_env_variables() -> Optional[str]:
                 break
     
     if not admin_password:
-        print("❌ ADMIN_PASSWORD not found in .env file.")
+        logger.error("ADMIN_PASSWORD not found in .env file.")
         return None
     
     return admin_password
@@ -34,7 +39,7 @@ def load_env_variables() -> Optional[str]:
 
 def get_admin_token(password: str, base_url: str = "http://localhost:8000") -> Optional[str]:
     """Authenticate and get admin token."""
-    print("🔑 Requesting admin token...")
+    logger.info("Requesting admin token...")
     
     auth_url = f"{base_url}/auth/jwt/login"
     
@@ -51,45 +56,46 @@ def get_admin_token(password: str, base_url: str = "http://localhost:8000") -> O
             timeout=10
         )
         
-        print(f"🔍 Auth response status: {response.status_code}")
+        logger.info(f"Auth response status: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
             token = data.get('access_token')
             if token:
-                print("✅ Admin token obtained.")
+                logger.info("Admin token obtained.")
                 return token
             else:
-                print("❌ No access token in response.")
-                print(f"Available fields: {list(data.keys())}")
+                logger.error("No access token in response.")
+                logger.error(f"Available fields: {list(data.keys())}")
                 return None
         else:
-            print(f"❌ Authentication failed with status {response.status_code}")
+            logger.error(f"Authentication failed with status {response.status_code}")
             try:
                 error_data = response.json()
-                print(f"Error details: {error_data}")
-            except:
-                print(f"Response text: {response.text}")
+                logger.error(f"Error details: {error_data}")
+            except Exception as json_error:
+                logger.error(f"Failed to parse error response as JSON: {json_error}")
+                logger.error(f"Response text: {response.text}")
             return None
             
     except requests.exceptions.RequestException as e:
-        print(f"❌ Request failed: {e}")
+        logger.error(f"Request failed: {e}")
         return None
 
 
 def collect_wav_files(audio_dir: str, filter_list: Optional[list[str]] = None) -> list[str]:
     """Collect all .wav files from the specified directory."""
-    print(f"📂 Collecting .wav files from {audio_dir} ...")
+    logger.info(f"Collecting .wav files from {audio_dir} ...")
     
     audio_path = Path(audio_dir).expanduser()
     if not audio_path.exists():
-        print(f"❌ Directory {audio_path} does not exist.")
+        logger.error(f"Directory {audio_path} does not exist.")
         return []
     
     wav_files = list(audio_path.glob("*.wav"))
     
     if not wav_files:
-        print(f"⚠️  No .wav files found in {audio_path}")
+        logger.warning(f"No .wav files found in {audio_path}")
         return []
     
     # Filter files if filter_list is provided, otherwise accept all
@@ -101,11 +107,11 @@ def collect_wav_files(audio_dir: str, filter_list: Optional[list[str]] = None) -
             if f.name in filter_list:
                 selected_files.append(f)
             else:
-                print(f"  ⏭️  Skipping file (not in filter): {f.name}")
+                logger.info(f"Skipping file (not in filter): {f.name}")
     
-    print(f"📦 Total files to upload: {len(selected_files)}")
+    logger.info(f"Total files to upload: {len(selected_files)}")
     for file_path in selected_files:
-        print(f"  ➕ Added file: {file_path}")
+        logger.info(f"Added file: {file_path}")
     
     return [str(f) for f in selected_files]
 
@@ -113,10 +119,10 @@ def collect_wav_files(audio_dir: str, filter_list: Optional[list[str]] = None) -
 def upload_files(files: list[str], token: str, base_url: str = "http://localhost:8000") -> bool:
     """Upload files to the backend for processing."""
     if not files:
-        print("❌ No files to upload.")
+        logger.error("No files to upload.")
         return False
     
-    print(f"🚀 Uploading files to {base_url}/api/process-audio-files ...")
+    logger.info(f"Uploading files to {base_url}/api/process-audio-files ...")
     
     # Prepare files for upload
     files_data = []
@@ -124,11 +130,11 @@ def upload_files(files: list[str], token: str, base_url: str = "http://localhost
         try:
             files_data.append(('files', (os.path.basename(file_path), open(file_path, 'rb'), 'audio/wav')))
         except IOError as e:
-            print(f"❌ Error opening file {file_path}: {e}")
+            logger.error(f"Error opening file {file_path}: {e}")
             continue
     
     if not files_data:
-        print("❌ No files could be opened for upload.")
+        logger.error("No files could be opened for upload.")
         return False
     
     try:
@@ -146,44 +152,46 @@ def upload_files(files: list[str], token: str, base_url: str = "http://localhost
         for _, file_tuple in files_data:
             file_tuple[1].close()
         
-        print(f"📤 Upload response status: {response.status_code}")
+        logger.info(f"Upload response status: {response.status_code}")
         
         if response.status_code == 200:
-            print("✅ File upload completed successfully.")
+            logger.info("File upload completed successfully.")
             try:
                 result = response.json()
-                print(f"📊 Response: {result}")
-            except:
-                print(f"📊 Response: {response.text}")
+                logger.info(f"Response: {result}")
+            except Exception as json_error:
+                logger.error(f"Failed to parse success response as JSON: {json_error}")
+                logger.info(f"Response: {response.text}")
             return True
         else:
-            print(f"❌ File upload failed with status {response.status_code}")
+            logger.error(f"File upload failed with status {response.status_code}")
             try:
                 error_data = response.json()
-                print(f"Error details: {error_data}")
-            except:
-                print(f"Response text: {response.text}")
+                logger.error(f"Error details: {error_data}")
+            except Exception as json_error:
+                logger.error(f"Failed to parse error response as JSON: {json_error}")
+                logger.error(f"Response text: {response.text}")
             return False
             
     except requests.exceptions.Timeout:
-        print("❌ Upload request timed out.")
+        logger.error("Upload request timed out.")
         return False
     except requests.exceptions.RequestException as e:
-        print(f"❌ Upload request failed: {e}")
+        logger.error(f"Upload request failed: {e}")
         return False
     finally:
         # Ensure all file handles are closed
         for _, file_tuple in files_data:
             try:
                 file_tuple[1].close()
-            except:
-                pass
+            except Exception as close_error:
+                logger.warning(f"Failed to close file handle: {close_error}")
 
 
 def main():
     """Main function to orchestrate the upload process."""
-    print("🎵 Friend-Lite Audio File Upload Tool")
-    print("=" * 40)
+    logger.info("Friend-Lite Audio File Upload Tool")
+    logger.info("=" * 40)
     
     # Load environment variables
     admin_password = load_env_variables()
@@ -204,7 +212,7 @@ def main():
     
     if specific_file_path.exists():
         wav_files = [str(specific_file_path)]
-        print(f"📦 Found specific test file: {specific_file_path}")
+        logger.info(f"Found specific test file: {specific_file_path}")
     else:
         # Fallback to original directory
         audio_dir = os.path.expanduser("~/Some dir/")
@@ -214,20 +222,20 @@ def main():
             sys.exit(1)
     
     if not wav_files:
-        print("❌ None of the test files were found")
+        logger.error("None of the test files were found")
         sys.exit(1)
     
-    print(f"🧪 Testing with {len(wav_files)} files:")
+    logger.info(f"Testing with {len(wav_files)} files:")
     for f in wav_files:
-        print(f"  - {os.path.basename(f)}")
+        logger.info(f"- {os.path.basename(f)}")
     
     success = upload_files(wav_files, token)
     
     if success:
-        print("\n🎉 Upload process completed successfully!")
+        logger.info("Upload process completed successfully!")
         sys.exit(0)
     else:
-        print("\n❌ Upload process failed.")
+        logger.error("Upload process failed.")
         sys.exit(1)
 
 

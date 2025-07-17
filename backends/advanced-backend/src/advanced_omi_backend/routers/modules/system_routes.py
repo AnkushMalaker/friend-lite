@@ -51,7 +51,7 @@ async def get_current_metrics(current_user: User = Depends(current_superuser)):
 
     except Exception as e:
         audio_logger.error(f"Error fetching metrics: {e}")
-        return JSONResponse(status_code=500, content={"error": "Failed to fetch metrics"})
+        return JSONResponse(status_code=500, content={"error": f"Failed to fetch metrics: {str(e)}"})
 
 
 @router.get("/auth/config")

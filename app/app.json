@@ -30,7 +30,27 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_NETWORK_STATE"
-      ]
+      ],
+      "usesCleartextTraffic": true,
+      "networkSecurityConfig": {
+        "domainConfig": {
+          "cleartextTrafficPermitted": true,
+          "domain": [
+            {
+              "includeSubdomains": true,
+              "name": "localhost"
+            },
+            {
+              "includeSubdomains": true,
+              "name": "192.168.0.0/16"
+            },
+            {
+              "includeSubdomains": true,
+              "name": "100.64.0.0/10"
+            }
+          ]
+        }
+      }
     },
     "newArchEnabled": true,
     "plugins": [
@@ -44,6 +64,11 @@
           "bluetoothAlwaysPermission": "This app uses Bluetooth to connect to and interact with nearby BLE devices."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "05d8598e-6fe7-4373-81e4-1654f3d8e181"
+      }
+    }
   }
 }

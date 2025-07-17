@@ -25,8 +25,8 @@ uv run isort src/
 # Run tests
 uv run pytest
 uv run pytest tests/test_memory_service.py  # Single test file
+uv run pytest test_integration.py  # End-to-end integration test (requires Docker)
 uv run pytest test_endpoints.py  # Integration tests
-uv run pytest test_failure_recovery.py  # Failure recovery tests
 uv run pytest test_memory_debug.py  # Memory debug tests
 
 # Environment setup
@@ -72,7 +72,6 @@ docker compose up --build
   - `src/main.py`: Central FastAPI application with WebSocket audio streaming
   - `src/auth.py`: Email-based authentication with JWT tokens
   - `src/memory/`: LLM-powered conversation memory system using mem0
-  - `src/failure_recovery/`: Robust processing pipeline with SQLite tracking
   - `webui/streamlit_app.py`: Web dashboard for conversation and user management
 
 ### Key Components
@@ -80,7 +79,7 @@ docker compose up --build
 - **Transcription**: Deepgram Nova-3 model with Wyoming ASR fallback, auto-reconnection
 - **Authentication**: Email-based login with MongoDB ObjectId user system
 - **Client Management**: Auto-generated client IDs as `{user_id_suffix}-{device_name}`, centralized ClientManager
-- **Data Storage**: MongoDB (conversations), Qdrant (vector memory), SQLite (failure recovery)
+- **Data Storage**: MongoDB (`audio_chunks` collection for conversations), Qdrant (vector memory)
 - **Web Interface**: Streamlit dashboard with authentication and real-time monitoring
 
 ### Service Dependencies
@@ -88,10 +87,10 @@ docker compose up --build
 Required:
   - MongoDB: User data and conversations
   - FastAPI Backend: Core audio processing
+  - LLM Service: Memory extraction and action items (OpenAI or Ollama)
 
 Recommended:
   - Qdrant: Vector storage for semantic memory
-  - Ollama: LLM for memory extraction and action items
   - Deepgram: Primary transcription service (Nova-3 WebSocket)
   - Wyoming ASR: Fallback transcription service (offline)
 
@@ -104,10 +103,17 @@ Optional:
 
 1. **Audio Ingestion**: OMI devices stream Opus audio via WebSocket with JWT auth
 2. **Real-time Processing**: Per-client queues handle transcription and buffering
-3. **Conversation Management**: Automatic timeout-based conversation segmentation
-4. **Memory Extraction**: LLM processes completed conversations for semantic storage
-5. **Action Items**: Automatic task detection with "Simon says" trigger phrases
-6. **Audio Optimization**: Speech segment extraction removes silence automatically
+3. **Conversation Storage**: Transcripts saved to MongoDB `audio_chunks` collection with segments array
+4. **Conversation Management**: Automatic timeout-based conversation segmentation
+5. **Memory Extraction**: Background LLM processing (decoupled from conversation storage)
+6. **Action Items**: Automatic task detection with "Simon says" trigger phrases
+7. **Audio Optimization**: Speech segment extraction removes silence automatically
+
+### Database Schema Details
+- **Conversations**: Stored in `audio_chunks` collection (not `conversations`)
+- **Transcript Format**: Array of segment objects with `text`, `speaker`, `start`, `end` fields
+- **Service Decoupling**: Conversation creation independent of memory processing
+- **Error Isolation**: Memory service failures don't affect conversation storage
 
 ## Authentication & Security
 
@@ -124,6 +130,15 @@ Optional:
 AUTH_SECRET_KEY=your-super-secret-jwt-key-here
 ADMIN_PASSWORD=your-secure-admin-password
 ADMIN_EMAIL=admin@example.com
+
+# For integration tests (CI/CD)
+DEEPGRAM_API_KEY=your-deepgram-key-here
+OPENAI_API_KEY=your-openai-key-here
+
+# CI Environment Requirements:
+# - Docker must be available (GitHub Actions ubuntu-latest includes Docker)
+# - User must have Docker permissions (no sudo required)
+# - For macOS local development, run ./mac-os-docker-ci-quickfix.sh if needed
 ```
 
 ### Optional Service Configuration
@@ -150,9 +165,9 @@ SPEAKER_SERVICE_URL=http://speaker-recognition:8001
 - **Docker**: Primary deployment method with docker-compose
 
 ### Testing Strategy
-- **Integration Tests**: `test_endpoints.py` covers API functionality
-- **Unit Tests**: Individual service tests in `tests/` directory
-- **System Tests**: `test_failure_recovery.py` and `test_memory_debug.py`
+- **End-to-End Integration**: `test_integration.py` validates complete audio processing pipeline
+- **API Integration Tests**: `test_endpoints.py` covers API functionality
+- **Unit Tests**: Individual service tests in `tests/` directory (NOT IMPLEMENTED)
 
 ### Code Style
 - **Python**: Black formatter with 100-character line length, isort for imports
@@ -162,8 +177,16 @@ SPEAKER_SERVICE_URL=http://speaker-recognition:8001
 The system includes comprehensive health checks:
 - `/readiness`: Service dependency validation
 - `/health`: Basic application status
-- Failure recovery system with SQLite tracking
 - Memory debug system for transcript processing monitoring
+
+### Integration Test Infrastructure
+- **Test Environment**: `docker-compose-test.yml` provides isolated services on separate ports
+- **Test Database**: Uses `test_db` database with isolated collections
+- **Service Ports**: Backend (8001), MongoDB (27018), Qdrant (6335/6336), Streamlit (8502)
+- **Test Credentials**: Pre-configured in `.env.test` for repeatable testing
+- **Ground Truth**: Expected transcript established via `scripts/test_deepgram_direct.py`
+- **AI Validation**: OpenAI-powered transcript similarity comparison
+- **Test Audio**: 4-minute glass blowing tutorial (`extras/test-audios/DIY*mono*.wav`)
 
 ### Cursor Rule Integration
 Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding before coding. Always explain the task and confirm approach before implementation.

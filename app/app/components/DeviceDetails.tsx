@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, ScrollView, Alert, Modal } from 'react-native';
+import React from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput } from 'react-native';
 import { BleAudioCodec } from 'friend-lite-react-native';
 
 interface DeviceDetailsProps {
@@ -25,10 +25,13 @@ interface DeviceDetailsProps {
   isConnectingAudioStreamer: boolean;
   audioStreamerError: string | null;
 
-  // User ID Management
+  // User ID Management  
   userId: string;
   onSetUserId: (userId: string) => void;
-  onFetchUsers: () => Promise<string[]>;
+
+  // Audio Listener Retry State
+  isAudioListenerRetrying?: boolean;
+  audioListenerRetryAttempts?: number;
 }
 
 export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
@@ -48,38 +51,11 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
   audioStreamerError,
   userId,
   onSetUserId,
-  onFetchUsers
+  isAudioListenerRetrying,
+  audioListenerRetryAttempts
 }) => {
-  const [showUsersModal, setShowUsersModal] = useState(false);
-  const [availableUsers, setAvailableUsers] = useState<string[]>([]);
-  const [isFetchingUsers, setIsFetchingUsers] = useState(false);
   if (!connectedDeviceId) return null;
 
-  const handleFetchUsers = async () => {
-    setIsFetchingUsers(true);
-    try {
-      const users = await onFetchUsers();
-      setAvailableUsers(users);
-      if (users.length === 0) {
-        Alert.alert('No Users Found', 'No users found in the system.');
-      } else {
-        setShowUsersModal(true);
-      }
-    } catch (error) {
-      console.error('[DeviceDetails] Error fetching users:', error);
-      Alert.alert(
-        'User Management Unavailable', 
-        'Could not fetch users. This feature requires the advanced backend.\n\nYou can still manually enter a User ID.'
-      );
-    } finally {
-      setIsFetchingUsers(false);
-    }
-  };
-
-  const handleUserSelect = (selectedUserId: string) => {
-    onSetUserId(selectedUserId);
-    setShowUsersModal(false);
-  };
 
   return (
     <View style={styles.section}>
@@ -113,27 +89,18 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
       {/* User ID Management */}
       <View style={styles.subSection}>
         <Text style={styles.subSectionTitle}>User ID (optional)</Text>
-        <Text style={styles.inputLabel}>Enter User ID:</Text>
+        <Text style={styles.inputLabel}>Enter User ID (for device identification):</Text>
         <TextInput
           style={styles.textInput}
           value={userId}
           onChangeText={onSetUserId}
-          placeholder="e.g., john_doe, alice123"
+          placeholder="e.g., device_name, user_identifier"
           autoCapitalize="none"
           returnKeyType="done"
           autoCorrect={false}
           editable={!isListeningAudio && !isAudioStreaming}
         />
         
-        <TouchableOpacity
-          style={[styles.button, styles.buttonSecondary, { marginTop: 10 }]}
-          onPress={handleFetchUsers}
-          disabled={isFetchingUsers || isListeningAudio || isAudioStreaming}
-        >
-          <Text style={[styles.buttonText, styles.buttonSecondaryText]}>
-            {isFetchingUsers ? "Fetching Users..." : "Fetch Existing Users"}
-          </Text>
-        </TouchableOpacity>
         
         {userId && (
           <View style={styles.infoContainerSM}>
@@ -146,13 +113,27 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
       {/* Audio Controls */}
       <View style={styles.subSection}>
         <TouchableOpacity
-          style={[styles.button, isListeningAudio ? styles.buttonWarning : null, { marginTop: 15 } ]}
-          onPress={isListeningAudio ? onStopAudioListener : onStartAudioListener}
+          style={[
+            styles.button, 
+            isListeningAudio || isAudioListenerRetrying ? styles.buttonWarning : null, 
+            { marginTop: 15 }
+          ]}
+          onPress={isListeningAudio || isAudioListenerRetrying ? onStopAudioListener : onStartAudioListener}
         >
           <Text style={styles.buttonText}>
-            {isListeningAudio ? "Stop Audio Listener" : "Start Audio Listener"}
+            {isListeningAudio ? "Stop Audio Listener" : 
+             isAudioListenerRetrying ? "Stop Retry" : "Start Audio Listener"}
           </Text>
         </TouchableOpacity>
+        
+        {isAudioListenerRetrying && (
+          <View style={styles.retryContainer}>
+            <Text style={styles.retryText}>
+              🔄 Retrying audio listener... (Attempt {audioListenerRetryAttempts || 0}/10)
+            </Text>
+          </View>
+        )}
+        
         {isListeningAudio && (
           <View style={styles.infoContainerSM}>
             <Text style={styles.infoTitle}>Audio Packets Received:</Text>
@@ -189,36 +170,6 @@ export const DeviceDetails: React.FC<DeviceDetailsProps> = ({
         )}
       </View>
 
-      {/* Users Selection Modal */}
-      <Modal
-        visible={showUsersModal}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowUsersModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select User ID</Text>
-            <ScrollView style={styles.usersList}>
-              {availableUsers.map((user, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.userItem}
-                  onPress={() => handleUserSelect(user)}
-                >
-                  <Text style={styles.userText}>{user}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <TouchableOpacity
-              style={[styles.button, styles.buttonDanger, { marginTop: 15 }]}
-              onPress={() => setShowUsersModal(false)}
-            >
-              <Text style={styles.buttonText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
@@ -358,6 +309,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     width: '100%', // Ensure input takes full width of its container
     marginBottom: 10,
+    color: '#333',
   },
   statusText: { // New style for status messages
     marginTop: 8,
@@ -372,38 +324,19 @@ const styles = StyleSheet.create({
     color: 'red',
     fontWeight: 'bold',
   },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    margin: 20,
-    padding: 20,
-    borderRadius: 10,
-    maxHeight: '70%',
-    minWidth: '80%',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 15,
-    textAlign: 'center',
-  },
-  usersList: {
-    maxHeight: 200,
-  },
-  userItem: {
+  retryContainer: {
+    marginTop: 10,
     padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    backgroundColor: '#FFF3CD',
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9500',
   },
-  userText: {
-    fontSize: 16,
-    color: '#333',
+  retryText: {
+    fontSize: 14,
+    color: '#856404',
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });
 

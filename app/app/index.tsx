@@ -14,6 +14,8 @@ import {
   getWebSocketUrl,
   saveUserId,
   getUserId,
+  getAuthEmail,
+  getJwtToken,
 } from './utils/storage';
 import { useAudioListener } from './hooks/useAudioListener';
 import { useAudioStreamer } from './hooks/useAudioStreamer';
@@ -23,6 +25,8 @@ import BluetoothStatusBanner from './components/BluetoothStatusBanner';
 import ScanControls from './components/ScanControls';
 import DeviceListItem from './components/DeviceListItem';
 import DeviceDetails from './components/DeviceDetails';
+import AuthSection from './components/AuthSection';
+import BackendStatus from './components/BackendStatus';
 
 export default function App() {
   // Initialize OmiConnection
@@ -42,6 +46,11 @@ export default function App() {
   // State for User ID
   const [userId, setUserId] = useState<string>('');
   
+  // Authentication state
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [jwtToken, setJwtToken] = useState<string | null>(null);
+  
   // Bluetooth Management Hook
   const {
     bleManager,
@@ -60,6 +69,8 @@ export default function App() {
     audioPacketsReceived,
     startAudioListener: originalStartAudioListener,
     stopAudioListener: originalStopAudioListener,
+    isRetrying: isAudioListenerRetrying,
+    retryAttempts: audioListenerRetryAttempts,
   } = useAudioListener(
     omiConnection,
     () => !!deviceConnection.connectedDeviceId
@@ -130,6 +141,12 @@ export default function App() {
       if (storedWsUrl) {
         console.log('[App.tsx] Loaded WebSocket URL from storage:', storedWsUrl);
         setWebSocketUrl(storedWsUrl);
+      } else {
+        // Set default to simple backend
+        const defaultUrl = 'ws://localhost:8000/ws';
+        console.log('[App.tsx] No stored WebSocket URL, setting default for simple backend:', defaultUrl);
+        setWebSocketUrl(defaultUrl);
+        await saveWebSocketUrl(defaultUrl);
       }
 
       const storedUserId = await getUserId();
@@ -137,20 +154,20 @@ export default function App() {
         console.log('[App.tsx] Loaded User ID from storage:', storedUserId);
         setUserId(storedUserId);
       }
+
+      // Load authentication data
+      const storedEmail = await getAuthEmail();
+      const storedToken = await getJwtToken();
+      if (storedEmail && storedToken) {
+        console.log('[App.tsx] Loaded auth data from storage for:', storedEmail);
+        setCurrentUserEmail(storedEmail);
+        setJwtToken(storedToken);
+        setIsAuthenticated(true);
+      }
     };
     loadSettings();
   }, []);
 
-  // Now that deviceConnection is available, we can define the more specific isAudioReadyToListen
-  // for useAudioListener if we were to re-initialize it or if useAudioListener needs it reactively.
-  // However, useAudioListener is already initialized. The key is that callbacks passed to hooks are stable.
-  // The previous tempIsAudioReadyCb is likely sufficient if it broadly gates on omiConnection.
-  // For a more reactive isAudioReadyToListen (if needed by useAudioListener internally beyond init):
-  const refinedIsAudioReadyToListen = useCallback(() => {
-    return omiConnection.isConnected() && !!deviceConnection.connectedDeviceId;
-  }, [omiConnection, deviceConnection.connectedDeviceId]);
-  // If useAudioListener needed to react to deviceId changes for its readiness, its internal structure would need to accommodate that.
-  // For its initial call, tempIsAudioReadyCb was used. This is a common pattern to break dependency cycles.
 
   // Device Scanning Hook
   const {
@@ -229,14 +246,30 @@ export default function App() {
     }
 
     try {
-      // Modify WebSocket URL to include user_id if provided
-      let finalWebSocketUrl = webSocketUrl;
-      if (userId && userId.trim() !== '') {
+      let finalWebSocketUrl = webSocketUrl.trim();
+      
+      // Check if this is the advanced backend (requires authentication) or simple backend
+      const isAdvancedBackend = jwtToken && isAuthenticated;
+      
+      if (isAdvancedBackend) {
+        // Advanced backend: include JWT token and device parameters
+        const params = new URLSearchParams();
+        params.append('token', jwtToken);
+        
+        if (userId && userId.trim() !== '') {
+          params.append('device_name', userId.trim());
+          console.log('[App.tsx] Using advanced backend with token and device_name:', userId.trim());
+        } else {
+          params.append('device_name', 'phone'); // Default device name
+          console.log('[App.tsx] Using advanced backend with token and default device_name');
+        }
+        
         const separator = webSocketUrl.includes('?') ? '&' : '?';
-        finalWebSocketUrl = `${webSocketUrl}${separator}user_id=${encodeURIComponent(userId.trim())}`;
-        console.log('[App.tsx] Using WebSocket URL with user_id:', finalWebSocketUrl);
+        finalWebSocketUrl = `${webSocketUrl}${separator}${params.toString()}`;
+        console.log('[App.tsx] Advanced backend WebSocket URL constructed (token hidden for security)');
       } else {
-        console.log('[App.tsx] Using WebSocket URL without user_id:', finalWebSocketUrl);
+        // Simple backend: use URL as-is without authentication
+        console.log('[App.tsx] Using simple backend without authentication:', finalWebSocketUrl);
       }
 
       // Start custom WebSocket streaming first
@@ -255,7 +288,7 @@ export default function App() {
       // Ensure cleanup if one part started but the other failed
       if (audioStreamer.isStreaming) audioStreamer.stopStreaming();
     }
-  }, [originalStartAudioListener, audioStreamer, webSocketUrl, userId, omiConnection, deviceConnection.connectedDeviceId]);
+  }, [originalStartAudioListener, audioStreamer, webSocketUrl, userId, omiConnection, deviceConnection.connectedDeviceId, jwtToken, isAuthenticated]);
 
   const handleStopAudioListeningAndStreaming = useCallback(async () => {
     console.log('[App.tsx] Stopping audio listening and streaming.');
@@ -287,6 +320,7 @@ export default function App() {
     !deviceConnection.isConnecting &&
     !deviceConnection.connectedDeviceId &&
     (triedAutoReconnectForCurrentId || !lastKnownDeviceId)
+    // Removed authentication requirement for scanning
   ), [
     permissionGranted,
     bluetoothState,
@@ -317,26 +351,13 @@ export default function App() {
     await saveUserId(id || null);
   }, []);
 
-  const fetchUsers = useCallback(async (): Promise<string[]> => {
-    if (!webSocketUrl) {
-      throw new Error('WebSocket URL not set');
-    }
-    
-    // Convert WebSocket URL to HTTP URL for API call
-    const baseUrl = webSocketUrl.replace('ws://', 'http://').replace('wss://', 'https://').split('/ws')[0];
-    
-    try {
-      const response = await fetch(`${baseUrl}/api/users`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      const users = await response.json();
-      return users.map((user: any) => user.user_id);
-    } catch (error) {
-      console.error('[App.tsx] Error fetching users:', error);
-      throw error;
-    }
-  }, [webSocketUrl]);
+  // Authentication status change handler
+  const handleAuthStatusChange = useCallback((authenticated: boolean, email: string | null, token: string | null) => {
+    setIsAuthenticated(authenticated);
+    setCurrentUserEmail(email);
+    setJwtToken(token);
+    console.log('[App.tsx] Auth status changed:', { authenticated, email: email ? 'logged in' : 'logged out' });
+  }, []);
 
   const handleCancelAutoReconnect = useCallback(async () => {
     console.log('[App.tsx] Cancelling auto-reconnection attempt.');
@@ -392,6 +413,21 @@ export default function App() {
         >
           <Text style={styles.title}>Friend Lite</Text>
 
+          {/* Backend Connection - moved to top */}
+          <BackendStatus
+            backendUrl={webSocketUrl}
+            onBackendUrlChange={handleSetAndSaveWebSocketUrl}
+            jwtToken={jwtToken}
+          />
+
+          {/* Authentication Section */}
+          <AuthSection
+            backendUrl={webSocketUrl}
+            isAuthenticated={isAuthenticated}
+            currentUserEmail={currentUserEmail}
+            onAuthStatusChange={handleAuthStatusChange}
+          />
+
           <BluetoothStatusBanner
             bluetoothState={bluetoothState}
             isPermissionsLoading={isPermissionsLoading}
@@ -405,6 +441,14 @@ export default function App() {
             onStopScanPress={stopDeviceScanAction}
             canScan={canScan}
           />
+
+          {!isAuthenticated && (
+            <View style={styles.authWarning}>
+              <Text style={styles.authWarningText}>
+                💡 Login is required for advanced backend features. Simple backend can be used without authentication.
+              </Text>
+            </View>
+          )}
 
           {scannedDevices.length > 0 && !deviceConnection.connectedDeviceId && !isAttemptingAutoReconnect && (
             <View style={styles.section}>
@@ -529,7 +573,8 @@ export default function App() {
               audioStreamerError={audioStreamer.error}
               userId={userId}
               onSetUserId={handleSetAndSaveUserId}
-              onFetchUsers={fetchUsers}
+              isAudioListenerRetrying={isAudioListenerRetrying}
+              audioListenerRetryAttempts={audioListenerRetryAttempts}
             />
           )}
         </ScrollView>
@@ -634,5 +679,19 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  authWarning: {
+    marginBottom: 20,
+    padding: 15,
+    backgroundColor: '#FFF3CD',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFEAA7',
+  },
+  authWarningText: {
+    fontSize: 14,
+    color: '#856404',
+    textAlign: 'center',
+    fontWeight: '500',
   },
 });

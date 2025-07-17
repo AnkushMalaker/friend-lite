@@ -75,8 +75,10 @@ async def get_user_by_id(user_id: str) -> Optional[User]:
     """Get user by MongoDB ObjectId string."""
     try:
         return await User.get(PydanticObjectId(user_id))
-    except Exception:
-        return None
+    except Exception as e:
+        logger.error(f"Failed to get user by ID {user_id}: {e}")
+        # Re-raise for proper error handling upstream
+        raise
 
 
 async def get_user_by_client_id(client_id: str) -> Optional[User]:
