@@ -140,10 +140,15 @@ class IntegrationTestRunner:
         """Set up environment variables for CI testing."""
         logger.info("Setting up CI environment variables...")
         
-        # Load .env file to get local credentials
+        # Load .env.test file to get CI credentials
         try:
-            load_dotenv()
-            logger.info("✓ Loaded .env file")
+            # Try to load .env.test first (CI environment), then fall back to .env (local development)
+            if os.path.exists('.env.test'):
+                load_dotenv('.env.test')
+                logger.info("✓ Loaded .env.test file (CI environment)")
+            else:
+                load_dotenv()
+                logger.info("✓ Loaded .env file (local development)")
         except ImportError:
             logger.warning("⚠️ python-dotenv not available, relying on shell environment")
             # why would this ever happen?
