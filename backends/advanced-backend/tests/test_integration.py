@@ -659,7 +659,7 @@ class IntegrationTestRunner:
             
             prompt = f"""
             Compare these two lists of memories to see if they represent similar content.
-            The actual memories should cover the same key points as the expected memories.
+            The actual memories should cover the same key points as the expected memories. They should be more or less similar, making sure that they're convering too different memories indicating an error in the process like transcription error or something.
             
             IGNORE differences in:
             - Client IDs, user IDs, timestamps, and other metadata
@@ -671,7 +671,7 @@ class IntegrationTestRunner:
             EXPECTED MEMORIES:
             {expected_memories}
             
-            ACTUAL MEMORIES:
+            EXTRACTED MEMORIES:
             {actual_memory_texts}
             
             Respond in JSON format with:
@@ -683,7 +683,7 @@ class IntegrationTestRunner:
             """
             
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=400,
                 temperature=0,
@@ -692,9 +692,7 @@ class IntegrationTestRunner:
             
             response_text = (response.choices[0].message.content or "").strip()
             
-            # Try to parse JSON response
             try:
-                import json
                 result = json.loads(response_text)
                 return result
             except json.JSONDecodeError:
