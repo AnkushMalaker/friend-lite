@@ -3,6 +3,7 @@ name: Build All Platforms
 on:
   push:
     branches: [main]
+    paths: ['app/**']
   workflow_dispatch:
     inputs:
       build_android:
