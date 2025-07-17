@@ -59,6 +59,8 @@ jobs:
         echo "Setting up environment variables..."
         echo "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
         echo "OPENAI_API_KEY length: ${#OPENAI_API_KEY}"
+        # Clear existing .env.test file and create fresh one
+        > .env.test
         echo "DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY" >> .env.test
         echo "OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.test
         echo "AUTH_SECRET_KEY=test-jwt-signing-key-for-integration-tests" >> .env.test
