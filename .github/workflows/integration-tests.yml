@@ -78,7 +78,7 @@ jobs:
         # With the fixed fact extraction prompt, fresh mode should work correctly
         echo "Using fresh mode (CACHED_MODE=False) for clean CI testing"
         # Run the integration test with extended timeout (mem0 needs time for comprehensive extraction)
-        timeout 900 uv run tests/pytest test_integration.py::test_full_pipeline_integration -v -s --tb=short
+        timeout 900 uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s --tb=short
         
     - name: Upload test logs on failure
       if: failure()
