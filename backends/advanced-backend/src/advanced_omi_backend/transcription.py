@@ -76,6 +76,46 @@ class TranscriptionManager:
                 self._current_transaction_id, stage, success, error_message, **metadata
             )
 
+    def _parse_speaker_segments(self, formatted_text: str) -> list:
+        """
+        Parse formatted speaker text into individual segments.
+
+        Args:
+            formatted_text: Text with speaker labels like "Speaker 0: text\\nSpeaker 1: text"
+
+        Returns:
+            List of transcript segments with speaker, text, start, end
+        """
+        if not formatted_text:
+            return []
+
+        segments = []
+        lines = formatted_text.strip().split("\n")
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Check if line starts with "Speaker X:"
+            if line.startswith("Speaker ") and ":" in line:
+                # Extract speaker number and text
+                colon_pos = line.find(":")
+                speaker_part = line[:colon_pos].strip()
+                text_part = line[colon_pos + 1 :].strip()
+
+                if text_part:  # Only add if there's actual text
+                    segments.append(
+                        {
+                            "speaker": speaker_part,
+                            "text": text_part,
+                            "start": 0.0,  # TODO: Use actual timestamps from word data
+                            "end": 0.0,
+                        }
+                    )
+
+        return segments
+
     async def connect(self, client_id: str | None = None):
         """Initialize transcription service for the client."""
         self._client_id = client_id
@@ -131,23 +171,41 @@ class TranscriptionManager:
             if self.online_provider is None:
                 logger.error("Online provider is None, this shouldn't happen")
                 return
-            transcript_text = await self.online_provider.transcribe(combined_audio)
+            transcript_result = await self.online_provider.transcribe(combined_audio)
 
-            if transcript_text and self._current_audio_uuid:
+            if transcript_result and transcript_result.get("text") and self._current_audio_uuid:
+                transcript_text = transcript_result["text"]
                 logger.info(
                     f"{self.online_provider.name} batch transcript for {self._current_audio_uuid}: {transcript_text}"
                 )
 
-                # Create transcript segment
-                transcript_segment = {
-                    "speaker": f"speaker_{self._client_id}",
-                    "text": transcript_text,
-                    "start": 0.0,
-                    "end": 0.0,
-                }
+                # Parse speaker segments from formatted text
+                speaker_segments = self._parse_speaker_segments(transcript_text)
 
-                # Store in database
-                if self.chunk_repo:
+                # Store each speaker segment separately in database
+                if self.chunk_repo and speaker_segments:
+                    speakers_found = set()
+                    for segment in speaker_segments:
+                        await self.chunk_repo.add_transcript_segment(
+                            self._current_audio_uuid, segment
+                        )
+                        speakers_found.add(segment["speaker"])
+
+                    # Add all identified speakers
+                    for speaker in speakers_found:
+                        await self.chunk_repo.add_speaker(self._current_audio_uuid, speaker)
+
+                    logger.info(
+                        f"Added {len(speaker_segments)} segments for {len(speakers_found)} speakers"
+                    )
+                elif self.chunk_repo:
+                    # Fallback: store as single segment if parsing fails
+                    transcript_segment = {
+                        "speaker": f"speaker_{self._client_id}",
+                        "text": transcript_text,
+                        "start": 0.0,
+                        "end": 0.0,
+                    }
                     await self.chunk_repo.add_transcript_segment(
                         self._current_audio_uuid, transcript_segment
                     )

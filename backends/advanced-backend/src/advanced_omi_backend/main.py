@@ -41,6 +41,7 @@ from advanced_omi_backend.auth import (
     websocket_auth,
 )
 from advanced_omi_backend.client import ClientState
+from advanced_omi_backend.client_manager import generate_client_id
 from advanced_omi_backend.database import AudioChunksCollectionHelper
 from advanced_omi_backend.debug_system_tracker import (
     get_debug_tracker,
@@ -53,7 +54,7 @@ from advanced_omi_backend.memory import (
     shutdown_memory_service,
 )
 from advanced_omi_backend.transcription_providers import get_transcription_provider
-from advanced_omi_backend.users import User, generate_client_id, register_client_to_user
+from advanced_omi_backend.users import User, register_client_to_user
 
 ###############################################################################
 # SETUP

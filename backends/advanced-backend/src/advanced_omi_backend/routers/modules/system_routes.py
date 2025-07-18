@@ -16,8 +16,9 @@ from fastapi.responses import JSONResponse
 from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.auth import current_superuser
+from advanced_omi_backend.client_manager import generate_client_id
 from advanced_omi_backend.debug_system_tracker import get_debug_tracker
-from advanced_omi_backend.users import User, generate_client_id
+from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -51,7 +52,9 @@ async def get_current_metrics(current_user: User = Depends(current_superuser)):
 
     except Exception as e:
         audio_logger.error(f"Error fetching metrics: {e}")
-        return JSONResponse(status_code=500, content={"error": f"Failed to fetch metrics: {str(e)}"})
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to fetch metrics: {str(e)}"}
+        )
 
 
 @router.get("/auth/config")
