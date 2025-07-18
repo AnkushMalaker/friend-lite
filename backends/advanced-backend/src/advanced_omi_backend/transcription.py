@@ -27,7 +27,7 @@ class TranscriptionManager:
     """Manages transcription using either Deepgram batch API or offline ASR service."""
 
     # TODO: Accept callbacks list
-    def __init__(self, chunk_repo=None):
+    def __init__(self, chunk_repo=None, processor_manager=None):
         self.client = None
         self._current_audio_uuid = None
         self.online_provider: Optional[OnlineTranscriptionProvider] = get_transcription_provider(
@@ -40,6 +40,7 @@ class TranscriptionManager:
         self._current_transaction_id = None  # Track current debug transaction
         self.chunk_repo = chunk_repo  # Database repository for chunks
         self.client_manager = get_client_manager()  # Cached client manager instance
+        self.processor_manager = processor_manager  # Reference to processor manager for completion tracking
 
         # Event-driven ASR event handling for offline ASR
         self._event_queue = asyncio.Queue()
@@ -216,12 +217,26 @@ class TranscriptionManager:
                 # Update client state
                 current_client = self._get_current_client()
                 if current_client:
-                    current_client.last_transcript_time = time.time()
-                    current_client.conversation_transcripts.append(transcript_text)
+                    current_client.add_transcript(transcript_text)
 
                 logger.info(
                     f"Added {self.online_provider.name} batch transcript for {self._current_audio_uuid} to DB"
                 )
+                
+                # Mark transcription as completed for this client
+                if self.processor_manager and self._client_id:
+                    segment_count = len(speaker_segments) if speaker_segments else 1
+                    self.processor_manager.track_processing_stage(
+                        self._client_id,
+                        "transcription",
+                        "completed",
+                        {
+                            "audio_uuid": self._current_audio_uuid,
+                            "segments": segment_count,
+                            "provider": self.online_provider.name
+                        }
+                    )
+                    logger.info(f"Marked transcription as completed for client {self._client_id}")
 
         except Exception as e:
             logger.error(f"Error processing collected audio: {e}")
@@ -287,7 +302,7 @@ class TranscriptionManager:
                                 # Update client state
                                 current_client = self._get_current_client()
                                 if current_client:
-                                    current_client.conversation_transcripts.append(transcript_text)
+                                    current_client.add_transcript(transcript_text)
                                     logger.info(f"🏁 Added final transcript to conversation")
 
                     except asyncio.TimeoutError:
@@ -422,13 +437,27 @@ class TranscriptionManager:
                     await self.chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
                     await self.chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
                     logger.info(f"📝 Added transcript segment for {audio_uuid} to DB.")
+                    
+                    # Mark transcription as completed for this client (offline ASR processes one segment at a time)
+                    if self.processor_manager and client_id:
+                        self.processor_manager.track_processing_stage(
+                            client_id,
+                            "transcription",
+                            "completed",
+                            {
+                                "audio_uuid": audio_uuid,
+                                "segments": 1,  # Offline ASR processes one segment at a time
+                                "provider": "offline_asr"
+                            }
+                        )
+                        logger.info(f"Marked transcription as completed for client {client_id} (offline ASR)")
 
                 # Update transcript time for conversation timeout tracking
                 current_client = self.client_manager.get_client(client_id)
                 if current_client:
                     current_client.last_transcript_time = time.time()
                     # Collect transcript for end-of-conversation memory processing
-                    current_client.conversation_transcripts.append(transcript_text)
+                    current_client.add_transcript(transcript_text)
                     logger.info(f"Added transcript to conversation collection: '{transcript_text}'")
 
         elif VoiceStarted.is_type(event.type):

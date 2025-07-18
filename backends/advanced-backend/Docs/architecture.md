@@ -24,12 +24,20 @@ graph TB
     end
     
     %% Audio Processing Pipeline
-    subgraph "Audio Processing Pipeline"
+    subgraph "Application-Level Processing"
         OpusDecoder[Opus Decoder<br/>Realtime Audio]
-        AudioChunks[Audio Chunks<br/>Per-Client Queues]
-        Transcription[Transcription Manager<br/>Deepgram WebSocket/Wyoming Fallback]
-        ClientState[Per-Client State<br/>Conversation Management]
-        AudioCropping[Audio Cropping<br/>Speech Segment Extraction]
+        ProcessorManager[Processor Manager<br/>Centralized Processing]
+        AudioProcessor[Audio Processor<br/>File Management]
+        TranscriptionProcessor[Transcription Processor<br/>Deepgram WebSocket/Wyoming]
+        MemoryProcessor[Memory Processor<br/>LLM Processing]
+        CroppingProcessor[Cropping Processor<br/>Speech Segment Extraction]
+        TaskManager[Task Manager<br/>Background Task Tracking]
+    end
+    
+    %% Client State Management
+    subgraph "Client State Management"
+        ClientState[Client State<br/>Conversation State Only]
+        ClientManager[Client Manager<br/>Connection Management]
     end
     
     %% Business Logic Services
@@ -70,24 +78,27 @@ graph TB
     %% Audio Processing Flow
     Client -->|Opus/PCM Audio| Main
     Main -->|Audio Packets| OpusDecoder
-    OpusDecoder -->|PCM Data| AudioChunks
-    AudioChunks -->|Per-Client Processing| ClientState
-    ClientState -->|Audio Chunks| Transcription
-    ClientState -->|Speech Segments| AudioCropping
+    OpusDecoder -->|PCM Data| ProcessorManager
+    ProcessorManager -->|Global Queues| AudioProcessor
+    ProcessorManager -->|Global Queues| TranscriptionProcessor
+    ProcessorManager -->|Global Queues| MemoryProcessor
+    ProcessorManager -->|Global Queues| CroppingProcessor
+    ClientState -->|State Only| ClientManager
+    TaskManager -->|Task Tracking| ProcessorManager
     
     %% WebSocket & REST Endpoints
     Main -->|/ws, /ws_pcm| Client
     Main -->|/api/* endpoints| WebUI
     
     %% Service Integration
-    Transcription -->|Conversation Data| Memory
-    Memory -->|Memory Storage| Ollama
-    Memory -->|Vector Storage| Qdrant
+    TranscriptionProcessor -->|Conversation Data| Memory
+    MemoryProcessor -->|Memory Storage| Ollama
+    MemoryProcessor -->|Vector Storage| Qdrant
     
     %% External Service Connections
     Main -->|User & Conversation Data| MongoDB
-    Transcription -->|Speech Processing| ASR
-    Memory -->|Embeddings| Qdrant
+    TranscriptionProcessor -->|Speech Processing| ASR
+    MemoryProcessor -->|Embeddings| Qdrant
     
     %% Monitoring & Metrics
     Main -->|System Metrics| Metrics
@@ -185,7 +196,46 @@ client_state = ClientState(
 
 **Key Features**:
 - **Connection Tracking**: Real-time monitoring of active clients
-- **State Isolation**: Per-client queues and processing pipelines
+- **State Management**: Simplified client state for conversation tracking only
+- **Centralized Processing**: Application-level processors handle all background tasks
+
+### Application-Level Processing Architecture
+
+The system has been refactored from per-client processing to application-level processing for improved reliability and resource management:
+
+**Processor Manager**:
+```python
+# Centralized processing with global queues
+ProcessorManager(
+    audio_queue=asyncio.Queue(),          # Audio file management
+    transcription_queue=asyncio.Queue(),  # Deepgram/Wyoming ASR
+    memory_queue=asyncio.Queue(),         # LLM processing
+    cropping_queue=asyncio.Queue()        # Speech segment extraction
+)
+```
+
+**Background Task Manager**:
+```python
+# Centralized task tracking prevents orphaned processes
+BackgroundTaskManager(
+    tasks={},                    # Active task tracking
+    completed_tasks=[],          # Completed task history
+    max_completed_history=1000   # Task history limit
+)
+```
+
+**Key Benefits**:
+- **Prevents Orphaned Processes**: All background tasks tracked centrally
+- **Processing Continues After Disconnect**: Tasks complete even if client disconnects
+- **Resource Leak Prevention**: Proper cleanup of TCP connections, file handles, threads
+- **Robust Error Handling**: Comprehensive exception handling with guaranteed cleanup
+- **Task Timeout Management**: Automatic cancellation of long-running tasks
+
+**Architecture Changes**:
+- **ClientState**: Simplified to state management only (conversation tracking, speech segments)
+- **ProcessorManager**: Handles all audio, transcription, memory, and cropping tasks
+- **TaskManager**: Tracks all background tasks with health monitoring
+- **Exception Safety**: WebSocket handlers use try/finally for guaranteed cleanup
 - **Resource Management**: Automatic cleanup on client disconnect
 - **Multi-Device Support**: Single user can have multiple active clients
 - **Thread-Safe Operations**: Concurrent client access with proper synchronization

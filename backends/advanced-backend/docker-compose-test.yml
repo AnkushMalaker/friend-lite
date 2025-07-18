@@ -20,11 +20,14 @@ services:
       - MONGODB_URI=mongodb://mongo-test:27017/test_db
       - QDRANT_BASE_URL=qdrant-test
       - DEBUG_DIR=/app/debug_dir
+      # Import API keys from environment
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       qdrant-test:
         condition: service_started
       mongo-test:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
       interval: 10s
@@ -47,7 +50,7 @@ services:
       friend-backend-test:
         condition: service_healthy
       mongo-test:
-        condition: service_started
+        condition: service_healthy
       qdrant-test:
         condition: service_started
 
@@ -67,6 +70,12 @@ services:
       - ./data/test_mongo_data:/data/db
     # Use test database name to ensure isolation
     command: mongod --dbpath /data/db --bind_ip_all
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.runCommand('ping').ok", "--quiet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
 # CI Considerations (for future implementation):
 # - GitHub Actions can run these services in isolated containers

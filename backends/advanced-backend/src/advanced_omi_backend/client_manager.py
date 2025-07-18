@@ -83,6 +83,18 @@ class ClientManager:
             logger.warning("ClientManager not initialized, cannot check client")
             return False
         return client_id in self._active_clients
+    
+    def is_client_active(self, client_id: str) -> bool:
+        """
+        Check if a client is currently active (alias for has_client).
+
+        Args:
+            client_id: The client ID to check
+
+        Returns:
+            True if client is active, False otherwise
+        """
+        return self.has_client(client_id)
 
     def get_all_clients(self) -> Dict[str, "ClientState"]:
         """

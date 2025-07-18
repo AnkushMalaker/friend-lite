@@ -15,9 +15,12 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse
 from wyoming.audio import AudioChunk
 
-from advanced_omi_backend.auth import current_superuser
+from advanced_omi_backend.auth import current_active_user, current_superuser
 from advanced_omi_backend.client_manager import generate_client_id
+from advanced_omi_backend.database import chunks_col
 from advanced_omi_backend.debug_system_tracker import get_debug_tracker
+from advanced_omi_backend.processors import AudioProcessingItem, get_processor_manager
+from advanced_omi_backend.task_manager import get_task_manager
 from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
@@ -71,6 +74,107 @@ async def get_auth_config():
     }
 
 
+@router.get("/processor/tasks")
+async def get_all_processing_tasks(current_user: User = Depends(current_superuser)):
+    """Get all active processing tasks. Admin only."""
+    try:
+        processor_manager = get_processor_manager()
+        return processor_manager.get_all_processing_status()
+    except Exception as e:
+        logger.error(f"Error getting processing tasks: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get processing tasks: {str(e)}"}
+        )
+
+
+@router.get("/processor/tasks/{client_id}")
+async def get_processing_task_status(
+    client_id: str, 
+    current_user: User = Depends(current_superuser)
+):
+    """Get processing task status for a specific client. Admin only."""
+    try:
+        processor_manager = get_processor_manager()
+        processing_status = processor_manager.get_processing_status(client_id)
+        
+        # Check if transcription is marked as started but not completed, and verify with database
+        stages = processing_status.get("stages", {})
+        transcription_stage = stages.get("transcription", {})
+        
+        """This is a hack to update it the DB INCASE a process failed
+        if transcription_stage.get("status") == "started" and not transcription_stage.get("completed", False):
+            # Check if transcription is actually complete by checking the database
+            try:
+                chunk = await chunks_col.find_one({"client_id": client_id})
+                if chunk and chunk.get("transcript") and len(chunk.get("transcript", [])) > 0:
+                    # Transcription is complete! Update the processor state
+                    processor_manager.track_processing_stage(
+                        client_id,
+                        "transcription",
+                        "completed",
+                        {"audio_uuid": chunk.get("audio_uuid"), "segments": len(chunk.get("transcript", []))}
+                    )
+                    logger.info(f"Detected transcription completion for client {client_id} ({len(chunk.get('transcript', []))} segments)")
+                    # Get updated status
+                    processing_status = processor_manager.get_processing_status(client_id)
+            except Exception as e:
+                logger.debug(f"Error checking transcription completion: {e}")
+        """
+        return processing_status
+    except Exception as e:
+        logger.error(f"Error getting processing task status for {client_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get processing task status: {str(e)}"}
+        )
+
+
+@router.get("/processor/status")
+async def get_processor_status(current_user: User = Depends(current_superuser)):
+    """Get processor queue status and health. Admin only."""
+    try:
+        processor_manager = get_processor_manager()
+        
+        # Get queue sizes
+        status = {
+            "queues": {
+                "audio_queue": processor_manager.audio_queue.qsize(),
+                "transcription_queue": processor_manager.transcription_queue.qsize(),
+                "memory_queue": processor_manager.memory_queue.qsize(),
+                "cropping_queue": processor_manager.cropping_queue.qsize(),
+            },
+            "processors": {
+                "audio_processor": "running",
+                "transcription_processor": "running", 
+                "memory_processor": "running",
+                "cropping_processor": "running",
+            },
+            "active_clients": len(processor_manager.active_file_sinks),
+            "active_audio_uuids": len(processor_manager.active_audio_uuids),
+            "processing_tasks": len(processor_manager.processing_tasks),
+            "timestamp": int(time.time()),
+        }
+        
+        # Get task manager status if available
+        try:
+            task_manager = get_task_manager()
+            if task_manager:
+                task_status = task_manager.get_health_status()
+                status["task_manager"] = task_status
+        except Exception as e:
+            status["task_manager"] = {"error": str(e)}
+            
+        return status
+        
+    except Exception as e:
+        logger.error(f"Error getting processor status: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": f"Failed to get processor status: {str(e)}"}
+        )
+
+
 @router.post("/process-audio-files")
 async def process_audio_files(
     current_user: User = Depends(current_superuser),
@@ -113,6 +217,8 @@ async def process_audio_files(
                 audio_logger.info(
                     f"📁 Processing file {file_index + 1}/{len(files)}: {file.filename} with client_id: {client_id}"
                 )
+
+                processor_manager = get_processor_manager()
 
                 # Read file content
                 content = await file.read()
@@ -172,8 +278,15 @@ async def process_audio_files(
                             timestamp=chunk_timestamp,
                         )
 
-                        # Add to processing queue - this starts the transcription pipeline
-                        await client_state.chunk_queue.put(chunk)
+                        # Add to application-level processing queue
+                        
+                        audio_item = AudioProcessingItem(
+                            client_id=client_id,
+                            user_id=current_user.user_id,
+                            audio_chunk=chunk,
+                            timestamp=chunk.timestamp
+                        )
+                        await processor_manager.queue_audio(audio_item)
 
                         # Yield control occasionally to prevent blocking the event loop
                         if i % (chunk_size * 10) == 0:  # Every 10 chunks (~320KB)
@@ -202,18 +315,50 @@ async def process_audio_files(
                 # Wait for chunks to be processed by the audio saver
                 await asyncio.sleep(1.0)
 
-                # Wait for transcription queue to be processed for this file
+                # Wait for file processing to complete using task tracking
                 max_wait_time = 60  # 1 minute per file
                 wait_interval = 0.5
                 elapsed_time = 0
 
+                # Use concrete task tracking instead of database polling
                 while elapsed_time < max_wait_time:
-                    if (
-                        client_state.transcription_queue.empty()
-                        and client_state.chunk_queue.empty()
-                    ):
-                        audio_logger.info(f"📁 Transcription completed for file: {file.filename}")
-                        break
+                    try:
+                        # Check processing status using task tracking
+                        processing_status = processor_manager.get_processing_status(client_id)
+                        
+                        # Check if transcription stage is complete
+                        stages = processing_status.get("stages", {})
+                        transcription_stage = stages.get("transcription", {})
+                        
+                        # If transcription is marked as started but not completed, check database
+                        if transcription_stage.get("status") == "started" and not transcription_stage.get("completed", False):
+                            # Check if transcription is actually complete by checking the database
+                            try:
+                                chunk = await chunks_col.find_one({"client_id": client_id})
+                                if chunk and chunk.get("transcript") and len(chunk.get("transcript", [])) > 0:
+                                    # Transcription is complete! Update the processor state
+                                    processor_manager.track_processing_stage(
+                                        client_id,
+                                        "transcription",
+                                        "completed",
+                                        {"audio_uuid": chunk.get("audio_uuid"), "segments": len(chunk.get("transcript", []))}
+                                    )
+                                    audio_logger.info(f"📁 Transcription completed for file: {file.filename} ({len(chunk.get('transcript', []))} segments)")
+                                    break
+                            except Exception as e:
+                                audio_logger.debug(f"Error checking transcription completion: {e}")
+                        
+                        if transcription_stage.get("completed", False):
+                            audio_logger.info(f"📁 Transcription completed for file: {file.filename}")
+                            break
+                        
+                        # Check for errors
+                        if transcription_stage.get("error"):
+                            audio_logger.warning(f"📁 Transcription error for file: {file.filename}: {transcription_stage.get('error')}")
+                            break
+                            
+                    except Exception as e:
+                        audio_logger.debug(f"Error checking processing status: {e}")
 
                     await asyncio.sleep(wait_interval)
                     elapsed_time += wait_interval
@@ -221,8 +366,8 @@ async def process_audio_files(
                 if elapsed_time >= max_wait_time:
                     audio_logger.warning(f"📁 Transcription timed out for file: {file.filename}")
 
-                # Close this conversation by sending None to chunk queue
-                await client_state.chunk_queue.put(None)
+                # Signal end of conversation - trigger memory processing
+                await client_state.close_current_conversation()
 
                 # Give cleanup time to complete
                 await asyncio.sleep(0.5)

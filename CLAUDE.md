@@ -36,6 +36,52 @@ cp .env.template .env  # Configure environment variables
 sudo rm -rf ./audio_chunks/ ./mongo_data/ ./qdrant_data/
 ```
 
+### Integration Test Development and Debugging
+
+#### Running Integration Tests
+```bash
+# Basic integration test (requires API keys in .env)
+uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+
+# For debugging: Use cached mode to keep containers running
+# 1. Edit tests/test_integration.py: Set CACHED_MODE = True
+# 2. Run test (containers will persist after test ends)
+uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s --tb=short
+
+# Check running test containers
+docker ps
+docker logs advanced-backend-friend-backend-test-1 --tail=50
+docker logs advanced-backend-mongo-test-1 --tail=20
+docker logs advanced-backend-qdrant-test-1 --tail=20
+
+# Clean up test containers
+docker compose -f docker-compose-test.yml down -v
+```
+
+#### Integration Test Iteration Methodology
+1. **Set CACHED_MODE = True** in `tests/test_integration.py` for debugging
+2. **Run the test** - containers will start and persist even if test times out
+3. **Check container logs** to see where the test is hanging:
+   ```bash
+   docker logs advanced-backend-friend-backend-test-1 --tail=100
+   ```
+4. **Test API endpoints manually** while containers are running:
+   ```bash
+   curl -X GET http://localhost:8001/health
+   curl -X POST http://localhost:8001/auth/jwt/login \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d "username=test-admin@example.com&password=test-admin-password-123"
+   ```
+5. **Exec into containers** for detailed debugging:
+   ```bash
+   docker exec -it advanced-backend-friend-backend-test-1 /bin/bash
+   ```
+6. **Clean up** when done:
+   ```bash
+   docker compose -f docker-compose-test.yml down -v
+   ```
+7. **Set CACHED_MODE = False** when committing changes for CI compatibility
+
 ### Mobile App Development
 ```bash
 cd app
@@ -75,7 +121,9 @@ docker compose up --build
   - `webui/streamlit_app.py`: Web dashboard for conversation and user management
 
 ### Key Components
-- **Audio Pipeline**: Real-time Opus/PCM → Deepgram WebSocket transcription → memory extraction
+- **Audio Pipeline**: Real-time Opus/PCM → Application-level processing → Deepgram transcription → memory extraction
+- **Application-Level Processing**: Centralized processors for audio, transcription, memory, and cropping
+- **Task Management**: BackgroundTaskManager tracks all async tasks to prevent orphaned processes
 - **Transcription**: Deepgram Nova-3 model with Wyoming ASR fallback, auto-reconnection
 - **Authentication**: Email-based login with MongoDB ObjectId user system
 - **Client Management**: Auto-generated client IDs as `{user_id_suffix}-{device_name}`, centralized ClientManager
@@ -102,12 +150,13 @@ Optional:
 ## Data Flow Architecture
 
 1. **Audio Ingestion**: OMI devices stream Opus audio via WebSocket with JWT auth
-2. **Real-time Processing**: Per-client queues handle transcription and buffering
+2. **Application-Level Processing**: Global queues and processors handle all audio/transcription/memory tasks
 3. **Conversation Storage**: Transcripts saved to MongoDB `audio_chunks` collection with segments array
 4. **Conversation Management**: Automatic timeout-based conversation segmentation
 5. **Memory Extraction**: Background LLM processing (decoupled from conversation storage)
 6. **Action Items**: Automatic task detection with "Simon says" trigger phrases
 7. **Audio Optimization**: Speech segment extraction removes silence automatically
+8. **Task Tracking**: BackgroundTaskManager ensures proper cleanup of all async operations
 
 ### Database Schema Details
 - **Conversations**: Stored in `audio_chunks` collection (not `conversations`)
@@ -190,3 +239,7 @@ The system includes comprehensive health checks:
 
 ### Cursor Rule Integration
 Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding before coding. Always explain the task and confirm approach before implementation.
+
+
+## Notes for Claude
+When working with docker, please do compose build if the src/ is not volume mounted so that code changes are reflected.
