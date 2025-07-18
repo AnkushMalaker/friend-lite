@@ -7,6 +7,7 @@ this information without tight coupling to the main.py module.
 """
 
 import logging
+import uuid
 from typing import TYPE_CHECKING, Dict, Optional
 
 if TYPE_CHECKING:
@@ -57,13 +58,15 @@ class ClientManager:
 
         Returns:
             ClientState object if found, None if client not found
-            
+
         Raises:
             RuntimeError: If ClientManager is not initialized
         """
         if not self._initialized:
             logger.error("ClientManager not initialized, cannot get client")
-            raise RuntimeError("ClientManager not initialized - call initialize() first before accessing clients")
+            raise RuntimeError(
+                "ClientManager not initialized - call initialize() first before accessing clients"
+            )
         return self._active_clients.get(client_id)
 
     def has_client(self, client_id: str) -> bool:
@@ -373,3 +376,53 @@ async def get_client_manager_dependency() -> ClientManager:
         # In a real application, you might want to raise an exception here
         # For now, we'll return the uninitialized manager and let the caller handle it
     return client_manager
+
+
+def generate_client_id(user, device_name: Optional[str] = None) -> str:
+    """
+    Generate a unique client_id in the format: user_id_suffix-device_suffix[-counter]
+
+    This function checks both the database (user.registered_clients) and active
+    connections to ensure no conflicts with existing or currently connected clients.
+
+    Args:
+        user: The User object
+        device_name: Optional device name (e.g., 'havpe', 'phone', 'tablet')
+
+    Returns:
+        client_id in format: user_id_suffix-device_suffix or user_id_suffix-device_suffix-N for duplicates
+    """
+    # Use last 6 characters of MongoDB ObjectId as user identifier
+    user_id_suffix = str(user.id)[-6:]
+
+    if device_name:
+        # Sanitize device name: lowercase, alphanumeric + hyphens only, max 10 chars
+        sanitized_device = "".join(c for c in device_name.lower() if c.isalnum() or c == "-")[:10]
+        base_client_id = f"{user_id_suffix}-{sanitized_device}"
+
+        # Check for existing client IDs in database
+        existing_client_ids = user.get_client_ids()
+
+        # Also check active clients to prevent conflicts with currently connected clients
+        client_manager = get_client_manager()
+        active_client_ids = set()
+        if client_manager.is_initialized():
+            active_client_ids = set(client_manager.get_all_clients().keys())
+
+        # Combine both sets of existing IDs
+        all_existing_ids = set(existing_client_ids) | active_client_ids
+
+        # If base client_id doesn't exist anywhere, use it
+        if base_client_id not in all_existing_ids:
+            return base_client_id
+
+        # If it exists, find the next available counter
+        counter = 2
+        while f"{base_client_id}-{counter}" in all_existing_ids:
+            counter += 1
+
+        return f"{base_client_id}-{counter}"
+    else:
+        # Generate UUID-based suffix if no device name provided
+        uuid_suffix = str(uuid.uuid4())[:8]  # Use first 8 chars of UUID for readability
+        return f"{user_id_suffix}-{uuid_suffix}"

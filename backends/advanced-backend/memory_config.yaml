@@ -26,7 +26,7 @@ memory_extraction:
   # LLM parameters for memory extraction
   # Provider is controlled by LLM_PROVIDER environment variable (ollama/openai)
   llm_settings:
-    temperature: 0.1  # Lower temperature for more consistent extraction
+    temperature: 0.3  # Lower temperature for more consistent extraction
     max_tokens: 2000
     # Model selection based on provider:
     # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
@@ -45,7 +45,7 @@ fact_extraction:
   
   # Prompt for extracting structured facts
   prompt: |
-    Extract specific, verifiable facts from this conversation. Focus on:
+    Extract important information from this conversation, including facts, events this conversation. Focus on:
     - Names of people and their roles/titles. Ensure to extract the names all all existing participants in the conversation, even if they're only mentioned once.
     - Company names and organizations
     - Dates and specific times
@@ -63,11 +63,13 @@ fact_extraction:
     "Project deadline is December 15th, 2024",
     "Meeting scheduled for 2 PM EST on Monday",
     "Budget approved for $50,000",
-    "The participants in the conversation were John and Rose."]
+    "The participants in the conversation were John and Rose.",
+    "Discussion is about DnD",
+    "There is a tense conversation about the upcoming demo"]
   
   # LLM parameters for fact extraction
   llm_settings:
-    temperature: 0.05  # Very low temperature for factual accuracy
+    temperature: 0.3  # Very low temperature for factual accuracy
     max_tokens: 1500
     # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
