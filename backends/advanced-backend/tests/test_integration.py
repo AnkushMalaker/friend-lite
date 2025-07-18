@@ -49,7 +49,7 @@ TEST_ENV_VARS = {
     "ADMIN_EMAIL": "test-admin@example.com",
     "LLM_PROVIDER": "openai",
     "OPENAI_MODEL": "gpt-4o-mini",  # Cheaper model for tests
-    "MONGODB_URI": "mongodb://localhost:27018/test_db",  # Test port
+    "MONGODB_URI": "mongodb://localhost:27018",  # Test port (database specified in backend)
     "QDRANT_BASE_URL": "localhost",
 }
 
@@ -137,64 +137,62 @@ class IntegrationTestRunner:
         logger.info("✓ Test data cleanup complete")
         
     def setup_environment(self):
-        """Set up environment variables for CI testing."""
-        logger.info("Setting up CI environment variables...")
+        """Set up environment variables for testing."""
+        logger.info("Setting up test environment variables...")
         
-        # Debug: Check current working directory and files
-        logger.info(f"Current working directory: {os.getcwd()}")
-        logger.info(f"Files in current directory: {os.listdir('.')}")
+        # Set test environment variables directly from TEST_ENV_VARS
+        logger.info("Setting test environment variables from TEST_ENV_VARS...")
+        for key, value in TEST_ENV_VARS.items():
+            os.environ.setdefault(key, value)
+            logger.info(f"✓ {key} set")
         
-        # Load .env.test file to get CI credentials
-        try:
-            # Try to load .env.test first (CI environment), then fall back to .env (local development)
-            env_test_path = '.env.test'
-            env_path = '.env'
-            
-            # Check if we're in the right directory (tests directory vs backend directory)
-            if not os.path.exists(env_test_path) and os.path.exists('../.env.test'):
-                env_test_path = '../.env.test'
-                logger.info("Found .env.test in parent directory")
-            if not os.path.exists(env_path) and os.path.exists('../.env'):
-                env_path = '../.env'
-                logger.info("Found .env in parent directory")
-            
-            if os.path.exists(env_test_path):
-                logger.info(f"Found .env.test file at {env_test_path}, loading it...")
-                load_dotenv(env_test_path)
-                logger.info("✓ Loaded .env.test file (CI environment)")
-            elif os.path.exists(env_path):
-                logger.info(f"Found .env file at {env_path}, loading it...")
-                load_dotenv(env_path)
-                logger.info("✓ Loaded .env file (local development)")
-            else:
-                logger.warning("⚠️ No .env.test or .env file found in current or parent directory")
-        except ImportError:
-            logger.warning("⚠️ python-dotenv not available, relying on shell environment")
-            # why would this ever happen?
+        # Load API keys from .env file if not already in environment
+        if not os.environ.get('DEEPGRAM_API_KEY') or not os.environ.get('OPENAI_API_KEY'):
+            logger.info("Loading API keys from .env file...")
+            try:
+                # Try to load .env.test first (CI environment), then fall back to .env (local development)
+                env_test_path = '.env.test'
+                env_path = '.env'
+                
+                # Check if we're in the right directory (tests directory vs backend directory)
+                if not os.path.exists(env_test_path) and os.path.exists('../.env.test'):
+                    env_test_path = '../.env.test'
+                if not os.path.exists(env_path) and os.path.exists('../.env'):
+                    env_path = '../.env'
+                
+                if os.path.exists(env_test_path):
+                    logger.info(f"Loading from {env_test_path}")
+                    load_dotenv(env_test_path)
+                elif os.path.exists(env_path):
+                    logger.info(f"Loading from {env_path}")
+                    load_dotenv(env_path)
+                else:
+                    logger.warning("No .env.test or .env file found")
+            except ImportError:
+                logger.warning("python-dotenv not available, relying on shell environment")
         
-        # Debug: Log all environment variables (masked for security)
-        logger.info("Environment variables after loading:")
-        for key in ["DEEPGRAM_API_KEY", "OPENAI_API_KEY", "CI", "GITHUB_ACTIONS"]:
+        # Debug: Log API key status (masked for security)
+        logger.info("API key status:")
+        for key in ["DEEPGRAM_API_KEY", "OPENAI_API_KEY"]:
             value = os.environ.get(key)
             if value:
                 masked_value = value[:4] + "*" * (len(value) - 8) + value[-4:] if len(value) > 8 else "***"
-                logger.info(f"  {key}: {masked_value}")
+                logger.info(f"  ✓ {key}: {masked_value}")
             else:
-                logger.info(f"  {key}: NOT SET")
+                logger.warning(f"  ⚠️ {key}: NOT SET")
         
-        # Get API keys from environment (GitHub secrets)
-        required_keys = ["DEEPGRAM_API_KEY", "OPENAI_API_KEY"]
-        missing_keys = [key for key in required_keys if not os.environ.get(key)]
+        # Log environment readiness
+        deepgram_key = os.environ.get('DEEPGRAM_API_KEY')
+        openai_key = os.environ.get('OPENAI_API_KEY')
         
-        if missing_keys:
-            logger.error(f"❌ Missing environment variables: {missing_keys}")
-            logger.error(f"Available environment variables: {list(os.environ.keys())}")
-            raise RuntimeError(f"Missing required environment variables: {', '.join(missing_keys)}. These should be set as GitHub secrets in the CI environment.")
-        
-        # Pass through API keys
-        for key in required_keys:
-            if key in os.environ:
-                logger.info(f"✓ {key} is set")
+        if deepgram_key and openai_key:
+            logger.info("✓ All required API keys are available")
+        else:
+            logger.warning("⚠️ Some API keys missing - test may fail")
+            if not deepgram_key:
+                logger.warning("  Missing DEEPGRAM_API_KEY")
+            if not openai_key:
+                logger.warning("  Missing OPENAI_API_KEY")
                 
     def start_services(self):
         """Start all services using docker compose."""
@@ -309,16 +307,16 @@ class IntegrationTestRunner:
                     except requests.exceptions.RequestException:
                         pass
                 
-                # 2. Check MongoDB connection
+                # 2. Check MongoDB connection via backend health check
                 if not services_status["mongo"] and services_status["backend"]:
                     try:
-                        # Try to connect to test MongoDB
-                        from pymongo import MongoClient
-                        test_client = MongoClient(TEST_ENV_VARS["MONGODB_URI"], serverSelectionTimeoutMS=3000)
-                        test_client.admin.command('ping')
-                        test_client.close()
-                        logger.info("✓ MongoDB connection validated")
-                        services_status["mongo"] = True
+                        health_response = requests.get(f"{BACKEND_URL}/health", timeout=5)
+                        if health_response.status_code == 200:
+                            data = health_response.json()
+                            mongo_health = data.get("services", {}).get("mongodb", {})
+                            if mongo_health.get("healthy", False):
+                                logger.info("✓ MongoDB connection validated via backend health check")
+                                services_status["mongo"] = True
                     except Exception:
                         pass
                 
@@ -452,6 +450,8 @@ class IntegrationTestRunner:
             client_id = result['conversations'][0].get('client_id')
         elif result.get('processed_files'):
             client_id = result['processed_files'][0].get('client_id')
+        elif result.get('files'):
+            client_id = result['files'][0].get('client_id')
             
         if not client_id:
             raise RuntimeError("No client_id in upload response")
@@ -463,39 +463,109 @@ class IntegrationTestRunner:
         """Verify that audio was processed correctly."""
         logger.info(f"🔍 Verifying processing results for client: {client_id}")
         
-        # Connect to test MongoDB
-        self.mongo_client = MongoClient(TEST_ENV_VARS["MONGODB_URI"])
-        db = self.mongo_client.test_db
+        # Use backend API instead of direct MongoDB connection
         
-        # Check audio_chunks collection (where conversations are actually stored)
+        # First, wait for processing to complete using processor status endpoint
+        logger.info("🔍 Waiting for processing to complete...")
         start_time = time.time()
+        processing_complete = False
+        
+        while time.time() - start_time < 60:  # Wait up to 60 seconds for processing
+            try:
+                # Check processor status for this client
+                response = requests.get(
+                    f"{BACKEND_URL}/api/processor/tasks/{client_id}",
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    stages = data.get("stages", {})
+                    
+                    # Check if transcription stage is complete
+                    transcription_stage = stages.get("transcription", {})
+                    if transcription_stage.get("completed", False):
+                        logger.info(f"✅ Transcription processing completed for client_id: {client_id}")
+                        processing_complete = True
+                        break
+                    
+                    # Check for errors
+                    if transcription_stage.get("error"):
+                        logger.error(f"❌ Transcription error: {transcription_stage.get('error')}")
+                        break
+                    
+                    # Show processing status
+                    logger.info(f"📊 Processing status: {data.get('status', 'unknown')}")
+                    for stage_name, stage_info in stages.items():
+                        completed = stage_info.get("completed", False)
+                        error = stage_info.get("error")
+                        status = "✅" if completed else "❌" if error else "⏳"
+                        logger.info(f"  {status} {stage_name}: {'completed' if completed else 'error' if error else 'processing'}")
+                        
+                else:
+                    logger.warning(f"❌ Processor status API call failed with status: {response.status_code}")
+                    
+            except Exception as e:
+                logger.warning(f"❌ Error calling processor status API: {e}")
+                
+            logger.info(f"⏳ Still waiting for processing... ({time.time() - start_time:.1f}s)")
+            time.sleep(3)
+        
+        if not processing_complete:
+            logger.error(f"❌ Processing did not complete within timeout for client_id: {client_id}")
+            # Don't fail immediately, try to get conversation anyway
+        
+        # Now get the conversation via API
+        logger.info("🔍 Retrieving conversation...")
         conversation = None
         
-        logger.info("🔍 Waiting for conversation to be created...")
-        while time.time() - start_time < 30:  # Wait up to 30 seconds
-            conversation = db.audio_chunks.find_one({"client_id": client_id})
-            if conversation:
-                break
-            logger.info(f"⏳ Still waiting... ({time.time() - start_time:.1f}s)")
-            time.sleep(2)
+        try:
+            # Get conversations via API
+            response = requests.get(
+                f"{BACKEND_URL}/api/conversations",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                conversations = data.get("conversations", {})
+                
+                # Look for our client_id in the conversations
+                if client_id in conversations:
+                    conversation_list = conversations[client_id]
+                    if conversation_list:
+                        conversation = conversation_list[0]  # Get the first (most recent) conversation
+                        logger.info(f"✅ Found conversation for client_id: {client_id}")
+                    else:
+                        logger.warning(f"⚠️ Client ID found but no conversations in list")
+                else:
+                    # Debug: show available conversations
+                    available_clients = list(conversations.keys())
+                    logger.error(f"❌ Client ID {client_id} not found in conversations")
+                    logger.error(f"📊 Available client_ids: {available_clients}")
+                    
+            else:
+                logger.error(f"❌ Conversations API call failed with status: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error calling conversations API: {e}")
             
         if not conversation:
-            # Show what conversations exist
-            all_conversations = list(db.audio_chunks.find({}, {"client_id": 1, "audio_uuid": 1}))
             logger.error(f"❌ No conversation found for client_id: {client_id}")
-            logger.error(f"Available conversations: {all_conversations}")
             raise AssertionError(f"No conversation found for client_id: {client_id}")
             
-        logger.info(f"✓ Conversation found: {conversation['_id']}")
+        logger.info(f"✓ Conversation found: {conversation['audio_uuid']}")
         
         # Log conversation details
         logger.info("📋 Conversation details:")
-        logger.info(f"  - ID: {conversation['_id']}")
+        logger.info(f"  - Audio UUID: {conversation['audio_uuid']}")
         logger.info(f"  - Client ID: {conversation.get('client_id')}")
-        logger.info(f"  - Created: {conversation.get('created_at', 'N/A')}")
-        logger.info(f"  - User ID: {conversation.get('user_id', 'N/A')}")
+        logger.info(f"  - Audio Path: {conversation.get('audio_path', 'N/A')}")
+        logger.info(f"  - Timestamp: {conversation.get('timestamp', 'N/A')}")
         
-        # Verify transcription (stored as array in audio_chunks collection)
+        # Verify transcription (stored as array in conversation)
         transcript_segments = conversation.get('transcript', [])
         logger.info(f"📝 Transcription details:")
         logger.info(f"  - Transcript segments: {len(transcript_segments)}")

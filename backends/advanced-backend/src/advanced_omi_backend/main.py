@@ -53,6 +53,12 @@ from advanced_omi_backend.memory import (
     init_memory_config,
     shutdown_memory_service,
 )
+from advanced_omi_backend.processors import (
+    AudioProcessingItem,
+    get_processor_manager,
+    init_processor_manager,
+)
+from advanced_omi_backend.task_manager import get_task_manager, init_task_manager
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import User, register_client_to_user
 
@@ -214,7 +220,7 @@ async def create_client_state(
     # Register client in user model (persistent)
     await register_client_to_user(user, client_id, device_name)
 
-    await client_state.start_processing()
+    # Note: No need to start processing - it's handled at application level now
 
     return client_state
 
@@ -264,6 +270,16 @@ async def lifespan(app: FastAPI):
     init_debug_tracker()
     audio_logger.info("Metrics collection started")
 
+    # Initialize task manager
+    task_manager = init_task_manager()
+    await task_manager.start()
+    audio_logger.info("Task manager started")
+
+    # Initialize processor manager
+    processor_manager = init_processor_manager(CHUNK_DIR, ac_db_collection_helper)
+    await processor_manager.start()
+    audio_logger.info("Application-level processors started")
+
     # Pre-initialize memory service to avoid blocking during first use
     try:
         audio_logger.info("Pre-initializing memory service...")
@@ -283,7 +299,7 @@ async def lifespan(app: FastAPI):
     # SystemTracker is used for monitoring and debugging
     audio_logger.info("Using SystemTracker for monitoring and debugging")
 
-    audio_logger.info("Application ready - clients will have individual processing pipelines.")
+    audio_logger.info("Application ready - using application-level processing architecture.")
 
     try:
         yield
@@ -294,6 +310,16 @@ async def lifespan(app: FastAPI):
         # Clean up all active clients
         for client_id in list(active_clients.keys()):
             await cleanup_client_state(client_id)
+
+        # Shutdown processor manager
+        processor_manager = get_processor_manager()
+        await processor_manager.shutdown()
+        audio_logger.info("Processor manager shut down")
+
+        # Shutdown task manager
+        task_manager = get_task_manager()
+        await task_manager.shutdown()
+        audio_logger.info("Task manager shut down")
 
         # Stop metrics collection and save final report
         # Shutdown debug tracker
@@ -337,36 +363,38 @@ async def ws_endpoint(
     device_name: Optional[str] = Query(None),
 ):
     """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
-    # TODO: Accept parameters or some type of "audio config" message from the client to setup
-    # the proper file sink.
-
-    # Authenticate user before accepting WebSocket connection
-    user = await websocket_auth(ws, token)
-    if not user:
-        await ws.close(code=1008, reason="Authentication required")
-        return
-
-    await ws.accept()
-
-    # Generate proper client_id using user and device_name
-    client_id = generate_client_id(user, device_name)
-    audio_logger.info(
-        f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
-    )
-
-    decoder = OmiOpusDecoder()
-    _decode_packet = partial(decoder.decode_packet, strip_header=False)
-
-    # Create client state and start processing
-    client_state = await create_client_state(client_id, user, device_name)
-
-    # Track WebSocket connection
-    # tracker = get_debug_tracker()
-    # tracker.track_websocket_connected(user.user_id, client_id)
-
+    client_id = None
+    client_state = None
+    
     try:
+        # Authenticate user before accepting WebSocket connection
+        user = await websocket_auth(ws, token)
+        if not user:
+            await ws.close(code=1008, reason="Authentication required")
+            return
+
+        # Accept WebSocket AFTER authentication succeeds (fixes race condition)
+        await ws.accept()
+
+        # Generate proper client_id using user and device_name
+        client_id = generate_client_id(user, device_name)
+        audio_logger.info(
+            f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
+        )
+
+        # Create client state
+        client_state = await create_client_state(client_id, user, device_name)
+
+        # Setup decoder
+        decoder = OmiOpusDecoder()
+        _decode_packet = partial(decoder.decode_packet, strip_header=False)
+        
+        # Get processor manager
+        processor_manager = get_processor_manager()
+
         packet_count = 0
         total_bytes = 0
+        
         while True:
             packet = await ws.receive_bytes()
             packet_count += 1
@@ -388,15 +416,19 @@ async def ws_endpoint(
                     channels=OMI_CHANNELS,
                     timestamp=int(time.time()),
                 )
-                await client_state.chunk_queue.put(chunk)
-
-                # # Track audio chunk with debug tracker
-                # if packet_count == 1:  # Create transaction on first audio chunk
-                #     client_state.transaction_id = tracker.create_transaction(
-                #         user.user_id, client_id
-                #     )
-                # if hasattr(client_state, "transaction_id") and client_state.transaction_id:
-                #     tracker.track_audio_chunk(client_state.transaction_id, len(pcm_data))
+                
+                # Queue to application-level processor instead of client queue
+                await processor_manager.queue_audio(
+                    AudioProcessingItem(
+                        client_id=client_id,
+                        user_id=user.user_id,
+                        audio_chunk=chunk,
+                        timestamp=chunk.timestamp
+                    )
+                )
+                
+                # Update client state for tracking purposes
+                client_state.update_audio_received(chunk)
 
                 # Log every 1000th packet to avoid spam
                 if packet_count % 1000 == 0:
@@ -411,12 +443,20 @@ async def ws_endpoint(
     except Exception as e:
         audio_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
-        # # Track WebSocket disconnection
-        # tracker = get_debug_tracker()
-        # tracker.track_websocket_disconnected(client_id)
-
-        # Clean up client state
-        await cleanup_client_state(client_id)
+        # Ensure cleanup happens even if client_id is None
+        if client_id:
+            try:
+                # Signal end of audio stream to processor
+                processor_manager = get_processor_manager()
+                await processor_manager.close_client_audio(client_id)
+                
+                # Clean up client state
+                await cleanup_client_state(client_id)
+            except Exception as cleanup_error:
+                audio_logger.error(
+                    f"Error during cleanup for client {client_id}: {cleanup_error}",
+                    exc_info=True
+                )
 
 
 @app.websocket("/ws_pcm")
@@ -424,30 +464,38 @@ async def ws_endpoint_pcm(
     ws: WebSocket, token: Optional[str] = Query(None), device_name: Optional[str] = Query(None)
 ):
     """Accepts WebSocket connections, processes PCM audio per-client."""
-    # Authenticate user before accepting WebSocket connection
-    user = await websocket_auth(ws, token)
-    if not user:
-        await ws.close(code=1008, reason="Authentication required")
-        return
-
-    await ws.accept()
-
-    # Generate proper client_id using user and device_name
-    client_id = generate_client_id(user, device_name)
-    audio_logger.info(
-        f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
-    )
-
-    # Create client state and start processing
-    client_state = await create_client_state(client_id, user, device_name)
-
-    # Track WebSocket connection
-    tracker = get_debug_tracker()
-    tracker.track_websocket_connected(user.user_id, client_id)
-
+    client_id = None
+    client_state = None
+    
     try:
+        # Authenticate user before accepting WebSocket connection
+        user = await websocket_auth(ws, token)
+        if not user:
+            await ws.close(code=1008, reason="Authentication required")
+            return
+
+        # Accept WebSocket AFTER authentication succeeds (fixes race condition)
+        await ws.accept()
+
+        # Generate proper client_id using user and device_name
+        client_id = generate_client_id(user, device_name)
+        audio_logger.info(
+            f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
+        )
+
+        # Create client state
+        client_state = await create_client_state(client_id, user, device_name)
+
+        # Track WebSocket connection
+        tracker = get_debug_tracker()
+        tracker.track_websocket_connected(user.user_id, client_id)
+        
+        # Get processor manager
+        processor_manager = get_processor_manager()
+
         packet_count = 0
         total_bytes = 0
+        
         while True:
             packet = await ws.receive_bytes()
             packet_count += 1
@@ -462,7 +510,19 @@ async def ws_endpoint_pcm(
                     channels=1,
                     timestamp=int(time.time()),
                 )
-                await client_state.chunk_queue.put(chunk)
+                
+                # Queue to application-level processor instead of client queue
+                await processor_manager.queue_audio(
+                    AudioProcessingItem(
+                        client_id=client_id,
+                        user_id=user.user_id,
+                        audio_chunk=chunk,
+                        timestamp=chunk.timestamp
+                    )
+                )
+                
+                # Update client state for tracking purposes
+                client_state.update_audio_received(chunk)
 
                 # Track audio chunk with debug tracker
                 if packet_count == 1:  # Create transaction on first audio chunk
@@ -477,6 +537,7 @@ async def ws_endpoint_pcm(
                     audio_logger.info(
                         f"📊 Processed {packet_count} PCM packets ({total_bytes} bytes total) for client {client_id}"
                     )
+                    
     except WebSocketDisconnect:
         audio_logger.info(
             f"🔌 PCM WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}"
@@ -485,11 +546,24 @@ async def ws_endpoint_pcm(
         audio_logger.error(f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
         # Track WebSocket disconnection
-        tracker = get_debug_tracker()
-        tracker.track_websocket_disconnected(client_id)
+        if client_id:
+            tracker = get_debug_tracker()
+            tracker.track_websocket_disconnected(client_id)
 
-        # Clean up client state
-        await cleanup_client_state(client_id)
+        # Ensure cleanup happens even if client_id is None
+        if client_id:
+            try:
+                # Signal end of audio stream to processor
+                processor_manager = get_processor_manager()
+                await processor_manager.close_client_audio(client_id)
+                
+                # Clean up client state
+                await cleanup_client_state(client_id)
+            except Exception as cleanup_error:
+                audio_logger.error(
+                    f"Error during cleanup for client {client_id}: {cleanup_error}",
+                    exc_info=True
+                )
 
 
 @app.get("/health")
