@@ -19,6 +19,20 @@ esphome:
   platformio_options:
     build_flags:
       - -DCONFIG_ARDUHAL_LOG_DEFAULT_LEVEL=5
+  on_boot:
+    priority: 600
+    then:
+      # Purple LED during boot
+      - logger.log:
+          tag: "LED"
+          level: INFO
+          format: "Setting LED to purple (boot/startup)"
+      - light.turn_on:
+          id: status_led
+          brightness: 30%
+          red: 50%
+          green: 0%
+          blue: 100%
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -38,7 +52,7 @@ external_components:
 
 logger:
   level: INFO
-  baud_rate: 0
+  baud_rate: 115200
 
 wifi:
   ssid: ${wifi_ssid}
@@ -57,6 +71,17 @@ wifi:
           level: INFO
           format: "Wi-Fi connected – starting XMOS-enhanced audio capture"
       - microphone.capture: i2s_mics
+      # Set LED to orange while waiting for TCP connection
+      - logger.log:
+          tag: "LED"
+          level: INFO
+          format: "Setting LED to orange (WiFi connected, waiting for TCP)"
+      - light.turn_on:
+          id: status_led
+          brightness: 50%
+          red: 100%
+          green: 50%
+          blue: 0%
 
 # api:
 #   encryption:
@@ -65,6 +90,15 @@ wifi:
 ota:
   - platform: esphome
     password: !secret ota_password
+
+# Global variables for tracking state
+globals:
+  - id: tcp_connected
+    type: bool
+    initial_value: 'false'
+  - id: connection_retry_count
+    type: int
+    initial_value: '0'
 
 # Voice Kit component for XMOS coordination
 voice_kit:
@@ -116,12 +150,32 @@ microphone:
             static int sockfd = -1;
             static bool connected = false;
             static bool announced = false;
+            static unsigned long last_retry_time = 0;
+            const unsigned long retry_delay = 5000; // 5 seconds between retries
             
             // Enhanced XMOS audio metadata
             ESP_LOGV("xmos_audio", "XMOS buffer: %d bytes, rate: 48kHz, bits: 32", (int)x.size());
             
             // (Re)establish TCP connection if needed
             if (sockfd < 0) {
+              unsigned long current_time = millis();
+              
+              // Rate limit connection attempts
+              if (current_time - last_retry_time < retry_delay) {
+                return;
+              }
+              last_retry_time = current_time;
+              
+              // Update LED to red pulse when retrying
+              if (id(connection_retry_count) > 0) {
+                ESP_LOGI("LED", "Setting LED to red pulse (retry %d)", id(connection_retry_count));
+                auto call = id(status_led).turn_on();
+                call.set_brightness(1.0);
+                call.set_rgb(1.0, 0.0, 0.0); // Red
+                call.set_effect("Retry Pulse");
+                call.perform();
+              }
+              
               sockfd = lwip_socket(AF_INET, SOCK_STREAM, 0);
               if (sockfd >= 0) {
                 // Set socket options for real-time audio streaming
@@ -136,16 +190,29 @@ microphone:
                 int result = lwip_connect(sockfd, (struct sockaddr *)&dest, sizeof(dest));
                 if (result == 0) {
                   connected = true;
+                  id(tcp_connected) = true;
+                  id(connection_retry_count) = 0;
                   ESP_LOGI("tcp_xmos", "Connected to XMOS audio relay at %s:%s", 
                            "${server_ip}", "${server_port}");
+                  
+                  // Update LED to solid blue when connected
+                  ESP_LOGI("LED", "Setting LED to solid blue (connected and streaming)");
+                  auto call = id(status_led).turn_on();
+                  call.set_brightness(0.5);
+                  call.set_rgb(0.0, 0.0, 1.0); // Blue
+                  call.set_effect("none");
+                  call.perform();
                 } else {
                   ESP_LOGE("tcp_xmos", "Failed to connect: errno=%d", errno);
                   lwip_close(sockfd);
                   sockfd = -1;
                   connected = false;
+                  id(tcp_connected) = false;
+                  id(connection_retry_count) += 1;
                 }
               } else {
                 ESP_LOGE("tcp_xmos", "Socket creation failed: errno=%d", errno);
+                id(connection_retry_count) += 1;
               }
             }
             
@@ -158,6 +225,8 @@ microphone:
                 sockfd = -1;
                 connected = false;
                 announced = false;
+                id(tcp_connected) = false;
+                id(connection_retry_count) += 1;
               } else if (!announced) {
                 ESP_LOGI("tcp_xmos", "Streaming XMOS-enhanced audio (48kHz/32bit/stereo beamformed)");
                 announced = true;
@@ -165,13 +234,28 @@ microphone:
               ESP_LOGV("tcp_xmos", "Sent %d/%d bytes", (int)bytes_sent, (int)x.size());
             }
 
-# Optional: Status LED disabled for compatibility
-# light:
-#   - platform: neopixel
-#     variant: WS2812
-#     pin: GPIO21
-#     num_leds: 1
-#     id: status_led
+# LED Power Supply
+power_supply:
+  - id: led_power
+    pin: GPIO45
+
+# Status LED for connection state (full 12-LED ring)
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "Status LED"
+    pin: GPIO21
+    chipset: WS2812
+    num_leds: 12
+    rgb_order: GRB
+    default_transition_length: 0ms
+    power_supply: led_power
+    effects:
+      # Slow pulse effect for retrying
+      - pulse:
+          name: "Retry Pulse"
+          transition_length: 1s
+          update_interval: 2s
 
 # Network diagnostics
 text_sensor:
@@ -192,7 +276,34 @@ sensor:
     name: "Uptime"
     update_interval: 60s
 
+# Physical center button for reset
+binary_sensor:
+  - platform: gpio
+    id: center_button
+    pin:
+      number: GPIO0
+      inverted: true
+    filters:
+      - delayed_on: 100ms
+      - delayed_off: 100ms
+    on_press:
+      - logger.log:
+          tag: "BUTTON"
+          level: INFO
+          format: "Center button pressed"
+    on_multi_click:
+      # Long press for restart (hold for 5 seconds)
+      - timing:
+          - ON for at least 5s
+        then:
+          - logger.log:
+              tag: "BUTTON"
+              level: INFO
+              format: "Long press detected - restarting device"
+          - button.press: restart_button
+
 # Restart button for remote management  
 button:
   - platform: restart
+    id: restart_button
     name: "Restart"
