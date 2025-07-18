@@ -13,6 +13,8 @@ import logging
 import pathlib
 from typing import Optional
 import random
+from datetime import datetime
+import pytz
 
 import numpy as np
 import httpx
@@ -295,9 +297,10 @@ class VoicePETCPServer(TCPServer):
         # Log quality metrics periodically
         if self.audio_processor.processed_chunks % 2000 == 0 and self.audio_processor.processed_chunks > 0:
             stats = self.audio_processor.get_quality_stats()
+            ist_time = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S IST')
             logger.info(f"🎵 XMOS Audio Quality: SNR={stats['average_snr_db']:.1f}dB, "
                        f"Processed={stats['processed_chunks']} chunks, "
-                       f"Ratio={stats['processing_ratio']:.3f}")
+                       f"Ratio={stats['processing_ratio']:.3f} [{ist_time}]")
         
         return enhanced_chunk
 
@@ -412,8 +415,9 @@ async def process_esp32_audio(
                 elapsed = time.time() - start_time
                 uptime_mins = elapsed / 60
                 success_rate = (successful_sends / chunk_count * 100) if chunk_count > 0 else 0
+                ist_time = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S IST')
                 logger.info(f"💓 Health: {uptime_mins:.1f}min uptime, {chunk_count} chunks, "
-                          f"{success_rate:.1f}% success, {auth_failures} auth failures")
+                          f"{success_rate:.1f}% success, {auth_failures} auth failures [{ist_time}]")
             
             if chunk_count % 100 == 1:  # Log every 100th chunk to reduce spam
                 logger.debug(

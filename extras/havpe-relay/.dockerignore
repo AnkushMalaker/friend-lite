@@ -3,3 +3,4 @@
 !pyproject.toml
 !uv.lock
 !.env
+!voice_pe_audio_processor.py
