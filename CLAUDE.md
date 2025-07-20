@@ -325,5 +325,34 @@ The system includes comprehensive health checks:
 Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding before coding. Always explain the task and confirm approach before implementation.
 
 
+## Essential Debugging Endpoints
+
+### System Health & Monitoring
+- **GET /health**: Basic application health check
+- **GET /readiness**: Service dependency validation (MongoDB, Qdrant, etc.)
+- **GET /api/metrics**: System metrics and debug tracker status (Admin only)
+- **GET /api/processor/status**: Processor queue status and health (Admin only)
+- **GET /api/processor/tasks**: All active processing tasks (Admin only)
+- **GET /api/processor/tasks/{client_id}**: Processing task status for specific client (Admin only)
+
+### Memory & Conversation Debugging
+- **GET /api/admin/memories**: All memories across all users with debug stats (Admin only)
+- **GET /api/memories/unfiltered**: User's memories without filtering
+- **GET /api/conversations**: User's conversations with transcripts
+- **GET /api/conversations/{audio_uuid}**: Specific conversation details
+
+### Client Management
+- **GET /api/clients/active**: Currently active WebSocket clients
+- **GET /api/users**: List all users (Admin only)
+
+### File Processing
+- **POST /api/process-audio-files**: Upload and process audio files (Admin only)
+  - Note: Processes files sequentially, may timeout for large files
+  - Client timeout: 5 minutes, Server processing: up to 3x audio duration + 60s
+
+### Authentication
+- **POST /auth/jwt/login**: Email-based login (returns JWT token)
+- **GET /api/auth/config**: Authentication configuration
+
 ## Notes for Claude
-When working with docker, please do compose build if the src/ is not volume mounted so that code changes are reflected.
+Check if the src/ is volume mounted. If not, do compose build so that code changes are reflected.

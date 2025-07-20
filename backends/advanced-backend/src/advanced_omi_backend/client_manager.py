@@ -83,7 +83,7 @@ class ClientManager:
             logger.warning("ClientManager not initialized, cannot check client")
             return False
         return client_id in self._active_clients
-    
+
     def is_client_active(self, client_id: str) -> bool:
         """
         Check if a client is currently active (alias for has_client).
@@ -144,11 +144,6 @@ class ClientManager:
                 "conversation_transcripts_count": len(
                     getattr(client_state, "conversation_transcripts", [])
                 ),
-                "queues": {
-                    "chunk_queue_size": (client_state.chunk_queue.qsize()),
-                    "transcription_queue_size": (client_state.transcription_queue.qsize()),
-                    "memory_queue_size": (client_state.memory_queue.qsize()),
-                },
             }
             client_info.append(client_data)
 

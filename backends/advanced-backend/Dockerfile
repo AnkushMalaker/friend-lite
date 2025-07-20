@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 
 # Copy memory config to the expected location
-COPY memory_config.yaml src/
+COPY memory_config.yaml ./
 
 
 # Run the application
