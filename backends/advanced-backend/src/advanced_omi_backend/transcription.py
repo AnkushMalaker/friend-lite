@@ -27,7 +27,7 @@ class TranscriptionManager:
     """Manages transcription using either Deepgram batch API or offline ASR service."""
 
     # TODO: Accept callbacks list
-    def __init__(self, chunk_repo=None):
+    def __init__(self, chunk_repo=None, processor_manager=None):
         self.client = None
         self._current_audio_uuid = None
         self.online_provider: Optional[OnlineTranscriptionProvider] = get_transcription_provider(
@@ -40,6 +40,7 @@ class TranscriptionManager:
         self._current_transaction_id = None  # Track current debug transaction
         self.chunk_repo = chunk_repo  # Database repository for chunks
         self.client_manager = get_client_manager()  # Cached client manager instance
+        self.processor_manager = processor_manager  # Reference to processor manager for completion tracking
 
         # Event-driven ASR event handling for offline ASR
         self._event_queue = asyncio.Queue()
@@ -116,6 +117,64 @@ class TranscriptionManager:
 
         return segments
 
+    async def _queue_memory_processing(self, transcript_text: str):
+        """Queue memory processing for completed transcripts."""
+        if not self._current_audio_uuid or not self._client_id:
+            logger.warning("Cannot trigger memory processing - missing audio_uuid or client_id")
+            return
+            
+        try:
+            # Get client info from the client manager to get user details
+            current_client = self._get_current_client()
+            if not current_client:
+                logger.warning(f"Client {self._client_id} not found in active clients")
+                # For upload clients that may have been cleaned up, we need to get user info differently
+                # Check if we can get user info from the client_id pattern
+                from advanced_omi_backend.client_manager import get_client_owner
+                user_id = get_client_owner(self._client_id)
+                if not user_id:
+                    logger.warning(f"Cannot determine user for client {self._client_id}")
+                    return
+                    
+                # Get user details from database
+                from advanced_omi_backend.users import User
+                user = await User.get(user_id)
+                if not user:
+                    logger.warning(f"User {user_id} not found in database")
+                    return
+                    
+                user_email = user.email
+                logger.info(f"Retrieved user info for memory processing: {user_id} ({user_email})")
+            else:
+                user_id = current_client.user_id
+                user_email = current_client.user_email
+                
+            if not user_id or not user_email:
+                logger.warning("Cannot trigger memory processing - missing user info")
+                return
+                
+            # Queue memory processing with the completed transcript
+            from advanced_omi_backend.processors import MemoryProcessingItem
+            logger.info(
+                f"💭 Triggering retroactive memory processing for {self._current_audio_uuid} "
+                f"(client: {self._client_id}, user: {user_id})"
+            )
+            
+            await self.processor_manager.queue_memory(
+                MemoryProcessingItem(
+                    client_id=self._client_id,
+                    user_id=user_id,
+                    user_email=user_email,
+                    audio_uuid=self._current_audio_uuid,
+                    full_conversation=transcript_text,
+                    db_helper=self.chunk_repo
+                )
+            )
+            logger.info(f"💭 Successfully queued retroactive memory processing for {self._current_audio_uuid}")
+            
+        except Exception as e:
+            logger.error(f"Error triggering memory processing: {e}", exc_info=True)
+
     async def connect(self, client_id: str | None = None):
         """Initialize transcription service for the client."""
         self._client_id = client_id
@@ -144,20 +203,40 @@ class TranscriptionManager:
 
     async def flush_final_transcript(self, audio_duration_seconds: Optional[float] = None):
         """Process collected audio and generate final transcript."""
+        logger.info(f"🚀 flush_final_transcript called for client {self._client_id} - online: {self.use_online_transcription}")
+        logger.info(f"📊 Current state - buffer size: {len(self._audio_buffer) if self._audio_buffer else 0}, collecting: {self._collecting}")
+        
         if self.use_online_transcription:
+            # Cancel collection timeout task first to prevent interference
+            if self._collection_task and not self._collection_task.done():
+                logger.info(f"🛑 Cancelling collection timeout task before flush")
+                self._collection_task.cancel()
+                try:
+                    await self._collection_task
+                except asyncio.CancelledError:
+                    logger.info(f"✅ Collection task cancelled successfully")
+                except Exception as e:
+                    logger.error(f"❌ Error cancelling collection task: {e}")
+            
+            logger.info(f"🌐 Using online transcription - calling _process_collected_audio")
             await self._process_collected_audio()
         else:
+            logger.info(f"🖥️ Using offline ASR - calling _flush_offline_asr")
             await self._flush_offline_asr(audio_duration_seconds)
 
     async def _process_collected_audio(self):
         """Process all collected audio chunks using Deepgram file upload API."""
+        start_time = time.time()
+        logger.info(f"🔄 _process_collected_audio called for client {self._client_id}")
+        logger.info(f"📦 Audio buffer state: {len(self._audio_buffer)} chunks, collecting: {self._collecting}, audio_uuid: {self._current_audio_uuid}")
+        
         if not self._audio_buffer:
-            logger.info(f"No audio data collected for client {self._client_id}")
+            logger.info(f"⚠️ No audio data collected for client {self._client_id}")
             return
 
         try:
             logger.info(
-                f"Processing {len(self._audio_buffer)} audio chunks for client {self._client_id}"
+                f"📊 Processing {len(self._audio_buffer)} audio chunks for client {self._client_id}"
             )
 
             # Combine all audio chunks into a single buffer
@@ -169,14 +248,20 @@ class TranscriptionManager:
 
             # Send to online provider for transcription
             if self.online_provider is None:
-                logger.error("Online provider is None, this shouldn't happen")
+                logger.error("❌ Online provider is None, this shouldn't happen")
                 return
+            
+            # Track Deepgram API call timing
+            api_start_time = time.time()
+            logger.info(f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes")
             transcript_result = await self.online_provider.transcribe(combined_audio)
+            api_duration = time.time() - api_start_time
+            logger.info(f"📝 Received transcription result from {self.online_provider.name} in {api_duration:.2f}s: {bool(transcript_result)}")
 
             if transcript_result and transcript_result.get("text") and self._current_audio_uuid:
                 transcript_text = transcript_result["text"]
                 logger.info(
-                    f"{self.online_provider.name} batch transcript for {self._current_audio_uuid}: {transcript_text}"
+                    f"📝 {self.online_provider.name} batch transcript for {self._current_audio_uuid} ({len(transcript_text)} chars): {transcript_text[:200]}..."
                 )
 
                 # Parse speaker segments from formatted text
@@ -216,12 +301,30 @@ class TranscriptionManager:
                 # Update client state
                 current_client = self._get_current_client()
                 if current_client:
-                    current_client.last_transcript_time = time.time()
-                    current_client.conversation_transcripts.append(transcript_text)
+                    current_client.add_transcript(transcript_text)
 
                 logger.info(
                     f"Added {self.online_provider.name} batch transcript for {self._current_audio_uuid} to DB"
                 )
+                
+                # Mark transcription as completed for this client
+                if self.processor_manager and self._client_id:
+                    segment_count = len(speaker_segments) if speaker_segments else 1
+                    logger.info(f"✅ Marking transcription as COMPLETED for client {self._client_id} (segments: {segment_count})")
+                    self.processor_manager.track_processing_stage(
+                        self._client_id,
+                        "transcription",
+                        "completed",
+                        {
+                            "audio_uuid": self._current_audio_uuid,
+                            "segments": segment_count,
+                            "provider": self.online_provider.name
+                        }
+                    )
+                    logger.info(f"🎉 Successfully marked transcription as completed for client {self._client_id}")
+                    
+                    # Queue memory processing for completed transcript
+                    await self._queue_memory_processing(transcript_text)
 
         except Exception as e:
             logger.error(f"Error processing collected audio: {e}")
@@ -230,6 +333,10 @@ class TranscriptionManager:
             self._audio_buffer.clear()
             self._audio_start_time = None
             self._collecting = False
+            
+            # Log total processing time
+            total_duration = time.time() - start_time
+            logger.info(f"⏱️ Total transcription processing time: {total_duration:.2f}s for client {self._client_id}")
 
     async def _flush_offline_asr(self, audio_duration_seconds: Optional[float] = None):
         """Flush final transcript from offline ASR by sending AudioStop."""
@@ -287,7 +394,7 @@ class TranscriptionManager:
                                 # Update client state
                                 current_client = self._get_current_client()
                                 if current_client:
-                                    current_client.conversation_transcripts.append(transcript_text)
+                                    current_client.add_transcript(transcript_text)
                                     logger.info(f"🏁 Added final transcript to conversation")
 
                     except asyncio.TimeoutError:
@@ -300,18 +407,24 @@ class TranscriptionManager:
 
     async def disconnect(self):
         """Cleanly disconnect from ASR service."""
+        logger.info(f"🔌 disconnect called for client {self._client_id} - online: {self.use_online_transcription}")
+        
         if self.use_online_transcription:
-            # For batch processing, just process any remaining audio
-            if self._collecting or self._audio_buffer:
-                await self._process_collected_audio()
-
-            # Cancel collection task if running
+            # Cancel collection task first to prevent interference
             if self._collection_task and not self._collection_task.done():
+                logger.info(f"🛑 Cancelling collection timeout task for client {self._client_id}")
                 self._collection_task.cancel()
                 try:
                     await self._collection_task
                 except asyncio.CancelledError:
-                    pass
+                    logger.info(f"✅ Collection task cancelled successfully")
+                except Exception as e:
+                    logger.error(f"❌ Error cancelling collection task: {e}")
+
+            # For batch processing, process any remaining audio
+            if self._collecting or self._audio_buffer:
+                logger.info(f"📊 Processing remaining audio on disconnect - buffer size: {len(self._audio_buffer)}")
+                await self._process_collected_audio()
 
             logger.info(
                 f"{self.online_provider.name if self.online_provider else 'Online'} batch transcription disconnected for client {self._client_id}"
@@ -422,13 +535,30 @@ class TranscriptionManager:
                     await self.chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
                     await self.chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
                     logger.info(f"📝 Added transcript segment for {audio_uuid} to DB.")
+                    
+                    # Mark transcription as completed for this client (offline ASR processes one segment at a time)
+                    if self.processor_manager and client_id:
+                        self.processor_manager.track_processing_stage(
+                            client_id,
+                            "transcription",
+                            "completed",
+                            {
+                                "audio_uuid": audio_uuid,
+                                "segments": 1,  # Offline ASR processes one segment at a time
+                                "provider": "offline_asr"
+                            }
+                        )
+                        logger.info(f"Marked transcription as completed for client {client_id} (offline ASR)")
+                        
+                        # Queue memory processing for completed transcript
+                        await self._queue_memory_processing(transcript_text)
 
                 # Update transcript time for conversation timeout tracking
                 current_client = self.client_manager.get_client(client_id)
                 if current_client:
                     current_client.last_transcript_time = time.time()
                     # Collect transcript for end-of-conversation memory processing
-                    current_client.conversation_transcripts.append(transcript_text)
+                    current_client.add_transcript(transcript_text)
                     logger.info(f"Added transcript to conversation collection: '{transcript_text}'")
 
         elif VoiceStarted.is_type(event.type):
@@ -457,17 +587,20 @@ class TranscriptionManager:
 
     async def _collection_timeout_handler(self):
         """Handle collection timeout - process audio after 1.5 minutes."""
+        logger.info(f"⏰ Collection timeout handler started for client {self._client_id} ({self._max_collection_time}s)")
         try:
             await asyncio.sleep(self._max_collection_time)
             if self._collecting and self._audio_buffer:
                 logger.info(
-                    f"Collection timeout reached for client {self._client_id}, processing audio"
+                    f"⏰ Collection timeout reached for client {self._client_id}, processing audio (buffer: {len(self._audio_buffer)} chunks)"
                 )
                 await self._process_collected_audio()
+            else:
+                logger.info(f"⏰ Collection timeout reached but no audio to process (collecting: {self._collecting}, buffer: {len(self._audio_buffer) if self._audio_buffer else 0})")
         except asyncio.CancelledError:
-            logger.debug(f"Collection timeout cancelled for client {self._client_id}")
+            logger.info(f"⏰ Collection timeout cancelled for client {self._client_id}")
         except Exception as e:
-            logger.error(f"Error in collection timeout handler: {e}")
+            logger.error(f"❌ Error in collection timeout handler: {e}", exc_info=True)
 
     # Note: The Deepgram-specific implementation has been moved to transcription_providers.py
     # This allows for a cleaner provider-based architecture supporting multiple ASR services
@@ -481,12 +614,13 @@ class TranscriptionManager:
 
     async def _collect_audio_chunk(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
         """Collect audio chunk for batch processing."""
+        logger.info(f"📥 _collect_audio_chunk called for client {client_id}, audio_uuid: {audio_uuid}")
         try:
             # Update current audio UUID
             if self._current_audio_uuid != audio_uuid:
                 self._current_audio_uuid = audio_uuid
                 logger.info(
-                    f"New audio_uuid for {self.online_provider.name if self.online_provider else 'online'} batch: {audio_uuid}"
+                    f"🆕 New audio_uuid for {self.online_provider.name if self.online_provider else 'online'} batch: {audio_uuid}"
                 )
 
                 # Reset collection state for new audio session
@@ -502,11 +636,11 @@ class TranscriptionManager:
             # Add chunk to buffer if we have audio data
             if chunk.audio and len(chunk.audio) > 0:
                 self._audio_buffer.append(chunk)
-                logger.debug(
-                    f"Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"
+                logger.info(
+                    f"📦 Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"
                 )
             else:
-                logger.warning(f"Empty audio chunk received for {audio_uuid}")
+                logger.warning(f"⚠️ Empty audio chunk received for {audio_uuid}")
 
         except Exception as e:
             logger.error(f"Error collecting audio chunk for {audio_uuid}: {e}")

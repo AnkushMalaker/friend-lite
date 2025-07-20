@@ -11,8 +11,8 @@ import uuid
 from typing import TYPE_CHECKING, Dict, Optional
 
 if TYPE_CHECKING:
-    # Import ClientState type for type hints without circular import
-    from advanced_omi_backend.main import ClientState
+    from advanced_omi_backend.client import ClientState
+    from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,18 @@ class ClientManager:
             logger.warning("ClientManager not initialized, cannot check client")
             return False
         return client_id in self._active_clients
+    
+    def is_client_active(self, client_id: str) -> bool:
+        """
+        Check if a client is currently active (alias for has_client).
+
+        Args:
+            client_id: The client ID to check
+
+        Returns:
+            True if client is active, False otherwise
+        """
+        return self.has_client(client_id)
 
     def get_all_clients(self) -> Dict[str, "ClientState"]:
         """
@@ -378,7 +390,7 @@ async def get_client_manager_dependency() -> ClientManager:
     return client_manager
 
 
-def generate_client_id(user, device_name: Optional[str] = None) -> str:
+def generate_client_id(user: "User", device_name: Optional[str] = None) -> str:
     """
     Generate a unique client_id in the format: user_id_suffix-device_suffix[-counter]
 
