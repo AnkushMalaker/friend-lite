@@ -8,6 +8,7 @@ services:
     env_file:
       - .env
     volumes:
+      - ./src:/app/src  # Mount source code for development
       - ./data/audio_chunks:/app/audio_chunks
       - ./data/debug_dir:/app/debug_dir
       - ./data:/app/data

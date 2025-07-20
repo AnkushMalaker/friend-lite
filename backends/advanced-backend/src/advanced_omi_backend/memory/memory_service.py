@@ -596,12 +596,45 @@ def _add_memory_to_store(
             memory_logger.info(f"🔍   - prompt: {prompt}")
 
             memory_logger.info(f"🧪 TEST_1: Calling with original prompt")
-            result = process_memory.add(
-                transcript,
-                user_id=user_id,
-                metadata=metadata,
-                prompt=prompt,
-            )
+
+            # Try mem0.add() with retry logic for JSON errors
+            try:
+                result = process_memory.add(
+                    transcript,
+                    user_id=user_id,
+                    metadata=metadata,
+                    prompt=prompt,
+                )
+            except json.JSONDecodeError as json_error:
+                memory_logger.warning(
+                    f"JSON parsing error on first attempt for {audio_uuid}: {json_error}"
+                )
+                memory_logger.info(f"🔄 Retrying mem0.add() once for {audio_uuid}")
+                try:
+                    # Retry once with same parameters
+                    result = process_memory.add(
+                        transcript,
+                        user_id=user_id,
+                        metadata=metadata,
+                        prompt=prompt,
+                    )
+                    memory_logger.info(f"✅ Retry successful for {audio_uuid}")
+                except json.JSONDecodeError as retry_json_error:
+                    memory_logger.error(
+                        f"JSON parsing error on retry for {audio_uuid}: {retry_json_error}"
+                    )
+                    memory_logger.info(f"🔄 Falling back to infer=False for {audio_uuid}")
+                    # Fallback to raw storage without LLM processing
+                    result = process_memory.add(
+                        transcript,
+                        user_id=user_id,
+                        metadata={
+                            **metadata,
+                            "storage_reason": "json_error_fallback",
+                            "original_error": f"JSONDecodeError after retry: {str(retry_json_error)}",
+                        },
+                        infer=False,
+                    )
 
             mem0_duration = time.time() - mem0_start_time
             memory_logger.info(f"Mem0 processing completed in {mem0_duration:.2f}s")
@@ -915,7 +948,7 @@ class MemoryService:
         user_email: str,
         allow_update: bool = False,
         db_helper=None,
-    ) -> bool:
+    ) -> tuple[bool, list[str]]:
         """Add memory in background process (non-blocking).
 
         Args:
@@ -932,7 +965,7 @@ class MemoryService:
                 await asyncio.wait_for(self.initialize(), timeout=MEMORY_INIT_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
                 memory_logger.error(f"Memory initialization timed out for {audio_uuid}")
-                return False
+                return False, []
 
         try:
             # Run the blocking operation in executor with timeout
@@ -973,15 +1006,15 @@ class MemoryService:
                     )
             else:
                 memory_logger.error(f"Failed to add memory for {audio_uuid}")
-            return success
+            return success, created_memory_ids
         except asyncio.TimeoutError:
             memory_logger.error(
                 f"Memory addition timed out after {OLLAMA_TIMEOUT_SECONDS}s for {audio_uuid}"
             )
-            return False
+            return False, []
         except Exception as e:
             memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
-            return False
+            return False, []
 
     def get_all_memories(self, user_id: str, limit: int = 100) -> list:
         """Get all memories for a user, filtering and prioritizing semantic memories over fallback transcript memories."""
