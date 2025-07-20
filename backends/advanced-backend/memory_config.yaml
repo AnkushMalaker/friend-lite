@@ -57,6 +57,7 @@ fact_extraction:
     - Contributions by each participant to the conversation or to the task
     
     Return the facts in JSON format as an array of strings. If no specific facts are mentioned, return an empty JSON array [].
+    Make sure to not wrap the JSON in ```json or ``` or any other markdown formatting. Only return the JSON array, that's all.
     
     Examples of JSON output:
     ["John Smith works as Software Engineer at Acme Corp",

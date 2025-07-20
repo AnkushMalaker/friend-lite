@@ -29,7 +29,8 @@ class MemoryConfigLoader:
         if config_path is None:
             # Default to memory_config.yaml in the backend root
             config_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "memory_config.yaml"
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                "memory_config.yaml",
             )
 
         self.config_path = config_path
@@ -75,16 +76,16 @@ class MemoryConfigLoader:
             "quality_control",
             "processing",
             "storage",
-            "debug"
+            "debug",
         ]
-        
+
         for section in required_sections:
             if section not in self.config:
                 raise ValueError(
                     f"Missing required configuration section: '{section}'\n"
                     f"Please check {self.config_path}"
                 )
-        
+
         # Validate memory_extraction section
         mem_extract = self.config.get("memory_extraction", {})
         if "enabled" not in mem_extract:
@@ -93,19 +94,19 @@ class MemoryConfigLoader:
             raise ValueError("memory_extraction.prompt is required in configuration")
         if "llm_settings" not in mem_extract:
             raise ValueError("memory_extraction.llm_settings is required in configuration")
-        
+
         # Validate quality_control section
         quality = self.config.get("quality_control", {})
         if "min_conversation_length" not in quality:
             raise ValueError("quality_control.min_conversation_length is required")
         if "max_conversation_length" not in quality:
             raise ValueError("quality_control.max_conversation_length is required")
-        
+
         # Validate processing section
         processing = self.config.get("processing", {})
         if "processing_timeout" not in processing:
             raise ValueError("processing.processing_timeout is required")
-        
+
         # Validate debug section
         debug = self.config.get("debug", {})
         if "enabled" not in debug:
@@ -219,7 +220,7 @@ class MemoryConfigLoader:
         # Check length constraints - these are required fields
         min_length = quality_config.get("min_conversation_length")
         max_length = quality_config.get("max_conversation_length")
-        
+
         if min_length is None or max_length is None:
             config_logger.error("Missing required quality control configuration")
             return False  # Don't skip if config is missing
