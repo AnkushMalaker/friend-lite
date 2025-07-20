@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.INFO)
 
 import asyncio
 import concurrent.futures
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -42,6 +43,11 @@ from advanced_omi_backend.auth import (
 )
 from advanced_omi_backend.client import ClientState
 from advanced_omi_backend.client_manager import generate_client_id
+from advanced_omi_backend.constants import (
+    OMI_CHANNELS,
+    OMI_SAMPLE_RATE,
+    OMI_SAMPLE_WIDTH,
+)
 from advanced_omi_backend.database import AudioChunksCollectionHelper
 from advanced_omi_backend.debug_system_tracker import (
     get_debug_tracker,
@@ -53,6 +59,12 @@ from advanced_omi_backend.memory import (
     init_memory_config,
     shutdown_memory_service,
 )
+from advanced_omi_backend.processors import (
+    AudioProcessingItem,
+    get_processor_manager,
+    init_processor_manager,
+)
+from advanced_omi_backend.task_manager import get_task_manager, init_task_manager
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import User, register_client_to_user
 
@@ -64,21 +76,14 @@ from advanced_omi_backend.users import User, register_client_to_user
 load_dotenv()
 
 # Logging setup
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("advanced-backend")
-audio_logger = logging.getLogger("audio_processing")
+application_logger = logging.getLogger("audio_processing")
 
 # Conditional Deepgram import
 try:
     from deepgram import DeepgramClient, FileSource, PrerecordedOptions  # type: ignore
-
-    DEEPGRAM_AVAILABLE = True
-    logger.info("✅ Deepgram SDK available")
 except ImportError:
-    DEEPGRAM_AVAILABLE = False
-    logger.warning("Deepgram SDK not available. Install with: pip install deepgram-sdk")
-audio_cropper_logger = logging.getLogger("audio_cropper")
-
+    logger.warning("Deepgram SDK not available. Install with: uv sync --group deepgram")
 
 ###############################################################################
 # CONFIGURATION
@@ -92,10 +97,8 @@ chunks_col = db["audio_chunks"]
 users_col = db["users"]
 speakers_col = db["speakers"]
 
+
 # Audio Configuration
-OMI_SAMPLE_RATE = 16_000  # Hz
-OMI_CHANNELS = 1
-OMI_SAMPLE_WIDTH = 2  # bytes (16‑bit)
 SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
@@ -156,6 +159,45 @@ memory_service = get_memory_service()
 ###############################################################################
 
 
+async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
+    """Parse Wyoming protocol: JSON header line followed by optional binary payload.
+    
+    Returns:
+        Tuple of (header_dict, payload_bytes or None)
+    """
+    # Read data from WebSocket
+    message = await ws.receive()
+    
+    # Handle text message (JSON header)
+    if "text" in message:
+        header_text = message["text"]
+        # Wyoming protocol uses newline-terminated JSON
+        if not header_text.endswith('\n'):
+            header_text += '\n'
+        
+        # Parse JSON header
+        json_line = header_text.strip()
+        header = json.loads(json_line)
+        
+        # If payload is expected, read binary data
+        payload = None
+        if header.get('payload_length', 0) > 0:
+            payload_msg = await ws.receive()
+            if "bytes" in payload_msg:
+                payload = payload_msg["bytes"]
+            else:
+                logger.warning(f"Expected binary payload but got: {payload_msg.keys()}")
+                
+        return header, payload
+    
+    # Handle binary message (invalid - Wyoming protocol requires JSONL headers)
+    elif "bytes" in message:
+        raise ValueError("Raw binary messages not supported - Wyoming protocol requires JSONL headers")
+    
+    else:
+        raise ValueError(f"Unexpected WebSocket message type: {message.keys()}")
+
+
 # Initialize repository and global state
 ac_db_collection_helper = AudioChunksCollectionHelper(chunks_col)
 active_clients: dict[str, ClientState] = {}
@@ -214,7 +256,7 @@ async def create_client_state(
     # Register client in user model (persistent)
     await register_client_to_user(user, client_id, device_name)
 
-    await client_state.start_processing()
+    # Note: No need to start processing - it's handled at application level now
 
     return client_state
 
@@ -239,7 +281,7 @@ async def cleanup_client_state(client_id: str):
 async def lifespan(app: FastAPI):
     """Manage application lifespan events."""
     # Startup
-    audio_logger.info("Starting application...")
+    application_logger.info("Starting application...")
 
     # Initialize Beanie for user management
     try:
@@ -247,64 +289,79 @@ async def lifespan(app: FastAPI):
             database=mongo_client.get_default_database("friend-lite"),
             document_models=[User],
         )
-        audio_logger.info("Beanie initialized for user management")
+        application_logger.info("Beanie initialized for user management")
     except Exception as e:
-        audio_logger.error(f"Failed to initialize Beanie: {e}")
+        application_logger.error(f"Failed to initialize Beanie: {e}")
         raise
 
     # Create admin user if needed
     try:
         await create_admin_user_if_needed()
     except Exception as e:
-        audio_logger.error(f"Failed to create admin user: {e}")
+        application_logger.error(f"Failed to create admin user: {e}")
         # Don't raise here as this is not critical for startup
 
-    # Start metrics collection
-    # Initialize debug tracker
-    init_debug_tracker()
-    audio_logger.info("Metrics collection started")
+    # Initialize task manager
+    task_manager = init_task_manager()
+    await task_manager.start()
+    application_logger.info("Task manager started")
+
+    # Initialize processor manager
+    processor_manager = init_processor_manager(CHUNK_DIR, ac_db_collection_helper)
+    await processor_manager.start()
+    application_logger.info("Application-level processors started")
 
     # Pre-initialize memory service to avoid blocking during first use
     try:
-        audio_logger.info("Pre-initializing memory service...")
+        application_logger.info("Pre-initializing memory service...")
         await asyncio.wait_for(
             memory_service.initialize(), timeout=120
         )  # 2 minute timeout for startup
-        audio_logger.info("Memory service pre-initialized successfully")
+        application_logger.info("Memory service pre-initialized successfully")
     except asyncio.TimeoutError:
-        audio_logger.warning(
+        application_logger.warning(
             "Memory service pre-initialization timed out - will initialize on first use"
         )
     except Exception as e:
-        audio_logger.warning(
+        application_logger.warning(
             f"Memory service pre-initialization failed: {e} - will initialize on first use"
         )
 
     # SystemTracker is used for monitoring and debugging
-    audio_logger.info("Using SystemTracker for monitoring and debugging")
+    application_logger.info("Using SystemTracker for monitoring and debugging")
 
-    audio_logger.info("Application ready - clients will have individual processing pipelines.")
+    application_logger.info("Application ready - using application-level processing architecture.")
 
     try:
         yield
     finally:
         # Shutdown
-        audio_logger.info("Shutting down application...")
+        application_logger.info("Shutting down application...")
 
         # Clean up all active clients
         for client_id in list(active_clients.keys()):
             await cleanup_client_state(client_id)
 
+        # Shutdown processor manager
+        processor_manager = get_processor_manager()
+        await processor_manager.shutdown()
+        application_logger.info("Processor manager shut down")
+
+        # Shutdown task manager
+        # task_manager = get_task_manager()
+        # await task_manager.shutdown()
+        # application_logger.info("Task manager shut down")
+
         # Stop metrics collection and save final report
         # Shutdown debug tracker
         shutdown_debug_tracker()
-        audio_logger.info("Metrics collection stopped")
+        application_logger.info("Metrics collection stopped")
 
         # Shutdown memory service and speaker service
         shutdown_memory_service()
-        audio_logger.info("Memory and speaker services shut down.")
+        application_logger.info("Memory and speaker services shut down.")
 
-        audio_logger.info("Shutdown complete.")
+        application_logger.info("Shutdown complete.")
 
 
 # FastAPI Application
@@ -331,92 +388,162 @@ app.include_router(api_router)
 
 
 @app.websocket("/ws_omi")
-async def ws_endpoint(
+async def ws_endpoint_omi(
     ws: WebSocket,
     token: Optional[str] = Query(None),
     device_name: Optional[str] = Query(None),
 ):
-    """Accepts WebSocket connections, decodes Opus audio, and processes per-client."""
-    # TODO: Accept parameters or some type of "audio config" message from the client to setup
-    # the proper file sink.
-
-    # Authenticate user before accepting WebSocket connection
-    user = await websocket_auth(ws, token)
-    if not user:
-        await ws.close(code=1008, reason="Authentication required")
-        return
-
-    await ws.accept()
-
-    # Generate proper client_id using user and device_name
-    client_id = generate_client_id(user, device_name)
-    audio_logger.info(
-        f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
-    )
-
-    decoder = OmiOpusDecoder()
-    _decode_packet = partial(decoder.decode_packet, strip_header=False)
-
-    # Create client state and start processing
-    client_state = await create_client_state(client_id, user, device_name)
-
-    # Track WebSocket connection
-    # tracker = get_debug_tracker()
-    # tracker.track_websocket_connected(user.user_id, client_id)
-
+    """Accepts WebSocket connections with Wyoming protocol, decodes OMI Opus audio, and processes per-client."""
+    client_id = None
+    client_state = None
+    
     try:
+        # Authenticate user before accepting WebSocket connection
+        user = await websocket_auth(ws, token)
+        if not user:
+            await ws.close(code=1008, reason="Authentication required")
+            return
+
+        await ws.accept()
+
+        # Generate proper client_id using user and device_name
+        client_id = generate_client_id(user, device_name)
+        application_logger.info(
+            f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
+        )
+
+        # Create client state
+        client_state = await create_client_state(client_id, user, device_name)
+
+        # Setup decoder (only required for decoding OMI audio)
+        decoder = OmiOpusDecoder()
+        _decode_packet = partial(decoder.decode_packet, strip_header=False)
+        
+        # Get processor manager
+        processor_manager = get_processor_manager()
+
         packet_count = 0
         total_bytes = 0
+        
         while True:
-            packet = await ws.receive_bytes()
-            packet_count += 1
-            total_bytes += len(packet)
-
-            start_time = time.time()
-            loop = asyncio.get_running_loop()
-            pcm_data = await loop.run_in_executor(_DEC_IO_EXECUTOR, _decode_packet, packet)
-            decode_time = time.time() - start_time
-
-            if pcm_data:
-                audio_logger.debug(
-                    f"🎵 Decoded packet #{packet_count}: {len(packet)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
+            # Parse Wyoming protocol
+            header, payload = await parse_wyoming_protocol(ws)
+            
+            if header['type'] == 'audio-start':
+                # Handle audio session start (optional for OMI devices)
+                application_logger.info(
+                    f"🎙️ OMI audio session started for {client_id} (explicit start)"
                 )
-                chunk = AudioChunk(
-                    audio=pcm_data,
-                    rate=OMI_SAMPLE_RATE,
-                    width=OMI_SAMPLE_WIDTH,
-                    channels=OMI_CHANNELS,
-                    timestamp=int(time.time()),
-                )
-                await client_state.chunk_queue.put(chunk)
-
-                # # Track audio chunk with debug tracker
-                # if packet_count == 1:  # Create transaction on first audio chunk
+                
+                # Create transaction for this audio session if not already created
+                # if not hasattr(client_state, "transaction_id"):
+                #     tracker = get_debug_tracker()
                 #     client_state.transaction_id = tracker.create_transaction(
                 #         user.user_id, client_id
                 #     )
-                # if hasattr(client_state, "transaction_id") and client_state.transaction_id:
-                #     tracker.track_audio_chunk(client_state.transaction_id, len(pcm_data))
+                
+            elif header['type'] == 'audio-chunk' and payload:
+                packet_count += 1
+                total_bytes += len(payload)
+                
+                # OMI devices stream continuously - always process audio chunks
+                application_logger.debug(f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes")
+                
+                # Decode Opus payload to PCM using OMI decoder
+                start_time = time.time()
+                loop = asyncio.get_running_loop()
+                pcm_data = await loop.run_in_executor(_DEC_IO_EXECUTOR, _decode_packet, payload)
+                decode_time = time.time() - start_time
 
-                # Log every 1000th packet to avoid spam
-                if packet_count % 1000 == 0:
-                    audio_logger.info(
-                        f"📊 Processed {packet_count} packets ({total_bytes} bytes total) for client {client_id}"
+                if pcm_data:
+                    application_logger.debug(
+                        f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
                     )
+                    
+                    # Use timestamp from Wyoming header if provided, otherwise current time
+                    audio_data = header.get('data', {})
+                    chunk_timestamp = audio_data.get('timestamp', int(time.time()))
+                    
+                    chunk = AudioChunk(
+                        audio=pcm_data,
+                        rate=OMI_SAMPLE_RATE,
+                        width=OMI_SAMPLE_WIDTH,
+                        channels=OMI_CHANNELS,
+                        timestamp=chunk_timestamp,
+                    )
+                    
+                    # Queue to application-level processor
+                    await processor_manager.queue_audio(
+                        AudioProcessingItem(
+                            client_id=client_id,
+                            user_id=user.user_id,
+                            audio_chunk=chunk,
+                            timestamp=chunk.timestamp
+                        )
+                    )
+                    
+                    # Update client state for tracking purposes
+                    client_state.update_audio_received(chunk)
+
+                    # Create transaction on first audio chunk if not already created
+                    # if packet_count == 1 and not hasattr(client_state, "transaction_id"):
+                    #     tracker = get_debug_tracker()
+                    #     client_state.transaction_id = tracker.create_transaction(
+                    #         user.user_id, client_id
+                    #     )
+
+                    # Track audio chunk with debug tracker
+                    # if hasattr(client_state, "transaction_id") and client_state.transaction_id:
+                    #     tracker = get_debug_tracker()
+                    #     tracker.track_audio_chunk(client_state.transaction_id, len(pcm_data))
+
+                    # Log every 1000th packet to avoid spam
+                    if packet_count % 1000 == 0:
+                        application_logger.info(
+                            f"📊 Processed {packet_count} OMI packets ({total_bytes} bytes total) for client {client_id}"
+                        )
+                    
+            elif header['type'] == 'audio-stop':
+                # Handle audio session stop
+                application_logger.info(
+                    f"🛑 OMI audio session stopped for {client_id} - "
+                    f"Total chunks: {packet_count}, Total bytes: {total_bytes}"
+                )
+                
+                # Signal end of audio stream to processor
+                await processor_manager.close_client_audio(client_id)
+                
+                # Reset counters for next session
+                packet_count = 0
+                total_bytes = 0
+                
+            else:
+                # Unknown event type
+                application_logger.debug(
+                    f"Ignoring Wyoming event type '{header['type']}' for OMI client {client_id}"
+                )
 
     except WebSocketDisconnect:
-        audio_logger.info(
+        application_logger.info(
             f"🔌 WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}"
         )
     except Exception as e:
-        audio_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
+        application_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
-        # # Track WebSocket disconnection
-        # tracker = get_debug_tracker()
-        # tracker.track_websocket_disconnected(client_id)
-
-        # Clean up client state
-        await cleanup_client_state(client_id)
+        # Ensure cleanup happens even if client_id is None
+        if client_id:
+            try:
+                # Signal end of audio stream to processor
+                processor_manager = get_processor_manager()
+                await processor_manager.close_client_audio(client_id)
+                
+                # Clean up client state
+                await cleanup_client_state(client_id)
+            except Exception as cleanup_error:
+                application_logger.error(
+                    f"Error during cleanup for client {client_id}: {cleanup_error}",
+                    exc_info=True
+                )
 
 
 @app.websocket("/ws_pcm")
@@ -424,72 +551,150 @@ async def ws_endpoint_pcm(
     ws: WebSocket, token: Optional[str] = Query(None), device_name: Optional[str] = Query(None)
 ):
     """Accepts WebSocket connections, processes PCM audio per-client."""
-    # Authenticate user before accepting WebSocket connection
-    user = await websocket_auth(ws, token)
-    if not user:
-        await ws.close(code=1008, reason="Authentication required")
-        return
-
-    await ws.accept()
-
-    # Generate proper client_id using user and device_name
-    client_id = generate_client_id(user, device_name)
-    audio_logger.info(
-        f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
-    )
-
-    # Create client state and start processing
-    client_state = await create_client_state(client_id, user, device_name)
-
-    # Track WebSocket connection
-    tracker = get_debug_tracker()
-    tracker.track_websocket_connected(user.user_id, client_id)
-
+    client_id = None
+    client_state = None
+    
     try:
+        # Authenticate user before accepting WebSocket connection
+        user = await websocket_auth(ws, token)
+        if not user:
+            await ws.close(code=1008, reason="Authentication required")
+            return
+
+        # Accept WebSocket AFTER authentication succeeds (fixes race condition)
+        await ws.accept()
+
+        # Generate proper client_id using user and device_name
+        client_id = generate_client_id(user, device_name)
+        application_logger.info(
+            f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
+        )
+
+        # Create client state
+        client_state = await create_client_state(client_id, user, device_name)
+
+        # Track WebSocket connection
+        tracker = get_debug_tracker()
+        tracker.track_websocket_connected(user.user_id, client_id)
+        
+        # Get processor manager
+        processor_manager = get_processor_manager()
+
         packet_count = 0
         total_bytes = 0
+        audio_streaming = False  # Track if audio session is active
+        
         while True:
-            packet = await ws.receive_bytes()
-            packet_count += 1
-            total_bytes += len(packet)
-
-            if packet:
-                audio_logger.debug(f"🎵 Received PCM packet #{packet_count}: {len(packet)} bytes")
-                chunk = AudioChunk(
-                    audio=packet,
-                    rate=16000,
-                    width=2,
-                    channels=1,
-                    timestamp=int(time.time()),
+            # Parse Wyoming protocol or fall back to raw audio
+            header, payload = await parse_wyoming_protocol(ws)
+            
+            if header['type'] == 'audio-start':
+                # Handle audio session start
+                audio_streaming = True
+                audio_format = header.get('data', {})
+                application_logger.info(
+                    f"🎙️ Audio session started for {client_id} - "
+                    f"Format: {audio_format.get('rate')}Hz, "
+                    f"{audio_format.get('width')}bytes, "
+                    f"{audio_format.get('channels')}ch"
                 )
-                await client_state.chunk_queue.put(chunk)
-
-                # Track audio chunk with debug tracker
-                if packet_count == 1:  # Create transaction on first audio chunk
-                    client_state.transaction_id = tracker.create_transaction(
-                        user.user_id, client_id
+                
+                # Create transaction for this audio session
+                # client_state.transaction_id = tracker.create_transaction(
+                #     user.user_id, client_id
+                # )
+                
+            elif header['type'] == 'audio-chunk' and payload:
+                packet_count += 1
+                total_bytes += len(payload)
+                
+                if audio_streaming:
+                    application_logger.debug(f"🎵 Received audio chunk #{packet_count}: {len(payload)} bytes")
+                    
+                    # Extract audio format from header
+                    audio_data = header.get('data', {})
+                    chunk = AudioChunk(
+                        audio=payload,
+                        rate=audio_data.get('rate', 16000),
+                        width=audio_data.get('width', 2),
+                        channels=audio_data.get('channels', 1),
+                        timestamp=audio_data.get('timestamp', int(time.time())),
                     )
-                if hasattr(client_state, "transaction_id") and client_state.transaction_id:
-                    tracker.track_audio_chunk(client_state.transaction_id, len(packet))
-
-                # Log every 1000th packet to avoid spam
-                if packet_count % 1000 == 0:
-                    audio_logger.info(
-                        f"📊 Processed {packet_count} PCM packets ({total_bytes} bytes total) for client {client_id}"
+                    
+                    # Queue to application-level processor
+                    await processor_manager.queue_audio(
+                        AudioProcessingItem(
+                            client_id=client_id,
+                            user_id=user.user_id,
+                            audio_chunk=chunk,
+                            timestamp=chunk.timestamp
+                        )
                     )
+                    
+                    # Update client state for tracking purposes
+                    client_state.update_audio_received(chunk)
+
+                    # Track audio chunk with debug tracker
+                    # if hasattr(client_state, "transaction_id") and client_state.transaction_id:
+                    #     tracker.track_audio_chunk(client_state.transaction_id, len(payload))
+
+                    # Log every 1000th packet to avoid spam
+                    if packet_count % 1000 == 0:
+                        application_logger.info(
+                            f"📊 Processed {packet_count} audio chunks ({total_bytes} bytes total) for client {client_id}"
+                        )
+                else:
+                    application_logger.warning(
+                        f"⚠️ Received audio chunk without audio-start for {client_id}"
+                    )
+                    
+            elif header['type'] == 'audio-stop':
+                # Handle audio session stop
+                audio_streaming = False
+                application_logger.info(
+                    f"🛑 Audio session stopped for {client_id} - "
+                    f"Total chunks: {packet_count}, Total bytes: {total_bytes}"
+                )
+                
+                # Signal end of audio stream to processor
+                await processor_manager.close_client_audio(client_id)
+                
+                # Reset counters for next session
+                packet_count = 0
+                total_bytes = 0
+                
+            else:
+                # Unknown event type
+                application_logger.debug(
+                    f"Ignoring Wyoming event type '{header['type']}' for {client_id}"
+                )
+                    
     except WebSocketDisconnect:
-        audio_logger.info(
+        application_logger.info(
             f"🔌 PCM WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}"
         )
     except Exception as e:
-        audio_logger.error(f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True)
+        application_logger.error(f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
         # Track WebSocket disconnection
-        tracker = get_debug_tracker()
-        tracker.track_websocket_disconnected(client_id)
+        if client_id:
+            tracker = get_debug_tracker()
+            tracker.track_websocket_disconnected(client_id)
 
-        # Clean up client state
-        await cleanup_client_state(client_id)
+        # Ensure cleanup happens even if client_id is None
+        if client_id:
+            try:
+                # Signal end of audio stream to processor
+                processor_manager = get_processor_manager()
+                await processor_manager.close_client_audio(client_id)
+                
+                # Clean up client state
+                await cleanup_client_state(client_id)
+            except Exception as cleanup_error:
+                application_logger.error(
+                    f"Error during cleanup for client {client_id}: {cleanup_error}",
+                    exc_info=True
+                )
 
 
 @app.get("/health")
@@ -706,11 +911,10 @@ async def health_check():
 
     # Track health check results in debug tracker
     try:
-        tracker = get_debug_tracker()
         # Can add health check tracking to debug tracker if needed
         pass
     except Exception as e:
-        audio_logger.error(f"Failed to record health check metrics: {e}")
+        application_logger.error(f"Failed to record health check metrics: {e}")
 
     # Set overall status
     health_status["overall_healthy"] = overall_healthy
@@ -755,5 +959,5 @@ if __name__ == "__main__":
 
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
-    audio_logger.info("Starting Omi unified service at ws://%s:%s/ws", host, port)
+    application_logger.info("Starting Omi unified service at ws://%s:%s/ws", host, port)
     uvicorn.run("main:app", host=host, port=port, reload=False)
