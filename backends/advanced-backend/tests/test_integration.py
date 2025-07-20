@@ -112,14 +112,14 @@ class IntegrationTestRunner:
             
         logger.info("🗂️ Cleaning up test-specific data directories...")
         
-        # Test data directories to clean
+        # Test data directories to clean (match docker-compose-test.yml mount paths)
         test_directories = [
-            "./test_audio_chunks/",
-            "./test_data/", 
-            "./test_debug_dir/",
-            "./mongo_data_test/",
-            "./qdrant_data_test/",
-            "./test_neo4j/"
+            "./data/test_audio_chunks/",
+            "./data/test_data/", 
+            "./data/test_debug_dir/",
+            "./data/test_mongo_data/",
+            "./data/test_qdrant_data/",
+            "./data/test_neo4j/"
         ]
         
         for test_dir in test_directories:
@@ -730,6 +730,8 @@ class IntegrationTestRunner:
             prompt = f"""
             Compare these two lists of memories to see if they represent similar content.
             The actual memories should cover the same key points as the expected memories. They should be more or less similar, making sure that they're convering too different memories indicating an error in the process like transcription error or something.
+            We're mainly trying to check that the memory extraction was fine and the content is more or less similar, meaning that the correct audio was used and maybe the correct prompt was used. Its okay if the number of memories differ or maybe if the resolution (detail) is a little different. But the topic should be the same, the things they're doing remembered, and maybe even names.
+            Ignore emotional/contextual details differences. Atleast 3 core memories should be the same, that's enough.
             
             IGNORE differences in:
             - Client IDs, user IDs, timestamps, and other metadata

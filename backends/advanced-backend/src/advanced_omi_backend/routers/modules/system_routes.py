@@ -309,6 +309,17 @@ async def process_audio_files(
                         f"✅ Processed audio file: {file.filename} ({len(audio_data)} bytes)"
                     )
 
+                # Wait briefly for transcription manager to be created by background processor
+                audio_logger.info(f"⏳ Waiting for transcription manager to be created for client {client_id}")
+                await asyncio.sleep(2.0)  # Give transcription processor time to create manager
+                
+                # Close client audio to trigger transcription completion (flush_final_transcript)
+                audio_logger.info(f"📞 About to call close_client_audio for upload client {client_id}")
+                processor_manager = get_processor_manager()
+                audio_logger.info(f"📞 Got processor manager, calling close_client_audio now...")
+                await processor_manager.close_client_audio(client_id)
+                audio_logger.info(f"🔚 Successfully called close_client_audio for upload client {client_id}")
+
                 # Wait for this file's transcription processing to complete
                 audio_logger.info(f"📁 Waiting for transcription to process file: {file.filename}")
 
@@ -316,9 +327,13 @@ async def process_audio_files(
                 await asyncio.sleep(1.0)
 
                 # Wait for file processing to complete using task tracking
-                max_wait_time = 60  # 1 minute per file
-                wait_interval = 0.5
+                # Increase timeout based on file duration (3x duration + 60s buffer)
+                audio_duration = len(audio_data) / (sample_rate * sample_width * channels)
+                max_wait_time = max(120, int(audio_duration * 3) + 60)  # At least 2 minutes, or 3x duration + 60s
+                wait_interval = 2.0  # Reduced from 0.5s to 2s to reduce polling spam
                 elapsed_time = 0
+                
+                audio_logger.info(f"📁 Audio duration: {audio_duration:.1f}s, max wait time: {max_wait_time}s")
 
                 # Use concrete task tracking instead of database polling
                 while elapsed_time < max_wait_time:

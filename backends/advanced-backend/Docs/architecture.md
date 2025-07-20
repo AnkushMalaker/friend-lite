@@ -118,8 +118,9 @@ graph TB
 
 #### FastAPI Backend (`main.py`)
 - **Authentication-First Design**: All endpoints require JWT authentication
+- **Wyoming Protocol WebSocket**: Real-time audio streaming using Wyoming protocol (JSONL + binary) for structured session management
 - **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation (`main.py:1562+`)
-- **Conversation Management**: Automatic conversation lifecycle with timeout handling (`main.py:1018-1149`)
+- **Conversation Management**: Session-based conversation lifecycle using Wyoming audio-start/stop events
 - **REST API Suite**: Comprehensive endpoints for user, conversation, and memory management (`main.py:1700+`)
 - **Health Monitoring**: Detailed service health checks and performance metrics (`main.py:2500+`)
 - **Audio Cropping**: Intelligent speech segment extraction using FFmpeg (`main.py:174-200`)
@@ -142,6 +143,71 @@ graph TB
 - **Data Management**: User, conversation, and memory interfaces
 - **Audio Playback**: Smart audio player with original/cropped audio options
 - **System Health**: Visual service status and configuration display
+
+### Wyoming Protocol Implementation
+
+The system implements Wyoming protocol for structured WebSocket audio communication, providing clear session boundaries and improved conversation management.
+
+#### Protocol Overview
+Wyoming is a peer-to-peer protocol for voice assistants that combines JSONL (JSON Lines) headers with binary audio payloads:
+
+**Protocol Format**:
+```
+{JSON_HEADER}\n
+<binary_payload>
+```
+
+#### Supported Events
+
+**Audio Session Events**:
+- **audio-start**: Signals the beginning of an audio recording session
+  ```json
+  {"type": "audio-start", "data": {"rate": 16000, "width": 2, "channels": 1}, "payload_length": null}
+  ```
+
+- **audio-chunk**: Contains raw audio data with format metadata
+  ```json
+  {"type": "audio-chunk", "data": {"rate": 16000, "width": 2, "channels": 1}, "payload_length": 320}
+  <320 bytes of PCM/Opus audio data>
+  ```
+
+- **audio-stop**: Signals the end of an audio recording session
+  ```json
+  {"type": "audio-stop", "data": {"timestamp": 1234567890}, "payload_length": null}
+  ```
+
+#### Backend Implementation
+
+**Advanced Backend (`/ws_pcm`)**:
+- **Full Wyoming Protocol Support**: Parses all Wyoming events for comprehensive session management
+- **Session State Tracking**: Only processes audio chunks when session is active (after receiving audio-start)
+- **Conversation Boundaries**: Uses Wyoming audio-start/stop events to define precise conversation segments
+- **PCM Audio Processing**: Direct processing of PCM audio data from all apps
+
+**Advanced Backend (`/ws_omi`)**:
+- **Wyoming Protocol + Opus Decoding**: Combines Wyoming session management with OMI Opus decoding
+- **Continuous Streaming**: OMI devices stream continuously, audio-start/stop events are optional
+- **Timestamp Preservation**: Uses timestamps from Wyoming headers when provided
+- **OMI-Optimized**: Hardcoded 16kHz mono format for OMI device compatibility
+
+**Simple Backend (`/ws`)**:
+- **Minimal Wyoming Support**: Parses audio-chunk events, silently ignores control events
+- **Opus Processing**: Handles Opus-encoded audio chunks from Wyoming protocol messages
+- **Legacy Compatibility**: Maintains support for raw Opus packet streaming
+
+#### Protocol Parser Implementation
+Both backends include a Wyoming protocol parser (`parse_wyoming_protocol()`) that:
+- Detects message type (JSONL header vs. raw binary)
+- Parses JSON headers and extracts payload length
+- Reads binary payloads when specified
+- Provides backward compatibility for non-Wyoming clients
+
+#### Benefits
+- **Clear Session Boundaries**: Eliminates timeout-based conversation detection
+- **Structured Communication**: Consistent protocol across all audio streaming interfaces
+- **Future Extensibility**: Foundation for additional event types (pause, resume, metadata)
+- **Universal App Integration**: Simple implementation for all WebSocket clients (mobile, desktop, web)
+- **Backward Compatibility**: Existing raw audio streaming clients continue to work
 
 ### Audio Processing Pipeline
 
@@ -513,6 +579,20 @@ flowchart TB
 7. **Conversation Lifecycle**: Automatic timeout handling and memory processing
 8. **Audio Optimization**: Speech segment extraction and silence removal
 
+#### Critical Timing Considerations
+**Transcription Manager Creation Race Condition**: When processing uploaded audio files, there's a timing dependency between:
+- Audio chunks being queued via `processor_manager.queue_audio()` (synchronous)
+- Transcription manager creation in background `_transcription_processor()` (asynchronous)
+- `close_client_audio()` call to flush final transcript (immediate)
+
+**Solution**: A 2-second delay is added before calling `close_client_audio()` to ensure the transcription manager is created by the background processor. Without this delay, the flush call fails silently and transcription never completes.
+
+**File Upload Flow**:
+1. Audio chunks queued to `transcription_queue` 
+2. Background `_transcription_processor()` creates `TranscriptionManager` on first chunk
+3. 2-second delay ensures manager exists before flush
+4. `close_client_audio()` → `flush_final_transcript()` → transcription completion
+
 ### Memory & Intelligence Processing
 1. **Conversation Completion**: End-of-session trigger for memory extraction
 2. **Transcript Validation**: Multi-layer validation prevents empty/short transcripts from reaching LLM
@@ -655,8 +735,8 @@ The system provides a comprehensive REST API organized into functional modules:
 #### Audio & Conversations
 - `GET /api/conversations` - User conversations
 - `POST /api/process-audio-files` - Batch audio file processing
-- WebSocket `/ws` - Real-time Opus audio streaming
-- WebSocket `/ws_pcm` - Real-time PCM audio streaming
+- WebSocket `/ws_omi` - Real-time Opus audio streaming with Wyoming protocol (OMI devices)
+- WebSocket `/ws_pcm` - Real-time PCM audio streaming with Wyoming protocol (all apps)
 
 ### Authentication & Authorization
 - **JWT Tokens**: All API endpoints require valid JWT authentication

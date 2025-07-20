@@ -11,8 +11,8 @@ import uuid
 from typing import TYPE_CHECKING, Dict, Optional
 
 if TYPE_CHECKING:
-    # Import ClientState type for type hints without circular import
-    from advanced_omi_backend.main import ClientState
+    from advanced_omi_backend.client import ClientState
+    from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
 
@@ -390,7 +390,7 @@ async def get_client_manager_dependency() -> ClientManager:
     return client_manager
 
 
-def generate_client_id(user, device_name: Optional[str] = None) -> str:
+def generate_client_id(user: "User", device_name: Optional[str] = None) -> str:
     """
     Generate a unique client_id in the format: user_id_suffix-device_suffix[-counter]
 

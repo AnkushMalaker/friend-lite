@@ -21,6 +21,7 @@ from advanced_omi_backend.audio_cropping_utils import (
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.database import AudioChunksCollectionHelper
 from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
+
 # Lazy import to avoid config loading issues
 # from advanced_omi_backend.memory import get_memory_service
 from advanced_omi_backend.task_manager import get_task_manager
@@ -215,7 +216,9 @@ class ProcessorManager:
     
     async def queue_transcription(self, item: TranscriptionItem):
         """Queue audio for transcription."""
+        audio_logger.info(f"📥 queue_transcription called for client {item.client_id}, audio_uuid: {item.audio_uuid}")
         await self.transcription_queue.put(item)
+        audio_logger.info(f"📤 Successfully put item in transcription_queue for client {item.client_id}, queue size: {self.transcription_queue.qsize()}")
     
     async def queue_memory(self, item: MemoryProcessingItem):
         """Queue conversation for memory processing."""
@@ -248,26 +251,13 @@ class ProcessorManager:
     
     def get_processing_status(self, client_id: str) -> Dict[str, Any]:
         """Get processing status for a specific client using both direct state and task tracking."""
-        logger.info(f"Getting processing status for client {client_id}")
-        logger.info(f"Available client_ids in processing_tasks: {list(self.processing_tasks.keys())}")
-        logger.info(f"Available client_ids in processing_state: {list(self.processing_state.keys())}")
+        logger.debug(f"Getting processing status for client {client_id}")
+        logger.debug(f"Available client_ids in processing_tasks: {list(self.processing_tasks.keys())}")
+        logger.debug(f"Available client_ids in processing_state: {list(self.processing_state.keys())}")
         
         stages = {}
         
-        # First, get direct state tracking (for synchronous operations like audio)
-        if client_id in self.processing_state:
-            client_state = self.processing_state[client_id]
-            for stage, state_info in client_state.items():
-                stages[stage] = {
-                    "completed": state_info["completed"],
-                    "error": state_info["error"],
-                    "status": state_info["status"],
-                    "metadata": state_info["metadata"],
-                    "timestamp": state_info["timestamp"]
-                }
-                logger.info(f"Direct state - {stage}: {state_info['status']}")
-        
-        # Then, get task tracking (for asynchronous operations like transcription)
+        # First, get task tracking (for asynchronous operations like memory/cropping)
         if client_id in self.processing_tasks:
             client_tasks = self.processing_tasks[client_id]
             for stage, task_id in client_tasks.items():
@@ -292,6 +282,20 @@ class ProcessorManager:
                         "completed_at": None,
                         "cancelled": False
                     }
+        
+        # Then, get direct state tracking (for synchronous operations like audio, transcription)
+        # Direct state takes PRECEDENCE over task tracking for the same stage
+        if client_id in self.processing_state:
+            client_state = self.processing_state[client_id]
+            for stage, state_info in client_state.items():
+                stages[stage] = {
+                    "completed": state_info["completed"],
+                    "error": state_info["error"],
+                    "status": state_info["status"],
+                    "metadata": state_info["metadata"],
+                    "timestamp": state_info["timestamp"]
+                }
+                logger.debug(f"Direct state - {stage}: {state_info['status']} (takes precedence)")
         
         # If no stages found, return no_tasks
         if not stages:
@@ -327,6 +331,50 @@ class ProcessorManager:
     
     async def close_client_audio(self, client_id: str):
         """Close audio file for a client when conversation ends."""
+        audio_logger.info(f"🔚 close_client_audio called for client {client_id}")
+        
+        # First, flush ASR to complete any pending transcription
+        if client_id in self.transcription_managers:
+            try:
+                manager = self.transcription_managers[client_id]
+                audio_logger.info(f"🔄 Found transcription manager - flushing ASR for client {client_id}")
+                audio_logger.info(f"📊 Transcription manager state - has manager: {manager is not None}, type: {type(manager).__name__}")
+                
+                # Get audio duration for flush timeout calculation
+                audio_duration = None
+                if client_id in self.active_audio_uuids:
+                    audio_uuid = self.active_audio_uuids[client_id]
+                    audio_logger.info(f"📌 Active audio UUID for flush: {audio_uuid}")
+                    # Try to estimate duration from file sink if available
+                    if client_id in self.active_file_sinks:
+                        try:
+                            sink = self.active_file_sinks[client_id]
+                            # Estimate duration based on samples written (if accessible)
+                            # For now, use None and let flush_final_transcript handle timeout
+                            audio_logger.info(f"📁 File sink exists for client {client_id}")
+                        except Exception as e:
+                            audio_logger.warning(f"⚠️ Error accessing file sink: {e}")
+                
+                flush_start_time = time.time()
+                audio_logger.info(f"📤 Calling flush_final_transcript for client {client_id} (manager: {manager})")
+                try:
+                    await manager.flush_final_transcript(audio_duration)
+                    flush_duration = time.time() - flush_start_time
+                    audio_logger.info(f"✅ ASR flush completed for client {client_id} in {flush_duration:.2f}s")
+                except Exception as flush_error:
+                    audio_logger.error(f"❌ Error during flush_final_transcript: {flush_error}", exc_info=True)
+                    raise
+                
+                # Verify that transcription was marked as completed after flush
+                current_status = self.get_processing_status(client_id)
+                transcription_stage = current_status.get("stages", {}).get("transcription", {})
+                audio_logger.info(f"🔍 Post-flush transcription status: {transcription_stage.get('status', 'unknown')} (completed: {transcription_stage.get('completed', False)})")
+            except Exception as e:
+                audio_logger.error(f"❌ Error flushing ASR for client {client_id}: {e}", exc_info=True)
+        else:
+            audio_logger.warning(f"⚠️ No transcription manager found for client {client_id} - cannot flush transcription")
+        
+        # Then close the audio file  
         if client_id in self.active_file_sinks:
             try:
                 sink = self.active_file_sinks[client_id]
@@ -407,6 +455,7 @@ class ProcessorManager:
                         
                         # Queue for transcription
                         audio_uuid = self.active_audio_uuids[item.client_id]
+                        audio_logger.info(f"🔄 About to queue transcription for client {item.client_id}, audio_uuid: {audio_uuid}")
                         await self.queue_transcription(
                             TranscriptionItem(
                                 client_id=item.client_id,
@@ -415,6 +464,7 @@ class ProcessorManager:
                                 audio_chunk=item.audio_chunk
                             )
                         )
+                        audio_logger.info(f"✅ Successfully queued transcription for client {item.client_id}, audio_uuid: {audio_uuid}")
                         
                     except Exception as e:
                         audio_logger.error(
@@ -456,46 +506,48 @@ class ProcessorManager:
                     try:
                         # Get or create transcription manager for client
                         if item.client_id not in self.transcription_managers:
+                            audio_logger.info(f"🔌 Creating new transcription manager for client {item.client_id}")
                             manager = TranscriptionManager(chunk_repo=self.db_helper, processor_manager=self)
                             try:
                                 await manager.connect(item.client_id)
                                 self.transcription_managers[item.client_id] = manager
+                                audio_logger.info(f"✅ Successfully created transcription manager for {item.client_id}")
                             except Exception as e:
                                 audio_logger.error(
-                                    f"Failed to create transcription manager for {item.client_id}: {e}"
+                                    f"❌ Failed to create transcription manager for {item.client_id}: {e}"
                                 )
                                 self.transcription_queue.task_done()
                                 continue
+                        else:
+                            audio_logger.debug(f"♻️ Reusing existing transcription manager for client {item.client_id}")
                         
                         manager = self.transcription_managers[item.client_id]
                         
-                        # Create background task for transcription
-                        task = asyncio.create_task(
-                            manager.transcribe_chunk(
-                                item.audio_uuid, item.audio_chunk, item.client_id
+                        # Process transcription chunk
+                        audio_logger.debug(f"🎵 Processing transcribe_chunk for client {item.client_id}, audio_uuid: {item.audio_uuid}")
+                        
+                        try:
+                            await manager.transcribe_chunk(item.audio_uuid, item.audio_chunk, item.client_id)
+                            audio_logger.debug(f"✅ Completed transcribe_chunk for client {item.client_id}")
+                        except Exception as e:
+                            audio_logger.error(f"❌ Error in transcribe_chunk for client {item.client_id}: {e}", exc_info=True)
+                        
+                        # Track transcription as started using direct state tracking - ONLY ONCE per audio session
+                        # Check if we haven't already marked this transcription as started for this audio UUID
+                        current_transcription_status = self.processing_state.get(item.client_id, {}).get("transcription", {})
+                        current_audio_uuid = current_transcription_status.get("metadata", {}).get("audio_uuid")
+                        
+                        # Only mark as started if this is a new audio UUID or no transcription status exists
+                        if current_audio_uuid != item.audio_uuid:
+                            audio_logger.info(f"🎯 Starting transcription tracking for new audio UUID: {item.audio_uuid}")
+                            self.track_processing_stage(
+                                item.client_id,
+                                "transcription", 
+                                "started",
+                                {"audio_uuid": item.audio_uuid, "chunk_processing": True}
                             )
-                        )
-                        
-                        # Track transcription as started using direct state tracking
-                        # (individual chunk tasks are too granular and overwrite each other)
-                        self.track_processing_stage(
-                            item.client_id,
-                            "transcription", 
-                            "started",
-                            {"audio_uuid": item.audio_uuid, "chunk_processing": True}
-                        )
-                        
-                        # Still track individual tasks in TaskManager for internal monitoring
-                        task_name = f"transcription_chunk_{item.client_id}_{item.audio_uuid}_{id(task)}"
-                        self.task_manager.track_task(
-                            task,
-                            task_name,
-                            {
-                                "client_id": item.client_id,
-                                "audio_uuid": item.audio_uuid,
-                                "type": "transcription_chunk"
-                            }
-                        )
+                        else:
+                            audio_logger.debug(f"⏩ Skipping transcription status update - already tracking audio UUID: {item.audio_uuid}")
                         
                     except Exception as e:
                         audio_logger.error(
@@ -506,36 +558,13 @@ class ProcessorManager:
                         self.transcription_queue.task_done()
                         
                 except asyncio.TimeoutError:
-                    # Periodic health check and cleanup
+                    # Periodic health check only (NO cleanup based on client active status)
                     queue_size = self.transcription_queue.qsize()
                     active_managers = len(self.transcription_managers)
                     audio_logger.debug(
                         f"Transcription processor health: {active_managers} managers, "
                         f"{queue_size} items in queue"
                     )
-                    
-                    # Clean up disconnected clients
-                    disconnected = []
-                    for client_id in list(self.transcription_managers.keys()):
-                        if not self.client_manager.is_client_active(client_id):
-                            disconnected.append(client_id)
-                    
-                    for client_id in disconnected:
-                        try:
-                            manager = self.transcription_managers.pop(client_id)
-                            await manager.disconnect()
-                            audio_logger.info(
-                                f"Cleaned up transcription manager for disconnected client {client_id}"
-                            )
-                        except Exception as e:
-                            audio_logger.error(
-                                f"Error cleaning up transcription manager for {client_id}: {e}"
-                            )
-                    
-                    # Also clean up audio files for disconnected clients
-                    for client_id in disconnected:
-                        if client_id in self.active_file_sinks:
-                            await self.close_client_audio(client_id)
                     
         except Exception as e:
             audio_logger.error(f"Fatal error in transcription processor: {e}", exc_info=True)
@@ -747,6 +776,7 @@ class ProcessorManager:
             audio_logger.error(f"Fatal error in cropping processor: {e}", exc_info=True)
         finally:
             audio_logger.info("Audio cropping processor stopped")
+    
 
 
 # Global processor manager instance

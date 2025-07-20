@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Friend-Lite is an AI-powered wearable ecosystem for audio capture, transcription, memory extraction, and action item detection. The system features real-time audio streaming from OMI devices via Bluetooth, intelligent conversation processing, and a comprehensive web dashboard for management.
+Friend-Lite is at the core an AI-powered personal system - various devices, incuding but not limited to wearables from OMI can be used for at the very least audio capture, speaker specific transcription, memory extraction and retriaval.
+On top of that - it is being designed to support other services, that can help a user with these inputs such as reminders, action items, personal diagnosis etc.
+
+This supports a comprehensive web dashboard for management.
 
 ## Development Commands
 
@@ -15,7 +18,6 @@ cd backends/advanced-backend
 # Start full stack with Docker
 docker compose up --build -d
 
-# Development with live reload
 uv run python src/main.py
 
 # Code formatting and linting
@@ -33,7 +35,7 @@ uv run pytest test_memory_debug.py  # Memory debug tests
 cp .env.template .env  # Configure environment variables
 
 # Reset data (development)
-sudo rm -rf ./audio_chunks/ ./mongo_data/ ./qdrant_data/
+sudo rm -rf backends/advanced-backend/data/
 ```
 
 ### Integration Test Development and Debugging
@@ -122,6 +124,7 @@ docker compose up --build
 
 ### Key Components
 - **Audio Pipeline**: Real-time Opus/PCM → Application-level processing → Deepgram transcription → memory extraction
+- **Wyoming Protocol**: WebSocket communication uses Wyoming protocol (JSONL + binary) for structured audio sessions
 - **Application-Level Processing**: Centralized processors for audio, transcription, memory, and cropping
 - **Task Management**: BackgroundTaskManager tracks all async tasks to prevent orphaned processes
 - **Transcription**: Deepgram Nova-3 model with Wyoming ASR fallback, auto-reconnection
@@ -149,14 +152,15 @@ Optional:
 
 ## Data Flow Architecture
 
-1. **Audio Ingestion**: OMI devices stream Opus audio via WebSocket with JWT auth
-2. **Application-Level Processing**: Global queues and processors handle all audio/transcription/memory tasks
-3. **Conversation Storage**: Transcripts saved to MongoDB `audio_chunks` collection with segments array
-4. **Conversation Management**: Automatic timeout-based conversation segmentation
-5. **Memory Extraction**: Background LLM processing (decoupled from conversation storage)
-6. **Action Items**: Automatic task detection with "Simon says" trigger phrases
-7. **Audio Optimization**: Speech segment extraction removes silence automatically
-8. **Task Tracking**: BackgroundTaskManager ensures proper cleanup of all async operations
+1. **Audio Ingestion**: OMI devices stream audio via WebSocket using Wyoming protocol with JWT auth
+2. **Wyoming Protocol Session Management**: Clients send audio-start/audio-stop events for session boundaries
+3. **Application-Level Processing**: Global queues and processors handle all audio/transcription/memory tasks
+4. **Conversation Storage**: Transcripts saved to MongoDB `audio_chunks` collection with segments array
+5. **Conversation Management**: Session-based conversation segmentation using Wyoming protocol events
+6. **Memory Extraction**: Background LLM processing (decoupled from conversation storage)
+7. **Action Items**: Automatic task detection with "Simon says" trigger phrases
+8. **Audio Optimization**: Speech segment extraction removes silence automatically
+9. **Task Tracking**: BackgroundTaskManager ensures proper cleanup of all async operations
 
 ### Database Schema Details
 - **Conversations**: Stored in `audio_chunks` collection (not `conversations`)
@@ -205,6 +209,86 @@ QDRANT_BASE_URL=qdrant
 # Speaker Recognition
 SPEAKER_SERVICE_URL=http://speaker-recognition:8001
 ```
+
+## Wyoming Protocol Implementation
+
+### Overview
+The system uses Wyoming protocol for WebSocket communication between mobile apps and backends. Wyoming is a peer-to-peer protocol for voice assistants that combines JSONL headers with binary audio payloads.
+
+### Protocol Format
+```
+{JSON_HEADER}\n
+<binary_payload>
+```
+
+### Supported Events
+
+#### Audio Session Events
+- **audio-start**: Signals the beginning of an audio recording session
+  ```json
+  {"type": "audio-start", "data": {"rate": 16000, "width": 2, "channels": 1}, "payload_length": null}
+  ```
+
+- **audio-chunk**: Contains raw audio data with format metadata
+  ```json
+  {"type": "audio-chunk", "data": {"rate": 16000, "width": 2, "channels": 1}, "payload_length": 320}
+  <320 bytes of PCM/Opus audio data>
+  ```
+
+- **audio-stop**: Signals the end of an audio recording session
+  ```json
+  {"type": "audio-stop", "data": {"timestamp": 1234567890}, "payload_length": null}
+  ```
+
+### Backend Implementation
+
+#### Advanced Backend (`/ws_pcm`)
+- **Full Wyoming Protocol Support**: Parses all Wyoming events for session management
+- **Session Tracking**: Only processes audio chunks when session is active (after audio-start)
+- **Conversation Boundaries**: Uses audio-start/stop events to define conversation segments
+- **Backward Compatibility**: Fallback to raw binary audio for older clients
+
+#### Simple Backend (`/ws`)
+- **Minimal Wyoming Support**: Parses audio-chunk events, ignores others
+- **Opus Processing**: Handles Opus-encoded audio chunks from Wyoming protocol
+- **Graceful Degradation**: Falls back to raw Opus packets for compatibility
+
+### Mobile App Integration
+
+Mobile apps should implement Wyoming protocol for proper session management:
+
+```javascript
+// Start audio session
+const audioStart = {
+  type: "audio-start",
+  data: { rate: 16000, width: 2, channels: 1 },
+  payload_length: null
+};
+websocket.send(JSON.stringify(audioStart) + '\n');
+
+// Send audio chunks
+const audioChunk = {
+  type: "audio-chunk",
+  data: { rate: 16000, width: 2, channels: 1 },
+  payload_length: audioData.byteLength
+};
+websocket.send(JSON.stringify(audioChunk) + '\n');
+websocket.send(audioData);
+
+// End audio session
+const audioStop = {
+  type: "audio-stop",
+  data: { timestamp: Date.now() },
+  payload_length: null
+};
+websocket.send(JSON.stringify(audioStop) + '\n');
+```
+
+### Benefits
+- **Clear Session Boundaries**: No timeout-based conversation detection needed
+- **Structured Communication**: Consistent protocol across all audio streaming
+- **Future Extensibility**: Room for additional event types (pause, resume, metadata)
+- **Backward Compatibility**: Works with existing raw audio streaming clients
 
 ## Development Notes
 

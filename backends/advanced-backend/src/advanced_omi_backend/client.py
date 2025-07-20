@@ -148,9 +148,19 @@ class ClientState:
         full_conversation = ""
         transcript_source = ""
         
+        # Debug logging for memory processing troubleshooting
+        audio_logger.info(
+            f"💭 Starting memory processing check for client {self.client_id}:"
+        )
+        audio_logger.info(f"    - current_audio_uuid: {self.current_audio_uuid}")
+        audio_logger.info(f"    - user_id: {self.user_id}")
+        audio_logger.info(f"    - user_email: {self.user_email}")
+        audio_logger.info(f"    - conversation_transcripts count: {len(self.conversation_transcripts) if self.conversation_transcripts else 0}")
+        
         if self.conversation_transcripts and self.current_audio_uuid:
             full_conversation = " ".join(self.conversation_transcripts).strip()
             transcript_source = f"memory ({len(self.conversation_transcripts)} segments)"
+            audio_logger.info(f"💭 Using transcripts from memory: {len(full_conversation)} chars")
         elif self.current_audio_uuid and self.db_helper:
             # Fallback: get transcripts from database
             try:
@@ -158,17 +168,32 @@ class ClientState:
                     f"💭 Conversation transcripts list empty, checking database for {self.current_audio_uuid}"
                 )
                 db_transcripts = await self.db_helper.get_transcript_segments(self.current_audio_uuid)
+                if not db_transcripts:
+                    await asyncio.sleep(15.0)
+                    db_transcripts = await self.db_helper.get_transcript_segments(self.current_audio_uuid)
+                
                 if db_transcripts:
                     transcript_texts = [segment.get("text", "") for segment in db_transcripts]
                     full_conversation = " ".join(transcript_texts).strip()
                     transcript_source = f"database ({len(db_transcripts)} segments)"
                     audio_logger.info(
-                        f"💭 Retrieved {len(db_transcripts)} transcript segments from database"
+                        f"💭 Retrieved {len(db_transcripts)} transcript segments from database: {len(full_conversation)} chars"
                     )
+                else:
+                    audio_logger.warning(f"💭 No transcripts found in database for {self.current_audio_uuid}")
             except Exception as e:
                 audio_logger.error(
                     f"💭 Error retrieving transcripts from database for {self.current_audio_uuid}: {e}"
                 )
+        else:
+            audio_logger.warning(f"💭 Cannot retrieve transcripts - missing audio_uuid or db_helper")
+        
+        # Debug the final condition check
+        audio_logger.info(f"💭 Memory processing condition check:")
+        audio_logger.info(f"    - full_conversation length: {len(full_conversation) if full_conversation else 0}")
+        audio_logger.info(f"    - current_audio_uuid: {bool(self.current_audio_uuid)}")
+        audio_logger.info(f"    - user_id: {bool(self.user_id)}")
+        audio_logger.info(f"    - user_email: {bool(self.user_email)}")
         
         # Queue memory processing if we have content
         if full_conversation and self.current_audio_uuid and self.user_id and self.user_email:
@@ -188,6 +213,14 @@ class ClientState:
                         db_helper=self.db_helper
                     )
                 )
+            else:
+                audio_logger.warning(f"💭 Memory processing skipped - conversation too short: {len(full_conversation)} chars")
+        else:
+            audio_logger.warning(f"💭 Memory processing skipped - missing required data:")
+            audio_logger.warning(f"    - full_conversation: {bool(full_conversation)}")
+            audio_logger.warning(f"    - current_audio_uuid: {bool(self.current_audio_uuid)}")
+            audio_logger.warning(f"    - user_id: {bool(self.user_id)}")
+            audio_logger.warning(f"    - user_email: {bool(self.user_email)}")
         
         # Queue audio cropping if enabled and we have speech segments
         if AUDIO_CROPPING_ENABLED and self.current_audio_uuid in self.speech_segments:

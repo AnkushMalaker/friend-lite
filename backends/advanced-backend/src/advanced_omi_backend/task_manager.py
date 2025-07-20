@@ -201,21 +201,53 @@ class BackgroundTaskManager:
         return client_tasks
     
     async def cancel_tasks_for_client(self, client_id: str, timeout: float = 30.0):
-        """Cancel all tasks for a specific client."""
+        """Cancel client-specific tasks, but preserve processing tasks that should continue independently."""
         client_tasks = self.get_tasks_for_client(client_id)
         if not client_tasks:
             return
-            
-        logger.info(f"Cancelling {len(client_tasks)} tasks for client {client_id}")
         
-        # Cancel all tasks
+        # Define task types that should continue after client disconnect
+        # These tasks represent ongoing processing that should complete independently
+        PROCESSING_TASK_TYPES = {
+            "transcription_chunk",  # Individual transcription tasks
+            "memory",              # Memory processing tasks  
+            "cropping"             # Audio cropping tasks
+        }
+        
+        # Filter tasks to only cancel non-processing tasks
+        tasks_to_cancel = []
+        tasks_to_preserve = []
+        
         for task_info in client_tasks:
+            task_type = task_info.metadata.get("type", "")
+            # Check if this is a processing task that should continue
+            is_processing_task = any(task_type.startswith(pt) for pt in PROCESSING_TASK_TYPES)
+            
+            if is_processing_task:
+                tasks_to_preserve.append(task_info)
+            else:
+                tasks_to_cancel.append(task_info)
+        
+        if tasks_to_preserve:
+            logger.info(f"Preserving {len(tasks_to_preserve)} processing tasks for client {client_id} to continue independently")
+            for task_info in tasks_to_preserve:
+                logger.debug(f"  Preserving task: {task_info.name} (type: {task_info.metadata.get('type')})")
+        
+        if not tasks_to_cancel:
+            logger.info(f"No non-processing tasks to cancel for client {client_id}")
+            return
+            
+        logger.info(f"Cancelling {len(tasks_to_cancel)} non-processing tasks for client {client_id}")
+        
+        # Cancel only non-processing tasks
+        for task_info in tasks_to_cancel:
             if not task_info.task.done():
+                logger.debug(f"  Cancelling task: {task_info.name} (type: {task_info.metadata.get('type')})")
                 task_info.task.cancel()
                 task_info.cancelled = True
         
-        # Wait for tasks to complete
-        tasks = [info.task for info in client_tasks if not info.task.done()]
+        # Wait for cancelled tasks to complete
+        tasks = [info.task for info in tasks_to_cancel if not info.task.done()]
         if tasks:
             try:
                 await asyncio.wait_for(
