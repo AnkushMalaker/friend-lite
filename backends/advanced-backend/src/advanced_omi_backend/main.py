@@ -181,7 +181,8 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
         
         # If payload is expected, read binary data
         payload = None
-        if header.get('payload_length', 0) > 0:
+        payload_length = header.get('payload_length')
+        if payload_length is not None and payload_length > 0:
             payload_msg = await ws.receive()
             if "bytes" in payload_msg:
                 payload = payload_msg["bytes"]
