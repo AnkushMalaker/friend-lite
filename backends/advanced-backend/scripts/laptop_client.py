@@ -103,19 +103,29 @@ async def send_wyoming_event(websocket, wyoming_event):
     Based on how the backend processes Wyoming events, they expect:
     1. JSON header line ending with \n
     2. Optional binary payload if payload_length > 0
+    
+    This replicates Wyoming's async_write_event behavior for WebSocket transport.
     """
     # Get the event data from Wyoming event
     event_data = wyoming_event.event()
     
-    # Convert to JSON and send as text message
-    json_header = json.dumps(event_data.to_dict()) + '\n'
-    await websocket.send(json_header)
-    logger.debug(f"Sent Wyoming event: {event_data.type}")
+    # Build event dict like Wyoming's async_write_event does
+    event_dict = event_data.to_dict()
+    event_dict["version"] = "1.0.0"  # Wyoming adds version
     
-    # For audio chunks, send the binary payload separately
-    if AudioChunk.is_type(event_data.type) and wyoming_event.audio:
-        await websocket.send(wyoming_event.audio)
-        logger.debug(f"Sent audio payload: {len(wyoming_event.audio)} bytes")
+    # Add payload_length if payload exists (critical for audio chunks!)
+    if event_data.payload:
+        event_dict["payload_length"] = len(event_data.payload)
+    
+    # Send JSON header
+    json_header = json.dumps(event_dict) + '\n'
+    await websocket.send(json_header)
+    logger.debug(f"Sent Wyoming event: {event_data.type} (payload_length: {event_dict.get('payload_length', 0)})")
+    
+    # Send binary payload if exists
+    if event_data.payload:
+        await websocket.send(event_data.payload)
+        logger.debug(f"Sent audio payload: {len(event_data.payload)} bytes")
 
 
 
