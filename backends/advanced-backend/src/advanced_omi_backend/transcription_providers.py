@@ -16,16 +16,19 @@ class OnlineTranscriptionProvider(abc.ABC):
     """Abstract base class for online transcription providers."""
 
     @abc.abstractmethod
-    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
+    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> dict:
         """
-        Transcribe audio data to text.
+        Transcribe audio data to text with optional speaker diarization.
 
         Args:
             audio_data: Raw audio bytes (PCM format)
             sample_rate: Audio sample rate (default 16000 Hz)
 
         Returns:
-            Transcribed text string
+            Dictionary containing:
+            - text: Transcribed text string
+            - segments: List of speaker segments (if diarization available)
+            - words: List of word-level data with timestamps and speakers
         """
         pass
 
@@ -47,7 +50,7 @@ class DeepgramProvider(OnlineTranscriptionProvider):
     def name(self) -> str:
         return "Deepgram"
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
+    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> dict:
         """Transcribe audio using Deepgram's REST API."""
         try:
             params = {
@@ -89,6 +92,7 @@ class DeepgramProvider(OnlineTranscriptionProvider):
 
                 if response.status_code == 200:
                     result = response.json()
+                    logger.debug(f"Deepgram response: {result}")
 
                     # Extract transcript from response
                     if result.get("results", {}).get("channels", []) and result["results"][
@@ -112,28 +116,63 @@ class DeepgramProvider(OnlineTranscriptionProvider):
                             )
 
                         if transcript:
-                            # Clean up speaker labels
-                            cleaned_transcript = re.sub(
-                                r"^[\s\n]*Speaker \d+:\s*", "", transcript, flags=re.MULTILINE
-                            )
-                            cleaned_transcript = re.sub(
-                                r"\n\s*Speaker \d+:\s*", " ", cleaned_transcript
-                            )
-                            cleaned_transcript = cleaned_transcript.strip()
+                            # Extract speech timing information for logging
+                            words = alternative.get("words", [])
+                            if words:
+                                first_word_start = words[0].get("start", 0)
+                                last_word_end = words[-1].get("end", 0)
+                                speech_duration = last_word_end - first_word_start
 
-                            logger.info(
-                                f"Cleaned transcript from {len(transcript)} to {len(cleaned_transcript)} characters"
-                            )
-                            return cleaned_transcript
+                                # Calculate audio duration from data size
+                                audio_duration = len(audio_data) / (
+                                    sample_rate * 2 * 1
+                                )  # 16-bit mono
+                                speech_percentage = (
+                                    (speech_duration / audio_duration) * 100
+                                    if audio_duration > 0
+                                    else 0
+                                )
+
+                                logger.info(
+                                    f"Deepgram speech analysis: {speech_duration:.1f}s speech detected in {audio_duration:.1f}s audio ({speech_percentage:.1f}%)"
+                                )
+
+                                # Check confidence levels
+                                confidences = [
+                                    w.get("confidence", 0) for w in words if "confidence" in w
+                                ]
+                                if confidences:
+                                    avg_confidence = sum(confidences) / len(confidences)
+                                    low_confidence_count = sum(1 for c in confidences if c < 0.5)
+                                    logger.info(
+                                        f"Deepgram confidence: avg={avg_confidence:.2f}, {low_confidence_count}/{len(words)} words <0.5 confidence"
+                                    )
+
+                                # Convert word-level speaker data to speaker segments
+                                formatted_transcript = self._format_speaker_segments(words)
+                                logger.info(
+                                    f"Formatted transcript with speaker segments: {len(formatted_transcript)} characters"
+                                )
+                                return {
+                                    "text": formatted_transcript,
+                                    "words": words,
+                                    "segments": [],
+                                }
+                            else:
+                                # No word-level data, return basic transcript
+                                logger.info(
+                                    "No word-level data available, returning basic transcript"
+                                )
+                                return {"text": transcript, "words": [], "segments": []}
                         else:
                             logger.warning("Deepgram returned empty transcript")
-                            return ""
+                            return {"text": "", "words": [], "segments": []}
                     else:
                         logger.warning("Deepgram response missing expected transcript structure")
-                        return ""
+                        return {"text": "", "words": [], "segments": []}
                 else:
                     logger.error(f"Deepgram API error: {response.status_code} - {response.text}")
-                    return ""
+                    return {"text": "", "words": [], "segments": []}
 
         except httpx.TimeoutException as e:
             timeout_type = "unknown"
@@ -148,10 +187,53 @@ class DeepgramProvider(OnlineTranscriptionProvider):
             logger.error(
                 f"HTTP {timeout_type} timeout during Deepgram API call for {len(audio_data)} bytes: {e}"
             )
-            return ""
+            return {"text": "", "words": [], "segments": []}
         except Exception as e:
             logger.error(f"Error calling Deepgram API: {e}")
+            return {"text": "", "words": [], "segments": []}
+
+    def _format_speaker_segments(self, words: list) -> str:
+        """
+        Convert word-level speaker data into formatted transcript with speaker labels.
+
+        Args:
+            words: List of word objects with speaker information
+
+        Returns:
+            Formatted transcript string with speaker labels
+        """
+        if not words:
             return ""
+
+        segments = []
+        current_speaker = None
+        current_text = []
+
+        for word in words:
+            speaker = word.get("speaker", 0)
+            word_text = word.get("punctuated_word", word.get("word", ""))
+
+            if speaker != current_speaker:
+                # Save previous segment if it exists
+                if current_speaker is not None and current_text:
+                    segment_text = " ".join(current_text).strip()
+                    if segment_text:
+                        segments.append(f"Speaker {current_speaker}: {segment_text}")
+
+                # Start new segment
+                current_speaker = speaker
+                current_text = [word_text]
+            else:
+                # Continue current segment
+                current_text.append(word_text)
+
+        # Add final segment
+        if current_speaker is not None and current_text:
+            segment_text = " ".join(current_text).strip()
+            if segment_text:
+                segments.append(f"Speaker {current_speaker}: {segment_text}")
+
+        return "\n".join(segments)
 
 
 class MistralProvider(OnlineTranscriptionProvider):
@@ -166,7 +248,7 @@ class MistralProvider(OnlineTranscriptionProvider):
     def name(self) -> str:
         return "Mistral"
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
+    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> dict:
         """Transcribe audio using Mistral's REST API."""
         try:
             # Mistral expects audio files, so we need to send it as a file upload
@@ -212,20 +294,20 @@ class MistralProvider(OnlineTranscriptionProvider):
                         logger.info(
                             f"Mistral transcription successful: {len(transcript)} characters"
                         )
-                        return transcript
+                        return {"text": transcript, "words": [], "segments": []}
                     else:
                         logger.warning("Mistral returned empty transcript")
-                        return ""
+                        return {"text": "", "words": [], "segments": []}
                 else:
                     logger.error(f"Mistral API error: {response.status_code} - {response.text}")
-                    return ""
+                    return {"text": "", "words": [], "segments": []}
 
         except httpx.TimeoutException as e:
             logger.error(f"HTTP timeout during Mistral API call for {len(audio_data)} bytes: {e}")
-            return ""
+            return {"text": "", "words": [], "segments": []}
         except Exception as e:
             logger.error(f"Error calling Mistral API: {e}")
-            return ""
+            return {"text": "", "words": [], "segments": []}
 
     def _create_wav_header(self, audio_data: bytes, sample_rate: int) -> bytes:
         """Create a WAV header for raw PCM data."""
@@ -262,7 +344,7 @@ class MistralProvider(OnlineTranscriptionProvider):
 
 def get_transcription_provider(
     provider_name: Optional[str] = None,
-) -> Optional[OnlineTranscriptionProvider]:
+) -> OnlineTranscriptionProvider:
     """
     Factory function to get the appropriate transcription provider.
 
@@ -271,7 +353,10 @@ def get_transcription_provider(
                       If None, will check environment for available keys.
 
     Returns:
-        An instance of OnlineTranscriptionProvider or None if no provider is available.
+        An instance of OnlineTranscriptionProvider.
+
+    Raises:
+        RuntimeError: If no transcription provider is configured or requested provider is unavailable.
     """
     import os
 
@@ -296,4 +381,21 @@ def get_transcription_provider(
             logger.info(f"Using Mistral transcription provider with model: {mistral_model}")
             return MistralProvider(mistral_key, mistral_model)
 
-    return None
+    # No provider available or configured
+    if provider_name:
+        if provider_name == "deepgram":
+            raise RuntimeError(
+                f"Deepgram transcription provider requested but DEEPGRAM_API_KEY not configured"
+            )
+        elif provider_name == "mistral":
+            raise RuntimeError(
+                f"Mistral transcription provider requested but MISTRAL_API_KEY not configured"
+            )
+        else:
+            raise RuntimeError(
+                f"Unknown transcription provider '{provider_name}'. Supported: 'deepgram', 'mistral'"
+            )
+    else:
+        raise RuntimeError(
+            "No transcription provider configured. Please set DEEPGRAM_API_KEY or MISTRAL_API_KEY environment variable"
+        )

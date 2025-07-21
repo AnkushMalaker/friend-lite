@@ -24,12 +24,20 @@ graph TB
     end
     
     %% Audio Processing Pipeline
-    subgraph "Audio Processing Pipeline"
+    subgraph "Application-Level Processing"
         OpusDecoder[Opus Decoder<br/>Realtime Audio]
-        AudioChunks[Audio Chunks<br/>Per-Client Queues]
-        Transcription[Transcription Manager<br/>Deepgram WebSocket/Wyoming Fallback]
-        ClientState[Per-Client State<br/>Conversation Management]
-        AudioCropping[Audio Cropping<br/>Speech Segment Extraction]
+        ProcessorManager[Processor Manager<br/>Centralized Processing]
+        AudioProcessor[Audio Processor<br/>File Management]
+        TranscriptionProcessor[Transcription Processor<br/>Deepgram WebSocket/Wyoming]
+        MemoryProcessor[Memory Processor<br/>LLM Processing]
+        CroppingProcessor[Cropping Processor<br/>Speech Segment Extraction]
+        TaskManager[Task Manager<br/>Background Task Tracking]
+    end
+    
+    %% Client State Management
+    subgraph "Client State Management"
+        ClientState[Client State<br/>Conversation State Only]
+        ClientManager[Client Manager<br/>Connection Management]
     end
     
     %% Business Logic Services
@@ -70,24 +78,27 @@ graph TB
     %% Audio Processing Flow
     Client -->|Opus/PCM Audio| Main
     Main -->|Audio Packets| OpusDecoder
-    OpusDecoder -->|PCM Data| AudioChunks
-    AudioChunks -->|Per-Client Processing| ClientState
-    ClientState -->|Audio Chunks| Transcription
-    ClientState -->|Speech Segments| AudioCropping
+    OpusDecoder -->|PCM Data| ProcessorManager
+    ProcessorManager -->|Global Queues| AudioProcessor
+    ProcessorManager -->|Global Queues| TranscriptionProcessor
+    ProcessorManager -->|Global Queues| MemoryProcessor
+    ProcessorManager -->|Global Queues| CroppingProcessor
+    ClientState -->|State Only| ClientManager
+    TaskManager -->|Task Tracking| ProcessorManager
     
     %% WebSocket & REST Endpoints
     Main -->|/ws, /ws_pcm| Client
     Main -->|/api/* endpoints| WebUI
     
     %% Service Integration
-    Transcription -->|Conversation Data| Memory
-    Memory -->|Memory Storage| Ollama
-    Memory -->|Vector Storage| Qdrant
+    TranscriptionProcessor -->|Conversation Data| Memory
+    MemoryProcessor -->|Memory Storage| Ollama
+    MemoryProcessor -->|Vector Storage| Qdrant
     
     %% External Service Connections
     Main -->|User & Conversation Data| MongoDB
-    Transcription -->|Speech Processing| ASR
-    Memory -->|Embeddings| Qdrant
+    TranscriptionProcessor -->|Speech Processing| ASR
+    MemoryProcessor -->|Embeddings| Qdrant
     
     %% Monitoring & Metrics
     Main -->|System Metrics| Metrics
@@ -107,8 +118,9 @@ graph TB
 
 #### FastAPI Backend (`main.py`)
 - **Authentication-First Design**: All endpoints require JWT authentication
+- **Wyoming Protocol WebSocket**: Real-time audio streaming using Wyoming protocol (JSONL + binary) for structured session management
 - **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation (`main.py:1562+`)
-- **Conversation Management**: Automatic conversation lifecycle with timeout handling (`main.py:1018-1149`)
+- **Conversation Management**: Session-based conversation lifecycle using Wyoming audio-start/stop events
 - **REST API Suite**: Comprehensive endpoints for user, conversation, and memory management (`main.py:1700+`)
 - **Health Monitoring**: Detailed service health checks and performance metrics (`main.py:2500+`)
 - **Audio Cropping**: Intelligent speech segment extraction using FFmpeg (`main.py:174-200`)
@@ -131,6 +143,71 @@ graph TB
 - **Data Management**: User, conversation, and memory interfaces
 - **Audio Playback**: Smart audio player with original/cropped audio options
 - **System Health**: Visual service status and configuration display
+
+### Wyoming Protocol Implementation
+
+The system implements Wyoming protocol for structured WebSocket audio communication, providing clear session boundaries and improved conversation management.
+
+#### Protocol Overview
+Wyoming is a peer-to-peer protocol for voice assistants that combines JSONL (JSON Lines) headers with binary audio payloads:
+
+**Protocol Format**:
+```
+{JSON_HEADER}\n
+<binary_payload>
+```
+
+#### Supported Events
+
+**Audio Session Events**:
+- **audio-start**: Signals the beginning of an audio recording session
+  ```json
+  {"type": "audio-start", "data": {"rate": 16000, "width": 2, "channels": 1}, "payload_length": null}
+  ```
+
+- **audio-chunk**: Contains raw audio data with format metadata
+  ```json
+  {"type": "audio-chunk", "data": {"rate": 16000, "width": 2, "channels": 1}, "payload_length": 320}
+  <320 bytes of PCM/Opus audio data>
+  ```
+
+- **audio-stop**: Signals the end of an audio recording session
+  ```json
+  {"type": "audio-stop", "data": {"timestamp": 1234567890}, "payload_length": null}
+  ```
+
+#### Backend Implementation
+
+**Advanced Backend (`/ws_pcm`)**:
+- **Full Wyoming Protocol Support**: Parses all Wyoming events for comprehensive session management
+- **Session State Tracking**: Only processes audio chunks when session is active (after receiving audio-start)
+- **Conversation Boundaries**: Uses Wyoming audio-start/stop events to define precise conversation segments
+- **PCM Audio Processing**: Direct processing of PCM audio data from all apps
+
+**Advanced Backend (`/ws_omi`)**:
+- **Wyoming Protocol + Opus Decoding**: Combines Wyoming session management with OMI Opus decoding
+- **Continuous Streaming**: OMI devices stream continuously, audio-start/stop events are optional
+- **Timestamp Preservation**: Uses timestamps from Wyoming headers when provided
+- **OMI-Optimized**: Hardcoded 16kHz mono format for OMI device compatibility
+
+**Simple Backend (`/ws`)**:
+- **Minimal Wyoming Support**: Parses audio-chunk events, silently ignores control events
+- **Opus Processing**: Handles Opus-encoded audio chunks from Wyoming protocol messages
+- **Legacy Compatibility**: Maintains support for raw Opus packet streaming
+
+#### Protocol Parser Implementation
+Both backends include a Wyoming protocol parser (`parse_wyoming_protocol()`) that:
+- Detects message type (JSONL header vs. raw binary)
+- Parses JSON headers and extracts payload length
+- Reads binary payloads when specified
+- Provides backward compatibility for non-Wyoming clients
+
+#### Benefits
+- **Clear Session Boundaries**: Eliminates timeout-based conversation detection
+- **Structured Communication**: Consistent protocol across all audio streaming interfaces
+- **Future Extensibility**: Foundation for additional event types (pause, resume, metadata)
+- **Universal App Integration**: Simple implementation for all WebSocket clients (mobile, desktop, web)
+- **Backward Compatibility**: Existing raw audio streaming clients continue to work
 
 ### Audio Processing Pipeline
 
@@ -185,7 +262,46 @@ client_state = ClientState(
 
 **Key Features**:
 - **Connection Tracking**: Real-time monitoring of active clients
-- **State Isolation**: Per-client queues and processing pipelines
+- **State Management**: Simplified client state for conversation tracking only
+- **Centralized Processing**: Application-level processors handle all background tasks
+
+### Application-Level Processing Architecture
+
+The system has been refactored from per-client processing to application-level processing for improved reliability and resource management:
+
+**Processor Manager**:
+```python
+# Centralized processing with global queues
+ProcessorManager(
+    audio_queue=asyncio.Queue(),          # Audio file management
+    transcription_queue=asyncio.Queue(),  # Deepgram/Wyoming ASR
+    memory_queue=asyncio.Queue(),         # LLM processing
+    cropping_queue=asyncio.Queue()        # Speech segment extraction
+)
+```
+
+**Background Task Manager**:
+```python
+# Centralized task tracking prevents orphaned processes
+BackgroundTaskManager(
+    tasks={},                    # Active task tracking
+    completed_tasks=[],          # Completed task history
+    max_completed_history=1000   # Task history limit
+)
+```
+
+**Key Benefits**:
+- **Prevents Orphaned Processes**: All background tasks tracked centrally
+- **Processing Continues After Disconnect**: Tasks complete even if client disconnects
+- **Resource Leak Prevention**: Proper cleanup of TCP connections, file handles, threads
+- **Robust Error Handling**: Comprehensive exception handling with guaranteed cleanup
+- **Task Timeout Management**: Automatic cancellation of long-running tasks
+
+**Architecture Changes**:
+- **ClientState**: Simplified to state management only (conversation tracking, speech segments)
+- **ProcessorManager**: Handles all audio, transcription, memory, and cropping tasks
+- **TaskManager**: Tracks all background tasks with health monitoring
+- **Exception Safety**: WebSocket handlers use try/finally for guaranteed cleanup
 - **Resource Management**: Automatic cleanup on client disconnect
 - **Multi-Device Support**: Single user can have multiple active clients
 - **Thread-Safe Operations**: Concurrent client access with proper synchronization
@@ -371,21 +487,11 @@ flowchart TB
         
     end
 
-    %% Failure Recovery System
-    subgraph "🛡️ Failure Recovery System"
-        QueueTracker[Queue Tracker<br/>📊 SQLite tracking]
-        PersistentQueue[Persistent Queue<br/>💾 Survives restarts]
-        RecoveryManager[Recovery Manager<br/>🔄 Auto-retry with backoff]
-        HealthMonitor[Health Monitor<br/>🏥 Service health checks]
-        CircuitBreaker[Circuit Breaker<br/>⚡ Fast-fail protection]
-        DeadLetter[Dead Letter Queue<br/>💀 Persistent failures]
-    end
 
     %% Data Storage
     subgraph "💾 Data Storage Layer"
         MongoDB[(MongoDB<br/>Users & Conversations<br/>🕐 Health check: 5s)]
         QdrantDB[(Qdrant<br/>Vector Embeddings<br/>🔍 Semantic memory)]
-        SQLiteTracking[(SQLite<br/>Failure Recovery Tracking<br/>📊 Performance metrics)]
         AudioFiles[Audio Files<br/>📁 Chunk storage + cropping]
     end
 
@@ -421,14 +527,6 @@ flowchart TB
     LLMProcessor -->|✅ Memory extracted| VectorStore
     MemoryService -->|📊 Track processing| QueueTracker
     
-
-    %% Failure Recovery Integration
-    QueueTracker -->|📊 Track all items| PersistentQueue
-    PersistentQueue -->|🔄 Failed items| RecoveryManager
-    RecoveryManager -->|🔄 Exponential backoff retry| MemoryService
-    RecoveryManager -->|💀 Max retries exceeded| DeadLetter
-    HealthMonitor -->|🏥 Service health checks<br/>🕐 5s MongoDB<br/>🕐 8s Ollama<br/>🕐 5s ASR| CircuitBreaker
-    CircuitBreaker -->|⚡ Service unavailable<br/>🔄 Fast-fail mode| RecoveryManager
 
     %% Disconnect and Cleanup Flow
     Client -->|🔌 Disconnect| ClientState
@@ -480,6 +578,20 @@ flowchart TB
 6. **Transcription Pipeline**: Configurable ASR service integration with user-scoped storage
 7. **Conversation Lifecycle**: Automatic timeout handling and memory processing
 8. **Audio Optimization**: Speech segment extraction and silence removal
+
+#### Critical Timing Considerations
+**Transcription Manager Creation Race Condition**: When processing uploaded audio files, there's a timing dependency between:
+- Audio chunks being queued via `processor_manager.queue_audio()` (synchronous)
+- Transcription manager creation in background `_transcription_processor()` (asynchronous)
+- `close_client_audio()` call to flush final transcript (immediate)
+
+**Solution**: A 2-second delay is added before calling `close_client_audio()` to ensure the transcription manager is created by the background processor. Without this delay, the flush call fails silently and transcription never completes.
+
+**File Upload Flow**:
+1. Audio chunks queued to `transcription_queue` 
+2. Background `_transcription_processor()` creates `TranscriptionManager` on first chunk
+3. 2-second delay ensures manager exists before flush
+4. `close_client_audio()` → `flush_final_transcript()` → transcription completion
 
 ### Memory & Intelligence Processing
 1. **Conversation Completion**: End-of-session trigger for memory extraction
@@ -623,8 +735,8 @@ The system provides a comprehensive REST API organized into functional modules:
 #### Audio & Conversations
 - `GET /api/conversations` - User conversations
 - `POST /api/process-audio-files` - Batch audio file processing
-- WebSocket `/ws` - Real-time Opus audio streaming
-- WebSocket `/ws_pcm` - Real-time PCM audio streaming
+- WebSocket `/ws_omi` - Real-time Opus audio streaming with Wyoming protocol (OMI devices)
+- WebSocket `/ws_pcm` - Real-time PCM audio streaming with Wyoming protocol (all apps)
 
 ### Authentication & Authorization
 - **JWT Tokens**: All API endpoints require valid JWT authentication

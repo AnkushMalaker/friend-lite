@@ -12,6 +12,21 @@ interface UseAudioStreamer {
   sendAudio: (audioBytes: Uint8Array) => void;
 }
 
+// Wyoming Protocol Types
+interface WyomingEvent {
+  type: string;
+  data?: any;
+  version?: string;
+  payload_length?: number | null;
+}
+
+// Audio format constants (matching OMI device format)
+const AUDIO_FORMAT = {
+  rate: 16000,  // 16kHz sample rate
+  width: 2,     // 16-bit samples (2 bytes)
+  channels: 1   // Mono audio
+};
+
 export const useAudioStreamer = (): UseAudioStreamer => {
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
@@ -24,7 +39,42 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const MAX_RECONNECT_ATTEMPTS = 5;
   const RECONNECT_DELAY = 3000; // 3 seconds between reconnects
 
-  const stopStreaming = useCallback(() => {
+  // Helper function to send Wyoming protocol events
+  const sendWyomingEvent = useCallback(async (event: WyomingEvent, payload?: Uint8Array) => {
+    if (!websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
+      console.log('[AudioStreamer] WebSocket not ready for Wyoming event');
+      return;
+    }
+
+    try {
+      // Add version to event
+      event.version = "1.0.0";
+      
+      // Add payload_length if payload exists
+      if (payload) {
+        event.payload_length = payload.length;
+      } else {
+        event.payload_length = null;
+      }
+
+      // Send JSON header with newline
+      const jsonHeader = JSON.stringify(event) + '\n';
+      websocketRef.current.send(jsonHeader);
+      console.debug(`[AudioStreamer] Sent Wyoming event: ${event.type} (payload_length: ${event.payload_length})`);
+
+      // Send binary payload if exists
+      if (payload && payload.length > 0) {
+        websocketRef.current.send(payload);
+        console.debug(`[AudioStreamer] Sent audio payload: ${payload.length} bytes`);
+      }
+    } catch (e) {
+      const errorMessage = (e as any).message || 'Error sending Wyoming event.';
+      console.error('[AudioStreamer] Error sending Wyoming event:', errorMessage);
+      setError(errorMessage);
+    }
+  }, []);
+
+  const stopStreaming = useCallback(async () => {
     if (websocketRef.current) {
       console.log('[AudioStreamer] Closing WebSocket connection.');
       // Mark that we're manually stopping the connection
@@ -36,12 +86,26 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         reconnectTimeoutRef.current = null;
       }
       
+      // Send audio-stop event before closing
+      if (websocketRef.current.readyState === WebSocket.OPEN) {
+        try {
+          const audioStopEvent: WyomingEvent = {
+            type: 'audio-stop',
+            data: { timestamp: Date.now() }
+          };
+          await sendWyomingEvent(audioStopEvent);
+          console.log('[AudioStreamer] Sent audio-stop event');
+        } catch (e) {
+          console.error('[AudioStreamer] Error sending audio-stop:', e);
+        }
+      }
+      
       websocketRef.current.close();
       websocketRef.current = null;
     }
     setIsStreaming(false);
     setIsConnecting(false);
-  }, []);
+  }, [sendWyomingEvent]);
 
   const attemptReconnect = useCallback(() => {
     if (manuallyStoppedRef.current || !currentUrlRef.current) {
@@ -113,7 +177,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
       try {
         const ws = new WebSocket(url.trim());
 
-        ws.onopen = () => {
+        ws.onopen = async () => {
           console.log('[AudioStreamer] WebSocket connection established.');
           setIsConnecting(false);
           setIsStreaming(true);
@@ -121,6 +185,19 @@ export const useAudioStreamer = (): UseAudioStreamer => {
           websocketRef.current = ws; // Assign ref only on successful open
           // Reset reconnect attempts on successful connection
           reconnectAttemptsRef.current = 0;
+          
+          // Send audio-start event to begin session
+          try {
+            const audioStartEvent: WyomingEvent = {
+              type: 'audio-start',
+              data: AUDIO_FORMAT
+            };
+            await sendWyomingEvent(audioStartEvent);
+            console.log(`[AudioStreamer] Sent audio-start event (rate=${AUDIO_FORMAT.rate}, width=${AUDIO_FORMAT.width}, channels=${AUDIO_FORMAT.channels})`);
+          } catch (e) {
+            console.error('[AudioStreamer] Error sending audio-start:', e);
+          }
+          
           resolve();
         };
 
@@ -181,13 +258,19 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         reject(new Error(errorMessage));
       }
     });
-  }, [stopStreaming, attemptReconnect]);
+  }, [stopStreaming, attemptReconnect, sendWyomingEvent]);
 
-  const sendAudio = useCallback((audioBytes: Uint8Array) => {
+  const sendAudio = useCallback(async (audioBytes: Uint8Array) => {
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
       try {
-        // console.debug(`[AudioStreamer] Attempting to send audio: ${audioBytes.length} bytes. WebSocket readyState: ${websocketRef.current?.readyState}`);
-        websocketRef.current.send(audioBytes);
+        // Create Wyoming AudioChunk event
+        const audioChunkEvent: WyomingEvent = {
+          type: 'audio-chunk',
+          data: AUDIO_FORMAT
+        };
+        
+        // Send Wyoming event with audio payload
+        await sendWyomingEvent(audioChunkEvent, audioBytes);
       } catch (e) {
         const errorMessage = (e as any).message || 'Error sending audio data.';
         console.error('[AudioStreamer] Error sending audio:', errorMessage);
@@ -198,7 +281,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
       // Log why it didn't send
       console.log(`[AudioStreamer] NOT sending audio. Conditions check: websocketRef.current exists: ${!!websocketRef.current}, readyState === OPEN: ${websocketRef.current?.readyState === WebSocket.OPEN}, audioBytes.length > 0: ${audioBytes.length > 0}. Actual readyState: ${websocketRef.current?.readyState}`);
     }
-  }, []);
+  }, [sendWyomingEvent]);
 
   const getWebSocketReadyState = useCallback(() => {
     return websocketRef.current?.readyState;

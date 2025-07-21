@@ -259,7 +259,7 @@ async def add_speaker_to_conversation(
         )
     except Exception as e:
         audio_logger.error(f"Error adding speaker: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"message": "Error adding speaker"})
+        return JSONResponse(status_code=500, content={"message": f"Error adding speaker: {str(e)}"})
 
 
 @router.put("/{audio_uuid}/transcript/{segment_index}")

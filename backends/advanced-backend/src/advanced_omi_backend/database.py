@@ -54,6 +54,8 @@ class AudioChunksCollectionHelper:
         transcript=None,
         speakers_identified=None,
         memories=None,
+        transcription_status="PENDING",
+        memory_processing_status="PENDING",
     ):
         doc = {
             "audio_uuid": audio_uuid,
@@ -63,6 +65,8 @@ class AudioChunksCollectionHelper:
             "transcript": transcript or [],  # List of conversation segments
             "speakers_identified": speakers_identified or [],  # List of identified speakers
             "memories": memories or [],  # List of memory references created from this audio
+            "transcription_status": transcription_status,  # PENDING, COMPLETED, FAILED, EMPTY
+            "memory_processing_status": memory_processing_status,  # PENDING, COMPLETED, FAILED, SKIPPED
         }
         await self.col.insert_one(doc)
 
@@ -190,4 +194,42 @@ class AudioChunksCollectionHelper:
         )
         if result.modified_count > 0:
             logger.info(f"Updated cropped audio info for {audio_uuid}: {cropped_path}")
+        return result.modified_count > 0
+
+    async def update_transcription_status(
+        self, audio_uuid: str, status: str, provider: str = None, error_message: str = None
+    ):
+        """Update transcription status and completion timestamp."""
+        update_doc = {
+            "transcription_status": status,
+            "transcription_updated_at": datetime.now(UTC).isoformat(),
+        }
+        if provider:
+            update_doc["transcription_provider"] = provider
+        if status == "COMPLETED":
+            update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
+        if error_message:
+            update_doc["transcription_error"] = error_message
+
+        result = await self.col.update_one({"audio_uuid": audio_uuid}, {"$set": update_doc})
+        if result.modified_count > 0:
+            logger.info(f"Updated transcription status to {status} for {audio_uuid}")
+        return result.modified_count > 0
+
+    async def update_memory_processing_status(
+        self, audio_uuid: str, status: str, error_message: str = None
+    ):
+        """Update memory processing status and completion timestamp."""
+        update_doc = {
+            "memory_processing_status": status,
+            "memory_processing_updated_at": datetime.now(UTC).isoformat(),
+        }
+        if status == "COMPLETED":
+            update_doc["memory_processing_completed_at"] = datetime.now(UTC).isoformat()
+        if error_message:
+            update_doc["memory_processing_error"] = error_message
+
+        result = await self.col.update_one({"audio_uuid": audio_uuid}, {"$set": update_doc})
+        if result.modified_count > 0:
+            logger.info(f"Updated memory processing status to {status} for {audio_uuid}")
         return result.modified_count > 0

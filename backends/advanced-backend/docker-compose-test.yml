@@ -1,0 +1,88 @@
+# docker-compose-test.yml
+# Isolated test environment for integration tests
+# Uses different ports to avoid conflicts with development environment
+
+services:
+  friend-backend-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"  # Avoid conflict with dev on 8000
+    env_file:
+      - .env.test
+    volumes:
+      - ./data/test_audio_chunks:/app/audio_chunks
+      - ./data/test_debug_dir:/app/debug_dir
+      - ./data/test_data:/app/data
+    environment:
+      # Override with test-specific settings
+      - MONGODB_URI=mongodb://mongo-test:27017/test_db
+      - QDRANT_BASE_URL=qdrant-test
+      - DEBUG_DIR=/app/debug_dir
+      # Import API keys from environment
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      qdrant-test:
+        condition: service_started
+      mongo-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  streamlit-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.webui
+    ports:
+      - "8502:8501"  # Avoid conflict with dev on 8501
+    environment:
+      - BACKEND_API_URL=http://friend-backend-test:8000
+      - BACKEND_PUBLIC_URL=http://localhost:8001  # For local test browser access
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+    depends_on:
+      friend-backend-test:
+        condition: service_healthy
+      mongo-test:
+        condition: service_healthy
+      qdrant-test:
+        condition: service_started
+
+  qdrant-test:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6335:6333"  # gRPC - avoid conflict with dev 6333
+      - "6336:6334"  # HTTP - avoid conflict with dev 6334
+    volumes:
+      - ./data/test_qdrant_data:/qdrant/storage
+
+  mongo-test:
+    image: mongo:4.4.18
+    ports:
+      - "27018:27017"  # Avoid conflict with dev on 27017
+    volumes:
+      - ./data/test_mongo_data:/data/db
+    # Use test database name to ensure isolation
+    command: mongod --dbpath /data/db --bind_ip_all
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.runCommand('ping').ok", "--quiet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+# CI Considerations (for future implementation):
+# - GitHub Actions can run these services in isolated containers
+# - Port conflicts won't exist in CI since each job runs in isolation
+# - For CI, we could add:
+#   - --build flag for fresh builds
+#   - --force-recreate for clean state
+#   - Volume cleanup between test runs
+# - Environment variables can be injected via GitHub secrets
+# - Health checks ensure services are ready before tests run

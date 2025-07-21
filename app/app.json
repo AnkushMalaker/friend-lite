@@ -30,7 +30,8 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_NETWORK_STATE"
-      ]
+      ],
+      "usesCleartextTraffic": true
     },
     "newArchEnabled": true,
     "plugins": [
@@ -43,7 +44,20 @@
           ],
           "bluetoothAlwaysPermission": "This app uses Bluetooth to connect to and interact with nearby BLE devices."
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "05d8598e-6fe7-4373-81e4-1654f3d8e181"
+      }
+    }
   }
 }

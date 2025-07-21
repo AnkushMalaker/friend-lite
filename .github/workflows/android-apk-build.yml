@@ -1,10 +1,15 @@
 name: Android APK Build
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main, develop]
+    paths: ['app/**']
   pull_request:
     branches: [main]
+    paths: ['app/**']
   workflow_dispatch:
 
 jobs:
@@ -59,6 +64,7 @@ jobs:
 
       - name: Create Release
         id: create_release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

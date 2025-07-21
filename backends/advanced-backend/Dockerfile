@@ -8,6 +8,7 @@ RUN apt-get update && \
     git \
     curl \
     ffmpeg \
+    portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -29,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 
 # Copy memory config to the expected location
-COPY memory_config.yaml src/
+COPY memory_config.yaml ./
 
 
 # Run the application

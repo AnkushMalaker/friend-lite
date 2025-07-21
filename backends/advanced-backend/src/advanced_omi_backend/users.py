@@ -1,8 +1,6 @@
 """User models for fastapi-users integration with Beanie and MongoDB."""
 
 import logging
-import random
-import string
 from datetime import UTC, datetime
 from typing import Optional
 
@@ -75,8 +73,10 @@ async def get_user_by_id(user_id: str) -> Optional[User]:
     """Get user by MongoDB ObjectId string."""
     try:
         return await User.get(PydanticObjectId(user_id))
-    except Exception:
-        return None
+    except Exception as e:
+        logger.error(f"Failed to get user by ID {user_id}: {e}")
+        # Re-raise for proper error handling upstream
+        raise
 
 
 async def get_user_by_client_id(client_id: str) -> Optional[User]:
@@ -90,41 +90,3 @@ async def register_client_to_user(
     """Register a client to a user and save to database."""
     user.register_client(client_id, device_name)
     await user.save()
-
-
-def generate_client_id(user: User, device_name: Optional[str] = None) -> str:
-    """
-    Generate a unique client_id in the format: user_id_suffix-device_suffix[-counter]
-
-    Args:
-        user: The User object
-        device_name: Optional device name (e.g., 'havpe', 'phone', 'tablet')
-
-    Returns:
-        client_id in format: user_id_suffix-device_suffix or user_id_suffix-device_suffix-N for duplicates
-    """
-    # Use last 6 characters of MongoDB ObjectId as user identifier
-    user_id_suffix = str(user.id)[-6:]
-
-    if device_name:
-        # Sanitize device name: lowercase, alphanumeric + hyphens only, max 10 chars
-        sanitized_device = "".join(c for c in device_name.lower() if c.isalnum() or c == "-")[:10]
-        base_client_id = f"{user_id_suffix}-{sanitized_device}"
-
-        # Check for existing client IDs to avoid conflicts
-        existing_client_ids = user.get_client_ids()
-
-        # If base client_id doesn't exist, use it
-        if base_client_id not in existing_client_ids:
-            return base_client_id
-
-        # If it exists, find the next available counter
-        counter = 2
-        while f"{base_client_id}-{counter}" in existing_client_ids:
-            counter += 1
-
-        return f"{base_client_id}-{counter}"
-    else:
-        # Generate random 4-character suffix if no device name provided
-        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-        return f"{user_id_suffix}-{suffix}"
