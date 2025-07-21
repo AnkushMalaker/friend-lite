@@ -7,6 +7,7 @@ import aiohttp
 import websockets
 import websockets.exceptions
 from easy_audio_interfaces.extras.local_audio import InputMicStream
+from wyoming.audio import AudioStart, AudioChunk, AudioStop
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +16,8 @@ logging.basicConfig(level=logging.INFO)
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8000
 DEFAULT_ENDPOINT = "/ws_pcm"
+
+# Audio format will be determined from the InputMicStream instance
 
 
 def build_websocket_uri(
@@ -91,6 +94,39 @@ def validate_auth_args(args):
         )
 
 
+async def send_wyoming_event(websocket, wyoming_event):
+    """Send a Wyoming protocol event over WebSocket.
+    
+    Based on how the backend processes Wyoming events, they expect:
+    1. JSON header line ending with \n
+    2. Optional binary payload if payload_length > 0
+    
+    This replicates Wyoming's async_write_event behavior for WebSocket transport.
+    """
+    # Get the event data from Wyoming event
+    event_data = wyoming_event.event()
+    
+    # Build event dict like Wyoming's async_write_event does
+    event_dict = event_data.to_dict()
+    event_dict["version"] = "1.0.0"  # Wyoming adds version
+    
+    # Add payload_length if payload exists (critical for audio chunks!)
+    if event_data.payload:
+        event_dict["payload_length"] = len(event_data.payload)
+    
+    # Send JSON header
+    json_header = json.dumps(event_dict) + '\n'
+    await websocket.send(json_header)
+    logger.debug(f"Sent Wyoming event: {event_data.type} (payload_length: {event_dict.get('payload_length', 0)})")
+    
+    # Send binary payload if exists
+    if event_data.payload:
+        await websocket.send(event_data.payload)
+        logger.debug(f"Sent audio payload: {len(event_data.payload)} bytes")
+
+
+
+
 async def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(
@@ -149,22 +185,48 @@ async def main():
             print("Connected to WebSocket")
 
             async def send_audio():
-                """Capture audio from microphone and send raw PCM bytes over WebSocket"""
-                async with InputMicStream(chunk_size=512) as stream:
-                    while True:
-                        try:
-                            data = await stream.read()
-                            if data and data.audio:
-                                # Send raw PCM bytes directly to WebSocket
-                                await websocket.send(data.audio)
-                                logger.debug(f"Sent audio chunk: {len(data.audio)} bytes")
-                            await asyncio.sleep(0.01)  # Small delay to prevent overwhelming
-                        except websockets.exceptions.ConnectionClosed:
-                            logger.info("WebSocket connection closed during audio sending")
-                            break
-                        except Exception as e:
-                            logger.error(f"Error sending audio: {e}")
-                            break
+                """Capture audio from microphone and send Wyoming protocol audio events"""
+                try:
+                    # Send audio-start event to begin session
+                    async with InputMicStream(chunk_size=512) as stream:
+                        audio_start = AudioStart(
+                            rate=stream.sample_rate,
+                            width=stream.sample_width,
+                            channels=stream.channels
+                        )
+                        await send_wyoming_event(websocket, audio_start)
+                        logger.info(f"Sent audio-start event (rate={stream.sample_rate}, width={stream.sample_width}, channels={stream.channels})")
+                        while True:
+                            try:
+                                data = await stream.read()
+                                if data and data.audio:
+                                    # Create Wyoming AudioChunk with format from stream
+                                    audio_chunk = AudioChunk(
+                                        audio=data.audio,
+                                        rate=stream.sample_rate,
+                                        width=stream.sample_width,
+                                        channels=stream.channels
+                                    )
+                                    await send_wyoming_event(websocket, audio_chunk)
+                                    logger.debug(f"Sent audio chunk: {len(data.audio)} bytes")
+                                await asyncio.sleep(0.01)  # Small delay to prevent overwhelming
+                            except websockets.exceptions.ConnectionClosed:
+                                logger.info("WebSocket connection closed during audio sending")
+                                break
+                            except Exception as e:
+                                logger.error(f"Error sending audio: {e}")
+                                break
+                                
+                except Exception as e:
+                    logger.error(f"Error in audio session: {e}")
+                finally:
+                    # Send audio-stop event to end session
+                    try:
+                        audio_stop = AudioStop()
+                        await send_wyoming_event(websocket, audio_stop)
+                        logger.info("Sent audio-stop event")
+                    except Exception as e:
+                        logger.error(f"Error sending audio-stop: {e}")
 
             async def receive_messages():
                 """Receive any messages from the WebSocket server"""
