@@ -17,10 +17,7 @@ DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8000
 DEFAULT_ENDPOINT = "/ws_pcm"
 
-# Wyoming protocol audio format constants
-AUDIO_RATE = 16000  # 16kHz sampling rate
-AUDIO_WIDTH = 2     # 16-bit (2 bytes) per sample
-AUDIO_CHANNELS = 1  # Mono audio
+# Audio format will be determined from the InputMicStream instance
 
 
 def build_websocket_uri(
@@ -191,25 +188,24 @@ async def main():
                 """Capture audio from microphone and send Wyoming protocol audio events"""
                 try:
                     # Send audio-start event to begin session
-                    audio_start = AudioStart(
-                        rate=AUDIO_RATE,
-                        width=AUDIO_WIDTH,
-                        channels=AUDIO_CHANNELS
-                    )
-                    await send_wyoming_event(websocket, audio_start)
-                    logger.info("Sent audio-start event")
-                    
                     async with InputMicStream(chunk_size=512) as stream:
+                        audio_start = AudioStart(
+                            rate=stream.sample_rate,
+                            width=stream.sample_width,
+                            channels=stream.channels
+                        )
+                        await send_wyoming_event(websocket, audio_start)
+                        logger.info(f"Sent audio-start event (rate={stream.sample_rate}, width={stream.sample_width}, channels={stream.channels})")
                         while True:
                             try:
                                 data = await stream.read()
                                 if data and data.audio:
-                                    # Create Wyoming AudioChunk with proper format
+                                    # Create Wyoming AudioChunk with format from stream
                                     audio_chunk = AudioChunk(
                                         audio=data.audio,
-                                        rate=AUDIO_RATE,
-                                        width=AUDIO_WIDTH,
-                                        channels=AUDIO_CHANNELS
+                                        rate=stream.sample_rate,
+                                        width=stream.sample_width,
+                                        channels=stream.channels
                                     )
                                     await send_wyoming_event(websocket, audio_chunk)
                                     logger.debug(f"Sent audio chunk: {len(data.audio)} bytes")
