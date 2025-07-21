@@ -208,8 +208,9 @@ export const BackendStatus: React.FC<BackendStatusProps> = ({
       </TouchableOpacity>
 
       <Text style={styles.helpText}>
-        Enter the WebSocket URL of your backend server. Simple backend: ws://localhost:8000/ws (no auth). 
-        Advanced backend: ws://localhost:8080/v1/listen (requires login). Status is automatically checked.
+        Enter the WebSocket URL of your backend server. Simple backend: http://localhost:8000/ (no auth). 
+        Advanced backend: http://localhost:8080/ (requires login). Status is automatically checked.
+        The websocket URL can be different or the same as the HTTP URL, with /ws_omi suffix
       </Text>
     </View>
   );
