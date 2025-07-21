@@ -1,14 +1,11 @@
 services:
   friend-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/AnkushMalaker/friend-lite/friend-backend:latest
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - backends/advanced-backend/.env
     volumes:
-      - ./src:/app/src  # Mount source code for development
       - ./data/audio_chunks:/app/audio_chunks
       - ./data/debug_dir:/app/debug_dir
       - ./data:/app/data
@@ -68,8 +65,6 @@ services:
         condition: service_started
       mongo:
         condition: service_started
-      # neo4j-mem0:
-      #   condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
       interval: 10s
@@ -79,16 +74,13 @@ services:
     restart: unless-stopped
 
   streamlit:
-    build:
-      context: .
-      dockerfile: Dockerfile.webui
+    image: ghcr.io/AnkushMalaker/friend-lite/friend-webui:latest
     ports:
       - "8501:8501"
     environment:
-      - BACKEND_API_URL=${BACKEND_API_URL:-http://friend-backend:8000}
+      - BACKEND_API_URL=http://friend-backend:8000
       - BACKEND_PUBLIC_URL=${BACKEND_PUBLIC_URL:-http://localhost:8000}
-      - STREAMLIT_SERVER_ENABLE_CORS=${STREAMLIT_SERVER_ENABLE_CORS:-false}
-      - DEBUG=${DEBUG:-false}
+      - STREAMLIT_SERVER_ENABLE_CORS=false
     depends_on:
       friend-backend:
         condition: service_healthy
@@ -104,7 +96,6 @@ services:
       - "6334:6334" # HTTP
     volumes:
       - ./data/qdrant_data:/qdrant/storage 
-  
 
   mongo:
     image: mongo:4.4.18
@@ -113,7 +104,7 @@ services:
     volumes:
       - ./data/mongo_data:/data/db
 
-  ##  Additional
+  # Optional services (uncomment to enable)
 
   # neo4j-mem0:
   #   image: neo4j:5.15-community
@@ -129,43 +120,7 @@ services:
   #     - ./data/neo4j_data:/data
   #     - ./data/neo4j_logs:/logs
   #   restart: unless-stopped
-  # proxy:
-  #   image: nginx:alpine
-  #   depends_on: [friend-backend, streamlit]
-  #   volumes:
-  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
-  #   ports: ["80:80"]          # publish once; ngrok points here
 
-  # speaker-recognition:
-  #   build:
-  #     context: ../../extras/speaker-recognition
-  #     dockerfile: Dockerfile
-  #   # image: speaker-recognition:latest
-  #   ports:
-  #     - "8001:8001"
-  #   volumes:
-  #     # Persist Hugging Face cache (models) between restarts
-  #     - ./data/speaker_model_cache:/models
-  #     - ./data/audio_chunks:/app/audio_chunks  # Share audio chunks with backend
-  #     - ./data/speaker_debug:/app/debug
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
-  #   environment:
-  #     - HF_HOME=/models
-  #     - HF_TOKEN=${HF_TOKEN}
-  #     - SIMILARITY_THRESHOLD=0.85
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-    
   # ollama:
   #   image: ollama/ollama:latest
   #   container_name: ollama
@@ -173,35 +128,22 @@ services:
   #     - "11434:11434"
   #   volumes:
   #     - ollama_data:/root/.ollama
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
 
+  # nginx:
+  #   image: nginx:alpine
+  #   depends_on: [friend-backend, streamlit]
+  #   volumes:
+  #     - ./backends/advanced-backend/nginx.conf:/etc/nginx/nginx.conf:ro
+  #   ports: 
+  #     - "80:80"
 
-
-  # Use tailscale instead 
-  # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
-  # ngrok:
-  #   image: ngrok/ngrok:latest
-  #   depends_on: [friend-backend, proxy]
-  #   ports:
-  #     - "4040:4040" # Ngrok web interface
-  #   environment:
-  #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-  #   command: "http proxy:80 --url=${NGROK_URL} --basic-auth=${NGROK_BASIC_AUTH}"
-
-
-# Question: These are named volumes, but they are not being used, right? Can we remove them?
 # volumes:
 #   ollama_data:
-#     driver: local
-#   mongo_data:
-#     driver: local
-#   neo4j_data:
-#     driver: local
-#   neo4j_logs:
-#     driver: local
+#     driver: local 
