@@ -40,7 +40,7 @@ from dotenv import load_dotenv
 # Test Configuration Flags
 # Set CACHED_MODE=True for fast development iteration (skip cleanup, reuse containers)
 # Set CACHED_MODE=False for fresh test environment (default, recommended)
-CACHED_MODE = True  # Set to True for debugging - keeps containers running
+CACHED_MODE = False  # Set to True for debugging - keeps containers running
 
 # Test Environment Configuration
 TEST_ENV_VARS = {
