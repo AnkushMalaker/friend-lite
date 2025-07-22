@@ -111,7 +111,13 @@ class BackgroundTaskManager:
             except Exception:
                 task_info.error = "Unknown error"
         else:
-            logger.debug(f"Task completed: {task_info.name}")
+            # DEBUG: Add more visible logging for memory task completion
+            if "memory_" in task_info.name:
+                logger.info(
+                    f"✅ MEMORY TASK COMPLETED: {task_info.name} at {task_info.completed_at}"
+                )
+            else:
+                logger.debug(f"Task completed: {task_info.name}")
 
         # Move to completed list
         del self.tasks[task_id]
@@ -181,8 +187,18 @@ class BackgroundTaskManager:
         return list(self.tasks.values())
 
     def get_task_info(self, task_id: str) -> Optional[TaskInfo]:
-        """Get task info by task ID."""
-        return self.tasks.get(task_id)
+        """Get task info by task ID from both active and completed tasks."""
+        # First check active tasks
+        task_info = self.tasks.get(task_id)
+        if task_info:
+            return task_info
+
+        # Then check completed tasks
+        for completed_task in self.completed_tasks:
+            if f"{completed_task.name}_{id(completed_task.task)}" == task_id:
+                return completed_task
+
+        return None
 
     def get_task_count_by_type(self) -> Dict[str, int]:
         """Get count of active tasks grouped by type."""
