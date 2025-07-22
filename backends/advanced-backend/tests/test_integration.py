@@ -58,7 +58,7 @@ tests_dir = Path(__file__).parent
 # Test constants
 BACKEND_URL = "http://localhost:8001"  # Test backend port
 TEST_AUDIO_PATH = tests_dir.parent.parent.parent / "extras/test-audios/DIY Experts Glass Blowing_16khz_mono_4min.wav"
-MAX_STARTUP_WAIT = 120  # seconds
+MAX_STARTUP_WAIT = 60  # seconds
 PROCESSING_TIMEOUT = 300  # seconds for audio processing (5 minutes)
 
 
@@ -851,10 +851,16 @@ class IntegrationTestRunner:
                 
                 if response.status_code == 200:
                     data = response.json()
+                    
+                    # DEBUG: Log full API response to see exactly what we're getting
+                    logger.info(f"🔍 Full processor status API response: {data}")
+                    
                     stages = data.get("stages", {})
                     
                     # Check if memory stage is complete
                     memory_stage = stages.get("memory", {})
+                    logger.info(f"🧠 Memory stage data: {memory_stage}")
+                    
                     if memory_stage.get("completed", False):
                         logger.info(f"✅ Memory processing completed for client_id: {client_id}")
                         memory_processing_complete = True
@@ -873,6 +879,8 @@ class IntegrationTestRunner:
                             error = stage_info.get("error")
                             status = "✅" if completed else "❌" if error else "⏳"
                             logger.info(f"  {status} {stage_name}: {'completed' if completed else 'error' if error else 'processing'}")
+                            # DEBUG: Show all fields in memory stage
+                            logger.info(f"    All memory stage fields: {stage_info}")
                             
                 else:
                     logger.warning(f"❌ Processor status API call failed with status: {response.status_code}")
@@ -937,6 +945,10 @@ def test_runner():
 def test_full_pipeline_integration(test_runner):
     """Test the complete audio processing pipeline."""
     try:
+        # Test timing tracking
+        test_start_time = time.time()
+        phase_times = {}
+        
         # Immediate logging to debug environment
         logger.info("=" * 80)
         logger.info("🚀 STARTING INTEGRATION TEST")
@@ -946,18 +958,54 @@ def test_full_pipeline_integration(test_runner):
         logger.info(f"CI environment: {os.environ.get('CI', 'NOT SET')}")
         logger.info(f"GITHUB_ACTIONS: {os.environ.get('GITHUB_ACTIONS', 'NOT SET')}")
         
-        # Setup
+        # Phase 1: Environment setup
+        phase_start = time.time()
+        logger.info("📋 Phase 1: Setting up test environment...")
         test_runner.setup_environment()
+        phase_times['env_setup'] = time.time() - phase_start
+        logger.info(f"✅ Environment setup completed in {phase_times['env_setup']:.2f}s")
+        
+        # Phase 2: Service startup
+        phase_start = time.time()
+        logger.info("🐳 Phase 2: Starting services...")
         test_runner.start_services()
+        phase_times['service_startup'] = time.time() - phase_start
+        logger.info(f"✅ Service startup completed in {phase_times['service_startup']:.2f}s")
+        
+        # Phase 3: Wait for services
+        phase_start = time.time()
+        logger.info("⏳ Phase 3: Waiting for services to be ready...")
         test_runner.wait_for_services()
+        phase_times['service_readiness'] = time.time() - phase_start
+        logger.info(f"✅ Service readiness check completed in {phase_times['service_readiness']:.2f}s")
+        
+        # Phase 4: Authentication
+        phase_start = time.time()
+        logger.info("🔑 Phase 4: Authentication...")
         test_runner.authenticate()
+        phase_times['authentication'] = time.time() - phase_start
+        logger.info(f"✅ Authentication completed in {phase_times['authentication']:.2f}s")
         
-        # Test audio processing
+        # Phase 5: Audio upload and processing
+        phase_start = time.time()
+        logger.info("📤 Phase 5: Audio upload...")
         client_id = test_runner.upload_test_audio()
-        conversation, transcription = test_runner.verify_processing_results(client_id)
+        phase_times['audio_upload'] = time.time() - phase_start
+        logger.info(f"✅ Audio upload completed in {phase_times['audio_upload']:.2f}s")
         
-        # Validate memory extraction
+        # Phase 6: Transcription processing
+        phase_start = time.time()
+        logger.info("🎤 Phase 6: Transcription processing...")
+        conversation, transcription = test_runner.verify_processing_results(client_id)
+        phase_times['transcription_processing'] = time.time() - phase_start
+        logger.info(f"✅ Transcription processing completed in {phase_times['transcription_processing']:.2f}s")
+        
+        # Phase 7: Memory extraction
+        phase_start = time.time()
+        logger.info("🧠 Phase 7: Memory extraction...")
         memories = test_runner.validate_memory_extraction(client_id)
+        phase_times['memory_extraction'] = time.time() - phase_start
+        logger.info(f"✅ Memory extraction completed in {phase_times['memory_extraction']:.2f}s")
         
         # Basic assertions
         assert conversation is not None
@@ -1003,10 +1051,25 @@ Generated Transcript ({len(transcription)} chars):
 """
                 assert False, error_msg
         
-        # Log success  
+        # Calculate total test time
+        total_test_time = time.time() - test_start_time
+        phase_times['total_test'] = total_test_time
+        
+        # Log success with detailed timing
         logger.info("=" * 80)
         logger.info("🎉 INTEGRATION TEST PASSED!")
         logger.info("=" * 80)
+        logger.info(f"⏱️  TIMING BREAKDOWN:")
+        logger.info(f"  📋 Environment Setup:      {phase_times['env_setup']:>6.2f}s")
+        logger.info(f"  🐳 Service Startup:        {phase_times['service_startup']:>6.2f}s")
+        logger.info(f"  ⏳ Service Readiness:      {phase_times['service_readiness']:>6.2f}s")
+        logger.info(f"  🔑 Authentication:         {phase_times['authentication']:>6.2f}s")
+        logger.info(f"  📤 Audio Upload:           {phase_times['audio_upload']:>6.2f}s")
+        logger.info(f"  🎤 Transcription:          {phase_times['transcription_processing']:>6.2f}s")
+        logger.info(f"  🧠 Memory Extraction:      {phase_times['memory_extraction']:>6.2f}s")
+        logger.info(f"  {'─' * 35}")
+        logger.info(f"  🏁 TOTAL TEST TIME:        {total_test_time:>6.2f}s ({total_test_time/60:.1f}m)")
+        logger.info("")
         logger.info(f"📊 Test Results:")
         logger.info(f"  ✅ Audio file processed successfully")
         logger.info(f"  ✅ Transcription generated: {len(transcription)} characters")

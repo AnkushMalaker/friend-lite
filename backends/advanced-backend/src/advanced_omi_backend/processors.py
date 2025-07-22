@@ -680,6 +680,15 @@ class ProcessorManager:
     async def _process_memory_item(self, item: MemoryProcessingItem):
         """Process a single memory item."""
         start_time = time.time()
+        audio_logger.info(f"🚀 MEMORY PROCESSING STARTED for {item.audio_uuid} at {start_time}")
+
+        # Track memory processing start
+        self.track_processing_stage(
+            item.client_id,
+            "memory",
+            "started",
+            {"audio_uuid": item.audio_uuid, "started_at": start_time},
+        )
 
         # Debug tracking removed for cleaner architecture
         # tracker = get_debug_tracker()
@@ -777,6 +786,18 @@ class ProcessorManager:
                         )
                     except Exception as e:
                         audio_logger.warning(f"Failed to update memory status: {e}")
+
+                    # Track memory processing completion
+                    self.track_processing_stage(
+                        item.client_id,
+                        "memory",
+                        "completed",
+                        {
+                            "audio_uuid": item.audio_uuid,
+                            "memories_created": len(created_memory_ids),
+                            "processing_time": time.time() - start_time,
+                        },
+                    )
                 elif success and not created_memory_ids:
                     # Successful processing but no memories created (likely empty transcript)
                     audio_logger.info(
@@ -793,6 +814,19 @@ class ProcessorManager:
                         )
                     except Exception as e:
                         audio_logger.warning(f"Failed to update memory status: {e}")
+
+                    # Track memory processing completion (even though no memories created)
+                    self.track_processing_stage(
+                        item.client_id,
+                        "memory",
+                        "completed",
+                        {
+                            "audio_uuid": item.audio_uuid,
+                            "memories_created": 0,
+                            "processing_time": time.time() - start_time,
+                            "status": "skipped",
+                        },
+                    )
                 else:
                     # This shouldn't happen, but handle it gracefully
                     audio_logger.warning(
@@ -812,6 +846,18 @@ class ProcessorManager:
                         audio_logger.warning(
                             f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
                         )
+
+                    # Track memory processing failure
+                    self.track_processing_stage(
+                        item.client_id,
+                        "memory",
+                        "failed",
+                        {
+                            "audio_uuid": item.audio_uuid,
+                            "error": f"Unexpected result: success={success}, ids={created_memory_ids}",
+                            "processing_time": time.time() - start_time,
+                        },
+                    )
 
                 # Debug tracking removed for cleaner architecture
                 # tracker.track_event(
@@ -836,6 +882,18 @@ class ProcessorManager:
                         f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
                     )
 
+                # Track memory processing failure
+                self.track_processing_stage(
+                    item.client_id,
+                    "memory",
+                    "failed",
+                    {
+                        "audio_uuid": item.audio_uuid,
+                        "error": "Memory service returned False",
+                        "processing_time": time.time() - start_time,
+                    },
+                )
+
                 # Debug tracking removed for cleaner architecture
                 # tracker.track_event(
                 #     transaction_id,
@@ -857,6 +915,18 @@ class ProcessorManager:
             except Exception as e:
                 audio_logger.warning(f"Failed to update memory status: {e}")
 
+            # Track memory processing timeout failure
+            self.track_processing_stage(
+                item.client_id,
+                "memory",
+                "failed",
+                {
+                    "audio_uuid": item.audio_uuid,
+                    "error": "Processing timeout (5 minutes)",
+                    "processing_time": time.time() - start_time,
+                },
+            )
+
             # Debug tracking removed for cleaner architecture
             # tracker.track_event(
             #     transaction_id,
@@ -877,6 +947,18 @@ class ProcessorManager:
             except Exception as repo_e:
                 audio_logger.warning(f"Failed to update memory status: {repo_e}")
 
+            # Track memory processing exception failure
+            self.track_processing_stage(
+                item.client_id,
+                "memory",
+                "failed",
+                {
+                    "audio_uuid": item.audio_uuid,
+                    "error": f"Exception: {str(e)}",
+                    "processing_time": time.time() - start_time,
+                },
+            )
+
             # Debug tracking removed for cleaner architecture
             # tracker.track_event(
             #     transaction_id,
@@ -886,9 +968,10 @@ class ProcessorManager:
             #     metadata={"processing_time": time.time() - start_time},
             # )
 
-        processing_time_ms = (time.time() - start_time) * 1000
+        end_time = time.time()
+        processing_time_ms = (end_time - start_time) * 1000
         audio_logger.info(
-            f"🔄 Completed memory processing for {item.audio_uuid} in {processing_time_ms:.1f}ms"
+            f"🏁 MEMORY PROCESSING COMPLETED for {item.audio_uuid} in {processing_time_ms:.1f}ms (end time: {end_time})"
         )
 
     async def _cropping_processor(self):
