@@ -41,9 +41,11 @@ sudo rm -rf backends/advanced-backend/data/
 ### Integration Test Development and Debugging
 
 #### Running Integration Tests
+These needs keys from .env file if running locally and not through CI.
+This can be done by exporting these keys before hand - 
 ```bash
 # Basic integration test (requires API keys in .env)
-uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY && uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
 
 # For debugging: Use cached mode to keep containers running
 # 1. Edit tests/test_integration.py: Set CACHED_MODE = True

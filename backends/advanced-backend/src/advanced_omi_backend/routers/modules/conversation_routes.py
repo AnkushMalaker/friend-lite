@@ -77,7 +77,7 @@ async def close_current_conversation(
 
     try:
         # Close the current conversation
-        await client_state._close_current_conversation()
+        await client_state.close_current_conversation()
 
         # Reset conversation state but keep client connected
         client_state.current_audio_uuid = None
@@ -182,6 +182,7 @@ async def get_cropped_audio_info(
         return JSONResponse(status_code=500, content={"error": "Error fetching cropped audio info"})
 
 
+# Deprecated
 @router.post("/{audio_uuid}/reprocess")
 async def reprocess_audio_cropping(
     audio_uuid: str, current_user: User = Depends(current_active_user)
