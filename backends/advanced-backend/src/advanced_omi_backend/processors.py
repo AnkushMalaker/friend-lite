@@ -68,7 +68,6 @@ class MemoryProcessingItem:
     user_id: str
     user_email: str
     audio_uuid: str
-    full_conversation: str
     db_helper: Optional[AudioChunksCollectionHelper] = None
 
 
@@ -681,19 +680,86 @@ class ProcessorManager:
         finally:
             audio_logger.info("Memory processor stopped")
 
+    async def _get_transcript_with_retry(
+        self, db_helper, audio_uuid: str, max_retries: int = 3, delay: float = 2.0
+    ):
+        """Get transcript from database with exponential backoff retry for race conditions."""
+        for attempt in range(max_retries):
+            try:
+                transcript_segments = await db_helper.get_transcript_segments(audio_uuid)
+                if transcript_segments:
+                    audio_logger.info(
+                        f"Retrieved transcript for {audio_uuid} on attempt {attempt + 1}"
+                    )
+                    return transcript_segments
+
+                if attempt < max_retries - 1:  # Don't wait after the last attempt
+                    wait_time = delay * (2**attempt)  # Exponential backoff
+                    audio_logger.info(
+                        f"No transcript found for {audio_uuid} on attempt {attempt + 1}, waiting {wait_time}s before retry"
+                    )
+                    await asyncio.sleep(wait_time)
+
+            except Exception as e:
+                audio_logger.error(
+                    f"Error retrieving transcript for {audio_uuid} on attempt {attempt + 1}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    wait_time = delay * (2**attempt)
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise
+
+        return None
+
     async def _process_memory_item(self, item: MemoryProcessingItem):
         """Process a single memory item."""
         start_time = time.time()
 
         tracker = get_debug_tracker()
         transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
-        tracker.track_event(
-            transaction_id,
-            PipelineStage.MEMORY_STARTED,
-            metadata={"conversation_length": len(item.full_conversation)},
-        )
 
         try:
+            # Get transcript from database with retry logic for race conditions
+            if not item.db_helper:
+                raise ValueError(
+                    f"No db_helper provided for memory processing of {item.audio_uuid}"
+                )
+
+            transcript_segments = await self._get_transcript_with_retry(
+                item.db_helper, item.audio_uuid
+            )
+            if not transcript_segments:
+                audio_logger.warning(
+                    f"No transcripts found for {item.audio_uuid} after retry attempts, skipping memory processing"
+                )
+                return None
+
+            # Build full conversation from segments
+            transcript_texts = [
+                segment.get("text", "")
+                for segment in transcript_segments
+                if segment.get("text", "").strip()
+            ]
+            if not transcript_texts:
+                audio_logger.warning(
+                    f"No valid transcript text found for {item.audio_uuid}, skipping memory processing"
+                )
+                return None
+
+            full_conversation = " ".join(transcript_texts).strip()
+            if len(full_conversation) < 10:  # Minimum length check
+                audio_logger.warning(
+                    f"Conversation too short for memory processing ({len(full_conversation)} chars): {item.audio_uuid}"
+                )
+                return None
+
+            tracker.track_event(
+                transaction_id,
+                PipelineStage.MEMORY_STARTED,
+                metadata={"conversation_length": len(full_conversation)},
+            )
+
             # Lazy import memory service
             if self.memory_service is None:
                 from advanced_omi_backend.memory import get_memory_service
@@ -703,7 +769,7 @@ class ProcessorManager:
             # Process memory with timeout
             memory_result = await asyncio.wait_for(
                 self.memory_service.add_memory(
-                    item.full_conversation,
+                    full_conversation,
                     item.client_id,
                     item.audio_uuid,
                     item.user_id,

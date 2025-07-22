@@ -10,7 +10,6 @@ from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 from advanced_omi_backend.client_manager import get_client_manager
-from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
 from advanced_omi_backend.transcription_providers import (
     OnlineTranscriptionProvider,
     get_transcription_provider,
@@ -59,25 +58,6 @@ class TranscriptionManager:
         if not self._client_id:
             return None
         return self.client_manager.get_client(self._client_id)
-
-    def _get_or_create_transaction(self, user_id: str, client_id: str, audio_uuid: str) -> str:
-        """Get or create a debug transaction for tracking transcription progress."""
-        if not self._current_transaction_id:
-            debug_tracker = get_debug_tracker()
-            self._current_transaction_id = debug_tracker.create_transaction(
-                user_id=user_id, client_id=client_id, conversation_id=audio_uuid
-            )
-        return self._current_transaction_id
-
-    def _track_transcription_event(
-        self, stage: PipelineStage, success: bool = True, error_message: str = None, **metadata
-    ):
-        """Track a transcription event using the debug tracker."""
-        if self._current_transaction_id:
-            debug_tracker = get_debug_tracker()
-            debug_tracker.track_event(
-                self._current_transaction_id, stage, success, error_message, **metadata
-            )
 
     def _parse_speaker_segments(self, formatted_text: str) -> list:
         """
@@ -259,7 +239,7 @@ class TranscriptionManager:
                 # Update client state
                 current_client = self._get_current_client()
                 if current_client:
-                    current_client.add_transcript(transcript_text)
+                    current_client.update_transcript_received()
 
                 logger.info(
                     f"Added {self.online_provider.name} batch transcript for {self._current_audio_uuid} to DB"
@@ -376,8 +356,8 @@ class TranscriptionManager:
                                 # Update client state
                                 current_client = self._get_current_client()
                                 if current_client:
-                                    current_client.add_transcript(transcript_text)
-                                    logger.info(f"🏁 Added final transcript to conversation")
+                                    current_client.update_transcript_received()
+                                    logger.info(f"🏁 Updated transcript timestamp for conversation")
 
                     except asyncio.TimeoutError:
                         # No more events available
@@ -541,10 +521,10 @@ class TranscriptionManager:
                 # Update transcript time for conversation timeout tracking
                 current_client = self.client_manager.get_client(client_id)
                 if current_client:
-                    current_client.last_transcript_time = time.time()
-                    # Collect transcript for end-of-conversation memory processing
-                    current_client.add_transcript(transcript_text)
-                    logger.info(f"Added transcript to conversation collection: '{transcript_text}'")
+                    current_client.update_transcript_received()
+                    logger.info(
+                        f"Updated transcript timestamp for conversation: '{transcript_text}'"
+                    )
 
         elif VoiceStarted.is_type(event.type):
             logger.info(f"VoiceStarted event received for {audio_uuid}")
