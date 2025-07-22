@@ -680,37 +680,50 @@ class ProcessorManager:
         finally:
             audio_logger.info("Memory processor stopped")
 
-    async def _get_transcript_with_retry(
-        self, db_helper, audio_uuid: str, max_retries: int = 3, delay: float = 2.0
-    ):
-        """Get transcript from database with exponential backoff retry for race conditions."""
-        for attempt in range(max_retries):
-            try:
-                transcript_segments = await db_helper.get_transcript_segments(audio_uuid)
-                if transcript_segments:
-                    audio_logger.info(
-                        f"Retrieved transcript for {audio_uuid} on attempt {attempt + 1}"
-                    )
-                    return transcript_segments
+    async def _get_transcript_with_coordination(self, db_helper, audio_uuid: str) -> Optional[list]:
+        """Get transcript from database using event coordination (no polling/retry).
 
-                if attempt < max_retries - 1:  # Don't wait after the last attempt
-                    wait_time = delay * (2**attempt)  # Exponential backoff
-                    audio_logger.info(
-                        f"No transcript found for {audio_uuid} on attempt {attempt + 1}, waiting {wait_time}s before retry"
-                    )
-                    await asyncio.sleep(wait_time)
+        This method uses the TranscriptCoordinator to wait for transcript completion
+        events rather than polling the database with retries.
+        """
+        from advanced_omi_backend.transcript_coordinator import (
+            get_transcript_coordinator,
+        )
 
-            except Exception as e:
+        # First, check if transcript already exists
+        try:
+            transcript_segments = await db_helper.get_transcript_segments(audio_uuid)
+            if transcript_segments:
+                audio_logger.info(f"Transcript already available for {audio_uuid}")
+                return transcript_segments
+        except Exception as e:
+            audio_logger.warning(f"Error checking existing transcript for {audio_uuid}: {e}")
+
+        # If not available, wait for transcript completion event
+        coordinator = get_transcript_coordinator()
+        audio_logger.info(f"Waiting for transcript completion event for {audio_uuid}")
+
+        transcript_ready = await coordinator.wait_for_transcript_completion(
+            audio_uuid, timeout=30.0
+        )
+        if not transcript_ready:
+            audio_logger.warning(f"Transcript completion event timeout for {audio_uuid}")
+            return None
+
+        # Now get the transcript from database (should be available)
+        try:
+            transcript_segments = await db_helper.get_transcript_segments(audio_uuid)
+            if transcript_segments:
+                audio_logger.info(f"Retrieved transcript for {audio_uuid} after event coordination")
+                return transcript_segments
+            else:
                 audio_logger.error(
-                    f"Error retrieving transcript for {audio_uuid} on attempt {attempt + 1}: {e}"
+                    f"Transcript event received but no transcript found in DB for {audio_uuid}"
                 )
-                if attempt < max_retries - 1:
-                    wait_time = delay * (2**attempt)
-                    await asyncio.sleep(wait_time)
-                else:
-                    raise
-
-        return None
+                return None
+        except Exception as e:
+            audio_logger.error(f"Error retrieving transcript after event for {audio_uuid}: {e}")
+            return None
 
     async def _process_memory_item(self, item: MemoryProcessingItem):
         """Process a single memory item."""
@@ -720,18 +733,18 @@ class ProcessorManager:
         transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
 
         try:
-            # Get transcript from database with retry logic for race conditions
+            # Get transcript from database with event coordination (no polling/retry)
             if not item.db_helper:
                 raise ValueError(
                     f"No db_helper provided for memory processing of {item.audio_uuid}"
                 )
 
-            transcript_segments = await self._get_transcript_with_retry(
+            transcript_segments = await self._get_transcript_with_coordination(
                 item.db_helper, item.audio_uuid
             )
             if not transcript_segments:
                 audio_logger.warning(
-                    f"No transcripts found for {item.audio_uuid} after retry attempts, skipping memory processing"
+                    f"No transcripts found for {item.audio_uuid} via event coordination, skipping memory processing"
                 )
                 return None
 

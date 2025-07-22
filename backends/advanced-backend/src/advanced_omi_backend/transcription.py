@@ -10,6 +10,7 @@ from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 from advanced_omi_backend.client_manager import get_client_manager
+from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     OnlineTranscriptionProvider,
     get_transcription_provider,
@@ -245,6 +246,10 @@ class TranscriptionManager:
                     f"Added {self.online_provider.name} batch transcript for {self._current_audio_uuid} to DB"
                 )
 
+                # Signal transcript coordinator that transcription is complete
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_ready(self._current_audio_uuid)
+
                 # Update database transcription status
                 if self.chunk_repo and self._current_audio_uuid:
                     status = "EMPTY" if not transcript_text.strip() else "COMPLETED"
@@ -358,6 +363,10 @@ class TranscriptionManager:
                                 if current_client:
                                     current_client.update_transcript_received()
                                     logger.info(f"🏁 Updated transcript timestamp for conversation")
+
+                                # Signal transcript coordinator for final transcript
+                                coordinator = get_transcript_coordinator()
+                                coordinator.signal_transcript_ready(self._current_audio_uuid)
 
                     except asyncio.TimeoutError:
                         # No more events available
@@ -525,6 +534,10 @@ class TranscriptionManager:
                     logger.info(
                         f"Updated transcript timestamp for conversation: '{transcript_text}'"
                     )
+
+                # Signal transcript coordinator that transcript is ready
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_ready(audio_uuid)
 
         elif VoiceStarted.is_type(event.type):
             logger.info(f"VoiceStarted event received for {audio_uuid}")
