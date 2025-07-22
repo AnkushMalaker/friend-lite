@@ -2,7 +2,7 @@ services:
   parakeet-asr:
     build:
       context: .
-      dockerfile: Dockerfile_Parakeet
+      dockerfile: ${DOCKERFILE_PARAKEET:-Dockerfile_Parakeet}
     image: parakeet-asr:latest
     ports:
       - "8765:8765"
@@ -25,7 +25,7 @@ services:
   # moonshine-asr:
   #   build:
   #     context: .
-  #     dockerfile: Dockerfile_Moonshine
+  #     dockerfile: ${DOCKERFILE_MOONSHINE:-Dockerfile_Moonshine}
   #   image: moonshine-asr:latest
   #   ports:
   #     - "8765:8765"
