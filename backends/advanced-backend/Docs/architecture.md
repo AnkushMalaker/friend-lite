@@ -12,104 +12,142 @@ Friend-Lite is a comprehensive real-time conversation processing system that cap
 
 ```mermaid
 graph TB
-    %% External Clients
-    Client[Audio Client<br/>Mobile/Desktop Apps]
-    WebUI[Streamlit Dashboard<br/>Web Interface]
-    
-    %% Main Backend Components
-    subgraph "Core Application"
-        Main[main.py<br/>FastAPI Backend]
-        Auth[auth.py<br/>Authentication System]
-        StreamlitApp[streamlit_app.py<br/>Web Dashboard]
+    %% External Inputs
+    subgraph "Audio Sources"
+        MIC[Mic/Wearables]
+        APP[Mobile App]
     end
-    
-    %% Audio Processing Pipeline
-    subgraph "Application-Level Processing"
-        OpusDecoder[Opus Decoder<br/>Realtime Audio]
-        ProcessorManager[Processor Manager<br/>Centralized Processing]
-        AudioProcessor[Audio Processor<br/>File Management]
-        TranscriptionProcessor[Transcription Processor<br/>Deepgram WebSocket/Wyoming]
-        MemoryProcessor[Memory Processor<br/>LLM Processing]
-        CroppingProcessor[Cropping Processor<br/>Speech Segment Extraction]
-        TaskManager[Task Manager<br/>Background Task Tracking]
+
+    %% Main WebSocket Server
+    subgraph "WebSocket Server"
+        WS["/ws_pcm endpoint"]
+        AUTH[JWT Auth]
     end
+
+    %% Wyoming Protocol Handler
+    subgraph "Wyoming Protocol"
+        WP[Protocol Parser]
+        AS[audio-start event]
+        AC[audio-chunk event]
+        AST[audio-stop event]
+    end
+
+    %% Client Management
+    subgraph "Client Management"
+        CM[ClientManager]
+        CS[ClientState]
+        CT[Client Tracking]
+    end
+
+    %% Processor System
+    subgraph "ProcessorManager"
+        direction TB
+        PM[Manager Coordinator]
+        
+        subgraph "Global Queues"
+            AQ[Audio Queue]
+            TQ[Transcription Queue]
+            MQ[Memory Queue]
+            CQ[Cropping Queue]
+        end
+        
+        subgraph "Processors"
+            AP[Audio Processor]
+            TP[Transcription Processor]
+            MP[Memory Processor]
+            CP[Cropping Processor]
+        end
+    end
+
+    %% Storage Systems
+    subgraph "Storage"
+        FS[File System<br/>Audio Files]
+        
+        subgraph "MongoDB"
+            AC_COL[audio_chunks<br/>conversations]
+            USERS[users]
+        end
+        
+        subgraph "Qdrant"
+            MEM[Memory Vectors]
+        end
+    end
+
+    %% Transcription Services
+    subgraph "Transcription Services"
+        DG[Deepgram<br/>Nova-3]
+        WY[Wyoming ASR<br/>Fallback]
+    end
+
+    %% Memory Services
+    subgraph "LLM Services"
+        OAI[OpenAI]
+        OLL[Ollama]
+    end
+
+    %% Data Flow
+    MIC --> WS
+    APP --> WS
+    WS --> AUTH
+    AUTH --> WP
+    
+    %% Wyoming Protocol Flow
+    WP --> AS
+    WP --> AC
+    WP --> AST
+    
+    AS --> CM
+    AC --> CM
+    AST --> CM
     
     %% Client State Management
-    subgraph "Client State Management"
-        ClientState[Client State<br/>Conversation State Only]
-        ClientManager[Client Manager<br/>Connection Management]
-    end
-    
-    %% Business Logic Services
-    subgraph "Intelligence Services"
-        Memory[memory/<br/>Conversation Memory]
-        Metrics[metrics.py<br/>System Monitoring]
-    end
-    
-    %% Data Layer
-    subgraph "Data Models & Security"
-        Users[users.py<br/>User Management]
-        ChunkRepo[ChunkRepo<br/>Audio Data Access]
-    end
-    
-    %% External Services
-    subgraph "External Services"
-        MongoDB[(MongoDB<br/>Users & Conversations)]
-        Ollama[Ollama<br/>LLM Processing]
-        Qdrant[Qdrant<br/>Vector Memory Store]
-        ASR[Wyoming ASR/<br/>Deepgram API]
-    end
-    
-    %% Docker Container Structure
-    subgraph "Docker Deployment"
-        BackendContainer[friend-backend<br/>FastAPI + Python]
-        StreamlitContainer[streamlit<br/>Web Dashboard]
-        ProxyContainer[nginx<br/>Reverse Proxy]
-        MongoContainer[mongo<br/>Database]
-        QdrantContainer[qdrant<br/>Vector DB]
-    end
-    
-    %% Authentication & API Flow
-    Client -->|WebSocket + JWT| Auth
-    WebUI -->|HTTP + JWT| Auth
-    Auth -->|User Validation| Main
-    StreamlitApp -->|Backend API| Main
+    CM --> CS
+    CS --> CT
     
     %% Audio Processing Flow
-    Client -->|Opus/PCM Audio| Main
-    Main -->|Audio Packets| OpusDecoder
-    OpusDecoder -->|PCM Data| ProcessorManager
-    ProcessorManager -->|Global Queues| AudioProcessor
-    ProcessorManager -->|Global Queues| TranscriptionProcessor
-    ProcessorManager -->|Global Queues| MemoryProcessor
-    ProcessorManager -->|Global Queues| CroppingProcessor
-    ClientState -->|State Only| ClientManager
-    TaskManager -->|Task Tracking| ProcessorManager
+    CS -->|queue audio| AQ
+    AQ --> AP
+    AP -->|save| FS
+    AP -->|queue| TQ
     
-    %% WebSocket & REST Endpoints
-    Main -->|/ws, /ws_pcm| Client
-    Main -->|/api/* endpoints| WebUI
+    %% Transcription Flow
+    TQ --> TP
+    TP --> DG
+    TP --> WY
+    TP -->|save transcript| AC_COL
     
-    %% Service Integration
-    TranscriptionProcessor -->|Conversation Data| Memory
-    MemoryProcessor -->|Memory Storage| Ollama
-    MemoryProcessor -->|Vector Storage| Qdrant
+    %% Conversation Closure Flow (Critical Path)
+    AST -->|close_conversation| CS
+    CS -->|if has transcripts| MQ
+    CS -->|if enabled| CQ
     
-    %% External Service Connections
-    Main -->|User & Conversation Data| MongoDB
-    TranscriptionProcessor -->|Speech Processing| ASR
-    MemoryProcessor -->|Embeddings| Qdrant
+    %% Memory Processing Flow
+    MQ --> MP
+    MP --> OAI
+    MP --> OLL
+    MP -->|orchestrate by mem0| MEM
+    MP -->|update| AC_COL
     
-    %% Monitoring & Metrics
-    Main -->|System Metrics| Metrics
-    Metrics -->|Performance Data| MongoDB
+    %% Cropping Flow
+    CQ --> CP
+    CP -->|read| FS
+    CP -->|save cropped| FS
+    CP -->|update| AC_COL
     
-    %% Container Relationships
-    BackendContainer -->|Internal Network| MongoContainer
-    BackendContainer -->|Internal Network| QdrantContainer
-    StreamlitContainer -->|HTTP API| BackendContainer
-    ProxyContainer -->|Load Balance| BackendContainer
-    ProxyContainer -->|Route /dashboard| StreamlitContainer
+    %% Management
+    PM -.-> AQ
+    PM -.-> TQ
+    PM -.-> MQ
+    PM -.-> CQ
+    PM -.-> AP
+    PM -.-> TP
+    PM -.-> MP
+    PM -.-> CP
+
+    style WS fill:#f9f,stroke:#333,stroke-width:4px
+    style CS fill:#bbf,stroke:#333,stroke-width:2px
+    style MQ fill:#fbb,stroke:#333,stroke-width:2px
+    style AST fill:#bfb,stroke:#333,stroke-width:2px
 ```
 
 ## Component Descriptions
@@ -305,6 +343,93 @@ BackgroundTaskManager(
 - **Resource Management**: Automatic cleanup on client disconnect
 - **Multi-Device Support**: Single user can have multiple active clients
 - **Thread-Safe Operations**: Concurrent client access with proper synchronization
+
+### Conversation Closure and Memory Processing
+
+**Recent Architecture Change**: Memory processing has been decoupled from transcription completion to prevent duplicate processing.
+
+#### Previous Architecture (Had Issues)
+```
+Transcription Complete → Queue Memory Processing ❌ (Duplicate)
+                    ↓
+Conversation Close → Queue Memory Processing ❌ (Duplicate)
+```
+
+#### Current Architecture (Fixed)
+```
+Transcription Complete → Save Transcript Only ✓
+                    ↓
+Conversation Close → Queue Memory Processing (Single Point) ✓
+```
+
+#### Conversation Closure Triggers
+
+The `close_conversation()` method in ClientState is called from:
+
+1. **Wyoming Protocol `audio-stop` Event** (Primary Path)
+   - Explicit session end from client
+   - Most reliable trigger
+   - Immediate processing
+
+2. **Client Disconnect** 
+   - WebSocket connection closed
+   - Cleanup handler ensures closure
+   - Prevents orphaned conversations
+
+3. **Manual API Call**
+   - `/api/conversations/{client_id}/close` endpoint
+   - User-initiated closure
+   - UI button in Streamlit dashboard
+
+4. **Conversation Timeout** (Not shown in diagram)
+   - 1.5 minute silence detection
+   - Automatic closure for inactive sessions
+
+#### Memory Processing Flow
+
+When `close_conversation()` is called:
+
+```python
+async def close_current_conversation(self):
+    # 1. Check if conversation has content
+    if not self.has_transcripts():
+        return  # No memory processing needed
+    
+    # 2. Save conversation to MongoDB
+    audio_uuid = await self.save_conversation()
+    
+    # 3. Queue memory processing (ONLY place this happens)
+    if audio_uuid and self.has_required_data():
+        processor_manager.queue_memory_processing({
+            'audio_uuid': audio_uuid,
+            'user_id': self.user_id,
+            'transcript': self.get_transcript()
+        })
+    
+    # 4. Queue audio cropping if enabled
+    if self.audio_cropping_enabled:
+        processor_manager.queue_audio_cropping(audio_path)
+    
+    # 5. Reset state for next conversation
+    self.reset_conversation_state()
+```
+
+#### Reliability Considerations
+
+**Q: Can `close_conversation` fail to be called?**
+
+Potential failure scenarios:
+1. **Server crash before processing `audio-stop`** - Mitigated by disconnect handler
+2. **Network failure during event transmission** - Client reconnect triggers new session
+3. **Client bug that doesn't send `audio-stop`** - Disconnect handler ensures cleanup
+
+**Q: Is memory processing guaranteed?**
+
+Current guarantee: **Best effort with multiple fallbacks**
+- Primary trigger: Wyoming protocol events
+- Fallback 1: Client disconnect handler
+- Fallback 2: Manual API endpoint
+- Future improvement: Periodic sweep for unprocessed conversations
 
 #### Per-Client State Management
 ```mermaid
