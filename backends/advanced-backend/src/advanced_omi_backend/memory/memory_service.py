@@ -258,15 +258,11 @@ def _build_mem0_config() -> dict:
 
         # Use OpenAI-compatible configuration for Ollama
         llm_config = {
-            "provider": "openai",  # Use OpenAI provider for Ollama compatibility
+            "provider": "ollama",  # Use OpenAI provider for Ollama compatibility
             "config": {
                 "model": model,
                 "api_key": os.getenv("OPENAI_API_KEY", "dummy"),  # Ollama doesn't need real key
-                "base_url": (
-                    f"{ollama_base_url}/v1"
-                    if not ollama_base_url.endswith("/v1")
-                    else ollama_base_url
-                ),
+                "ollama_base_url": ollama_base_url,
                 "temperature": llm_settings.get(
                     "temperature", 0.1
                 ),  # Default from YAML is acceptable
