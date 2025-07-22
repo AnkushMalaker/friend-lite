@@ -10,7 +10,7 @@ from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 from advanced_omi_backend.client_manager import get_client_manager
-from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
+from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     OnlineTranscriptionProvider,
     get_transcription_provider,
@@ -60,25 +60,6 @@ class TranscriptionManager:
             return None
         return self.client_manager.get_client(self._client_id)
 
-    def _get_or_create_transaction(self, user_id: str, client_id: str, audio_uuid: str) -> str:
-        """Get or create a debug transaction for tracking transcription progress."""
-        if not self._current_transaction_id:
-            debug_tracker = get_debug_tracker()
-            self._current_transaction_id = debug_tracker.create_transaction(
-                user_id=user_id, client_id=client_id, conversation_id=audio_uuid
-            )
-        return self._current_transaction_id
-
-    def _track_transcription_event(
-        self, stage: PipelineStage, success: bool = True, error_message: str = None, **metadata
-    ):
-        """Track a transcription event using the debug tracker."""
-        if self._current_transaction_id:
-            debug_tracker = get_debug_tracker()
-            debug_tracker.track_event(
-                self._current_transaction_id, stage, success, error_message, **metadata
-            )
-
     def _parse_speaker_segments(self, formatted_text: str) -> list:
         """
         Parse formatted speaker text into individual segments.
@@ -119,68 +100,9 @@ class TranscriptionManager:
 
         return segments
 
-    async def _queue_memory_processing(self, transcript_text: str):
-        """Queue memory processing for completed transcripts."""
-        if not self._current_audio_uuid or not self._client_id:
-            logger.warning("Cannot trigger memory processing - missing audio_uuid or client_id")
-            return
-
-        try:
-            # Get client info from the client manager to get user details
-            current_client = self._get_current_client()
-            if not current_client:
-                logger.warning(f"Client {self._client_id} not found in active clients")
-                # For upload clients that may have been cleaned up, we need to get user info differently
-                # Check if we can get user info from the client_id pattern
-                from advanced_omi_backend.client_manager import get_client_owner
-
-                user_id = get_client_owner(self._client_id)
-                if not user_id:
-                    logger.warning(f"Cannot determine user for client {self._client_id}")
-                    return
-
-                # Get user details from database
-                from advanced_omi_backend.users import User
-
-                user = await User.get(user_id)
-                if not user:
-                    logger.warning(f"User {user_id} not found in database")
-                    return
-
-                user_email = user.email
-                logger.info(f"Retrieved user info for memory processing: {user_id} ({user_email})")
-            else:
-                user_id = current_client.user_id
-                user_email = current_client.user_email
-
-            if not user_id or not user_email:
-                logger.warning("Cannot trigger memory processing - missing user info")
-                return
-
-            # Queue memory processing with the completed transcript
-            from advanced_omi_backend.processors import MemoryProcessingItem
-
-            logger.info(
-                f"💭 Triggering retroactive memory processing for {self._current_audio_uuid} "
-                f"(client: {self._client_id}, user: {user_id})"
-            )
-
-            await self.processor_manager.queue_memory(
-                MemoryProcessingItem(
-                    client_id=self._client_id,
-                    user_id=user_id,
-                    user_email=user_email,
-                    audio_uuid=self._current_audio_uuid,
-                    full_conversation=transcript_text,
-                    db_helper=self.chunk_repo,
-                )
-            )
-            logger.info(
-                f"💭 Successfully queued retroactive memory processing for {self._current_audio_uuid}"
-            )
-
-        except Exception as e:
-            logger.error(f"Error triggering memory processing: {e}", exc_info=True)
+    # REMOVED: Memory processing is now handled exclusively by conversation closure
+    # to prevent duplicate processing. The _queue_memory_processing method has been
+    # removed as part of the fix for double memory generation issue.
 
     async def connect(self, client_id: str | None = None):
         """Initialize transcription service for the client."""
@@ -318,11 +240,15 @@ class TranscriptionManager:
                 # Update client state
                 current_client = self._get_current_client()
                 if current_client:
-                    current_client.add_transcript(transcript_text)
+                    current_client.update_transcript_received()
 
                 logger.info(
                     f"Added {self.online_provider.name} batch transcript for {self._current_audio_uuid} to DB"
                 )
+
+                # Signal transcript coordinator that transcription is complete
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_ready(self._current_audio_uuid)
 
                 # Update database transcription status
                 if self.chunk_repo and self._current_audio_uuid:
@@ -354,8 +280,7 @@ class TranscriptionManager:
                         f"🎉 Successfully marked transcription as completed for client {self._client_id}"
                     )
 
-                    # Queue memory processing for completed transcript
-                    await self._queue_memory_processing(transcript_text)
+                    # Memory processing removed - handled by conversation closure instead
 
         except Exception as e:
             logger.error(f"Error processing collected audio: {e}")
@@ -436,8 +361,12 @@ class TranscriptionManager:
                                 # Update client state
                                 current_client = self._get_current_client()
                                 if current_client:
-                                    current_client.add_transcript(transcript_text)
-                                    logger.info(f"🏁 Added final transcript to conversation")
+                                    current_client.update_transcript_received()
+                                    logger.info(f"🏁 Updated transcript timestamp for conversation")
+
+                                # Signal transcript coordinator for final transcript
+                                coordinator = get_transcript_coordinator()
+                                coordinator.signal_transcript_ready(self._current_audio_uuid)
 
                     except asyncio.TimeoutError:
                         # No more events available
@@ -622,16 +551,17 @@ class TranscriptionManager:
                             f"Marked transcription as completed for client {client_id} (offline ASR)"
                         )
 
-                        # Queue memory processing for completed transcript
-                        await self._queue_memory_processing(transcript_text)
-
                 # Update transcript time for conversation timeout tracking
                 current_client = self.client_manager.get_client(client_id)
                 if current_client:
-                    current_client.last_transcript_time = time.time()
-                    # Collect transcript for end-of-conversation memory processing
-                    current_client.add_transcript(transcript_text)
-                    logger.info(f"Added transcript to conversation collection: '{transcript_text}'")
+                    current_client.update_transcript_received()
+                    logger.info(
+                        f"Updated transcript timestamp for conversation: '{transcript_text}'"
+                    )
+
+                # Signal transcript coordinator that transcript is ready
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_ready(audio_uuid)
 
         elif VoiceStarted.is_type(event.type):
             logger.info(f"VoiceStarted event received for {audio_uuid}")

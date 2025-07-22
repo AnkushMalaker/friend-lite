@@ -276,10 +276,10 @@ export default function App() {
       await audioStreamer.startStreaming(finalWebSocketUrl);
 
       // Then start OMI audio listener
-      await originalStartAudioListener((audioBytes) => {
+      await originalStartAudioListener(async (audioBytes) => {
         const wsReadyState = audioStreamer.getWebSocketReadyState();
         if (wsReadyState === WebSocket.OPEN && audioBytes.length > 0) {
-          audioStreamer.sendAudio(audioBytes);
+          await audioStreamer.sendAudio(audioBytes);
         }
       });
     } catch (error) {

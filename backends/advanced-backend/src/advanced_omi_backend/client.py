@@ -4,6 +4,7 @@ This module provides a lightweight ClientState class that tracks conversation
 state, timestamps, and speech segments. All processing is handled at the
 application level by the ProcessorManager.
 """
+
 import asyncio
 import logging
 import os
@@ -13,12 +14,8 @@ from typing import Dict, List, Optional, Tuple
 
 from wyoming.audio import AudioChunk
 
-from advanced_omi_backend.database import AudioChunksCollectionHelper
-from advanced_omi_backend.processors import (
-    AudioCroppingItem,
-    MemoryProcessingItem,
-    get_processor_manager,
-)
+from advanced_omi_backend.conversation_manager import get_conversation_manager
+from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.task_manager import get_task_manager
 
 # Get loggers
@@ -26,7 +23,6 @@ audio_logger = logging.getLogger("audio_processing")
 
 # Configuration constants
 NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
-AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
 
 
 class ClientState:
@@ -35,16 +31,16 @@ class ClientState:
     def __init__(
         self,
         client_id: str,
-        ac_db_collection_helper: AudioChunksCollectionHelper,
+        ac_db_collection_helper: AudioChunksRepository,
         chunk_dir: Path,
-        user_id: Optional[str] = None,
+        user_id: str,
         user_email: Optional[str] = None,
     ):
         self.client_id = client_id
         self.connected = True
         self.db_helper = ac_db_collection_helper
         self.chunk_dir = chunk_dir
-        
+
         # Store user data for memory processing
         self.user_id = user_id
         self.user_email = user_email
@@ -53,20 +49,20 @@ class ClientState:
         self.last_transcript_time: Optional[float] = None
         self.conversation_start_time: float = time.time()
         self.current_audio_uuid: Optional[str] = None
-        
+
         # Speech segment tracking for audio cropping
         self.speech_segments: Dict[str, List[Tuple[float, float]]] = {}
         self.current_speech_start: Dict[str, Optional[float]] = {}
-        
-        # Conversation transcript collection
-        self.conversation_transcripts: List[str] = []
-        
+
+        # NOTE: Removed in-memory transcript storage for single source of truth
+        # Transcripts are stored only in MongoDB via TranscriptionManager
+
         # Track if conversation has been closed
         self.conversation_closed: bool = False
-        
+
         # Debug tracking
         self.transaction_id: Optional[str] = None
-        
+
         audio_logger.info(f"Created simplified client state for {client_id}")
 
     def update_audio_received(self, chunk: AudioChunk):
@@ -74,7 +70,7 @@ class ClientState:
         # Check if we should start a new conversation
         if self.should_start_new_conversation():
             asyncio.create_task(self.start_new_conversation())
-    
+
     def set_current_audio_uuid(self, audio_uuid: str):
         """Set the current audio UUID when processor creates a new file."""
         self.current_audio_uuid = audio_uuid
@@ -105,20 +101,19 @@ class ClientState:
         else:
             audio_logger.warning(f"Speech end recorded for {audio_uuid} but no start time found")
 
-    def add_transcript(self, transcript_text: str):
-        """Add a transcript to the conversation."""
-        self.conversation_transcripts.append(transcript_text)
+    def update_transcript_received(self):
+        """Update timestamp when transcript is received (for timeout detection)."""
         self.last_transcript_time = time.time()
 
     def should_start_new_conversation(self) -> bool:
         """Check if we should start a new conversation based on timeout."""
         if self.last_transcript_time is None:
             return False
-        
+
         current_time = time.time()
         time_since_last_transcript = current_time - self.last_transcript_time
         timeout_seconds = NEW_CONVERSATION_TIMEOUT_MINUTES * 60
-        
+
         return time_since_last_transcript > timeout_seconds
 
     async def close_current_conversation(self):
@@ -129,142 +124,44 @@ class ClientState:
                 f"🔒 Conversation already closed for client {self.client_id}, skipping"
             )
             return
-        
+
         self.conversation_closed = True
-        
+
         if not self.current_audio_uuid:
             audio_logger.info(f"🔒 No active conversation to close for client {self.client_id}")
             return
-        
-        audio_logger.info(f"🔒 Closing conversation {self.current_audio_uuid}")
-        
-        # Get processor manager
-        processor_manager = get_processor_manager()
-        
-        # Close audio file in processor
-        await processor_manager.close_client_audio(self.client_id)
-        
-        # Process memory if we have transcripts
-        full_conversation = ""
-        transcript_source = ""
-        
-        # Debug logging for memory processing troubleshooting
-        audio_logger.info(
-            f"💭 Starting memory processing check for client {self.client_id}:"
+
+        # Use ConversationManager for clean separation of concerns
+        conversation_manager = get_conversation_manager()
+        success = await conversation_manager.close_conversation(
+            client_id=self.client_id,
+            audio_uuid=self.current_audio_uuid,
+            user_id=self.user_id,
+            user_email=self.user_email,
+            conversation_start_time=self.conversation_start_time,
+            speech_segments=self.speech_segments,
+            chunk_dir=self.chunk_dir,
         )
-        audio_logger.info(f"    - current_audio_uuid: {self.current_audio_uuid}")
-        audio_logger.info(f"    - user_id: {self.user_id}")
-        audio_logger.info(f"    - user_email: {self.user_email}")
-        audio_logger.info(f"    - conversation_transcripts count: {len(self.conversation_transcripts) if self.conversation_transcripts else 0}")
-        
-        if self.conversation_transcripts and self.current_audio_uuid:
-            full_conversation = " ".join(self.conversation_transcripts).strip()
-            transcript_source = f"memory ({len(self.conversation_transcripts)} segments)"
-            audio_logger.info(f"💭 Using transcripts from memory: {len(full_conversation)} chars")
-        elif self.current_audio_uuid and self.db_helper:
-            # Fallback: get transcripts from database
-            try:
-                audio_logger.info(
-                    f"💭 Conversation transcripts list empty, checking database for {self.current_audio_uuid}"
-                )
-                db_transcripts = await self.db_helper.get_transcript_segments(self.current_audio_uuid)
-                if not db_transcripts:
-                    await asyncio.sleep(15.0)
-                    db_transcripts = await self.db_helper.get_transcript_segments(self.current_audio_uuid)
-                
-                if db_transcripts:
-                    transcript_texts = [segment.get("text", "") for segment in db_transcripts]
-                    full_conversation = " ".join(transcript_texts).strip()
-                    transcript_source = f"database ({len(db_transcripts)} segments)"
-                    audio_logger.info(
-                        f"💭 Retrieved {len(db_transcripts)} transcript segments from database: {len(full_conversation)} chars"
-                    )
-                else:
-                    audio_logger.warning(f"💭 No transcripts found in database for {self.current_audio_uuid}")
-            except Exception as e:
-                audio_logger.error(
-                    f"💭 Error retrieving transcripts from database for {self.current_audio_uuid}: {e}"
-                )
-        else:
-            audio_logger.warning(f"💭 Cannot retrieve transcripts - missing audio_uuid or db_helper")
-        
-        # Debug the final condition check
-        audio_logger.info(f"💭 Memory processing condition check:")
-        audio_logger.info(f"    - full_conversation length: {len(full_conversation) if full_conversation else 0}")
-        audio_logger.info(f"    - current_audio_uuid: {bool(self.current_audio_uuid)}")
-        audio_logger.info(f"    - user_id: {bool(self.user_id)}")
-        audio_logger.info(f"    - user_email: {bool(self.user_email)}")
-        
-        # Queue memory processing if we have content
-        if full_conversation and self.current_audio_uuid and self.user_id and self.user_email:
-            if len(full_conversation) >= 1:  # Process even very short conversations
-                audio_logger.info(
-                    f"💭 Queuing memory processing for conversation {self.current_audio_uuid} "
-                    f"from {transcript_source} (length: {len(full_conversation)} chars)"
-                )
-                
-                await processor_manager.queue_memory(
-                    MemoryProcessingItem(
-                        client_id=self.client_id,
-                        user_id=self.user_id,
-                        user_email=self.user_email,
-                        audio_uuid=self.current_audio_uuid,
-                        full_conversation=full_conversation,
-                        db_helper=self.db_helper
-                    )
-                )
-            else:
-                audio_logger.warning(f"💭 Memory processing skipped - conversation too short: {len(full_conversation)} chars")
-        else:
-            audio_logger.warning(f"💭 Memory processing skipped - missing required data:")
-            audio_logger.warning(f"    - full_conversation: {bool(full_conversation)}")
-            audio_logger.warning(f"    - current_audio_uuid: {bool(self.current_audio_uuid)}")
-            audio_logger.warning(f"    - user_id: {bool(self.user_id)}")
-            audio_logger.warning(f"    - user_email: {bool(self.user_email)}")
-        
-        # Queue audio cropping if enabled and we have speech segments
-        if AUDIO_CROPPING_ENABLED and self.current_audio_uuid in self.speech_segments:
-            speech_segments = self.speech_segments[self.current_audio_uuid]
-            if speech_segments:
-                # Get the audio file path from processor
-                # This assumes the processor follows the same naming convention
-                timestamp = int(self.conversation_start_time)
-                wav_filename = f"{timestamp}_{self.client_id}_{self.current_audio_uuid}.wav"
-                original_path = f"{self.chunk_dir}/{wav_filename}"
-                cropped_path = str(original_path).replace(".wav", "_cropped.wav")
-                
-                audio_logger.info(
-                    f"✂️ Queuing audio cropping for {self.current_audio_uuid} "
-                    f"with {len(speech_segments)} speech segments"
-                )
-                
-                await processor_manager.queue_cropping(
-                    AudioCroppingItem(
-                        client_id=self.client_id,
-                        user_id=self.user_id,
-                        audio_uuid=self.current_audio_uuid,
-                        original_path=original_path,
-                        speech_segments=speech_segments,
-                        output_path=cropped_path
-                    )
-                )
-            
-            # Clean up segments for this conversation
-            del self.speech_segments[self.current_audio_uuid]
+
+        if success:
+            # Clean up speech segments for this conversation
+            if self.current_audio_uuid in self.speech_segments:
+                del self.speech_segments[self.current_audio_uuid]
             if self.current_audio_uuid in self.current_speech_start:
                 del self.current_speech_start[self.current_audio_uuid]
+        else:
+            audio_logger.warning(f"⚠️ Conversation closure had issues for {self.current_audio_uuid}")
 
     async def start_new_conversation(self):
         """Start a new conversation by closing current and resetting state."""
         await self.close_current_conversation()
-        
+
         # Reset conversation state
         self.current_audio_uuid = None
         self.conversation_start_time = time.time()
         self.last_transcript_time = None
-        self.conversation_transcripts.clear()
         self.conversation_closed = False
-        
+
         audio_logger.info(
             f"Client {self.client_id}: Started new conversation due to "
             f"{NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout"
@@ -274,20 +171,19 @@ class ClientState:
         """Clean disconnect of client state."""
         if not self.connected:
             return
-        
+
         self.connected = False
         audio_logger.info(f"Disconnecting client {self.client_id}")
-        
+
         # Close current conversation
         await self.close_current_conversation()
-        
+
         # Cancel any tasks for this client
         task_manager = get_task_manager()
         await task_manager.cancel_tasks_for_client(self.client_id)
-        
+
         # Clean up state
         self.speech_segments.clear()
         self.current_speech_start.clear()
-        self.conversation_transcripts.clear()
-        
+
         audio_logger.info(f"Client {self.client_id} disconnected and cleaned up")
