@@ -51,9 +51,9 @@ from advanced_omi_backend.constants import (
 from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.debug_system_tracker import (
     get_debug_tracker,
-    init_debug_tracker,
     shutdown_debug_tracker,
 )
+from advanced_omi_backend.llm_client import async_health_check
 from advanced_omi_backend.memory import (
     get_memory_service,
     init_memory_config,
@@ -64,7 +64,7 @@ from advanced_omi_backend.processors import (
     get_processor_manager,
     init_processor_manager,
 )
-from advanced_omi_backend.task_manager import get_task_manager, init_task_manager
+from advanced_omi_backend.task_manager import init_task_manager
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import User, register_client_to_user
 
@@ -783,7 +783,6 @@ async def health_check():
 
     # Check LLM service (non-critical service - may not be running)
     try:
-        from advanced_omi_backend.llm_client import async_health_check
 
         llm_health = await asyncio.wait_for(async_health_check(), timeout=8.0)
         health_status["services"]["audioai"] = {
