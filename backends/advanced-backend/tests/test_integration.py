@@ -851,10 +851,16 @@ class IntegrationTestRunner:
                 
                 if response.status_code == 200:
                     data = response.json()
+                    
+                    # DEBUG: Log full API response to see exactly what we're getting
+                    logger.info(f"🔍 Full processor status API response: {data}")
+                    
                     stages = data.get("stages", {})
                     
                     # Check if memory stage is complete
                     memory_stage = stages.get("memory", {})
+                    logger.info(f"🧠 Memory stage data: {memory_stage}")
+                    
                     if memory_stage.get("completed", False):
                         logger.info(f"✅ Memory processing completed for client_id: {client_id}")
                         memory_processing_complete = True
@@ -873,6 +879,8 @@ class IntegrationTestRunner:
                             error = stage_info.get("error")
                             status = "✅" if completed else "❌" if error else "⏳"
                             logger.info(f"  {status} {stage_name}: {'completed' if completed else 'error' if error else 'processing'}")
+                            # DEBUG: Show all fields in memory stage
+                            logger.info(f"    All memory stage fields: {stage_info}")
                             
                 else:
                     logger.warning(f"❌ Processor status API call failed with status: {response.status_code}")
