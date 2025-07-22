@@ -161,40 +161,42 @@ memory_service = get_memory_service()
 
 async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
     """Parse Wyoming protocol: JSON header line followed by optional binary payload.
-    
+
     Returns:
         Tuple of (header_dict, payload_bytes or None)
     """
     # Read data from WebSocket
     message = await ws.receive()
-    
+
     # Handle text message (JSON header)
     if "text" in message:
         header_text = message["text"]
         # Wyoming protocol uses newline-terminated JSON
-        if not header_text.endswith('\n'):
-            header_text += '\n'
-        
+        if not header_text.endswith("\n"):
+            header_text += "\n"
+
         # Parse JSON header
         json_line = header_text.strip()
         header = json.loads(json_line)
-        
+
         # If payload is expected, read binary data
         payload = None
-        payload_length = header.get('payload_length')
+        payload_length = header.get("payload_length")
         if payload_length is not None and payload_length > 0:
             payload_msg = await ws.receive()
             if "bytes" in payload_msg:
                 payload = payload_msg["bytes"]
             else:
                 logger.warning(f"Expected binary payload but got: {payload_msg.keys()}")
-                
+
         return header, payload
-    
+
     # Handle binary message (invalid - Wyoming protocol requires JSONL headers)
     elif "bytes" in message:
-        raise ValueError("Raw binary messages not supported - Wyoming protocol requires JSONL headers")
-    
+        raise ValueError(
+            "Raw binary messages not supported - Wyoming protocol requires JSONL headers"
+        )
+
     else:
         raise ValueError(f"Unexpected WebSocket message type: {message.keys()}")
 
@@ -397,7 +399,7 @@ async def ws_endpoint_omi(
     """Accepts WebSocket connections with Wyoming protocol, decodes OMI Opus audio, and processes per-client."""
     client_id = None
     client_state = None
-    
+
     try:
         # Authenticate user before accepting WebSocket connection
         user = await websocket_auth(ws, token)
@@ -419,37 +421,39 @@ async def ws_endpoint_omi(
         # Setup decoder (only required for decoding OMI audio)
         decoder = OmiOpusDecoder()
         _decode_packet = partial(decoder.decode_packet, strip_header=False)
-        
+
         # Get processor manager
         processor_manager = get_processor_manager()
 
         packet_count = 0
         total_bytes = 0
-        
+
         while True:
             # Parse Wyoming protocol
             header, payload = await parse_wyoming_protocol(ws)
-            
-            if header['type'] == 'audio-start':
+
+            if header["type"] == "audio-start":
                 # Handle audio session start (optional for OMI devices)
                 application_logger.info(
                     f"🎙️ OMI audio session started for {client_id} (explicit start)"
                 )
-                
+
                 # Create transaction for this audio session if not already created
                 # if not hasattr(client_state, "transaction_id"):
                 #     tracker = get_debug_tracker()
                 #     client_state.transaction_id = tracker.create_transaction(
                 #         user.user_id, client_id
                 #     )
-                
-            elif header['type'] == 'audio-chunk' and payload:
+
+            elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
                 total_bytes += len(payload)
-                
+
                 # OMI devices stream continuously - always process audio chunks
-                application_logger.debug(f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes")
-                
+                application_logger.debug(
+                    f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes"
+                )
+
                 # Decode Opus payload to PCM using OMI decoder
                 start_time = time.time()
                 loop = asyncio.get_running_loop()
@@ -460,11 +464,11 @@ async def ws_endpoint_omi(
                     application_logger.debug(
                         f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
                     )
-                    
+
                     # Use timestamp from Wyoming header if provided, otherwise current time
-                    audio_data = header.get('data', {})
-                    chunk_timestamp = audio_data.get('timestamp', int(time.time()))
-                    
+                    audio_data = header.get("data", {})
+                    chunk_timestamp = audio_data.get("timestamp", int(time.time()))
+
                     chunk = AudioChunk(
                         audio=pcm_data,
                         rate=OMI_SAMPLE_RATE,
@@ -472,17 +476,17 @@ async def ws_endpoint_omi(
                         channels=OMI_CHANNELS,
                         timestamp=chunk_timestamp,
                     )
-                    
+
                     # Queue to application-level processor
                     await processor_manager.queue_audio(
                         AudioProcessingItem(
                             client_id=client_id,
                             user_id=user.user_id,
                             audio_chunk=chunk,
-                            timestamp=chunk.timestamp
+                            timestamp=chunk.timestamp,
                         )
                     )
-                    
+
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
 
@@ -503,21 +507,28 @@ async def ws_endpoint_omi(
                         application_logger.info(
                             f"📊 Processed {packet_count} OMI packets ({total_bytes} bytes total) for client {client_id}"
                         )
-                    
-            elif header['type'] == 'audio-stop':
+
+            elif header["type"] == "audio-stop":
                 # Handle audio session stop
                 application_logger.info(
                     f"🛑 OMI audio session stopped for {client_id} - "
                     f"Total chunks: {packet_count}, Total bytes: {total_bytes}"
                 )
-                
+
                 # Signal end of audio stream to processor
                 await processor_manager.close_client_audio(client_id)
-                
+
+                # Close current conversation to trigger memory processing
+                if client_state:
+                    application_logger.info(
+                        f"📝 Closing conversation for {client_id} on audio-stop"
+                    )
+                    await client_state.close_current_conversation()
+
                 # Reset counters for next session
                 packet_count = 0
                 total_bytes = 0
-                
+
             else:
                 # Unknown event type
                 application_logger.debug(
@@ -537,13 +548,12 @@ async def ws_endpoint_omi(
                 # Signal end of audio stream to processor
                 processor_manager = get_processor_manager()
                 await processor_manager.close_client_audio(client_id)
-                
+
                 # Clean up client state
                 await cleanup_client_state(client_id)
             except Exception as cleanup_error:
                 application_logger.error(
-                    f"Error during cleanup for client {client_id}: {cleanup_error}",
-                    exc_info=True
+                    f"Error during cleanup for client {client_id}: {cleanup_error}", exc_info=True
                 )
 
 
@@ -554,7 +564,7 @@ async def ws_endpoint_pcm(
     """Accepts WebSocket connections, processes PCM audio per-client."""
     client_id = None
     client_state = None
-    
+
     try:
         # Authenticate user before accepting WebSocket connection
         user = await websocket_auth(ws, token)
@@ -577,61 +587,63 @@ async def ws_endpoint_pcm(
         # Track WebSocket connection
         tracker = get_debug_tracker()
         tracker.track_websocket_connected(user.user_id, client_id)
-        
+
         # Get processor manager
         processor_manager = get_processor_manager()
 
         packet_count = 0
         total_bytes = 0
         audio_streaming = False  # Track if audio session is active
-        
+
         while True:
             # Parse Wyoming protocol or fall back to raw audio
             header, payload = await parse_wyoming_protocol(ws)
-            
-            if header['type'] == 'audio-start':
+
+            if header["type"] == "audio-start":
                 # Handle audio session start
                 audio_streaming = True
-                audio_format = header.get('data', {})
+                audio_format = header.get("data", {})
                 application_logger.info(
                     f"🎙️ Audio session started for {client_id} - "
                     f"Format: {audio_format.get('rate')}Hz, "
                     f"{audio_format.get('width')}bytes, "
                     f"{audio_format.get('channels')}ch"
                 )
-                
+
                 # Create transaction for this audio session
                 # client_state.transaction_id = tracker.create_transaction(
                 #     user.user_id, client_id
                 # )
-                
-            elif header['type'] == 'audio-chunk' and payload:
+
+            elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
                 total_bytes += len(payload)
-                
+
                 if audio_streaming:
-                    application_logger.debug(f"🎵 Received audio chunk #{packet_count}: {len(payload)} bytes")
-                    
+                    application_logger.debug(
+                        f"🎵 Received audio chunk #{packet_count}: {len(payload)} bytes"
+                    )
+
                     # Extract audio format from header
-                    audio_data = header.get('data', {})
+                    audio_data = header.get("data", {})
                     chunk = AudioChunk(
                         audio=payload,
-                        rate=audio_data.get('rate', 16000),
-                        width=audio_data.get('width', 2),
-                        channels=audio_data.get('channels', 1),
-                        timestamp=audio_data.get('timestamp', int(time.time())),
+                        rate=audio_data.get("rate", 16000),
+                        width=audio_data.get("width", 2),
+                        channels=audio_data.get("channels", 1),
+                        timestamp=audio_data.get("timestamp", int(time.time())),
                     )
-                    
+
                     # Queue to application-level processor
                     await processor_manager.queue_audio(
                         AudioProcessingItem(
                             client_id=client_id,
                             user_id=user.user_id,
                             audio_chunk=chunk,
-                            timestamp=chunk.timestamp
+                            timestamp=chunk.timestamp,
                         )
                     )
-                    
+
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
 
@@ -648,34 +660,43 @@ async def ws_endpoint_pcm(
                     application_logger.warning(
                         f"⚠️ Received audio chunk without audio-start for {client_id}"
                     )
-                    
-            elif header['type'] == 'audio-stop':
+
+            elif header["type"] == "audio-stop":
                 # Handle audio session stop
                 audio_streaming = False
                 application_logger.info(
                     f"🛑 Audio session stopped for {client_id} - "
                     f"Total chunks: {packet_count}, Total bytes: {total_bytes}"
                 )
-                
+
                 # Signal end of audio stream to processor
                 await processor_manager.close_client_audio(client_id)
-                
+
+                # Close current conversation to trigger memory processing
+                if client_state:
+                    application_logger.info(
+                        f"📝 Closing conversation for {client_id} on audio-stop"
+                    )
+                    await client_state.close_current_conversation()
+
                 # Reset counters for next session
                 packet_count = 0
                 total_bytes = 0
-                
+
             else:
                 # Unknown event type
                 application_logger.debug(
                     f"Ignoring Wyoming event type '{header['type']}' for {client_id}"
                 )
-                    
+
     except WebSocketDisconnect:
         application_logger.info(
             f"🔌 PCM WebSocket disconnected - Client: {client_id}, Packets: {packet_count}, Total bytes: {total_bytes}"
         )
     except Exception as e:
-        application_logger.error(f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True)
+        application_logger.error(
+            f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True
+        )
     finally:
         # Track WebSocket disconnection
         if client_id:
@@ -688,13 +709,12 @@ async def ws_endpoint_pcm(
                 # Signal end of audio stream to processor
                 processor_manager = get_processor_manager()
                 await processor_manager.close_client_audio(client_id)
-                
+
                 # Clean up client state
                 await cleanup_client_state(client_id)
             except Exception as cleanup_error:
                 application_logger.error(
-                    f"Error during cleanup for client {client_id}: {cleanup_error}",
-                    exc_info=True
+                    f"Error during cleanup for client {client_id}: {cleanup_error}", exc_info=True
                 )
 
 
