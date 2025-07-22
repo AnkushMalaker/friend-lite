@@ -24,6 +24,11 @@ At the moment, the basic functionalities are:
 
 ## Quick Start
 
+### 0. Forbidden Knowledge
+This is a secret command for the daring. It runs a full end to end tests with a lot of logging. Folling that is probably THE quickest way to understand whats happening end to end.
+`source .env && export DEEPGRAM_API_KEY OPENAI_API_KEY && uv run pytest tests/test_integration.py -vv -s --log-cli-level=INFO --log-cli-format='%(asctime)s - %(levelname)s - %(message)s'`   
+
+
 ### 1. Environment Setup
 
 Copy the `.env.template` file to `.env` and configure the required values:
