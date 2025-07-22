@@ -57,6 +57,10 @@ graph TB
             MP[Memory Processor]
             CP[Cropping Processor]
         end
+        
+        subgraph "Event Coordination"
+            TC[TranscriptCoordinator<br/>AsyncIO Events]
+        end
     end
 
     %% Storage Systems
@@ -115,14 +119,18 @@ graph TB
     TP --> DG
     TP --> WY
     TP -->|save transcript| AC_COL
+    TP -->|signal completion| TC
     
     %% Conversation Closure Flow (Critical Path)
     AST -->|close_conversation| CS
-    CS -->|if has transcripts| MQ
+    CS -->|wait for event| TC
+    TC -->|transcript ready| CS
+    CS -->|queue memory| MQ
     CS -->|if enabled| CQ
     
     %% Memory Processing Flow
     MQ --> MP
+    MP -->|wait for coordination| TC
     MP --> OAI
     MP --> OLL
     MP -->|orchestrate by mem0| MEM
@@ -148,6 +156,7 @@ graph TB
     style CS fill:#bbf,stroke:#333,stroke-width:2px
     style MQ fill:#fbb,stroke:#333,stroke-width:2px
     style AST fill:#bfb,stroke:#333,stroke-width:2px
+    style TC fill:#ffb,stroke:#333,stroke-width:3px
 ```
 
 ## Component Descriptions
@@ -346,7 +355,9 @@ BackgroundTaskManager(
 
 ### Conversation Closure and Memory Processing
 
-**Recent Architecture Change**: Memory processing has been decoupled from transcription completion to prevent duplicate processing.
+**Recent Architecture Changes**: 
+1. Memory processing decoupled from transcription to prevent duplicates
+2. **Event-driven coordination** eliminates polling/retry race conditions
 
 #### Previous Architecture (Had Issues)
 ```
@@ -355,12 +366,30 @@ Transcription Complete → Queue Memory Processing ❌ (Duplicate)
 Conversation Close → Queue Memory Processing ❌ (Duplicate)
 ```
 
-#### Current Architecture (Fixed)
+#### Current Architecture (Event-Driven)
 ```
-Transcription Complete → Save Transcript Only ✓
-                    ↓
-Conversation Close → Queue Memory Processing (Single Point) ✓
+Transcription Complete → Save Transcript + Signal Event ✓
+                                           ↓
+Conversation Close → Wait for Event → Queue Memory Processing ✓
 ```
+
+#### Event Coordination System
+The system now uses **TranscriptCoordinator** for proper async coordination:
+
+```python
+class TranscriptCoordinator:
+    async def wait_for_transcript_completion(audio_uuid: str) -> bool:
+        # Wait for asyncio.Event (no polling!)
+        
+    def signal_transcript_ready(audio_uuid: str):
+        # Signal completion from TranscriptionManager
+```
+
+**Benefits:**
+- ✅ **Zero polling** - Uses asyncio events instead of sleep/retry loops
+- ✅ **Immediate processing** - Memory processor starts as soon as transcript is ready  
+- ✅ **No race conditions** - Proper async coordination prevents timing issues
+- ✅ **Better performance** - No artificial delays or timeout-based waiting
 
 #### Conversation Closure Triggers
 
