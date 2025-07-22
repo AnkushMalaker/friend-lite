@@ -21,12 +21,15 @@ from advanced_omi_backend.audio_cropping_utils import (
 )
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.database import AudioChunksCollectionHelper
-from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
 
 # Lazy import to avoid config loading issues
 # from advanced_omi_backend.memory import get_memory_service
 from advanced_omi_backend.task_manager import get_task_manager
 from advanced_omi_backend.transcription import TranscriptionManager
+
+# Debug tracker removed for cleaner architecture - can be re-added if needed
+# from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
+
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -68,7 +71,6 @@ class MemoryProcessingItem:
     user_id: str
     user_email: str
     audio_uuid: str
-    db_helper: Optional[AudioChunksCollectionHelper] = None
 
 
 @dataclass
@@ -680,98 +682,66 @@ class ProcessorManager:
         finally:
             audio_logger.info("Memory processor stopped")
 
-    async def _get_transcript_with_coordination(self, db_helper, audio_uuid: str) -> Optional[list]:
-        """Get transcript from database using event coordination (no polling/retry).
-
-        This method uses the TranscriptCoordinator to wait for transcript completion
-        events rather than polling the database with retries.
-        """
-        from advanced_omi_backend.transcript_coordinator import (
-            get_transcript_coordinator,
-        )
-
-        # First, check if transcript already exists
-        try:
-            transcript_segments = await db_helper.get_transcript_segments(audio_uuid)
-            if transcript_segments:
-                audio_logger.info(f"Transcript already available for {audio_uuid}")
-                return transcript_segments
-        except Exception as e:
-            audio_logger.warning(f"Error checking existing transcript for {audio_uuid}: {e}")
-
-        # If not available, wait for transcript completion event
-        coordinator = get_transcript_coordinator()
-        audio_logger.info(f"Waiting for transcript completion event for {audio_uuid}")
-
-        transcript_ready = await coordinator.wait_for_transcript_completion(
-            audio_uuid, timeout=30.0
-        )
-        if not transcript_ready:
-            audio_logger.warning(f"Transcript completion event timeout for {audio_uuid}")
-            return None
-
-        # Now get the transcript from database (should be available)
-        try:
-            transcript_segments = await db_helper.get_transcript_segments(audio_uuid)
-            if transcript_segments:
-                audio_logger.info(f"Retrieved transcript for {audio_uuid} after event coordination")
-                return transcript_segments
-            else:
-                audio_logger.error(
-                    f"Transcript event received but no transcript found in DB for {audio_uuid}"
-                )
-                return None
-        except Exception as e:
-            audio_logger.error(f"Error retrieving transcript after event for {audio_uuid}: {e}")
-            return None
-
     async def _process_memory_item(self, item: MemoryProcessingItem):
         """Process a single memory item."""
         start_time = time.time()
 
-        tracker = get_debug_tracker()
-        transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
+        # Debug tracking removed for cleaner architecture
+        # tracker = get_debug_tracker()
+        # transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
 
         try:
-            # Get transcript from database with event coordination (no polling/retry)
-            if not item.db_helper:
-                raise ValueError(
-                    f"No db_helper provided for memory processing of {item.audio_uuid}"
-                )
-
-            transcript_segments = await self._get_transcript_with_coordination(
-                item.db_helper, item.audio_uuid
+            # Use ConversationRepository for clean data access with event coordination
+            from advanced_omi_backend.conversation_repository import (
+                get_conversation_repository,
             )
-            if not transcript_segments:
+
+            conversation_repo = get_conversation_repository()
+
+            # First check if conversation already has transcript available
+            full_conversation = await conversation_repo.get_full_conversation_text(item.audio_uuid)
+
+            if not full_conversation:
+                # If not available, wait for transcript completion using event coordination
+                from advanced_omi_backend.transcript_coordinator import (
+                    get_transcript_coordinator,
+                )
+
+                coordinator = get_transcript_coordinator()
+
+                audio_logger.info(f"Waiting for transcript completion event for {item.audio_uuid}")
+                transcript_ready = await coordinator.wait_for_transcript_completion(
+                    item.audio_uuid, timeout=30.0
+                )
+
+                if not transcript_ready:
+                    audio_logger.warning(
+                        f"Transcript completion event timeout for {item.audio_uuid}"
+                    )
+                    return None
+
+                # Try again after event coordination
+                full_conversation = await conversation_repo.get_full_conversation_text(
+                    item.audio_uuid
+                )
+
+            if not full_conversation:
                 audio_logger.warning(
-                    f"No transcripts found for {item.audio_uuid} via event coordination, skipping memory processing"
+                    f"No valid conversation text found for {item.audio_uuid}, skipping memory processing"
                 )
                 return None
-
-            # Build full conversation from segments
-            transcript_texts = [
-                segment.get("text", "")
-                for segment in transcript_segments
-                if segment.get("text", "").strip()
-            ]
-            if not transcript_texts:
-                audio_logger.warning(
-                    f"No valid transcript text found for {item.audio_uuid}, skipping memory processing"
-                )
-                return None
-
-            full_conversation = " ".join(transcript_texts).strip()
             if len(full_conversation) < 10:  # Minimum length check
                 audio_logger.warning(
                     f"Conversation too short for memory processing ({len(full_conversation)} chars): {item.audio_uuid}"
                 )
                 return None
 
-            tracker.track_event(
-                transaction_id,
-                PipelineStage.MEMORY_STARTED,
-                metadata={"conversation_length": len(full_conversation)},
-            )
+            # Debug tracking removed for cleaner architecture
+            # tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_STARTED,
+            #     metadata={"conversation_length": len(full_conversation)},
+            # )
 
             # Lazy import memory service
             if self.memory_service is None:
@@ -843,11 +813,12 @@ class ProcessorManager:
                             f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
                         )
 
-                tracker.track_event(
-                    transaction_id,
-                    PipelineStage.MEMORY_COMPLETED,
-                    metadata={"processing_time": time.time() - start_time},
-                )
+                # Debug tracking removed for cleaner architecture
+                # tracker.track_event(
+                #     transaction_id,
+                #     PipelineStage.MEMORY_COMPLETED,
+                #     metadata={"processing_time": time.time() - start_time},
+                # )
             else:
                 audio_logger.warning(f"⚠️ Memory service returned False for {item.audio_uuid}")
 
@@ -860,13 +831,14 @@ class ProcessorManager:
                         f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
                     )
 
-                tracker.track_event(
-                    transaction_id,
-                    PipelineStage.MEMORY_COMPLETED,
-                    success=False,
-                    error_message="Memory service returned False",
-                    metadata={"processing_time": time.time() - start_time},
-                )
+                # Debug tracking removed for cleaner architecture
+                # tracker.track_event(
+                #     transaction_id,
+                #     PipelineStage.MEMORY_COMPLETED,
+                #     success=False,
+                #     error_message="Memory service returned False",
+                #     metadata={"processing_time": time.time() - start_time},
+                # )
 
         except asyncio.TimeoutError:
             audio_logger.error(f"Memory processing timed out for {item.audio_uuid}")
@@ -880,13 +852,14 @@ class ProcessorManager:
                     f"📝 Updated memory processing status to FAILED (timeout) for {item.audio_uuid}"
                 )
 
-            tracker.track_event(
-                transaction_id,
-                PipelineStage.MEMORY_COMPLETED,
-                success=False,
-                error_message="Processing timeout (5 minutes)",
-                metadata={"processing_time": time.time() - start_time},
-            )
+            # Debug tracking removed for cleaner architecture
+            # tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_COMPLETED,
+            #     success=False,
+            #     error_message="Processing timeout (5 minutes)",
+            #     metadata={"processing_time": time.time() - start_time},
+            # )
         except Exception as e:
             audio_logger.error(f"Error processing memory for {item.audio_uuid}: {e}")
 
@@ -899,13 +872,14 @@ class ProcessorManager:
                     f"📝 Updated memory processing status to FAILED (exception) for {item.audio_uuid}"
                 )
 
-            tracker.track_event(
-                transaction_id,
-                PipelineStage.MEMORY_COMPLETED,
-                success=False,
-                error_message=f"Exception: {str(e)}",
-                metadata={"processing_time": time.time() - start_time},
-            )
+            # Debug tracking removed for cleaner architecture
+            # tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_COMPLETED,
+            #     success=False,
+            #     error_message=f"Exception: {str(e)}",
+            #     metadata={"processing_time": time.time() - start_time},
+            # )
 
         processing_time_ms = (time.time() - start_time) * 1000
         audio_logger.info(

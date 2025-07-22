@@ -14,12 +14,9 @@ from typing import Dict, List, Optional, Tuple
 
 from wyoming.audio import AudioChunk
 
+from advanced_omi_backend.conversation_manager import get_conversation_manager
 from advanced_omi_backend.database import AudioChunksCollectionHelper
-from advanced_omi_backend.processors import (
-    AudioCroppingItem,
-    MemoryProcessingItem,
-    get_processor_manager,
-)
+from advanced_omi_backend.processors import get_processor_manager
 from advanced_omi_backend.task_manager import get_task_manager
 
 # Get loggers
@@ -27,7 +24,6 @@ audio_logger = logging.getLogger("audio_processing")
 
 # Configuration constants
 NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
-AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
 
 
 class ClientState:
@@ -136,72 +132,26 @@ class ClientState:
             audio_logger.info(f"🔒 No active conversation to close for client {self.client_id}")
             return
 
-        audio_logger.info(f"🔒 Closing conversation {self.current_audio_uuid}")
+        # Use ConversationManager for clean separation of concerns
+        conversation_manager = get_conversation_manager()
+        success = await conversation_manager.close_conversation(
+            client_id=self.client_id,
+            audio_uuid=self.current_audio_uuid,
+            user_id=self.user_id,
+            user_email=self.user_email,
+            conversation_start_time=self.conversation_start_time,
+            speech_segments=self.speech_segments,
+            chunk_dir=self.chunk_dir,
+        )
 
-        # Get processor manager
-        processor_manager = get_processor_manager()
-
-        # Close audio file in processor
-        await processor_manager.close_client_audio(self.client_id)
-
-        # Queue memory processing if we have required data
-        # Memory processor will read transcripts from database directly
-        audio_logger.info(f"💭 Memory processing check for client {self.client_id}:")
-        audio_logger.info(f"    - current_audio_uuid: {self.current_audio_uuid}")
-        audio_logger.info(f"    - user_id: {self.user_id}")
-        audio_logger.info(f"    - user_email: {self.user_email}")
-
-        if self.current_audio_uuid and self.user_id and self.user_email:
-            audio_logger.info(
-                f"💭 Queuing memory processing for conversation {self.current_audio_uuid}"
-            )
-
-            await processor_manager.queue_memory(
-                MemoryProcessingItem(
-                    client_id=self.client_id,
-                    user_id=self.user_id,
-                    user_email=self.user_email,
-                    audio_uuid=self.current_audio_uuid,
-                    db_helper=self.db_helper,
-                )
-            )
-        else:
-            audio_logger.warning(f"💭 Memory processing skipped - missing required data:")
-            audio_logger.warning(f"    - current_audio_uuid: {bool(self.current_audio_uuid)}")
-            audio_logger.warning(f"    - user_id: {bool(self.user_id)}")
-            audio_logger.warning(f"    - user_email: {bool(self.user_email)}")
-
-        # Queue audio cropping if enabled and we have speech segments
-        if AUDIO_CROPPING_ENABLED and self.current_audio_uuid in self.speech_segments:
-            speech_segments = self.speech_segments[self.current_audio_uuid]
-            if speech_segments:
-                # Get the audio file path from processor
-                # This assumes the processor follows the same naming convention
-                timestamp = int(self.conversation_start_time)
-                wav_filename = f"{timestamp}_{self.client_id}_{self.current_audio_uuid}.wav"
-                original_path = f"{self.chunk_dir}/{wav_filename}"
-                cropped_path = str(original_path).replace(".wav", "_cropped.wav")
-
-                audio_logger.info(
-                    f"✂️ Queuing audio cropping for {self.current_audio_uuid} "
-                    f"with {len(speech_segments)} speech segments"
-                )
-
-                await processor_manager.queue_cropping(
-                    AudioCroppingItem(
-                        client_id=self.client_id,
-                        user_id=self.user_id,
-                        audio_uuid=self.current_audio_uuid,
-                        original_path=original_path,
-                        speech_segments=speech_segments,
-                        output_path=cropped_path,
-                    )
-                )
-
-            # Clean up segments for this conversation
-            del self.speech_segments[self.current_audio_uuid]
+        if success:
+            # Clean up speech segments for this conversation
+            if self.current_audio_uuid in self.speech_segments:
+                del self.speech_segments[self.current_audio_uuid]
             if self.current_audio_uuid in self.current_speech_start:
                 del self.current_speech_start[self.current_audio_uuid]
+        else:
+            audio_logger.warning(f"⚠️ Conversation closure had issues for {self.current_audio_uuid}")
 
     async def start_new_conversation(self):
         """Start a new conversation by closing current and resetting state."""

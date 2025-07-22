@@ -40,8 +40,9 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 - Configuration and customization options
 - **Code References**: 
   - `src/memory/memory_service.py:159-282` (main processing)
-  - `main.py:1047-1065` (conversation end trigger)
-  - `main.py:1163-1195` (background processing)
+  - `src/advanced_omi_backend/transcript_coordinator.py` (event coordination)
+  - `src/advanced_omi_backend/conversation_repository.py` (data access)
+  - `src/advanced_omi_backend/conversation_manager.py` (lifecycle management)
 
 ### 4. **[Authentication System](./auth.md)**
 **User management and security**

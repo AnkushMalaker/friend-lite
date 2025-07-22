@@ -37,6 +37,7 @@ graph TB
         CM[ClientManager]
         CS[ClientState]
         CT[Client Tracking]
+        CONV_MGR[ConversationManager<br/>Lifecycle Coordination]
     end
 
     %% Processor System
@@ -70,6 +71,7 @@ graph TB
         subgraph "MongoDB"
             AC_COL[audio_chunks<br/>conversations]
             USERS[users]
+            CONV_REPO[ConversationRepository<br/>Clean Data Access]
         end
         
         subgraph "Qdrant"
@@ -123,18 +125,20 @@ graph TB
     
     %% Conversation Closure Flow (Critical Path)
     AST -->|close_conversation| CS
-    CS -->|wait for event| TC
-    TC -->|transcript ready| CS
-    CS -->|queue memory| MQ
-    CS -->|if enabled| CQ
+    CS -->|delegate to| CONV_MGR
+    CONV_MGR -->|wait for event| TC
+    TC -->|transcript ready| CONV_MGR
+    CONV_MGR -->|queue memory| MQ
+    CONV_MGR -->|if enabled| CQ
     
     %% Memory Processing Flow
     MQ --> MP
-    MP -->|wait for coordination| TC
+    MP -->|read via| CONV_REPO
+    CONV_REPO -->|access| AC_COL
     MP --> OAI
     MP --> OLL
     MP -->|orchestrate by mem0| MEM
-    MP -->|update| AC_COL
+    MP -->|update via| CONV_REPO
     
     %% Cropping Flow
     CQ --> CP
@@ -157,6 +161,8 @@ graph TB
     style MQ fill:#fbb,stroke:#333,stroke-width:2px
     style AST fill:#bfb,stroke:#333,stroke-width:2px
     style TC fill:#ffb,stroke:#333,stroke-width:3px
+    style CONV_MGR fill:#bff,stroke:#333,stroke-width:2px
+    style CONV_REPO fill:#fbf,stroke:#333,stroke-width:2px
 ```
 
 ## Component Descriptions
@@ -391,9 +397,29 @@ class TranscriptCoordinator:
 - ✅ **No race conditions** - Proper async coordination prevents timing issues
 - ✅ **Better performance** - No artificial delays or timeout-based waiting
 
+#### New Architecture Components
+
+**TranscriptCoordinator** (`transcript_coordinator.py`)
+- **Event-Driven Coordination**: Manages asyncio.Event objects for transcript completion
+- **Zero-Polling Design**: Eliminates sleep/retry loops in favor of proper async events
+- **Global Singleton**: Centralized coordination across all processors
+- **Automatic Cleanup**: Events are cleaned up after use to prevent memory leaks
+
+**ConversationManager** (`conversation_manager.py`)
+- **Lifecycle Management**: Handles complete conversation closure workflow
+- **Single Responsibility**: Separated from ClientState for cleaner architecture
+- **Processing Coordination**: Manages memory processing and audio cropping queuing
+- **Error Handling**: Comprehensive error handling with success/failure tracking
+
+**ConversationRepository** (`conversation_repository.py`)
+- **Repository Pattern**: Clean abstraction for conversation data access
+- **Event Integration**: Signals TranscriptCoordinator when transcripts are saved
+- **Domain-Focused Methods**: High-level methods like `get_full_conversation_text()`
+- **Proper Error Handling**: All database operations wrapped with try/catch and logging
+
 #### Conversation Closure Triggers
 
-The `close_conversation()` method in ClientState is called from:
+The `close_conversation()` method in ClientState now delegates to ConversationManager:
 
 1. **Wyoming Protocol `audio-stop` Event** (Primary Path)
    - Explicit session end from client
