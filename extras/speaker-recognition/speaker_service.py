@@ -47,17 +47,18 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+log = logging.getLogger("speaker_service")
+
 # Get HF_TOKEN from environment and create settings
 hf_token = os.getenv("HF_TOKEN")
 if not hf_token:
-    raise ValueError("HF_TOKEN environment variable is required. Please set it before running the service.")
+    log.warning("HF_TOKEN environment variable not set. Speaker recognition will be disabled.")
+    hf_token = None
 
 # Type cast since we know hf_token is not None after the check above
-hf_token = cast(str, hf_token)
+hf_token = cast(Optional[str], hf_token)
 auth = Settings()  # Load other settings from env vars or .env file
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-log = logging.getLogger("speaker_service")
 
 ###############################################################################
 # Audio handling & embedding
@@ -66,17 +67,27 @@ log = logging.getLogger("speaker_service")
 class AudioBackend:
     """Wrapper around PyAnnote & SpeechBrain components."""
 
-    def __init__(self, hf_token: str, device: torch.device):
+    def __init__(self, hf_token: Optional[str], device: torch.device):
         self.device = device
-        self.diar = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1", use_auth_token=hf_token
-        ).to(device)
-        self.embedder = PretrainedSpeakerEmbedding(
-            "speechbrain/spkrec-ecapa-voxceleb", device=device
-        )
+        self.hf_token = hf_token
+        
+        if hf_token is None:
+            log.warning("HF_TOKEN not provided - speaker recognition models will not be loaded")
+            self.diar = None
+            self.embedder = None
+        else:
+            self.diar = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1", use_auth_token=hf_token
+            ).to(device)
+            self.embedder = PretrainedSpeakerEmbedding(
+                "speechbrain/spkrec-ecapa-voxceleb", device=device
+            )
+        
         self.loader = Audio(sample_rate=16_000, mono="downmix")
 
     def embed(self, wave: torch.Tensor) -> np.ndarray:  # (1, T)
+        if self.embedder is None:
+            raise RuntimeError("Speaker embedding model not loaded - HF_TOKEN required")
         with torch.inference_mode():
             emb = self.embedder(wave.to(self.device))
         if isinstance(emb, torch.Tensor):
@@ -89,6 +100,8 @@ class AudioBackend:
 
     def diarize(self, path: Path) -> List[Dict]:
         """Perform speaker diarization on an audio file."""
+        if self.diar is None:
+            raise RuntimeError("Speaker diarization model not loaded - HF_TOKEN required")
         with torch.inference_mode():
             diarization = self.diar(str(path))
         

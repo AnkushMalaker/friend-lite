@@ -127,12 +127,16 @@ OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://localhost:8765")
 USE_ONLINE_TRANSCRIPTION = bool(TRANSCRIPTION_PROVIDER and (DEEPGRAM_API_KEY or MISTRAL_API_KEY))
 USE_OFFLINE_ASR = not USE_ONLINE_TRANSCRIPTION and bool(OFFLINE_ASR_TCP_URI)
 
-
-transcription_provider = get_transcription_provider(TRANSCRIPTION_PROVIDER)
-if transcription_provider:
-    logger.info(f"✅ Using {transcription_provider.name} transcription provider")
+# Only initialize transcription provider if we have the required API keys
+transcription_provider = None
+if USE_ONLINE_TRANSCRIPTION:
+    transcription_provider = get_transcription_provider(TRANSCRIPTION_PROVIDER)
+    if transcription_provider:
+        logger.info(f"✅ Using {transcription_provider.name} transcription provider")
+    else:
+        logger.info("⚠️ No online transcription provider configured")
 else:
-    logger.info("⚠️ No online transcription provider configured")
+    logger.info("⚠️ No online transcription provider configured - missing API keys")
 
 # Ollama & Qdrant Configuration
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
@@ -181,7 +185,8 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
         
         # If payload is expected, read binary data
         payload = None
-        if header.get('payload_length', 0) > 0:
+        payload_length = header.get('payload_length')
+        if (payload_length or 0) > 0:
             payload_msg = await ws.receive()
             if "bytes" in payload_msg:
                 payload = payload_msg["bytes"]

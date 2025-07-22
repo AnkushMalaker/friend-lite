@@ -405,7 +405,7 @@ class TranscriptionManager:
                     logger.info("🏁 Using default timeout: 5.0s (no audio duration provided)")
 
                 start_time = time.time()
-
+                transcript_text = None
                 # Wait for events from the background queue instead of direct reading
                 # This avoids conflicts with the background event reader task
                 while (time.time() - start_time) < max_wait:
@@ -444,6 +444,30 @@ class TranscriptionManager:
                         break
 
                 logger.info(f"🏁 Finished flushing ASR for {self._current_audio_uuid}")
+
+                # --- Notify system that transcription is complete ---
+                if transcript_text is not None:
+                    if self.chunk_repo and self._current_audio_uuid:
+                        await self.chunk_repo.update_transcription_status(
+                            self._current_audio_uuid, "COMPLETED", provider="offline_asr"
+                        )
+                        logger.info(f"📝 Updated transcription status to COMPLETED for {self._current_audio_uuid}")
+
+                    if self.processor_manager and self._client_id:
+                        self.processor_manager.track_processing_stage(
+                            self._client_id,
+                            "transcription",
+                            "completed",
+                            {
+                                "audio_uuid": self._current_audio_uuid,
+                                "segments": 1,
+                                "provider": "offline_asr",
+                            },
+                        )
+                        logger.info(
+                            f"🎉 Successfully marked transcription as completed for client {self._client_id} (offline ASR)"
+                        )
+                        await self._queue_memory_processing(transcript_text)
             except Exception as e:
                 logger.error(f"Error flushing offline ASR transcript: {e}")
 
