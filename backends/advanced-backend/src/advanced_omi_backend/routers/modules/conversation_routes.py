@@ -23,7 +23,7 @@ from advanced_omi_backend.client_manager import (
     get_client_manager_dependency,
     get_user_clients_all,
 )
-from advanced_omi_backend.database import AudioChunksCollectionHelper, chunks_col
+from advanced_omi_backend.database import AudioChunksRepository, chunks_col
 from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ audio_logger = logging.getLogger("audio_processing")
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 # Initialize chunk repository
-chunk_repo = AudioChunksCollectionHelper(chunks_col)
+chunk_repo = AudioChunksRepository(chunks_col)
 
 
 @router.post("/{client_id}/close")

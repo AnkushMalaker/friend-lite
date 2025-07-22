@@ -48,7 +48,7 @@ from advanced_omi_backend.constants import (
     OMI_SAMPLE_RATE,
     OMI_SAMPLE_WIDTH,
 )
-from advanced_omi_backend.database import AudioChunksCollectionHelper
+from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.debug_system_tracker import (
     get_debug_tracker,
     init_debug_tracker,
@@ -202,7 +202,7 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
 
 
 # Initialize repository and global state
-ac_db_collection_helper = AudioChunksCollectionHelper(chunks_col)
+ac_repository = AudioChunksRepository(chunks_col)
 active_clients: dict[str, ClientState] = {}
 
 # Client-to-user mapping for reliable permission checking
@@ -245,9 +245,7 @@ async def create_client_state(
     client_id: str, user: User, device_name: Optional[str] = None
 ) -> ClientState:
     """Create and register a new client state."""
-    client_state = ClientState(
-        client_id, ac_db_collection_helper, CHUNK_DIR, user.user_id, user.email
-    )
+    client_state = ClientState(client_id, ac_repository, CHUNK_DIR, user.user_id, user.email)
     active_clients[client_id] = client_state
 
     # Register client-user mapping (for active clients)
@@ -310,7 +308,7 @@ async def lifespan(app: FastAPI):
     application_logger.info("Task manager started")
 
     # Initialize processor manager
-    processor_manager = init_processor_manager(CHUNK_DIR, ac_db_collection_helper)
+    processor_manager = init_processor_manager(CHUNK_DIR, ac_repository)
     await processor_manager.start()
     application_logger.info("Application-level processors started")
 

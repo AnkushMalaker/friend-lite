@@ -6,33 +6,50 @@ This document explains how to configure and customize the memory service in the 
 
 **Code References**: 
 - **Main Implementation**: `src/memory/memory_service.py`
-- **Processing Trigger**: `main.py:1047-1065` (conversation end)
-- **Background Processing**: `main.py:1163-1195` (memory extraction)
+- **Event Coordination**: `src/advanced_omi_backend/transcript_coordinator.py` (zero-polling async events)
+- **Repository Layer**: `src/advanced_omi_backend/conversation_repository.py` (clean data access)
+- **Processing Manager**: `src/advanced_omi_backend/processors.py` (MemoryProcessor class)
+- **Conversation Management**: `src/advanced_omi_backend/conversation_manager.py` (lifecycle coordination)
 - **Configuration**: `memory_config.yaml` + `src/memory_config_loader.py`
 
 ## Overview
 
 The memory service uses [Mem0](https://mem0.ai/) to store, retrieve, and search conversation memories. It integrates with Ollama for embeddings and LLM processing, and Qdrant for vector storage.
 
-**Key Architecture Change**: All memories are now keyed by the database user_id instead of client_id, with client information stored in metadata for reference.
+**Key Architecture Changes**: 
+1. **Event-Driven Processing**: Memories use asyncio events instead of polling/retry mechanisms
+2. **Repository Pattern**: Clean data access through ConversationRepository
+3. **User-Centric Storage**: All memories keyed by user_id instead of client_id
+4. **Single Source of Truth**: MongoDB as the only transcript storage (no duplicates)
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   Transcripts   │    │   Ollama     │    │    Qdrant       │
-│  (Audio Input)  │───▶│  (LLM +      │───▶│ (Vector Store)  │
-│ + User Context  │    │  Embeddings) │    │   (user_id      │
-│                 │    │              │    │    keyed)       │
-└─────────────────┘    └──────────────┘    └─────────────────┘
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Audio Stream  │    │ TranscriptCoord  │    │ ConversationRepo│
+│   (WebSocket)   │───▶│  (Event-Driven)  │───▶│ (MongoDB Access)│
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                              │                          │
+                              ▼                          ▼
+                    ┌──────────────────┐    ┌──────────────────┐
+                    │ MemoryProcessor  │    │   Conversation   │
+                    │ (Event-Waiting)  │◄───│   Manager        │
+                    └──────────────────┘    └──────────────────┘
                               │
                               ▼
                     ┌──────────────────┐
-                    │   Mem0 Memory    │
-                    │     Service      │
-                    │  (User-Centric)  │
-                    └──────────────────┘
+                    │   Ollama + Mem0  │───▶ ┌─────────────────┐
+                    │ (LLM + Embeddings)│    │    Qdrant       │
+                    └──────────────────┘    │ (Vector Store)  │
+                                            │  (user_id keyed)│
+                                            └─────────────────┘
 ```
+
+**Key Flow:**
+1. **Audio** → **TranscriptCoordinator** signals completion
+2. **ConversationManager** waits for event, queues memory processing  
+3. **MemoryProcessor** uses **ConversationRepository** for data access
+4. **Mem0 + Ollama** extract and store memories in **Qdrant**
 
 ## Configuration
 

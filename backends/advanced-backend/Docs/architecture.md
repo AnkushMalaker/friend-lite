@@ -37,6 +37,7 @@ graph TB
         CM[ClientManager]
         CS[ClientState]
         CT[Client Tracking]
+        CONV_MGR[ConversationManager<br/>Lifecycle Coordination]
     end
 
     %% Processor System
@@ -57,6 +58,10 @@ graph TB
             MP[Memory Processor]
             CP[Cropping Processor]
         end
+        
+        subgraph "Event Coordination"
+            TC[TranscriptCoordinator<br/>AsyncIO Events]
+        end
     end
 
     %% Storage Systems
@@ -66,6 +71,7 @@ graph TB
         subgraph "MongoDB"
             AC_COL[audio_chunks<br/>conversations]
             USERS[users]
+            CONV_REPO[ConversationRepository<br/>Clean Data Access]
         end
         
         subgraph "Qdrant"
@@ -115,18 +121,24 @@ graph TB
     TP --> DG
     TP --> WY
     TP -->|save transcript| AC_COL
+    TP -->|signal completion| TC
     
     %% Conversation Closure Flow (Critical Path)
     AST -->|close_conversation| CS
-    CS -->|if has transcripts| MQ
-    CS -->|if enabled| CQ
+    CS -->|delegate to| CONV_MGR
+    CONV_MGR -->|wait for event| TC
+    TC -->|transcript ready| CONV_MGR
+    CONV_MGR -->|queue memory| MQ
+    CONV_MGR -->|if enabled| CQ
     
     %% Memory Processing Flow
     MQ --> MP
+    MP -->|read via| CONV_REPO
+    CONV_REPO -->|access| AC_COL
     MP --> OAI
     MP --> OLL
     MP -->|orchestrate by mem0| MEM
-    MP -->|update| AC_COL
+    MP -->|update via| CONV_REPO
     
     %% Cropping Flow
     CQ --> CP
@@ -148,6 +160,9 @@ graph TB
     style CS fill:#bbf,stroke:#333,stroke-width:2px
     style MQ fill:#fbb,stroke:#333,stroke-width:2px
     style AST fill:#bfb,stroke:#333,stroke-width:2px
+    style TC fill:#ffb,stroke:#333,stroke-width:3px
+    style CONV_MGR fill:#bff,stroke:#333,stroke-width:2px
+    style CONV_REPO fill:#fbf,stroke:#333,stroke-width:2px
 ```
 
 ## Component Descriptions
@@ -346,7 +361,9 @@ BackgroundTaskManager(
 
 ### Conversation Closure and Memory Processing
 
-**Recent Architecture Change**: Memory processing has been decoupled from transcription completion to prevent duplicate processing.
+**Recent Architecture Changes**: 
+1. Memory processing decoupled from transcription to prevent duplicates
+2. **Event-driven coordination** eliminates polling/retry race conditions
 
 #### Previous Architecture (Had Issues)
 ```
@@ -355,16 +372,54 @@ Transcription Complete → Queue Memory Processing ❌ (Duplicate)
 Conversation Close → Queue Memory Processing ❌ (Duplicate)
 ```
 
-#### Current Architecture (Fixed)
+#### Current Architecture (Event-Driven)
 ```
-Transcription Complete → Save Transcript Only ✓
-                    ↓
-Conversation Close → Queue Memory Processing (Single Point) ✓
+Transcription Complete → Save Transcript + Signal Event ✓
+                                           ↓
+Conversation Close → Wait for Event → Queue Memory Processing ✓
 ```
+
+#### Event Coordination System
+The system now uses **TranscriptCoordinator** for proper async coordination:
+
+```python
+class TranscriptCoordinator:
+    async def wait_for_transcript_completion(audio_uuid: str) -> bool:
+        # Wait for asyncio.Event (no polling!)
+        
+    def signal_transcript_ready(audio_uuid: str):
+        # Signal completion from TranscriptionManager
+```
+
+**Benefits:**
+- ✅ **Zero polling** - Uses asyncio events instead of sleep/retry loops
+- ✅ **Immediate processing** - Memory processor starts as soon as transcript is ready  
+- ✅ **No race conditions** - Proper async coordination prevents timing issues
+- ✅ **Better performance** - No artificial delays or timeout-based waiting
+
+#### New Architecture Components
+
+**TranscriptCoordinator** (`transcript_coordinator.py`)
+- **Event-Driven Coordination**: Manages asyncio.Event objects for transcript completion
+- **Zero-Polling Design**: Eliminates sleep/retry loops in favor of proper async events
+- **Global Singleton**: Centralized coordination across all processors
+- **Automatic Cleanup**: Events are cleaned up after use to prevent memory leaks
+
+**ConversationManager** (`conversation_manager.py`)
+- **Lifecycle Management**: Handles complete conversation closure workflow
+- **Single Responsibility**: Separated from ClientState for cleaner architecture
+- **Processing Coordination**: Manages memory processing and audio cropping queuing
+- **Error Handling**: Comprehensive error handling with success/failure tracking
+
+**ConversationRepository** (`conversation_repository.py`)
+- **Repository Pattern**: Clean abstraction for conversation data access
+- **Event Integration**: Signals TranscriptCoordinator when transcripts are saved
+- **Domain-Focused Methods**: High-level methods like `get_full_conversation_text()`
+- **Proper Error Handling**: All database operations wrapped with try/catch and logging
 
 #### Conversation Closure Triggers
 
-The `close_conversation()` method in ClientState is called from:
+The `close_conversation()` method in ClientState now delegates to ConversationManager:
 
 1. **Wyoming Protocol `audio-stop` Event** (Primary Path)
    - Explicit session end from client
