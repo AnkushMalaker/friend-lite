@@ -680,6 +680,7 @@ class ProcessorManager:
     async def _process_memory_item(self, item: MemoryProcessingItem):
         """Process a single memory item."""
         start_time = time.time()
+        audio_logger.info(f"🚀 MEMORY PROCESSING STARTED for {item.audio_uuid} at {start_time}")
 
         # Debug tracking removed for cleaner architecture
         # tracker = get_debug_tracker()
@@ -886,9 +887,10 @@ class ProcessorManager:
             #     metadata={"processing_time": time.time() - start_time},
             # )
 
-        processing_time_ms = (time.time() - start_time) * 1000
+        end_time = time.time()
+        processing_time_ms = (end_time - start_time) * 1000
         audio_logger.info(
-            f"🔄 Completed memory processing for {item.audio_uuid} in {processing_time_ms:.1f}ms"
+            f"🏁 MEMORY PROCESSING COMPLETED for {item.audio_uuid} in {processing_time_ms:.1f}ms (end time: {end_time})"
         )
 
     async def _cropping_processor(self):
