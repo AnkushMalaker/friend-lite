@@ -63,7 +63,7 @@ docker compose -f docker-compose-test.yml down -v
 ```
 
 #### Integration Test Iteration Methodology
-1. **Set CACHED_MODE = True** in `tests/test_integration.py` for debugging
+1. **Set CACHED_MODE = True** in `tests/test_integration.py` for debugging. If CACHE_MODE is false, the test containers will be created fresh before the test, and removed after - so they won't be running after the test to view logs/debug.
 2. **Run the test** - containers will start and persist even if test times out
 3. **Check container logs** to see where the test is hanging:
    ```bash
