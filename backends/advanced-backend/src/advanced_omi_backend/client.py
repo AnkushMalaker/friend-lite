@@ -15,8 +15,7 @@ from typing import Dict, List, Optional, Tuple
 from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.conversation_manager import get_conversation_manager
-from advanced_omi_backend.database import AudioChunksCollectionHelper
-from advanced_omi_backend.processors import get_processor_manager
+from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.task_manager import get_task_manager
 
 # Get loggers
@@ -32,7 +31,7 @@ class ClientState:
     def __init__(
         self,
         client_id: str,
-        ac_db_collection_helper: AudioChunksCollectionHelper,
+        ac_db_collection_helper: AudioChunksRepository,
         chunk_dir: Path,
         user_id: str,
         user_email: Optional[str] = None,
