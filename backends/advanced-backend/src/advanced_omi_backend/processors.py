@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
 from wyoming.audio import AudioChunk
@@ -20,8 +20,7 @@ from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
 from advanced_omi_backend.client_manager import get_client_manager
-from advanced_omi_backend.database import AudioChunksCollectionHelper
-from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
+from advanced_omi_backend.database import AudioChunksRepository
 
 # Lazy import to avoid config loading issues
 # from advanced_omi_backend.memory import get_memory_service
@@ -68,8 +67,6 @@ class MemoryProcessingItem:
     user_id: str
     user_email: str
     audio_uuid: str
-    full_conversation: str
-    db_helper: Optional[AudioChunksCollectionHelper] = None
 
 
 @dataclass
@@ -80,16 +77,16 @@ class AudioCroppingItem:
     user_id: str
     audio_uuid: str
     original_path: str
-    speech_segments: List[Tuple[float, float]]
+    speech_segments: list[tuple[float, float]]
     output_path: str
 
 
 class ProcessorManager:
     """Manages all application-level processors and queues."""
 
-    def __init__(self, chunk_dir: Path, db_helper: AudioChunksCollectionHelper):
+    def __init__(self, chunk_dir: Path, audio_chunks_repository: AudioChunksRepository):
         self.chunk_dir = chunk_dir
-        self.db_helper = db_helper
+        self.repository = audio_chunks_repository
 
         # Global processing queues
         self.audio_queue: asyncio.Queue[Optional[AudioProcessingItem]] = asyncio.Queue()
@@ -109,20 +106,20 @@ class ProcessorManager:
         self.client_manager = get_client_manager()
 
         # Track active file sinks per client
-        self.active_file_sinks: Dict[str, LocalFileSink] = {}
-        self.active_audio_uuids: Dict[str, str] = {}
+        self.active_file_sinks: dict[str, LocalFileSink] = {}
+        self.active_audio_uuids: dict[str, str] = {}
 
         # Transcription managers pool
-        self.transcription_managers: Dict[str, TranscriptionManager] = {}
+        self.transcription_managers: dict[str, TranscriptionManager] = {}
 
         # Shutdown flag
         self.shutdown_flag = False
 
         # Task tracking for specific processing jobs
-        self.processing_tasks: Dict[str, Dict[str, str]] = {}  # client_id -> {stage: task_id}
+        self.processing_tasks: dict[str, dict[str, str]] = {}  # client_id -> {stage: task_id}
 
         # Direct state tracking for synchronous operations
-        self.processing_state: Dict[str, Dict[str, Any]] = {}  # client_id -> {stage: state_info}
+        self.processing_state: dict[str, dict[str, Any]] = {}  # client_id -> {stage: state_info}
 
     async def start(self):
         """Start all processors."""
@@ -238,7 +235,7 @@ class ProcessorManager:
         await self.cropping_queue.put(item)
 
     def track_processing_task(
-        self, client_id: str, stage: str, task_id: str, metadata: Dict[str, Any] = None
+        self, client_id: str, stage: str, task_id: str, metadata: dict[str, Any] | None = None
     ):
         """Track a processing task for a specific client and stage."""
         if client_id not in self.processing_tasks:
@@ -247,7 +244,7 @@ class ProcessorManager:
         logger.info(f"Tracking task {task_id} for client {client_id} stage {stage}")
 
     def track_processing_stage(
-        self, client_id: str, stage: str, status: str, metadata: Dict[str, Any] = None
+        self, client_id: str, stage: str, status: str, metadata: dict[str, Any] | None = None
     ):
         """Track processing stage completion directly for synchronous operations."""
         if client_id not in self.processing_state:
@@ -262,7 +259,7 @@ class ProcessorManager:
         }
         logger.info(f"Tracking stage {stage} as {status} for client {client_id}")
 
-    def get_processing_status(self, client_id: str) -> Dict[str, Any]:
+    def get_processing_status(self, client_id: str) -> dict[str, Any]:
         """Get processing status for a specific client using both direct state and task tracking."""
         logger.debug(f"Getting processing status for client {client_id}")
         logger.debug(
@@ -337,7 +334,7 @@ class ProcessorManager:
             del self.processing_state[client_id]
             logger.debug(f"Cleaned up processing state for client {client_id}")
 
-    def get_all_processing_status(self) -> Dict[str, Any]:
+    def get_all_processing_status(self) -> dict[str, Any]:
         """Get processing status for all clients."""
         # Get all client IDs from both tracking types
         all_client_ids = set(self.processing_tasks.keys()) | set(self.processing_state.keys())
@@ -447,7 +444,7 @@ class ProcessorManager:
                             self.active_audio_uuids[item.client_id] = audio_uuid
 
                             # Create database entry
-                            await self.db_helper.create_chunk(
+                            await self.repository.create_chunk(
                                 audio_uuid=audio_uuid,
                                 audio_path=wav_filename,
                                 client_id=item.client_id,
@@ -538,7 +535,7 @@ class ProcessorManager:
                                 f"🔌 Creating new transcription manager for client {item.client_id}"
                             )
                             manager = TranscriptionManager(
-                                chunk_repo=self.db_helper, processor_manager=self
+                                chunk_repo=self.repository, processor_manager=self
                             )
                             try:
                                 await manager.connect(item.client_id)
@@ -643,7 +640,7 @@ class ProcessorManager:
 
                         # Track task with 5 minute timeout
                         task_name = f"memory_{item.client_id}_{item.audio_uuid}"
-                        self.task_manager.track_task(
+                        actual_task_id = self.task_manager.track_task(
                             task,
                             task_name,
                             {
@@ -655,7 +652,6 @@ class ProcessorManager:
                         )
 
                         # Register task with client for tracking (use the actual task_id from TaskManager)
-                        actual_task_id = f"{task_name}_{id(task)}"
                         self.track_processing_task(
                             item.client_id,
                             "memory",
@@ -685,15 +681,63 @@ class ProcessorManager:
         """Process a single memory item."""
         start_time = time.time()
 
-        tracker = get_debug_tracker()
-        transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
-        tracker.track_event(
-            transaction_id,
-            PipelineStage.MEMORY_STARTED,
-            metadata={"conversation_length": len(item.full_conversation)},
-        )
+        # Debug tracking removed for cleaner architecture
+        # tracker = get_debug_tracker()
+        # transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
 
         try:
+            # Use ConversationRepository for clean data access with event coordination
+            from advanced_omi_backend.conversation_repository import (
+                get_conversation_repository,
+            )
+
+            conversation_repo = get_conversation_repository()
+
+            # First check if conversation already has transcript available
+            full_conversation = await conversation_repo.get_full_conversation_text(item.audio_uuid)
+
+            if not full_conversation:
+                # If not available, wait for transcript completion using event coordination
+                from advanced_omi_backend.transcript_coordinator import (
+                    get_transcript_coordinator,
+                )
+
+                coordinator = get_transcript_coordinator()
+
+                audio_logger.info(f"Waiting for transcript completion event for {item.audio_uuid}")
+                transcript_ready = await coordinator.wait_for_transcript_completion(
+                    item.audio_uuid, timeout=30.0
+                )
+
+                if not transcript_ready:
+                    audio_logger.warning(
+                        f"Transcript completion event timeout for {item.audio_uuid}"
+                    )
+                    return None
+
+                # Try again after event coordination
+                full_conversation = await conversation_repo.get_full_conversation_text(
+                    item.audio_uuid
+                )
+
+            if not full_conversation:
+                audio_logger.warning(
+                    f"No valid conversation text found for {item.audio_uuid}, skipping memory processing"
+                )
+                return None
+            if len(full_conversation) < 10:  # Minimum length check
+                audio_logger.warning(
+                    f"Conversation too short for memory processing ({len(full_conversation)} chars): {item.audio_uuid}"
+                )
+                return None
+
+            # Debug tracking removed for cleaner architecture
+            # tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_STARTED,
+            #     metadata={"conversation_length": len(full_conversation)},
+            # )
+
             # Lazy import memory service
             if self.memory_service is None:
                 from advanced_omi_backend.memory import get_memory_service
@@ -703,12 +747,12 @@ class ProcessorManager:
             # Process memory with timeout
             memory_result = await asyncio.wait_for(
                 self.memory_service.add_memory(
-                    item.full_conversation,
+                    full_conversation,
                     item.client_id,
                     item.audio_uuid,
                     item.user_id,
                     item.user_email,
-                    db_helper=item.db_helper,
+                    db_helper=None,  # Using ConversationRepository now
                 ),
                 timeout=300.0,  # 5 minutes
             )
@@ -724,13 +768,15 @@ class ProcessorManager:
                     )
 
                     # Update database memory processing status to completed
-                    if item.db_helper:
-                        await item.db_helper.update_memory_processing_status(
+                    try:
+                        await conversation_repo.update_memory_processing_status(
                             item.audio_uuid, "COMPLETED"
                         )
                         audio_logger.info(
                             f"📝 Updated memory processing status to COMPLETED for {item.audio_uuid}"
                         )
+                    except Exception as e:
+                        audio_logger.warning(f"Failed to update memory status: {e}")
                 elif success and not created_memory_ids:
                     # Successful processing but no memories created (likely empty transcript)
                     audio_logger.info(
@@ -738,15 +784,15 @@ class ProcessorManager:
                     )
 
                     # Update database memory processing status to skipped
-                    if item.db_helper:
-                        await item.db_helper.update_memory_processing_status(
-                            item.audio_uuid,
-                            "SKIPPED",
-                            error_message="No memories created (empty transcript)",
+                    try:
+                        await conversation_repo.update_memory_processing_status(
+                            item.audio_uuid, "SKIPPED"
                         )
                         audio_logger.info(
-                            f"📝 Updated memory processing status to SKIPPED for {item.audio_uuid}"
+                            f"📝 Updated memory processing status to SKIPPED for {item.audio_uuid} (no memories created - empty transcript)"
                         )
+                    except Exception as e:
+                        audio_logger.warning(f"Failed to update memory status: {e}")
                 else:
                     # This shouldn't happen, but handle it gracefully
                     audio_logger.warning(
@@ -754,79 +800,91 @@ class ProcessorManager:
                     )
 
                     # Update database memory processing status to failed
-                    if item.db_helper:
-                        await item.db_helper.update_memory_processing_status(
-                            item.audio_uuid,
-                            "FAILED",
-                            error_message="Unexpected memory processing result",
+                    try:
+                        await conversation_repo.update_memory_processing_status(
+                            item.audio_uuid, "FAILED"
                         )
+                        audio_logger.warning(
+                            f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (unexpected result)"
+                        )
+                    except Exception as e:
+                        audio_logger.warning(f"Failed to update memory status: {e}")
                         audio_logger.warning(
                             f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
                         )
 
-                tracker.track_event(
-                    transaction_id,
-                    PipelineStage.MEMORY_COMPLETED,
-                    metadata={"processing_time": time.time() - start_time},
-                )
+                # Debug tracking removed for cleaner architecture
+                # tracker.track_event(
+                #     transaction_id,
+                #     PipelineStage.MEMORY_COMPLETED,
+                #     metadata={"processing_time": time.time() - start_time},
+                # )
             else:
                 audio_logger.warning(f"⚠️ Memory service returned False for {item.audio_uuid}")
 
                 # Update database memory processing status to failed
-                if item.db_helper:
-                    await item.db_helper.update_memory_processing_status(
-                        item.audio_uuid, "FAILED", error_message="Memory service returned False"
+                try:
+                    await conversation_repo.update_memory_processing_status(
+                        item.audio_uuid, "FAILED"
                     )
+                    audio_logger.warning(
+                        f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (memory service returned False)"
+                    )
+                except Exception as e:
+                    audio_logger.warning(f"Failed to update memory status: {e}")
                     audio_logger.warning(
                         f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
                     )
 
-                tracker.track_event(
-                    transaction_id,
-                    PipelineStage.MEMORY_COMPLETED,
-                    success=False,
-                    error_message="Memory service returned False",
-                    metadata={"processing_time": time.time() - start_time},
-                )
+                # Debug tracking removed for cleaner architecture
+                # tracker.track_event(
+                #     transaction_id,
+                #     PipelineStage.MEMORY_COMPLETED,
+                #     success=False,
+                #     error_message="Memory service returned False",
+                #     metadata={"processing_time": time.time() - start_time},
+                # )
 
         except asyncio.TimeoutError:
             audio_logger.error(f"Memory processing timed out for {item.audio_uuid}")
 
             # Update database memory processing status to failed
-            if item.db_helper:
-                await item.db_helper.update_memory_processing_status(
-                    item.audio_uuid, "FAILED", error_message="Processing timeout (5 minutes)"
-                )
+            try:
+                await conversation_repo.update_memory_processing_status(item.audio_uuid, "FAILED")
                 audio_logger.error(
-                    f"📝 Updated memory processing status to FAILED (timeout) for {item.audio_uuid}"
+                    f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (timeout: 5 minutes)"
                 )
+            except Exception as e:
+                audio_logger.warning(f"Failed to update memory status: {e}")
 
-            tracker.track_event(
-                transaction_id,
-                PipelineStage.MEMORY_COMPLETED,
-                success=False,
-                error_message="Processing timeout (5 minutes)",
-                metadata={"processing_time": time.time() - start_time},
-            )
+            # Debug tracking removed for cleaner architecture
+            # tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_COMPLETED,
+            #     success=False,
+            #     error_message="Processing timeout (5 minutes)",
+            #     metadata={"processing_time": time.time() - start_time},
+            # )
         except Exception as e:
             audio_logger.error(f"Error processing memory for {item.audio_uuid}: {e}")
 
             # Update database memory processing status to failed
-            if item.db_helper:
-                await item.db_helper.update_memory_processing_status(
-                    item.audio_uuid, "FAILED", error_message=f"Exception: {str(e)}"
-                )
+            try:
+                await conversation_repo.update_memory_processing_status(item.audio_uuid, "FAILED")
                 audio_logger.error(
-                    f"📝 Updated memory processing status to FAILED (exception) for {item.audio_uuid}"
+                    f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (exception: {str(e)})"
                 )
+            except Exception as repo_e:
+                audio_logger.warning(f"Failed to update memory status: {repo_e}")
 
-            tracker.track_event(
-                transaction_id,
-                PipelineStage.MEMORY_COMPLETED,
-                success=False,
-                error_message=f"Exception: {str(e)}",
-                metadata={"processing_time": time.time() - start_time},
-            )
+            # Debug tracking removed for cleaner architecture
+            # tracker.track_event(
+            #     transaction_id,
+            #     PipelineStage.MEMORY_COMPLETED,
+            #     success=False,
+            #     error_message=f"Exception: {str(e)}",
+            #     metadata={"processing_time": time.time() - start_time},
+            # )
 
         processing_time_ms = (time.time() - start_time) * 1000
         audio_logger.info(
@@ -859,7 +917,7 @@ class ProcessorManager:
 
                         # Track task
                         task_name = f"cropping_{item.client_id}_{item.audio_uuid}"
-                        self.task_manager.track_task(
+                        actual_task_id = self.task_manager.track_task(
                             task,
                             task_name,
                             {
@@ -871,7 +929,6 @@ class ProcessorManager:
                         )
 
                         # Register task with client for tracking (use the actual task_id from TaskManager)
-                        actual_task_id = f"{task_name}_{id(task)}"
                         self.track_processing_task(
                             item.client_id,
                             "cropping",
@@ -907,7 +964,7 @@ class ProcessorManager:
 _processor_manager: Optional[ProcessorManager] = None
 
 
-def init_processor_manager(chunk_dir: Path, db_helper: AudioChunksCollectionHelper):
+def init_processor_manager(chunk_dir: Path, db_helper: AudioChunksRepository):
     """Initialize the global processor manager."""
     global _processor_manager
     _processor_manager = ProcessorManager(chunk_dir, db_helper)
