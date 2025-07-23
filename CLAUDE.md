@@ -41,9 +41,11 @@ sudo rm -rf backends/advanced-backend/data/
 ### Integration Test Development and Debugging
 
 #### Running Integration Tests
+These needs keys from .env file if running locally and not through CI.
+This can be done by exporting these keys before hand - 
 ```bash
 # Basic integration test (requires API keys in .env)
-uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY && uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
 
 # For debugging: Use cached mode to keep containers running
 # 1. Edit tests/test_integration.py: Set CACHED_MODE = True
@@ -61,7 +63,7 @@ docker compose -f docker-compose-test.yml down -v
 ```
 
 #### Integration Test Iteration Methodology
-1. **Set CACHED_MODE = True** in `tests/test_integration.py` for debugging
+1. **Set CACHED_MODE = True** in `tests/test_integration.py` for debugging. If CACHE_MODE is false, the test containers will be created fresh before the test, and removed after - so they won't be running after the test to view logs/debug.
 2. **Run the test** - containers will start and persist even if test times out
 3. **Check container logs** to see where the test is hanging:
    ```bash
@@ -356,3 +358,4 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 
 ## Notes for Claude
 Check if the src/ is volume mounted. If not, do compose build so that code changes are reflected.
+Check backend/advanced-backend/Docs for up to date information on advanced backend.

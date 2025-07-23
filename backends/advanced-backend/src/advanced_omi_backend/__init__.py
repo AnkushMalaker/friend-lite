@@ -2,6 +2,6 @@
 
 __version__ = "0.1.0"
 
-from .database import AudioChunksCollectionHelper
+from .database import AudioChunksRepository
 
-__all__ = ["AudioChunksCollectionHelper"]
+__all__ = ["AudioChunksRepository"]

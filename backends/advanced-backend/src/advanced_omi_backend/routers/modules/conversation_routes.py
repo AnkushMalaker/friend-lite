@@ -23,7 +23,7 @@ from advanced_omi_backend.client_manager import (
     get_client_manager_dependency,
     get_user_clients_all,
 )
-from advanced_omi_backend.database import AudioChunksCollectionHelper, chunks_col
+from advanced_omi_backend.database import AudioChunksRepository, chunks_col
 from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ audio_logger = logging.getLogger("audio_processing")
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 # Initialize chunk repository
-chunk_repo = AudioChunksCollectionHelper(chunks_col)
+chunk_repo = AudioChunksRepository(chunks_col)
 
 
 @router.post("/{client_id}/close")
@@ -77,7 +77,7 @@ async def close_current_conversation(
 
     try:
         # Close the current conversation
-        await client_state._close_current_conversation()
+        await client_state.close_current_conversation()
 
         # Reset conversation state but keep client connected
         client_state.current_audio_uuid = None
@@ -182,6 +182,7 @@ async def get_cropped_audio_info(
         return JSONResponse(status_code=500, content={"error": "Error fetching cropped audio info"})
 
 
+# Deprecated
 @router.post("/{audio_uuid}/reprocess")
 async def reprocess_audio_cropping(
     audio_uuid: str, current_user: User = Depends(current_active_user)
