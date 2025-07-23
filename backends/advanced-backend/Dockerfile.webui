@@ -21,8 +21,9 @@ RUN mkdir -p src/advanced_omi_backend
 COPY src/advanced_omi_backend/__init__.py src/advanced_omi_backend/
 
 # Install dependencies using uv with webui extra
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --extra webui
+# RUN --mount=type=cache,target=/root/.cache/uv \
+#     uv sync --extra webui
+RUN uv sync --extra webui
 
 # Set PYTHONPATH so imports work
 COPY src/ /app/src/
