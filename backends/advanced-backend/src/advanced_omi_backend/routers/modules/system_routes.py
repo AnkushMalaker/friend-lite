@@ -192,6 +192,9 @@ async def process_audio_files(
         processed_conversations = []
 
         for file_index, file in enumerate(files):
+            client_id = None
+            client_state = None
+            
             try:
                 # Validate file type (only WAV for now)
                 if not file.filename or not file.filename.lower().endswith(".wav"):
@@ -417,20 +420,19 @@ async def process_audio_files(
                 }
                 processed_conversations.append(conversation_info)
 
-                # Clean up client state to prevent accumulation of active clients
-                await cleanup_client_state(client_id)
-                audio_logger.info(
-                    f"📁 Completed processing file {file_index + 1}/{len(files)}: {file.filename} - client cleaned up"
-                )
-
             except Exception as e:
                 audio_logger.error(f"Error processing file {file.filename}: {e}")
-                # Clean up client state even on error to prevent accumulation
-                if "client_state" in locals():
-                    await cleanup_client_state(client_id)
                 processed_files.append(
                     {"filename": file.filename or "unknown", "status": "error", "error": str(e)}
                 )
+            finally:
+                # Always clean up client state to prevent accumulation
+                if client_id and client_state:
+                    try:
+                        await cleanup_client_state(client_id)
+                        audio_logger.info(f"🧹 Cleaned up client state for {client_id}")
+                    except Exception as cleanup_error:
+                        audio_logger.error(f"❌ Error cleaning up client state for {client_id}: {cleanup_error}")
 
         return {
             "message": f"Processed {len(files)} files",
@@ -597,6 +599,9 @@ async def process_files_background(
                     f"⏳ [Job {job_id}] Waiting for transcription (max {max_wait_time}s)"
                 )
 
+                # Track whether memory processing has been triggered to avoid duplicate calls
+                memory_triggered = False
+
                 while elapsed_time < max_wait_time:
                     try:
                         # Check database for completion status
@@ -615,19 +620,27 @@ async def process_files_background(
                                 memory_status=memory_status,
                             )
 
-                            # Check if both transcription and memory are complete
-                            if transcription_status in [
-                                "COMPLETED",
-                                "EMPTY",
-                                "FAILED",
-                            ] and memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
-                                audio_logger.info(
-                                    f"✅ [Job {job_id}] File processing completed: {filename}"
-                                )
-                                await job_tracker.update_file_status(
-                                    job_id, filename, FileStatus.COMPLETED
-                                )
-                                break
+                            # First check if transcription is complete to trigger memory processing
+                            if transcription_status in ["COMPLETED", "EMPTY", "FAILED"]:
+                                # Trigger memory processing if not already done
+                                if memory_status == "PENDING" and not memory_triggered:
+                                    audio_logger.info(
+                                        f"🚀 [Job {job_id}] Transcription complete, triggering memory processing: {filename}"
+                                    )
+                                    await client_state.close_current_conversation()
+                                    memory_triggered = True
+                                    # Continue to next iteration to check memory status
+                                    continue
+                                
+                                # Check if memory processing is also complete
+                                if memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
+                                    audio_logger.info(
+                                        f"✅ [Job {job_id}] File processing completed: {filename}"
+                                    )
+                                    await job_tracker.update_file_status(
+                                        job_id, filename, FileStatus.COMPLETED
+                                    )
+                                    break
 
                     except Exception as e:
                         audio_logger.debug(f"Error checking processing status: {e}")
@@ -646,17 +659,20 @@ async def process_files_background(
                 await client_state.close_current_conversation()
                 await asyncio.sleep(0.5)
 
-                # Clean up client state
-                await cleanup_client_state(client_id)
-
             except Exception as e:
                 error_msg = f"Error processing file: {str(e)}"
                 audio_logger.error(f"❌ [Job {job_id}] {error_msg}")
                 await job_tracker.update_file_status(
                     job_id, filename, FileStatus.FAILED, error_message=error_msg
                 )
-                if "client_state" in locals():
-                    await cleanup_client_state(client_id)
+            finally:
+                # Always clean up client state to prevent accumulation
+                if client_id and client_state:
+                    try:
+                        await cleanup_client_state(client_id)
+                        audio_logger.info(f"🧹 [Job {job_id}] Cleaned up client state for {client_id}")
+                    except Exception as cleanup_error:
+                        audio_logger.error(f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}")
 
         # Mark job as completed
         await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)
@@ -685,6 +701,9 @@ async def process_files_with_content(
         from advanced_omi_backend.main import cleanup_client_state, create_client_state
 
         for file_index, (filename, content) in enumerate(file_data):
+            client_id = None
+            client_state = None
+            
             try:
                 audio_logger.info(
                     f"🔧 [Job {job_id}] Processing file {file_index + 1}/{len(file_data)}: {filename}, content type: {type(content)}, size: {len(content)}"
@@ -805,6 +824,9 @@ async def process_files_with_content(
                     f"⏳ [Job {job_id}] Waiting for transcription (max {max_wait_time}s)"
                 )
 
+                # Track whether memory processing has been triggered to avoid duplicate calls
+                memory_triggered = False
+
                 while elapsed_time < max_wait_time:
                     try:
                         # Check database for completion status
@@ -823,19 +845,27 @@ async def process_files_with_content(
                                 memory_status=memory_status,
                             )
 
-                            # Check if both transcription and memory are complete
-                            if transcription_status in [
-                                "COMPLETED",
-                                "EMPTY",
-                                "FAILED",
-                            ] and memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
-                                audio_logger.info(
-                                    f"✅ [Job {job_id}] File processing completed: {filename}"
-                                )
-                                await job_tracker.update_file_status(
-                                    job_id, filename, FileStatus.COMPLETED
-                                )
-                                break
+                            # First check if transcription is complete to trigger memory processing
+                            if transcription_status in ["COMPLETED", "EMPTY", "FAILED"]:
+                                # Trigger memory processing if not already done
+                                if memory_status == "PENDING" and not memory_triggered:
+                                    audio_logger.info(
+                                        f"🚀 [Job {job_id}] Transcription complete, triggering memory processing: {filename}"
+                                    )
+                                    await client_state.close_current_conversation()
+                                    memory_triggered = True
+                                    # Continue to next iteration to check memory status
+                                    continue
+                                
+                                # Check if memory processing is also complete
+                                if memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
+                                    audio_logger.info(
+                                        f"✅ [Job {job_id}] File processing completed: {filename}"
+                                    )
+                                    await job_tracker.update_file_status(
+                                        job_id, filename, FileStatus.COMPLETED
+                                    )
+                                    break
 
                     except Exception as e:
                         audio_logger.debug(f"Error checking processing status: {e}")
@@ -854,17 +884,20 @@ async def process_files_with_content(
                 await client_state.close_current_conversation()
                 await asyncio.sleep(0.5)
 
-                # Clean up client state
-                await cleanup_client_state(client_id)
-
             except Exception as e:
                 error_msg = f"Error processing file: {str(e)}"
                 audio_logger.error(f"❌ [Job {job_id}] {error_msg}")
                 await job_tracker.update_file_status(
                     job_id, filename, FileStatus.FAILED, error_message=error_msg
                 )
-                if "client_state" in locals():
-                    await cleanup_client_state(client_id)
+            finally:
+                # Always clean up client state to prevent accumulation
+                if client_id and client_state:
+                    try:
+                        await cleanup_client_state(client_id)
+                        audio_logger.info(f"🧹 [Job {job_id}] Cleaned up client state for {client_id}")
+                    except Exception as cleanup_error:
+                        audio_logger.error(f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}")
 
         # Mark job as completed
         await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)

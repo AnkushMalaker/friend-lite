@@ -131,6 +131,13 @@ class ClientState:
             audio_logger.info(f"🔒 No active conversation to close for client {self.client_id}")
             return
 
+        # Debug logging for memory processing investigation
+        audio_logger.info(f"🔍 ClientState close_current_conversation debug for {self.client_id}:")
+        audio_logger.info(f"    - current_audio_uuid: {self.current_audio_uuid}")
+        audio_logger.info(f"    - user_id: {self.user_id}")
+        audio_logger.info(f"    - user_email: {self.user_email}")
+        audio_logger.info(f"    - client_id: {self.client_id}")
+
         # Use ConversationManager for clean separation of concerns
         conversation_manager = get_conversation_manager()
         success = await conversation_manager.close_conversation(

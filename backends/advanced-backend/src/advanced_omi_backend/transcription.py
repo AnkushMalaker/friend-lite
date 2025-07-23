@@ -596,7 +596,7 @@ class TranscriptionManager:
 
     async def _collect_audio_chunk(self, audio_uuid: str, chunk: AudioChunk, client_id: str):
         """Collect audio chunk for batch processing."""
-        logger.info(
+        logger.debug(
             f"📥 _collect_audio_chunk called for client {client_id}, audio_uuid: {audio_uuid}"
         )
         try:
@@ -620,7 +620,7 @@ class TranscriptionManager:
             # Add chunk to buffer if we have audio data
             if chunk.audio and len(chunk.audio) > 0:
                 self._audio_buffer.append(chunk)
-                logger.info(
+                logger.debug(
                     f"📦 Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"
                 )
             else:
