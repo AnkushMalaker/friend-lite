@@ -599,6 +599,9 @@ async def process_files_background(
                     f"⏳ [Job {job_id}] Waiting for transcription (max {max_wait_time}s)"
                 )
 
+                # Track whether memory processing has been triggered to avoid duplicate calls
+                memory_triggered = False
+
                 while elapsed_time < max_wait_time:
                     try:
                         # Check database for completion status
@@ -617,19 +620,27 @@ async def process_files_background(
                                 memory_status=memory_status,
                             )
 
-                            # Check if both transcription and memory are complete
-                            if transcription_status in [
-                                "COMPLETED",
-                                "EMPTY",
-                                "FAILED",
-                            ] and memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
-                                audio_logger.info(
-                                    f"✅ [Job {job_id}] File processing completed: {filename}"
-                                )
-                                await job_tracker.update_file_status(
-                                    job_id, filename, FileStatus.COMPLETED
-                                )
-                                break
+                            # First check if transcription is complete to trigger memory processing
+                            if transcription_status in ["COMPLETED", "EMPTY", "FAILED"]:
+                                # Trigger memory processing if not already done
+                                if memory_status == "PENDING" and not memory_triggered:
+                                    audio_logger.info(
+                                        f"🚀 [Job {job_id}] Transcription complete, triggering memory processing: {filename}"
+                                    )
+                                    await client_state.close_current_conversation()
+                                    memory_triggered = True
+                                    # Continue to next iteration to check memory status
+                                    continue
+                                
+                                # Check if memory processing is also complete
+                                if memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
+                                    audio_logger.info(
+                                        f"✅ [Job {job_id}] File processing completed: {filename}"
+                                    )
+                                    await job_tracker.update_file_status(
+                                        job_id, filename, FileStatus.COMPLETED
+                                    )
+                                    break
 
                     except Exception as e:
                         audio_logger.debug(f"Error checking processing status: {e}")
@@ -813,6 +824,9 @@ async def process_files_with_content(
                     f"⏳ [Job {job_id}] Waiting for transcription (max {max_wait_time}s)"
                 )
 
+                # Track whether memory processing has been triggered to avoid duplicate calls
+                memory_triggered = False
+
                 while elapsed_time < max_wait_time:
                     try:
                         # Check database for completion status
@@ -831,19 +845,27 @@ async def process_files_with_content(
                                 memory_status=memory_status,
                             )
 
-                            # Check if both transcription and memory are complete
-                            if transcription_status in [
-                                "COMPLETED",
-                                "EMPTY",
-                                "FAILED",
-                            ] and memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
-                                audio_logger.info(
-                                    f"✅ [Job {job_id}] File processing completed: {filename}"
-                                )
-                                await job_tracker.update_file_status(
-                                    job_id, filename, FileStatus.COMPLETED
-                                )
-                                break
+                            # First check if transcription is complete to trigger memory processing
+                            if transcription_status in ["COMPLETED", "EMPTY", "FAILED"]:
+                                # Trigger memory processing if not already done
+                                if memory_status == "PENDING" and not memory_triggered:
+                                    audio_logger.info(
+                                        f"🚀 [Job {job_id}] Transcription complete, triggering memory processing: {filename}"
+                                    )
+                                    await client_state.close_current_conversation()
+                                    memory_triggered = True
+                                    # Continue to next iteration to check memory status
+                                    continue
+                                
+                                # Check if memory processing is also complete
+                                if memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
+                                    audio_logger.info(
+                                        f"✅ [Job {job_id}] File processing completed: {filename}"
+                                    )
+                                    await job_tracker.update_file_status(
+                                        job_id, filename, FileStatus.COMPLETED
+                                    )
+                                    break
 
                     except Exception as e:
                         audio_logger.debug(f"Error checking processing status: {e}")

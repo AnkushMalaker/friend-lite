@@ -228,7 +228,11 @@ class ProcessorManager:
 
     async def queue_memory(self, item: MemoryProcessingItem):
         """Queue conversation for memory processing."""
+        audio_logger.info(f"📥 queue_memory called for client {item.client_id}, audio_uuid: {item.audio_uuid}")
+        audio_logger.info(f"📥 Memory queue size before: {self.memory_queue.qsize()}")
         await self.memory_queue.put(item)
+        audio_logger.info(f"📥 Memory queue size after: {self.memory_queue.qsize()}")
+        audio_logger.info(f"✅ Successfully queued memory processing item for {item.audio_uuid}")
 
     async def queue_cropping(self, item: AudioCroppingItem):
         """Queue audio for cropping."""
