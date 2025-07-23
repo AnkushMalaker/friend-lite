@@ -2,7 +2,7 @@ services:
   friend-backend:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ${DOCKERFILE:-Dockerfile}
     ports:
       - "8000:8000"
     env_file:

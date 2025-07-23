@@ -2,7 +2,7 @@ services:
   speaker-recognition:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ${DOCKERFILE:-Dockerfile}
     image: speaker-recognition:latest
     ports:
       - "8001:8001"

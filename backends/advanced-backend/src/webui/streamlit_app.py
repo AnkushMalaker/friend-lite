@@ -1246,6 +1246,10 @@ with tab_convos:
                             backend_url = st.session_state.get(
                                 "custom_backend_url", BACKEND_PUBLIC_URL
                             )
+                            
+                            if not backend_url.startswith(("http://", "https://")):
+                                backend_url = f"http://{backend_url}"
+                            
                             audio_url = f"{backend_url}/audio/{selected_audio_path}{cache_buster}"
 
                             # Test audio accessibility
@@ -1459,6 +1463,9 @@ with tab_convos:
                         st.write(audio_label)
                         # Use custom URL if set, otherwise use detected URL
                         backend_url = st.session_state.get("custom_backend_url", BACKEND_PUBLIC_URL)
+                        # Ensure backend_url always has a scheme
+                        if not backend_url.startswith(("http://", "https://")):
+                            backend_url = f"http://{backend_url}"
                         audio_url = f"{backend_url}/audio/{selected_audio_path}{cache_buster}"
 
                         # Test audio accessibility
