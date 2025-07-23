@@ -340,6 +340,32 @@ class ProcessorManager:
         all_client_ids = set(self.processing_tasks.keys()) | set(self.processing_state.keys())
         return {client_id: self.get_processing_status(client_id) for client_id in all_client_ids}
 
+    async def mark_transcription_failed(self, client_id: str, error: str):
+        """Mark transcription as failed and clean up transcription manager.
+        
+        This method handles transcription failures without closing audio files,
+        allowing long recordings to continue even if intermediate transcriptions fail.
+        
+        Args:
+            client_id: The client ID whose transcription failed
+            error: The error message describing the failure
+        """
+        # Mark as failed in state tracking
+        self.track_processing_stage(client_id, "transcription", "failed", {"error": error})
+        
+        # Remove transcription manager to allow fresh retry
+        if client_id in self.transcription_managers:
+            try:
+                manager = self.transcription_managers.pop(client_id)
+                await manager.disconnect()
+                audio_logger.info(f"🧹 Removed failed transcription manager for {client_id}")
+            except Exception as cleanup_error:
+                audio_logger.error(f"❌ Error cleaning up transcription manager for {client_id}: {cleanup_error}")
+        
+        # Do NOT close audio files - client may still be streaming
+        # Audio will be closed when client disconnects or sends audio-stop
+        audio_logger.warning(f"❌ Transcription failed for {client_id}: {error}, keeping audio session open")
+
     async def close_client_audio(self, client_id: str):
         """Close audio file for a client when conversation ends."""
         audio_logger.info(f"🔚 close_client_audio called for client {client_id}")
@@ -380,9 +406,17 @@ class ProcessorManager:
                     audio_logger.info(
                         f"✅ ASR flush completed for client {client_id} in {flush_duration:.2f}s"
                     )
+                    # Mark transcription as completed after successful flush
+                    self.track_processing_stage(
+                        client_id, "transcription", "completed", {"flushed": True}
+                    )
                 except Exception as flush_error:
                     audio_logger.error(
                         f"❌ Error during flush_final_transcript: {flush_error}", exc_info=True
+                    )
+                    # Mark transcription as failed on flush error
+                    self.track_processing_stage(
+                        client_id, "transcription", "failed", {"error": str(flush_error)}
                     )
                     raise
 
@@ -547,6 +581,10 @@ class ProcessorManager:
                                 audio_logger.error(
                                     f"❌ Failed to create transcription manager for {item.client_id}: {e}"
                                 )
+                                # Mark transcription as failed when manager creation fails
+                                self.track_processing_stage(
+                                    item.client_id, "transcription", "failed", {"error": str(e)}
+                                )
                                 self.transcription_queue.task_done()
                                 continue
                         else:
@@ -562,16 +600,30 @@ class ProcessorManager:
                         )
 
                         try:
-                            await manager.transcribe_chunk(
-                                item.audio_uuid, item.audio_chunk, item.client_id
-                            )
+                            # Add timeout for transcription processing (5 minutes)
+                            async with asyncio.timeout(300):  # 5 minute timeout
+                                await manager.transcribe_chunk(
+                                    item.audio_uuid, item.audio_chunk, item.client_id
+                                )
                             audio_logger.debug(
                                 f"✅ Completed transcribe_chunk for client {item.client_id}"
+                            )
+                        except asyncio.TimeoutError:
+                            audio_logger.error(
+                                f"❌ Transcription timeout for client {item.client_id} after 5 minutes"
+                            )
+                            # Mark transcription as failed on timeout
+                            self.track_processing_stage(
+                                item.client_id, "transcription", "failed", {"error": "Transcription timeout (5 minutes)"}
                             )
                         except Exception as e:
                             audio_logger.error(
                                 f"❌ Error in transcribe_chunk for client {item.client_id}: {e}",
                                 exc_info=True,
+                            )
+                            # Mark transcription as failed when chunk processing fails
+                            self.track_processing_stage(
+                                item.client_id, "transcription", "failed", {"error": str(e)}
                             )
 
                         # Track transcription as started using direct state tracking - ONLY ONCE per audio session

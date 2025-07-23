@@ -192,6 +192,9 @@ async def process_audio_files(
         processed_conversations = []
 
         for file_index, file in enumerate(files):
+            client_id = None
+            client_state = None
+            
             try:
                 # Validate file type (only WAV for now)
                 if not file.filename or not file.filename.lower().endswith(".wav"):
@@ -417,20 +420,19 @@ async def process_audio_files(
                 }
                 processed_conversations.append(conversation_info)
 
-                # Clean up client state to prevent accumulation of active clients
-                await cleanup_client_state(client_id)
-                audio_logger.info(
-                    f"📁 Completed processing file {file_index + 1}/{len(files)}: {file.filename} - client cleaned up"
-                )
-
             except Exception as e:
                 audio_logger.error(f"Error processing file {file.filename}: {e}")
-                # Clean up client state even on error to prevent accumulation
-                if "client_state" in locals():
-                    await cleanup_client_state(client_id)
                 processed_files.append(
                     {"filename": file.filename or "unknown", "status": "error", "error": str(e)}
                 )
+            finally:
+                # Always clean up client state to prevent accumulation
+                if client_id and client_state:
+                    try:
+                        await cleanup_client_state(client_id)
+                        audio_logger.info(f"🧹 Cleaned up client state for {client_id}")
+                    except Exception as cleanup_error:
+                        audio_logger.error(f"❌ Error cleaning up client state for {client_id}: {cleanup_error}")
 
         return {
             "message": f"Processed {len(files)} files",
@@ -646,17 +648,20 @@ async def process_files_background(
                 await client_state.close_current_conversation()
                 await asyncio.sleep(0.5)
 
-                # Clean up client state
-                await cleanup_client_state(client_id)
-
             except Exception as e:
                 error_msg = f"Error processing file: {str(e)}"
                 audio_logger.error(f"❌ [Job {job_id}] {error_msg}")
                 await job_tracker.update_file_status(
                     job_id, filename, FileStatus.FAILED, error_message=error_msg
                 )
-                if "client_state" in locals():
-                    await cleanup_client_state(client_id)
+            finally:
+                # Always clean up client state to prevent accumulation
+                if client_id and client_state:
+                    try:
+                        await cleanup_client_state(client_id)
+                        audio_logger.info(f"🧹 [Job {job_id}] Cleaned up client state for {client_id}")
+                    except Exception as cleanup_error:
+                        audio_logger.error(f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}")
 
         # Mark job as completed
         await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)
@@ -685,6 +690,9 @@ async def process_files_with_content(
         from advanced_omi_backend.main import cleanup_client_state, create_client_state
 
         for file_index, (filename, content) in enumerate(file_data):
+            client_id = None
+            client_state = None
+            
             try:
                 audio_logger.info(
                     f"🔧 [Job {job_id}] Processing file {file_index + 1}/{len(file_data)}: {filename}, content type: {type(content)}, size: {len(content)}"
@@ -854,17 +862,20 @@ async def process_files_with_content(
                 await client_state.close_current_conversation()
                 await asyncio.sleep(0.5)
 
-                # Clean up client state
-                await cleanup_client_state(client_id)
-
             except Exception as e:
                 error_msg = f"Error processing file: {str(e)}"
                 audio_logger.error(f"❌ [Job {job_id}] {error_msg}")
                 await job_tracker.update_file_status(
                     job_id, filename, FileStatus.FAILED, error_message=error_msg
                 )
-                if "client_state" in locals():
-                    await cleanup_client_state(client_id)
+            finally:
+                # Always clean up client state to prevent accumulation
+                if client_id and client_state:
+                    try:
+                        await cleanup_client_state(client_id)
+                        audio_logger.info(f"🧹 [Job {job_id}] Cleaned up client state for {client_id}")
+                    except Exception as cleanup_error:
+                        audio_logger.error(f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}")
 
         # Mark job as completed
         await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)

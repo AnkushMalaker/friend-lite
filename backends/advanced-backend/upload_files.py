@@ -8,9 +8,11 @@ import os
 import sys
 import time
 import wave
-import requests
 from pathlib import Path
 from typing import Optional
+
+import requests
+
 
 # Configure colored logging
 class ColoredFormatter(logging.Formatter):
@@ -127,6 +129,38 @@ def get_audio_duration(file_path: str) -> float:
         return 0.0
 
 
+def validate_audio_format(file_path: str) -> tuple[bool, str]:
+    """Validate that audio file is 16kHz, 16-bit mono format.
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    try:
+        with wave.open(file_path, "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            sample_rate = wav_file.getframerate()
+            sample_width = wav_file.getsampwidth()
+            
+            errors = []
+            
+            if channels != 1:
+                errors.append(f"Expected mono (1 channel), got {channels} channels")
+            
+            if sample_rate != 16000:
+                errors.append(f"Expected 16kHz sample rate, got {sample_rate}Hz")
+            
+            if sample_width != 2:  # 2 bytes = 16 bits
+                errors.append(f"Expected 16-bit audio, got {sample_width * 8}-bit")
+            
+            if errors:
+                return False, "; ".join(errors)
+            
+            return True, ""
+            
+    except Exception as e:
+        return False, f"Error reading WAV file: {e}"
+
+
 def collect_wav_files(audio_dir: str, filter_list: Optional[list[str]] = None) -> list[str]:
     """Collect all .wav files from the specified directory with duration checking."""
     logger.info(f"Collecting .wav files from {audio_dir} ...")
@@ -158,6 +192,12 @@ def collect_wav_files(audio_dir: str, filter_list: Optional[list[str]] = None) -
     total_duration = 0.0
     
     for file_path in candidate_files:
+        # First validate audio format
+        is_valid, format_error = validate_audio_format(str(file_path))
+        if not is_valid:
+            logger.error(f"🔴 SKIPPING: {file_path.name} - Invalid format: {format_error}")
+            continue
+        
         duration = get_audio_duration(str(file_path))
         duration_minutes = duration / 60.0
         
