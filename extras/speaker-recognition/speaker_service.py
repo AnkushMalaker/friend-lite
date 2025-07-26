@@ -25,12 +25,14 @@ from typing import Dict, List, Optional, Tuple, cast
 import faiss
 import numpy as np
 import torch
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from pyannote.audio import Audio, Pipeline
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
 from pyannote.core import Segment
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 ###############################################################################
 # Settings & logging
@@ -254,6 +256,11 @@ class EnrollRequest(BaseModel):
     end: Optional[float] = None
 
 
+class BatchEnrollRequest(BaseModel):
+    speaker_id: str
+    speaker_name: str
+
+
 class IdentifyRequest(BaseModel):
     start: Optional[float] = None
     end: Optional[float] = None
@@ -268,6 +275,19 @@ class VerifyRequest(BaseModel):
 class DiarizeRequest(BaseModel):
     min_duration: Optional[float] = Field(default=None, description="Minimum duration for speaker segments (seconds)")
     max_speakers: Optional[int] = Field(default=None, description="Maximum number of speakers to detect")
+
+
+class InferenceRequest(BaseModel):
+    segments: List[dict] = Field(..., description="Diarized transcript segments with speaker, start, end, text")
+
+
+class InferenceSegment(BaseModel):
+    speaker: int = Field(..., description="Original speaker ID from diarization")
+    start: float = Field(..., description="Start time in seconds")
+    end: float = Field(..., description="End time in seconds") 
+    text: str = Field(..., description="Transcript text")
+    identified_speaker: Optional[str] = Field(None, description="Identified speaker name")
+    confidence: Optional[float] = Field(None, description="Identification confidence score")
 
 ###############################################################################
 # FastAPI app & dependency wiring
@@ -326,10 +346,13 @@ async def health(db: SpeakerDB = Depends(get_db)):
 @app.post("/enroll/upload")
 async def enroll_upload(
     file: UploadFile = File(..., description="WAV/FLAC <3 min"),
-    req: EnrollRequest = Depends(),
+    speaker_id: str = Form(..., description="Unique speaker identifier"),
+    speaker_name: str = Form(..., description="Speaker display name"),
+    start: Optional[float] = Form(None, description="Start time in seconds"),
+    end: Optional[float] = Form(None, description="End time in seconds"),
     db: SpeakerDB = Depends(get_db),
 ):
-    log.info(f"Enrolling speaker: {req.speaker_name} (ID: {req.speaker_id})")
+    log.info(f"Enrolling speaker: {speaker_name} (ID: {speaker_id})")
     
     # Persist temporary file
     with secure_temp_file() as tmp:
@@ -337,7 +360,7 @@ async def enroll_upload(
         tmp_path = Path(tmp.name)
     try:
         log.info(f"Loading audio file: {tmp_path}")
-        wav = audio_backend.load_wave(tmp_path, req.start, req.end)
+        wav = audio_backend.load_wave(tmp_path, start, end)
         log.info(f"Audio loaded, shape: {wav.shape}")
         
         log.info("Computing speaker embedding...")
@@ -345,19 +368,92 @@ async def enroll_upload(
         log.info(f"Embedding computed, shape: {emb.shape}")
         
         log.info(f"Adding speaker to database...")
-        updated = await db.add_speaker(req.speaker_id, req.speaker_name, emb[0])
+        updated = await db.add_speaker(speaker_id, speaker_name, emb[0])
+        
+        if updated:
+            log.info(f"Successfully updated existing speaker: {speaker_id}")
+        else:
+            log.info(f"Successfully enrolled new speaker: {speaker_id}")
+        
+        return {"updated": updated, "speaker_id": speaker_id}
+    except Exception as e:
+        log.error(f"Error during enrollment: {e}")
+        raise HTTPException(500, f"Enrollment failed: {str(e)}") from e
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/enroll/batch")
+async def enroll_batch(
+    files: List[UploadFile] = File(..., description="Multiple audio files for same speaker"),
+    req: BatchEnrollRequest = Depends(),
+    db: SpeakerDB = Depends(get_db),
+):
+    """Enroll a speaker using multiple audio segments, computing average embedding."""
+    log.info(f"Batch enrolling speaker: {req.speaker_name} (ID: {req.speaker_id}) with {len(files)} files")
+    
+    embeddings = []
+    temp_paths = []
+    
+    try:
+        # Process each audio file
+        for i, file in enumerate(files):
+            log.info(f"Processing file {i+1}/{len(files)}: {file.filename}")
+            
+            # Save to temporary file
+            with secure_temp_file() as tmp:
+                tmp.write(await file.read())
+                tmp_path = Path(tmp.name)
+                temp_paths.append(tmp_path)
+            
+            # Load and embed
+            try:
+                wav = audio_backend.load_wave(tmp_path)
+                emb = await audio_backend.async_embed(wav)
+                embeddings.append(emb[0])
+                log.info(f"Successfully embedded file {i+1}")
+            except Exception as e:
+                log.warning(f"Failed to process file {i+1}: {e}")
+                continue
+        
+        if not embeddings:
+            raise HTTPException(400, "No valid audio files could be processed")
+        
+        # Compute average embedding
+        log.info(f"Computing average embedding from {len(embeddings)} segments")
+        embeddings_array = np.array(embeddings)
+        average_embedding = np.mean(embeddings_array, axis=0)
+        
+        # Normalize the average embedding
+        average_embedding = average_embedding / np.linalg.norm(average_embedding)
+        
+        log.info(f"Average embedding computed, shape: {average_embedding.shape}")
+        
+        # Add to database
+        updated = await db.add_speaker(req.speaker_id, req.speaker_name, average_embedding)
         
         if updated:
             log.info(f"Successfully updated existing speaker: {req.speaker_id}")
         else:
             log.info(f"Successfully enrolled new speaker: {req.speaker_id}")
         
-        return {"updated": updated, "speaker_id": req.speaker_id}
+        return {
+            "updated": updated,
+            "speaker_id": req.speaker_id,
+            "num_segments": len(embeddings),
+            "num_files": len(files)
+        }
+        
     except Exception as e:
-        log.error(f"Error during enrollment: {e}")
-        raise HTTPException(500, f"Enrollment failed: {str(e)}") from e
+        log.error(f"Error during batch enrollment: {e}")
+        raise HTTPException(500, f"Batch enrollment failed: {str(e)}") from e
     finally:
-        tmp_path.unlink(missing_ok=True)
+        # Clean up temporary files
+        for tmp_path in temp_paths:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except:
+                pass
 
 
 @app.post("/identify/upload")
@@ -507,6 +603,116 @@ async def delete_speaker(speaker_id: str, db: SpeakerDB = Depends(get_db)):
         raise HTTPException(404, "speaker not found") from None
 
 
+@app.post("/infer/diarized")
+async def infer_diarized(
+    audio_file: UploadFile = File(..., description="Original audio file for speaker identification"),
+    segments: str = Form(..., description="JSON string of diarized segments"),
+    db: SpeakerDB = Depends(get_db),
+):
+    """
+    Identify speakers in pre-diarized transcript segments.
+    
+    Expects segments in format: [{"speaker": 0, "start": 1.2, "end": 5.4, "text": "..."}]
+    Returns enhanced segments with identified speaker names.
+    """
+    log.info("Processing speaker inference on diarized segments")
+    
+    try:
+        import json
+        segments_data = json.loads(segments)
+        log.info(f"Processing {len(segments_data)} diarized segments")
+    except json.JSONDecodeError as e:
+        log.error(f"Invalid JSON in segments parameter: {e}")
+        raise HTTPException(400, f"Invalid JSON format in segments: {str(e)}")
+    
+    # Save uploaded audio file temporarily
+    with secure_temp_file() as tmp:
+        tmp.write(await audio_file.read())
+        tmp_path = Path(tmp.name)
+    
+    enhanced_segments = []
+    
+    try:
+        for i, segment in enumerate(segments_data):
+            try:
+                # Extract segment info
+                speaker_id = segment.get('speaker', 0)
+                start_time = float(segment.get('start', 0))
+                end_time = float(segment.get('end', 0))
+                text = segment.get('text', '')
+                
+                log.info(f"Processing segment {i+1}: Speaker {speaker_id}, {start_time:.2f}s-{end_time:.2f}s")
+                
+                # Extract audio segment for this speaker
+                wav = audio_backend.load_wave(tmp_path, start_time, end_time)
+                
+                # Skip very short segments (less than 0.5 seconds)
+                if end_time - start_time < 0.5:
+                    log.warning(f"Skipping segment {i+1}: too short ({end_time - start_time:.2f}s)")
+                    enhanced_segments.append({
+                        "speaker": speaker_id,
+                        "start": start_time,
+                        "end": end_time,
+                        "text": text,
+                        "identified_speaker": f"Speaker {speaker_id}",
+                        "confidence": 0.0,
+                        "status": "skipped_too_short"
+                    })
+                    continue
+                
+                # Generate embedding
+                emb = await audio_backend.async_embed(wav)
+                log.info(f"Generated embedding for segment {i+1}, shape: {emb.shape}")
+                
+                # Identify speaker
+                found, speaker_info, confidence = await db.identify(emb)
+                
+                if found and speaker_info:
+                    identified_name = speaker_info.get('name', f'Speaker {speaker_id}')
+                    log.info(f"Identified segment {i+1} as: {identified_name} (confidence: {confidence:.3f})")
+                else:
+                    identified_name = f"Speaker {speaker_id}"
+                    log.info(f"Could not identify segment {i+1}, using: {identified_name}")
+                
+                enhanced_segments.append({
+                    "speaker": speaker_id,
+                    "start": start_time,
+                    "end": end_time,
+                    "text": text,
+                    "identified_speaker": identified_name,
+                    "confidence": float(confidence),
+                    "status": "identified" if found else "unknown"
+                })
+                
+            except Exception as e:
+                log.error(f"Error processing segment {i+1}: {str(e)}")
+                # Add segment with error status
+                enhanced_segments.append({
+                    "speaker": segment.get('speaker', 0),
+                    "start": segment.get('start', 0),
+                    "end": segment.get('end', 0),
+                    "text": segment.get('text', ''),
+                    "identified_speaker": f"Speaker {segment.get('speaker', 0)}",
+                    "confidence": 0.0,
+                    "status": "error",
+                    "error": str(e)
+                })
+        
+        log.info(f"Successfully processed {len(enhanced_segments)} segments")
+        return {
+            "success": True,
+            "segments": enhanced_segments,
+            "total_segments": len(enhanced_segments),
+            "identified_segments": len([s for s in enhanced_segments if s.get('status') == 'identified'])
+        }
+        
+    except Exception as e:
+        log.error(f"Error during inference processing: {str(e)}")
+        raise HTTPException(500, f"Inference processing failed: {str(e)}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 ###############################################################################
 # Uvicorn entrypoint (optional)
 ###############################################################################
@@ -514,4 +720,8 @@ async def delete_speaker(speaker_id: str, db: SpeakerDB = Depends(get_db)):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("speaker_service:app", host="0.0.0.0", port=8001, reload=bool(os.getenv("DEV", False)))
+    host = os.getenv("SPEAKER_SERVICE_HOST", "0.0.0.0")
+    port = int(os.getenv("SPEAKER_SERVICE_PORT", "8085"))
+    
+    logger.info(f"Starting Speaker Service on {host}:{port}")
+    uvicorn.run("speaker_service:app", host=host, port=port, reload=bool(os.getenv("DEV", False)))

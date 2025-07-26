@@ -14,15 +14,18 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files
+# Copy dependency files and source code
 COPY pyproject.toml ./
-
-# Install dependencies
-RUN uv sync --no-dev
-
-# Copy application code
 COPY speaker_service.py ./
-# COPY client.py ./
+COPY web_ui.py ./
+COPY database/ ./database/
+COPY utils/ ./utils/
+COPY pages/ ./pages/
+
+# Install dependencies and package
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev
+# RUN uv pip install -e .
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
