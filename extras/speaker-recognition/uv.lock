@@ -8,8 +8,8 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 conflicts = [[
-    { package = "speaker-recognition-service", group = "cpu" },
-    { package = "speaker-recognition-service", group = "gpu" },
+    { package = "simple-speaker-recognition", group = "cpu" },
+    { package = "simple-speaker-recognition", group = "gpu" },
 ]]
 
 [[package]]
@@ -45,7 +45,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
     { name = "aiosignal" },
-    { name = "async-timeout", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "async-timeout", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "attrs" },
     { name = "frozenlist" },
     { name = "multidict" },
@@ -175,7 +175,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mako" },
     { name = "sqlalchemy" },
-    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9c/35/116797ff14635e496bbda0c168987f5326a6555b09312e9b817e360d1f56/alembic-1.16.2.tar.gz", hash = "sha256:e53c38ff88dadb92eb22f8b150708367db731d58ad7e9d417c9168ab516cbed8", size = 1963563, upload-time = "2025-06-16T18:05:08.566Z" }
@@ -192,7 +192,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "narwhals" },
     { name = "packaging" },
-    { name = "typing-extensions", marker = "python_full_version < '3.14' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.14' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/16/b1/f2969c7bdb8ad8bbdda031687defdce2c19afba2aa2c8e1d2a17f78376d8/altair-5.5.0.tar.gz", hash = "sha256:d960ebe6178c56de3855a68c47b516be38640b73fb3b5111c2a9ca90546dd73d", size = 705305, upload-time = "2024-11-23T23:39:58.542Z" }
 wheels = [
@@ -219,10 +219,10 @@ name = "anyio"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "idna" },
     { name = "sniffio" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/95/7d/4c1bd541d4dffa1b52bd83fb8527089e097a106fc90b467a7313b105f840/anyio-4.9.0.tar.gz", hash = "sha256:673c0c244e15788651a4ff38710fea9675823028a6f08a5eda409e0c9840a028", size = 190949, upload-time = "2025-03-17T00:02:54.77Z" }
 wheels = [
@@ -364,8 +364,8 @@ dependencies = [
     { name = "packaging" },
     { name = "pathspec" },
     { name = "platformdirs" },
-    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/94/49/26a7b0f3f35da4b5a65f081943b7bcd22d7002f5f0fb8098ec1ff21cb6ef/black-25.1.0.tar.gz", hash = "sha256:33496d5cd1222ad73391352b4ae8da15253c5de89b93a80b3e2c8d9a19ec2666", size = 649449, upload-time = "2025-01-29T04:15:40.373Z" }
 wheels = [
@@ -538,7 +538,7 @@ name = "click"
 version = "8.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/60/6c/8ca2efa64cf75a977a0d7fac081354553ebe483345c734fb6b6515d96bbc/click-8.2.1.tar.gz", hash = "sha256:27c491cc05d968d271d5a1db13e3b5a184636d9d930f148c50b038f0d0646202", size = 286342, upload-time = "2025-05-20T23:19:49.832Z" }
 wheels = [
@@ -559,7 +559,7 @@ name = "colorlog"
 version = "6.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d3/7a/359f4d5df2353f26172b3cc39ea32daa39af8de522205f512f458923e677/colorlog-6.9.0.tar.gz", hash = "sha256:bfba54a1b93b94f54e1f4fe48395725a3d92fd2a4af702f6bd70946bdc0c6ac2", size = 16624, upload-time = "2024-10-29T18:34:51.011Z" }
 wheels = [
@@ -638,7 +638,7 @@ name = "cryptography"
 version = "45.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/95/1e/49527ac611af559665f71cbb8f92b332b5ec9c6fbc4e88b0f8e92f5e85df/cryptography-45.0.5.tar.gz", hash = "sha256:72e76caa004ab63accdf26023fccd1d087f6d90ec6048ff33ad0445abf7f605a", size = 744903, upload-time = "2025-07-02T13:06:25.941Z" }
 wheels = [
@@ -765,8 +765,8 @@ dependencies = [
     { name = "fire" },
     { name = "opuslib" },
     { name = "rich" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "soxr" },
     { name = "websockets" },
     { name = "wyoming" },
@@ -795,7 +795,7 @@ name = "exceptiongroup"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
 wheels = [
@@ -1193,7 +1193,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -1415,12 +1415,12 @@ dependencies = [
     { name = "numpy" },
     { name = "pooch" },
     { name = "scikit-learn" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "soundfile" },
     { name = "soxr" },
-    { name = "standard-aifc", marker = "python_full_version >= '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "standard-sunau", marker = "python_full_version >= '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "standard-aifc", marker = "python_full_version >= '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "standard-sunau", marker = "python_full_version >= '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/64/36/360b5aafa0238e29758729e9486c6ed92a6f37fa403b7875e06c115cdf4a/librosa-0.11.0.tar.gz", hash = "sha256:f5ed951ca189b375bbe2e33b2abd7e040ceeee302b9bbaeeffdfddb8d0ace908", size = 327001, upload-time = "2025-03-11T15:09:54.884Z" }
@@ -1707,7 +1707,7 @@ name = "multidict"
 version = "6.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/aa/6d/84d6dbf9a855c09504bdffd4a2c82c6b82cc7b4d69101b64491873967d88/multidict-6.6.0.tar.gz", hash = "sha256:460b213769cb8691b5ba2f12e53522acd95eb5b2602497d4d7e64069a61e5941", size = 99841, upload-time = "2025-06-27T09:51:54.73Z" }
 wheels = [
@@ -2462,8 +2462,8 @@ version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "sortedcontainers" },
     { name = "typing-extensions" },
 ]
@@ -2499,8 +2499,8 @@ dependencies = [
     { name = "pyannote-core" },
     { name = "pyannote-database" },
     { name = "scikit-learn" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "sympy" },
     { name = "tabulate" },
 ]
@@ -2782,7 +2782,7 @@ version = "25.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/04/8c/cd89ad05804f8e3c17dea8f178c3f40eeab5694c30e0c9f5bcd49f576fc3/pyopenssl-25.1.0.tar.gz", hash = "sha256:8d031884482e0c67ee92bf9a4d8cceb08d92aba7136432ffb0703c5280fc205b", size = 179937, upload-time = "2025-05-17T16:28:31.31Z" }
 wheels = [
@@ -2922,7 +2922,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "rpds-py" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2f/db/98b5c277be99dd18bfd91dd04e1b759cad18d1a338188c936e92f921c7e2/referencing-0.36.2.tar.gz", hash = "sha256:df2e89862cd09deabbdba16944cc3f10feb6b3e6f18e902f7cc25609a34775aa", size = 74744, upload-time = "2025-01-25T08:48:16.138Z" }
 wheels = [
@@ -2951,7 +2951,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markdown-it-py" },
     { name = "pygments" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ab/3a/0316b28d0761c6734d6bc14e770d85506c986c85ffb239e688eeaab2c2bc/rich-13.9.4.tar.gz", hash = "sha256:439594978a49a09530cff7ebc4b5c7103ef57baf48d5ea3184f21d9a2befa098", size = 223149, upload-time = "2024-11-01T16:43:57.873Z" }
 wheels = [
@@ -3089,7 +3089,7 @@ name = "ruamel-yaml"
 version = "0.18.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ruamel-yaml-clib", marker = "(python_full_version < '3.14' and platform_python_implementation == 'CPython') or (python_full_version >= '3.14' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_python_implementation != 'CPython' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "ruamel-yaml-clib", marker = "(python_full_version < '3.14' and platform_python_implementation == 'CPython') or (python_full_version >= '3.14' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_python_implementation != 'CPython' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/39/87/6da0df742a4684263261c253f00edd5829e6aca970fff69e75028cccc547/ruamel.yaml-0.18.14.tar.gz", hash = "sha256:7227b76aaec364df15936730efbf7d72b30c0b79b1d578bbb8e3dcb2d81f52b7", size = 145511, upload-time = "2025-06-09T08:51:09.828Z" }
 wheels = [
@@ -3147,8 +3147,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
     { name = "numpy" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "threadpoolctl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/df/3b/29fa87e76b1d7b3b77cc1fcbe82e6e6b8cd704410705b008822de530277c/scikit_learn-1.7.0.tar.gz", hash = "sha256:c01e869b15aec88e2cdb73d27f15bdbe03bce8e2fb43afbe77c45d399e73a5a3", size = 7178217, upload-time = "2025-06-05T22:02:46.703Z" }
@@ -3187,7 +3187,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "numpy", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0f/37/6964b830433e654ec7485e45a00fc9a27cf868d622838f6b6d9c5ec0d532/scipy-1.15.3.tar.gz", hash = "sha256:eae3cf522bc7df64b42cad3925c876e1b0b6c35c1337c93e12c0f366f55b0eaf", size = 59419214, upload-time = "2025-05-08T16:13:05.955Z" }
 wheels = [
@@ -3248,7 +3248,7 @@ resolution-markers = [
     "python_full_version == '3.11.*'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "numpy", marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/18/b06a83f0c5ee8cddbde5e3f3d0bb9b702abfa5136ef6d4620ff67df7eee5/scipy-1.16.0.tar.gz", hash = "sha256:b5ef54021e832869c8cfb03bc3bf20366cbcd426e02a58e8a58d7584dfbb8f62", size = 30581216, upload-time = "2025-06-22T16:27:55.782Z" }
 wheels = [
@@ -3350,6 +3350,90 @@ wheels = [
 ]
 
 [[package]]
+name = "simple-speaker-recognition"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "alembic" },
+    { name = "deepgram-sdk" },
+    { name = "easy-audio-interfaces", extra = ["local-audio"] },
+    { name = "faiss-cpu" },
+    { name = "fastapi" },
+    { name = "librosa" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "plotly" },
+    { name = "pyannote-audio" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pydub" },
+    { name = "python-multipart" },
+    { name = "scikit-learn" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "soundfile" },
+    { name = "sqlalchemy" },
+    { name = "streamlit" },
+    { name = "streamlit-webrtc" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "uvicorn" },
+    { name = "yt-dlp" },
+]
+
+[package.dev-dependencies]
+cpu = [
+    { name = "faiss-cpu" },
+]
+dev = [
+    { name = "black" },
+    { name = "isort" },
+]
+gpu = [
+    { name = "faiss-gpu" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.8.0" },
+    { name = "alembic", specifier = ">=1.13.0" },
+    { name = "deepgram-sdk", specifier = ">=4.7.0" },
+    { name = "easy-audio-interfaces", extras = ["local-audio"], specifier = ">=0.7.1" },
+    { name = "faiss-cpu", specifier = ">=1.8" },
+    { name = "fastapi", specifier = ">=0.115.12" },
+    { name = "librosa", specifier = ">=0.10.0" },
+    { name = "matplotlib", specifier = ">=3.8.0" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pandas", specifier = ">=2.2.0" },
+    { name = "plotly", specifier = ">=5.18.0" },
+    { name = "pyannote-audio", specifier = ">=3.3.2" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.10.1" },
+    { name = "pydub", specifier = ">=0.25.1" },
+    { name = "python-multipart", specifier = ">=0.0.6" },
+    { name = "scikit-learn", specifier = ">=1.4.0" },
+    { name = "scipy", specifier = ">=1.10.0" },
+    { name = "soundfile", specifier = ">=0.12" },
+    { name = "sqlalchemy", specifier = ">=2.0.0" },
+    { name = "streamlit", specifier = ">=1.31.0" },
+    { name = "streamlit-webrtc", specifier = ">=0.47.0" },
+    { name = "torch", specifier = ">=2.0.0" },
+    { name = "torchaudio", specifier = ">=2.0.0" },
+    { name = "uvicorn", specifier = ">=0.34.2" },
+    { name = "yt-dlp", specifier = ">=2025.7.21" },
+]
+
+[package.metadata.requires-dev]
+cpu = [{ name = "faiss-cpu", specifier = ">=1.8" }]
+dev = [
+    { name = "black", specifier = ">=25.1.0" },
+    { name = "isort", specifier = ">=6.0.1" },
+]
+gpu = [{ name = "faiss-gpu", specifier = ">=1.7" }]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3431,90 +3515,6 @@ wheels = [
 ]
 
 [[package]]
-name = "speaker-recognition-service"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "alembic" },
-    { name = "deepgram-sdk" },
-    { name = "easy-audio-interfaces", extra = ["local-audio"] },
-    { name = "faiss-cpu" },
-    { name = "fastapi" },
-    { name = "librosa" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "plotly" },
-    { name = "pyannote-audio" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pydub" },
-    { name = "python-multipart" },
-    { name = "scikit-learn" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "soundfile" },
-    { name = "sqlalchemy" },
-    { name = "streamlit" },
-    { name = "streamlit-webrtc" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "uvicorn" },
-    { name = "yt-dlp" },
-]
-
-[package.dev-dependencies]
-cpu = [
-    { name = "faiss-cpu" },
-]
-dev = [
-    { name = "black" },
-    { name = "isort" },
-]
-gpu = [
-    { name = "faiss-gpu" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "alembic", specifier = ">=1.13.0" },
-    { name = "deepgram-sdk", specifier = ">=4.7.0" },
-    { name = "easy-audio-interfaces", extras = ["local-audio"], specifier = ">=0.7.1" },
-    { name = "faiss-cpu", specifier = ">=1.8" },
-    { name = "fastapi", specifier = ">=0.115.12" },
-    { name = "librosa", specifier = ">=0.10.0" },
-    { name = "matplotlib", specifier = ">=3.8.0" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pandas", specifier = ">=2.2.0" },
-    { name = "plotly", specifier = ">=5.18.0" },
-    { name = "pyannote-audio", specifier = ">=3.3.2" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pydantic-settings", specifier = ">=2.10.1" },
-    { name = "pydub", specifier = ">=0.25.1" },
-    { name = "python-multipart", specifier = ">=0.0.6" },
-    { name = "scikit-learn", specifier = ">=1.4.0" },
-    { name = "scipy", specifier = ">=1.10.0" },
-    { name = "soundfile", specifier = ">=0.12" },
-    { name = "sqlalchemy", specifier = ">=2.0.0" },
-    { name = "streamlit", specifier = ">=1.31.0" },
-    { name = "streamlit-webrtc", specifier = ">=0.47.0" },
-    { name = "torch", specifier = ">=2.0.0" },
-    { name = "torchaudio", specifier = ">=2.0.0" },
-    { name = "uvicorn", specifier = ">=0.34.2" },
-    { name = "yt-dlp", specifier = ">=2025.7.21" },
-]
-
-[package.metadata.requires-dev]
-cpu = [{ name = "faiss-cpu", specifier = ">=1.8" }]
-dev = [
-    { name = "black", specifier = ">=25.1.0" },
-    { name = "isort", specifier = ">=6.0.1" },
-]
-gpu = [{ name = "faiss-gpu", specifier = ">=1.7" }]
-
-[[package]]
 name = "speechbrain"
 version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3524,8 +3524,8 @@ dependencies = [
     { name = "joblib" },
     { name = "numpy" },
     { name = "packaging" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "scipy", version = "1.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "sentencepiece" },
     { name = "torch" },
     { name = "torchaudio" },
@@ -3541,7 +3541,7 @@ name = "sqlalchemy"
 version = "2.0.41"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "greenlet", marker = "(python_full_version < '3.14' and platform_machine == 'AMD64') or (python_full_version < '3.14' and platform_machine == 'WIN32') or (python_full_version < '3.14' and platform_machine == 'aarch64') or (python_full_version < '3.14' and platform_machine == 'amd64') or (python_full_version < '3.14' and platform_machine == 'ppc64le') or (python_full_version < '3.14' and platform_machine == 'win32') or (python_full_version < '3.14' and platform_machine == 'x86_64') or (platform_machine != 'AMD64' and platform_machine != 'WIN32' and platform_machine != 'aarch64' and platform_machine != 'amd64' and platform_machine != 'ppc64le' and platform_machine != 'win32' and platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_machine == 'AMD64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_machine == 'WIN32' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_machine == 'aarch64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_machine == 'amd64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_machine == 'ppc64le' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_machine == 'win32' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (platform_machine == 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "greenlet", marker = "(python_full_version < '3.14' and platform_machine == 'AMD64') or (python_full_version < '3.14' and platform_machine == 'WIN32') or (python_full_version < '3.14' and platform_machine == 'aarch64') or (python_full_version < '3.14' and platform_machine == 'amd64') or (python_full_version < '3.14' and platform_machine == 'ppc64le') or (python_full_version < '3.14' and platform_machine == 'win32') or (python_full_version < '3.14' and platform_machine == 'x86_64') or (platform_machine != 'AMD64' and platform_machine != 'WIN32' and platform_machine != 'aarch64' and platform_machine != 'amd64' and platform_machine != 'ppc64le' and platform_machine != 'win32' and platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_machine == 'AMD64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_machine == 'WIN32' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_machine == 'aarch64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_machine == 'amd64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_machine == 'ppc64le' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_machine == 'win32' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (platform_machine == 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/63/66/45b165c595ec89aa7dcc2c1cd222ab269bc753f1fc7a1e68f8481bd957bf/sqlalchemy-2.0.41.tar.gz", hash = "sha256:edba70118c4be3c2b1f90754d308d0b79c6fe2c0fdc52d8ddf603916f83f4db9", size = 9689424, upload-time = "2025-05-14T17:10:32.339Z" }
@@ -3586,8 +3586,8 @@ name = "standard-aifc"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "audioop-lts", marker = "python_full_version >= '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "standard-chunk", marker = "python_full_version >= '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "audioop-lts", marker = "python_full_version >= '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "standard-chunk", marker = "python_full_version >= '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/53/6050dc3dde1671eb3db592c13b55a8005e5040131f7509cef0215212cb84/standard_aifc-3.13.0.tar.gz", hash = "sha256:64e249c7cb4b3daf2fdba4e95721f811bde8bdfc43ad9f936589b7bb2fae2e43", size = 15240, upload-time = "2024-10-30T16:01:31.772Z" }
 wheels = [
@@ -3608,7 +3608,7 @@ name = "standard-sunau"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "audioop-lts", marker = "python_full_version >= '3.13' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "audioop-lts", marker = "python_full_version >= '3.13' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/e3/ce8d38cb2d70e05ffeddc28bb09bad77cfef979eb0a299c9117f7ed4e6a9/standard_sunau-3.13.0.tar.gz", hash = "sha256:b319a1ac95a09a2378a8442f403c66f4fd4b36616d6df6ae82b8e536ee790908", size = 9368, upload-time = "2024-10-30T16:01:41.626Z" }
 wheels = [
@@ -3649,7 +3649,7 @@ dependencies = [
     { name = "toml" },
     { name = "tornado" },
     { name = "typing-extensions" },
-    { name = "watchdog", marker = "sys_platform != 'darwin' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "watchdog", marker = "sys_platform != 'darwin' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e9/10/46e1e71fd52d7137402f5b2abee20c57d315dd9f8a88e123f03c36ad6260/streamlit-1.47.0.tar.gz", hash = "sha256:b4ff3b8fa01de1e1dc572930b420897f0870ed2ae44e23a815999b62c0778c30", size = 9540444, upload-time = "2025-07-16T16:26:49.864Z" }
 wheels = [
@@ -3789,25 +3789,25 @@ dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
     { name = "jinja2" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cudnn-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cufft-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cufile-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-curand-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-cusparselt-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
-    { name = "setuptools", marker = "python_full_version >= '3.12' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cudnn-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cufft-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cufile-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-curand-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cusparselt-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "setuptools", marker = "python_full_version >= '3.12' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "sympy" },
-    { name = "triton", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu') or (sys_platform != 'linux' and extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "triton", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "typing-extensions" },
 ]
 wheels = [
@@ -3932,7 +3932,7 @@ name = "tqdm"
 version = "4.67.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737, upload-time = "2024-11-24T20:12:22.481Z" }
 wheels = [
@@ -4028,7 +4028,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "h11" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-27-speaker-recognition-service-cpu' and extra == 'group-27-speaker-recognition-service-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/ad/713be230bcda622eaa35c28f0d328c3675c371238470abdea52417f17a8e/uvicorn-0.34.3.tar.gz", hash = "sha256:35919a9a979d7a59334b6b10e05d77c1d0d574c50e0fc98b8b1a0f165708b55a", size = 76631, upload-time = "2025-06-01T07:48:17.531Z" }
 wheels = [

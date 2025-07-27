@@ -16,11 +16,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # Copy dependency files and source code
 COPY pyproject.toml ./
-COPY speaker_service.py ./
-COPY web_ui.py ./
-COPY database/ ./database/
-COPY utils/ ./utils/
-COPY pages/ ./pages/
+COPY src/ ./src/
 
 # Install dependencies and package
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -38,4 +34,4 @@ ENV PYTHONPATH=/app
 EXPOSE 8001
 
 # Run the service
-CMD ["uv", "run", "python", "speaker_service.py"] 
+CMD ["uv", "run", "simple-speaker-service"] 

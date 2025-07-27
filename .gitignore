@@ -28,8 +28,12 @@ transcription_results.csv
 **/advanced_omi_backend.egg-info/
 **/dist/*
 **/build/*
+**/*.egg-info/
 
 untracked/*
 backends/advanced-backend/data/*
 extras/havpe-relay/firmware/secrets.yaml
 extras/test-audios/*
+
+## Python Build stuff
+**/*egg-info/*

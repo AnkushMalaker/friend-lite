@@ -41,7 +41,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: speaker-recognition:latest
-    command: ["uv", "run", "streamlit", "run", "web_ui.py", "--server.port=${STREAMLIT_PORT:-8502}", "--server.address=${STREAMLIT_HOST:-0.0.0.0}"]
+    command: ["uv", "run", "streamlit", "run", "src/simple_speaker_recognition/web/app.py", "--server.port=${STREAMLIT_PORT:-8502}", "--server.address=${STREAMLIT_HOST:-0.0.0.0}"]
     ports:
       - "${STREAMLIT_PORT:-8502}:${STREAMLIT_PORT:-8502}"
     volumes:

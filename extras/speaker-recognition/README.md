@@ -96,17 +96,22 @@ For detailed documentation, API reference, and advanced usage:
 
 Environment variables:
 ```bash
-HF_TOKEN="your_token"                    # Required: Hugging Face token
-SIMILARITY_THRESHOLD="0.85"              # Speaker similarity threshold (0.0-1.0)
+# Required
+HF_TOKEN="your_token"                    # Required: Hugging Face token for PyAnnote models
 
-# Speaker Service Configuration
+# Speaker Service Configuration  
 SPEAKER_SERVICE_HOST="0.0.0.0"          # Speaker service bind host
-SPEAKER_SERVICE_PORT="8085"             # Speaker service port
+SPEAKER_SERVICE_PORT="8085"             # Speaker service port (default: 8085)
 SPEAKER_SERVICE_URL="http://speaker-service:8085"  # URL for internal Docker communication
+SIMILARITY_THRESHOLD="0.15"             # Speaker similarity threshold (0.1-0.3 typical for ECAPA-TDNN)
 
-# Streamlit Web UI Configuration  
-STREAMLIT_HOST="0.0.0.0"               # Web UI bind host
-STREAMLIT_PORT="8502"                   # Web UI port
+# Streamlit Web UI Configuration
+STREAMLIT_HOST="0.0.0.0"               # Web UI bind host  
+STREAMLIT_PORT="8502"                   # Web UI port (default: 8502)
+
+# Optional
+DEEPGRAM_API_KEY="your_key"             # For transcript import features
+DEV="false"                             # Enable development mode with reload
 ```
 
 Copy `.env.template` to `.env` and configure your settings:
@@ -147,40 +152,90 @@ uv run streamlit run web_ui.py
 ```bash
 GET /health
 ```
-
-### Speaker Enrollment
-```bash
-POST /enroll
-Content-Type: application/json
-
+**Response:**
+```json
 {
+  "status": "ok",
+  "device": "cuda",
+  "speakers": 5
+}
+```
+
+### Speaker Enrollment - Single File
+```bash
+POST /enroll/upload
+Content-Type: multipart/form-data
+```
+**Form Fields:**
+- `file`: Audio file (WAV/FLAC, max 3 minutes)
+- `speaker_id`: Unique speaker identifier
+- `speaker_name`: Speaker display name  
+- `start`: Start time in seconds (optional)
+- `end`: End time in seconds (optional)
+
+**Response:**
+```json
+{
+  "updated": false,
+  "speaker_id": "john_doe"
+}
+```
+
+### Speaker Enrollment - Batch
+```bash
+POST /enroll/batch
+Content-Type: multipart/form-data
+```
+**Form Fields:**
+- `files`: Multiple audio files for same speaker
+- `speaker_id`: Unique speaker identifier
+- `speaker_name`: Speaker display name
+
+**Response:**
+```json
+{
+  "updated": false,
   "speaker_id": "john_doe",
-  "speaker_name": "John Doe", 
-  "audio_file_path": "/path/to/audio.wav",
-  "start_time": 0.0,  // optional
-  "end_time": 5.0     // optional
+  "num_segments": 3,
+  "num_files": 3
 }
 ```
 
-### Speaker Identification
+### Speaker Diarization and Identification
 ```bash
-POST /identify
-Content-Type: application/json
-
-{
-  "audio_file_path": "/path/to/audio.wav",
-  "start_time": 0.0,  // optional
-  "end_time": 5.0     // optional
-}
+POST /diarize-and-identify
+Content-Type: multipart/form-data
 ```
+**Form Fields:**
+- `file`: Audio file for processing
+- `min_duration`: Minimum segment duration in seconds (optional, default: 0.5)
+- `similarity_threshold`: Override default threshold (optional)
+- `identify_only_enrolled`: Return only identified speakers (optional, default: false)
 
-### Speaker Diarization
-```bash
-POST /diarize
-Content-Type: application/json
-
+**Response:**
+```json
 {
-  "audio_file_path": "/path/to/audio.wav"
+  "segments": [
+    {
+      "speaker": "SPEAKER_00",
+      "start": 1.234,
+      "end": 5.678,
+      "duration": 4.444,
+      "identified_as": "John Doe",
+      "identified_id": "john_doe",
+      "confidence": 0.892,
+      "status": "identified"
+    }
+  ],
+  "summary": {
+    "total_duration": 120.5,
+    "num_segments": 15,
+    "num_diarized_speakers": 3,
+    "identified_speakers": ["John Doe", "Jane Smith"],
+    "unknown_speakers": ["SPEAKER_02"],
+    "similarity_threshold": 0.15,
+    "filtered": false
+  }
 }
 ```
 
@@ -188,10 +243,38 @@ Content-Type: application/json
 ```bash
 GET /speakers
 ```
+**Response:**
+```json
+{
+  "speakers": [
+    {
+      "id": "john_doe",
+      "name": "John Doe"
+    }
+  ]
+}
+```
 
-### Remove Speaker
+### Reset All Speakers
+```bash
+POST /speakers/reset
+```
+**Response:**
+```json
+{
+  "reset": true
+}
+```
+
+### Delete Speaker
 ```bash
 DELETE /speakers/{speaker_id}
+```
+**Response:**
+```json
+{
+  "deleted": true
+}
 ```
 
 ## Integration with Advanced Backend

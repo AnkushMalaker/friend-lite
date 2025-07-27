@@ -273,7 +273,7 @@ def results_section():
         unknown_segments = len([s for s in segments if s.get('status') == 'unknown'])
         st.metric("Unknown", unknown_segments)
     with col4:
-        error_segments = len([s for s in segments if s.get('status') == 'error'])
+        error_segments = len([s for s in segments if s.get('status', '').endswith('error')])
         st.metric("Errors", error_segments)
     
     # Results table
@@ -286,6 +286,9 @@ def results_section():
             'identified': '✅',
             'unknown': '❓',
             'error': '❌',
+            'audio_load_error': '🔊',
+            'embedding_error': '🧠',
+            'identification_error': '🔍',
             'skipped_too_short': '⏭️'
         }.get(segment.get('status'), '❓')
         

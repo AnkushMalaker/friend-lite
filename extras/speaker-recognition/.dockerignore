@@ -1,10 +1,6 @@
 *
-!speaker_service.py
 !pyproject.toml
 !uv.lock
 !pyproject.blackwell.toml
-!web_ui.py
 !.env
-!utils
-!pages
-!database
+!src

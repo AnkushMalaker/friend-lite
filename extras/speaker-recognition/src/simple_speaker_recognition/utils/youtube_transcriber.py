@@ -200,8 +200,8 @@ class YouTubeTranscriber:
             
             self.logger.info(f"💸 Making Deepgram API call for {audio_path} (no cache found)")
             
-            # Use the correct API method
-            response = await self.deepgram.listen.asyncprerecorded.v("1").transcribe_file(payload, options)
+            # Use the current API method (remove deprecated v("1"))
+            response = await self.deepgram.listen.asyncprerecorded.transcribe_file(payload, options)
             
             if response and hasattr(response, 'results'):
                 self.logger.info(f"Transcription completed successfully for {audio_path}")
@@ -273,8 +273,59 @@ class YouTubeTranscriber:
                 f.write(f"Transcript: {title} - Segment {segment_num}\n")
                 f.write("=" * 50 + "\n\n")
                 
-                # Check if we have utterances (which include speaker info)
-                if 'utterances' in response_dict['results']:
+                # Use word-level speaker changes for better formatting (like our working approach)
+                if 'channels' in response_dict['results'] and response_dict['results']['channels']:
+                    channels = response_dict['results']['channels']
+                    if channels and 'alternatives' in channels[0]:
+                        words = channels[0]['alternatives'][0].get('words', [])
+                        
+                        if words:
+                            # Group words by speaker changes for cleaner output
+                            current_speaker = None
+                            current_segment = []
+                            
+                            for word in words:
+                                speaker = word.get('speaker', 0)
+                                
+                                if current_speaker is None:
+                                    current_speaker = speaker
+                                    current_segment = [word]
+                                elif speaker == current_speaker:
+                                    current_segment.append(word)
+                                else:
+                                    # Speaker change - write current segment
+                                    if current_segment:
+                                        start_time = current_segment[0].get('start', 0)
+                                        end_time = current_segment[-1].get('end', 0)
+                                        text = ' '.join([w.get('punctuated_word', w.get('word', '')) for w in current_segment])
+                                        
+                                        # Format time as MM:SS
+                                        start_min, start_sec = divmod(int(start_time), 60)
+                                        end_min, end_sec = divmod(int(end_time), 60)
+                                        
+                                        f.write(f"Speaker {current_speaker} [{start_min:02d}:{start_sec:02d} - {end_min:02d}:{end_sec:02d}]: {text}\n\n")
+                                    
+                                    # Start new segment
+                                    current_speaker = speaker
+                                    current_segment = [word]
+                            
+                            # Write final segment
+                            if current_segment:
+                                start_time = current_segment[0].get('start', 0)
+                                end_time = current_segment[-1].get('end', 0)
+                                text = ' '.join([w.get('punctuated_word', w.get('word', '')) for w in current_segment])
+                                
+                                start_min, start_sec = divmod(int(start_time), 60)
+                                end_min, end_sec = divmod(int(end_time), 60)
+                                
+                                f.write(f"Speaker {current_speaker} [{start_min:02d}:{start_sec:02d} - {end_min:02d}:{end_sec:02d}]: {text}\n\n")
+                        
+                        # Fallback to basic transcript if no words
+                        elif 'transcript' in channels[0]['alternatives'][0]:
+                            f.write(f"Transcript: {channels[0]['alternatives'][0]['transcript']}\n\n")
+                
+                # Fallback for utterances if they exist (legacy support)
+                elif 'utterances' in response_dict['results']:
                     for utterance in response_dict['results']['utterances']:
                         speaker = utterance.get('speaker', 0)
                         start_time = utterance.get('start', 0)
@@ -286,22 +337,6 @@ class YouTubeTranscriber:
                         end_min, end_sec = divmod(int(end_time), 60)
                         
                         f.write(f"Speaker {speaker} [{start_min:02d}:{start_sec:02d} - {end_min:02d}:{end_sec:02d}]: {text}\n\n")
-                else:
-                    # Fallback to channels if no utterances
-                    if 'channels' in response_dict['results'] and response_dict['results']['channels']:
-                        for i, alternative in enumerate(response_dict['results']['channels'][0]['alternatives']):
-                            if 'transcript' in alternative:
-                                f.write(f"Transcript: {alternative['transcript']}\n\n")
-                                
-                                # Add word-level timestamps if available
-                                if 'words' in alternative:
-                                    f.write("Word-level timestamps:\n")
-                                    for word_info in alternative['words']:
-                                        word = word_info.get('word', '')
-                                        start = word_info.get('start', 0)
-                                        end = word_info.get('end', 0)
-                                        f.write(f"{word} [{start:.2f}s-{end:.2f}s] ")
-                                    f.write("\n\n")
                                     
             self.logger.info(f"Saved transcript to: {filepath}")
             

@@ -1,5 +1,5 @@
 [project]
-name = "speaker-recognition-service"
+name = "simple-speaker-recognition"
 version = "0.1.0"
 description = "Speaker recognition and diarization service for friend-lite"
 requires-python = ">=3.10"
@@ -37,9 +37,17 @@ dependencies = [
     "scikit-learn>=1.4.0", # For t-SNE/UMAP visualization
 ]
 
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["database*", "utils*", "pages*"]
+where = ["src"]
+include = ["simple_speaker_recognition*"]
+
+[project.scripts]
+simple-speaker-service = "simple_speaker_recognition.api.service:main"
+simple-speaker-web = "simple_speaker_recognition.web.app:main"
 
 [dependency-groups]
 cpu = ["faiss-cpu>=1.8"]
