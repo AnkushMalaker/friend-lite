@@ -17,8 +17,11 @@ dependencies = [
     "python-multipart>=0.0.6",
     "pydantic>=2.0.0",
     "soundfile>=0.12",
+    "easy-audio-interfaces[local-audio]>=0.7.1",
     "pydantic-settings>=2.10.1",
-    "easy-audio-interfaces[local-audio]>=0.5.1",
+    "deepgram-sdk>=4.7.0",
+    "pydub>=0.25.1",
+    "yt-dlp>=2025.7.21",
 ]
 
 [dependency-groups]

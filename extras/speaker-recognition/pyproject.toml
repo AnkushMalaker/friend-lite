@@ -1,5 +1,5 @@
 [project]
-name = "speaker-recognition-service"
+name = "simple-speaker-recognition"
 version = "0.1.0"
 description = "Speaker recognition and diarization service for friend-lite"
 requires-python = ">=3.10"
@@ -17,9 +17,37 @@ dependencies = [
     "python-multipart>=0.0.6",
     "pydantic>=2.0.0",
     "soundfile>=0.12",
-    "easy-audio-interfaces[local-audio]>=0.5.1",
+    "easy-audio-interfaces[local-audio]>=0.7.1",
     "pydantic-settings>=2.10.1",
+    "deepgram-sdk>=4.7.0",
+    "pydub>=0.25.1",
+    "yt-dlp>=2025.7.21",
+    # Web UI dependencies
+    "streamlit>=1.31.0",
+    "streamlit-webrtc>=0.47.0",
+    # Audio processing and visualization
+    "librosa>=0.10.0",
+    "plotly>=5.18.0",
+    "matplotlib>=3.8.0",
+    # Database
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    # Data processing
+    "pandas>=2.2.0",
+    "scikit-learn>=1.4.0", # For t-SNE/UMAP visualization
 ]
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["simple_speaker_recognition*"]
+
+[project.scripts]
+simple-speaker-service = "simple_speaker_recognition.api.service:main"
+simple-speaker-web = "simple_speaker_recognition.web.app:main"
 
 [dependency-groups]
 cpu = ["faiss-cpu>=1.8"]
@@ -28,6 +56,7 @@ dev = [
     "black>=25.1.0",
     "isort>=6.0.1",
 ]
+
 
 [tool.uv]
 # dev & cpu are installed automatically

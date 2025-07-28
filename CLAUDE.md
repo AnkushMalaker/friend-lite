@@ -359,3 +359,4 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 ## Notes for Claude
 Check if the src/ is volume mounted. If not, do compose build so that code changes are reflected.
 Check backend/advanced-backend/Docs for up to date information on advanced backend.
+All docker projects have .dockerignore following the exclude pattern. That means files need to be included for them to be visible to docker.

@@ -21,6 +21,7 @@ from advanced_omi_backend.audio_cropping_utils import (
 )
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.database import AudioChunksRepository
+from advanced_omi_backend.memory import get_memory_service
 
 # Lazy import to avoid config loading issues
 # from advanced_omi_backend.memory import get_memory_service
@@ -805,8 +806,6 @@ class ProcessorManager:
 
             # Lazy import memory service
             if self.memory_service is None:
-                from advanced_omi_backend.memory import get_memory_service
-
                 self.memory_service = get_memory_service()
 
             # Process memory with timeout
