@@ -1,0 +1,64 @@
+# Qwen2.5-Omni Speaker Recognition Configuration
+# 
+# This file defines the speakers to enroll and their reference audio clips.
+# Update the speaker names and paths to match your family/group members.
+
+# Model Configuration
+model:
+  # Choose between "Qwen/Qwen2.5-Omni-7B" (better) or "Qwen/Qwen2.5-Omni-3B" (lighter)
+  model_id: "Qwen/Qwen2.5-Omni-7B"
+  device_map: "auto"  # "auto", "cpu", or specific GPU like "cuda:0"
+
+# Audio Processing Settings
+audio:
+  chunk_duration: 30      # Maximum duration per chunk in seconds
+  overlap_duration: 5     # Overlap between chunks in seconds
+  auto_chunk: true        # Automatically chunk long audio files
+
+# Speaker Enrollment Configuration
+# Each speaker needs 2-3 clean reference clips of 5-15 seconds each
+# Paths can be absolute or relative to this config file
+speakers:
+  # Example family members - replace with your actual family/group
+  Flowerin:
+    - "reference_clips/flowerin_01.wav"
+    - "reference_clips/flowerin_02.wav"
+    - "reference_clips/flowerin_03.wav"
+  
+  Brother:
+    - "reference_clips/brother_01.wav"
+    - "reference_clips/brother_02.wav"
+  
+  Dad:
+    - "reference_clips/dad_01.wav"
+    - "reference_clips/dad_02.wav"
+    - "reference_clips/dad_03.wav"
+  
+  Mom:
+    - "reference_clips/mom_01.wav"
+    - "reference_clips/mom_02.wav"
+
+# Output Configuration
+output:
+  format: "json"          # Output format: "json" or "text"
+  include_metadata: true  # Include processing metadata in output
+  save_segments: false    # Save individual audio segments (future feature)
+
+# Advanced Settings
+advanced:
+  max_new_tokens: 1024    # Maximum tokens for transcript generation
+  temperature: 0.0        # Temperature for text generation (0.0 = deterministic)
+  enable_audio_output: false  # Keep false to save VRAM
+
+# Quality Guidelines for Reference Clips:
+# - Duration: 5-15 seconds per clip
+# - Quality: Clear speech, minimal background noise
+# - Content: Natural conversation, avoid reading
+# - Variety: Different emotions/speaking styles if possible
+# - Format: WAV, MP3, FLAC (16kHz+ recommended)
+#
+# Tips for Better Results:
+# - Use 2-3 clips per person for more robust enrollment
+# - Ensure clips are from different conversations/contexts
+# - Avoid music, overlapping speech, or echo in reference clips
+# - Test with shorter audio segments first (under 30 seconds)

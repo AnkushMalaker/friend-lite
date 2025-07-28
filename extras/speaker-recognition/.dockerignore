@@ -1,4 +1,6 @@
 *
-!speaker_service.py
 !pyproject.toml
+!uv.lock
 !pyproject.blackwell.toml
+!.env
+!src

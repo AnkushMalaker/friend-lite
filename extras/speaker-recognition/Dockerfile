@@ -14,15 +14,14 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files
+# Copy dependency files and source code
 COPY pyproject.toml ./
+COPY src/ ./src/
 
-# Install dependencies
-RUN uv sync --no-dev
-
-# Copy application code
-COPY speaker_service.py ./
-# COPY client.py ./
+# Install dependencies and package
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev
+# RUN uv pip install -e .
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
@@ -35,4 +34,4 @@ ENV PYTHONPATH=/app
 EXPOSE 8001
 
 # Run the service
-CMD ["uv", "run", "python", "speaker_service.py"] 
+CMD ["uv", "run", "simple-speaker-service"] 

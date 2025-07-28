@@ -1,11 +1,12 @@
 services:
-  speaker-recognition:
+  # FastAPI Speaker Recognition Service
+  speaker-service:
     build:
       context: .
       dockerfile: Dockerfile
     image: speaker-recognition:latest
     ports:
-      - "8001:8001"
+      - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"
     volumes:
       # Persist Hugging Face cache (models) between restarts
       - ./model_cache:/models
@@ -23,10 +24,43 @@ services:
     environment:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
-      - SIMILARITY_THRESHOLD=0.85
+      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.85}
+      - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST:-0.0.0.0}
+      - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${SPEAKER_SERVICE_PORT:-8085}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  
+  # Streamlit Web UI
+  web-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: speaker-recognition:latest
+    command: ["uv", "run", "streamlit", "run", "src/simple_speaker_recognition/web/app.py", "--server.port=${STREAMLIT_PORT:-8502}", "--server.address=${STREAMLIT_HOST:-0.0.0.0}"]
+    ports:
+      - "${STREAMLIT_PORT:-8502}:${STREAMLIT_PORT:-8502}"
+    volumes:
+      # Share data directory with speaker service
+      - ./data:/app/data
+      - ./audio_chunks:/app/audio_chunks
+      - ./debug:/app/debug
+      # Persist SQLite database and exports
+      - ./data:/app/data
+    environment:
+      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL:-http://speaker-service:8085}
+      - STREAMLIT_HOST=${STREAMLIT_HOST:-0.0.0.0}
+      - STREAMLIT_PORT=${STREAMLIT_PORT:-8502}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+    depends_on:
+      - speaker-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${STREAMLIT_PORT:-8502}/_stcore/health"]
       interval: 30s
       timeout: 10s
       retries: 3 
