@@ -7,7 +7,7 @@ import aiohttp
 import websockets
 import websockets.exceptions
 from easy_audio_interfaces.extras.local_audio import InputMicStream
-from wyoming.audio import AudioStart, AudioChunk, AudioStop
+from wyoming.audio import AudioChunk, AudioStart, AudioStop
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)

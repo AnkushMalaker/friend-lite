@@ -10,6 +10,7 @@ from wyoming.client import AsyncTcpClient
 from wyoming.vad import VoiceStarted, VoiceStopped
 
 from advanced_omi_backend.client_manager import get_client_manager
+from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     OnlineTranscriptionProvider,
@@ -53,6 +54,11 @@ class TranscriptionManager:
         # Collection state tracking
         self._collecting = False
         self._collection_task = None
+        
+        # Optional speaker recognition
+        self.speaker_client = SpeakerRecognitionClient()
+        if self.speaker_client.enabled:
+            logger.info("Speaker recognition integration enabled")
 
     def _get_current_client(self):
         """Get the current client state using ClientManager."""
@@ -205,6 +211,37 @@ class TranscriptionManager:
 
                 # Parse speaker segments from formatted text
                 speaker_segments = self._parse_speaker_segments(transcript_text)
+                
+                # Optional: Enhance segments with speaker recognition
+                if self.speaker_client.enabled and speaker_segments and self._current_audio_uuid and self.chunk_repo:
+                    try:
+                        # Get audio file path from database
+                        chunk_data = await self.chunk_repo.get_chunk(self._current_audio_uuid)
+                        if chunk_data and 'audio_path' in chunk_data:
+                            audio_path = chunk_data['audio_path']
+                            # Construct full path (assuming chunk_dir is /app/audio_chunks in docker)
+                            full_audio_path = f"/app/audio_chunks/{audio_path}"
+                            
+                            logger.info(f"Enhancing transcript with speaker recognition for {full_audio_path}")
+                            speaker_mapping = await self.speaker_client.identify_speakers(
+                                full_audio_path, speaker_segments
+                            )
+                        
+                        if speaker_mapping:
+                            # Apply speaker mapping to segments
+                            for segment in speaker_segments:
+                                original_speaker = segment.get('speaker', '')
+                                if original_speaker in speaker_mapping:
+                                    segment['speaker'] = speaker_mapping[original_speaker]
+                                    logger.debug(
+                                        f"Mapped {original_speaker} -> {speaker_mapping[original_speaker]}"
+                                    )
+                            logger.info(f"Enhanced {len(speaker_mapping)} speakers in transcript")
+                        else:
+                            logger.warning("No audio path found in database for speaker recognition")
+                    except Exception as e:
+                        logger.warning(f"Speaker recognition enhancement failed: {e}")
+                        # Continue with original segments if enhancement fails
 
                 # Store each speaker segment separately in database
                 if self.chunk_repo and speaker_segments:
