@@ -1,0 +1,19 @@
+services:
+  friend-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./audio_chunks:/app/audio_chunks
+  ngrok:
+    image: ngrok/ngrok:latest
+    ports:
+      - "4040:4040" # Ngrok web interface
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+      - NGROK_DOMAIN=${NGROK_DOMAIN}
+    command: "http friend-backend:8000 --domain=${NGROK_DOMAIN}"
+    depends_on:
+      - friend-backend
