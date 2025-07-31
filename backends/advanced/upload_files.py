@@ -402,8 +402,8 @@ def main():
         wav_files = [str(specific_file_path)]
         logger.info(f"Found specific test file: {specific_file_path}")
     else:
-        # Fallback to original directory
-        audio_dir = os.path.expanduser("~/Some dir/")
+        # Fallback to ds1 directory
+        audio_dir = "../../ds1/"
         # You can specify some test_files list if you want here
         wav_files = collect_wav_files(audio_dir, filter_list=None)
         if not wav_files:
