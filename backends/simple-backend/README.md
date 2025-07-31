@@ -1,1 +1,0 @@
-The added complication on top of existing "JUST GET AUDIO AND SAVE IT" is the wyoming protocol "metadata". Clients may send audio start / stop events - the simple backend ignores these
