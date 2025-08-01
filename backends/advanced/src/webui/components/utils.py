@@ -134,14 +134,30 @@ def post_data(
                 st.error("❌ Resource already exists. Please check your input and try again.")
             return None
 
-        response.raise_for_status()
+        # Check for HTTP errors before raising
+        if not response.ok:
+            duration = time.time() - start_time
+            logger.error(f"❌ POST {endpoint} failed with status {response.status_code} in {duration:.3f}s")
+            
+            # Try to extract detailed error message from JSON response
+            try:
+                error_data = response.json()
+                error_message = error_data.get("error", f"HTTP {response.status_code} error")
+                logger.error(f"❌ Backend error details: {error_message}")
+                st.error(f"❌ Backend error: {error_message}")
+            except Exception:
+                # Fall back to status code if JSON parsing fails
+                logger.error(f"❌ Could not parse error response from backend")
+                st.error(f"❌ HTTP {response.status_code} error from backend")
+            return None
+            
         duration = time.time() - start_time
         logger.info(f"✅ POST {endpoint} successful in {duration:.3f}s")
         return response.json()
     except requests.exceptions.RequestException as e:
         duration = time.time() - start_time
         logger.error(f"❌ POST {endpoint} failed in {duration:.3f}s: {e}")
-        st.error(f"Error posting to backend: {e}")
+        st.error(f"❌ Network error: {e}")
         return None
 
 

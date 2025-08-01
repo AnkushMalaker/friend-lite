@@ -161,22 +161,28 @@ def process_uploaded_files(uploaded_files, device_name, auto_generate_client):
             status_text.text("✅ Processing complete!")
             
             if response:
-                # Show results
-                st.success("🎉 Files processed successfully!")
+                # Check if there were any successful files
+                successful_count = response.get("successful", 0)
+                failed_count = response.get("failed", 0)
+                total_files = len(uploaded_files)
+                
+                if successful_count > 0:
+                    st.success(f"🎉 Files processed successfully!")
+                elif failed_count == total_files:
+                    st.error(f"❌ All {total_files} files failed to process!")
+                else:
+                    st.warning(f"⚠️ Partial success: {successful_count} succeeded, {failed_count} failed")
                 
                 # Display summary
-                summary = response.get("summary", {})
-                
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    st.metric("Total Files", summary.get("total", 0))
+                    st.metric("Total Files", total_files)
                 
                 with col2:
-                    st.metric("Successful", summary.get("successful", 0), delta_color="normal")
+                    st.metric("Successful", successful_count, delta_color="normal")
                 
                 with col3:
-                    failed_count = summary.get("failed", 0)
                     st.metric("Failed", failed_count, delta_color="inverse" if failed_count > 0 else "normal")
                 
                 # Show detailed results
@@ -187,33 +193,51 @@ def process_uploaded_files(uploaded_files, device_name, auto_generate_client):
                         filename = file_result.get("filename", "Unknown")
                         status = file_result.get("status", "unknown")
                         
-                        if status == "success":
-                            conversation_id = file_result.get("conversation_id")
-                            processing_time = file_result.get("processing_time", 0)
+                        if status == "processed" or status == "success":
+                            # Handle successful processing
+                            client_id = file_result.get("client_id")
+                            sample_rate = file_result.get("sample_rate")
+                            duration = file_result.get("duration_seconds", 0)
                             
                             with st.container():
                                 st.success(f"✅ **{filename}**")
-                                if conversation_id:
-                                    st.write(f"   📄 Conversation ID: `{conversation_id}`")
-                                st.write(f"   ⏱️ Processing time: {processing_time:.2f}s")
+                                if client_id:
+                                    st.write(f"   🆔 Client ID: `{client_id}`")
+                                if sample_rate:
+                                    st.write(f"   🎵 Sample Rate: {sample_rate}Hz")
+                                if duration > 0:
+                                    st.write(f"   ⏱️ Duration: {duration:.1f}s")
                         else:
+                            # Handle errors with detailed error message
                             error_msg = file_result.get("error", "Unknown error")
                             with st.container():
                                 st.error(f"❌ **{filename}**")
                                 st.write(f"   💥 Error: {error_msg}")
+                                
+                                # Log the error for debugging
+                                logger.error(f"File processing failed for {filename}: {error_msg}")
                 
                 # Clean up progress indicators
                 progress_bar.empty()
                 status_text.empty()
                 
-                st.info("💡 You can now view the processed conversations in the 'Conversations' tab.")
+                if successful_count > 0:
+                    st.info("💡 You can now view the processed conversations in the 'Conversations' tab.")
                 
             else:
-                st.error("❌ Failed to process files. Please check the logs and try again.")
+                # This happens when post_data returns None due to an error
+                st.error("❌ Failed to process files. The backend returned an error.")
+                st.info("💡 Please check the error message above for details, or try again with a different file.")
                 progress_bar.empty()
                 status_text.empty()
                 
     except Exception as e:
-        logger.error(f"Error processing uploaded files: {e}")
+        logger.error(f"Error processing uploaded files: {e}", exc_info=True)
         st.error(f"❌ Error processing files: {str(e)}")
         st.info("💡 Please check that the backend is running and try again.")
+        
+        # Additional debugging information
+        with st.expander("🔍 Debug Information"):
+            st.code(f"Exception type: {type(e).__name__}\nException message: {str(e)}")
+            st.write("This error occurred in the frontend while trying to process your upload.")
+            st.write("Please check the browser console and backend logs for more details.")

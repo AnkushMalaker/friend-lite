@@ -185,11 +185,13 @@ async def process_audio_files(
             try:
                 # Validate file type (only WAV for now)
                 if not file.filename or not file.filename.lower().endswith(".wav"):
+                    error_msg = f"Unsupported file format. Only WAV files are supported, but received: {file.filename or 'unknown file'}"
+                    audio_logger.warning(f"File format validation failed: {error_msg}")
                     processed_files.append(
                         {
                             "filename": file.filename or "unknown",
                             "status": "error",
-                            "error": "Only WAV files are currently supported",
+                            "error": error_msg,
                         }
                     )
                     continue
@@ -209,16 +211,42 @@ async def process_audio_files(
 
                 # Read file content
                 content = await file.read()
+                
+                # Validate file size
+                if len(content) == 0:
+                    error_msg = "File is empty or could not be read"
+                    audio_logger.error(f"Empty file error: {error_msg}")
+                    processed_files.append(
+                        {
+                            "filename": file.filename,
+                            "status": "error",
+                            "error": error_msg,
+                        }
+                    )
+                    continue
+                
+                if len(content) > 500 * 1024 * 1024:  # 500MB limit
+                    error_msg = f"File too large ({len(content) / (1024*1024):.1f}MB). Maximum file size is 500MB"
+                    audio_logger.error(f"File size error: {error_msg}")
+                    processed_files.append(
+                        {
+                            "filename": file.filename,
+                            "status": "error",
+                            "error": error_msg,
+                        }
+                    )
+                    continue
 
                 # Process WAV file
-                with wave.open(io.BytesIO(content), "rb") as wav_file:
-                    # Get audio parameters
-                    sample_rate = wav_file.getframerate()
-                    sample_width = wav_file.getsampwidth()
-                    channels = wav_file.getnchannels()
+                try:
+                    with wave.open(io.BytesIO(content), "rb") as wav_file:
+                        # Get audio parameters
+                        sample_rate = wav_file.getframerate()
+                        sample_width = wav_file.getsampwidth()
+                        channels = wav_file.getnchannels()
 
-                    # Read all audio data
-                    audio_data = wav_file.readframes(wav_file.getnframes())
+                        # Read all audio data
+                        audio_data = wav_file.readframes(wav_file.getnframes())
 
                     # Convert to mono if stereo
                     if channels == 2:
@@ -294,6 +322,29 @@ async def process_audio_files(
                     audio_logger.info(
                         f"✅ Processed audio file: {file.filename} ({len(audio_data)} bytes)"
                     )
+                
+                except wave.Error as e:
+                    error_msg = f"Invalid WAV file format: {str(e)}"
+                    audio_logger.error(f"WAV format error for {file.filename}: {error_msg}")
+                    processed_files.append(
+                        {
+                            "filename": file.filename,
+                            "status": "error",
+                            "error": error_msg,
+                        }
+                    )
+                    continue
+                except Exception as wav_e:
+                    error_msg = f"Audio processing error: {str(wav_e)}"
+                    audio_logger.error(f"Audio processing error for {file.filename}: {error_msg}")
+                    processed_files.append(
+                        {
+                            "filename": file.filename,
+                            "status": "error",
+                            "error": error_msg,
+                        }
+                    )
+                    continue
 
                 # Wait briefly for transcription manager to be created by background processor
                 audio_logger.info(
@@ -407,9 +458,21 @@ async def process_audio_files(
                 processed_conversations.append(conversation_info)
 
             except Exception as e:
-                audio_logger.error(f"Error processing file {file.filename}: {e}")
+                error_msg = str(e)
+                audio_logger.error(f"Error processing file {file.filename}: {error_msg}", exc_info=True)
+                
+                # Provide more specific error messages based on the type of error
+                if "wave" in error_msg.lower() or "invalid" in error_msg.lower():
+                    error_msg = f"Invalid audio file format: {error_msg}"
+                elif "permission" in error_msg.lower() or "access" in error_msg.lower():
+                    error_msg = f"File access error: {error_msg}"
+                elif "timeout" in error_msg.lower():
+                    error_msg = f"Processing timeout: {error_msg}"
+                elif "memory" in error_msg.lower() or "size" in error_msg.lower():
+                    error_msg = f"File size or memory error: {error_msg}"
+                
                 processed_files.append(
-                    {"filename": file.filename or "unknown", "status": "error", "error": str(e)}
+                    {"filename": file.filename or "unknown", "status": "error", "error": error_msg}
                 )
             finally:
                 # Always clean up client state to prevent accumulation
@@ -429,8 +492,20 @@ async def process_audio_files(
         }
 
     except Exception as e:
-        audio_logger.error(f"Error in process_audio_files: {e}")
-        return JSONResponse(status_code=500, content={"error": f"File processing failed: {str(e)}"})
+        error_msg = str(e)
+        audio_logger.error(f"Critical error in process_audio_files: {error_msg}", exc_info=True)
+        
+        # Provide more specific error messages for common issues
+        if "No files provided" in error_msg:
+            return JSONResponse(status_code=400, content={"error": "No audio files were uploaded"})
+        elif "Only WAV files" in error_msg:
+            return JSONResponse(status_code=400, content={"error": "Only WAV audio files are currently supported"})
+        elif "Authentication" in error_msg or "permission" in error_msg.lower():
+            return JSONResponse(status_code=403, content={"error": f"Authentication error: {error_msg}"})
+        elif "timeout" in error_msg.lower():
+            return JSONResponse(status_code=504, content={"error": f"Processing timeout: {error_msg}"})
+        else:
+            return JSONResponse(status_code=500, content={"error": f"File processing failed: {error_msg}"})
 
 
 def get_audio_duration(file_content: bytes) -> float:
