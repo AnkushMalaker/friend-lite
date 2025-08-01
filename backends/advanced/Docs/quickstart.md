@@ -13,7 +13,7 @@ At the moment, the basic functionalities are:
 - Streamlit web dashboard
 - Basic user management
 
-**Core Implementation**: See `src/main.py` for the complete FastAPI application and WebSocket handling.
+**Core Implementation**: See `src/advanced_omi_backend/main.py` for the complete FastAPI application and WebSocket handling.
 
 ## Prerequisites
 
@@ -90,7 +90,7 @@ This starts:
 - **Qdrant**: `localhost:6333`
 - (optional) **Ollama**: # commented out
 
-**Implementation**: See `docker-compose.yml` for complete service configuration and `src/main.py` for FastAPI application setup.
+**Implementation**: See `docker-compose.yml` for complete service configuration and `src/advanced_omi_backend/main.py` for FastAPI application setup.
 
 ### 3. Optional: Start ASR Service
 
@@ -219,7 +219,7 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 - **Speech detection**: Automatic silence removal
 - **Audio cropping**: Extract only speech segments
 
-**Implementation**: See `src/main.py:1562+` for WebSocket endpoints and `src/main.py:895-1340` for audio processing pipeline.
+**Implementation**: See `src/advanced_omi_backend/main.py` for WebSocket endpoints and `src/advanced_omi_backend/processors.py` for audio processing pipeline.
 
 ### Transcription Options
 - **Deepgram API**: Cloud-based batch processing, high accuracy (recommended)
@@ -245,9 +245,9 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 - **No more fallbacks**: System now creates proper memories instead of generic transcript placeholders
 
 **Implementation**: 
-- **Memory System**: `src/memory/memory_service.py` + `main.py:1047-1065, 1163-1195`
-- **Configuration**: `memory_config.yaml` + `src/memory_config_loader.py`
-- **Debug Tracking**: `src/memory_debug.py` + API endpoints at `/api/debug/memory/*`
+- **Memory System**: `src/advanced_omi_backend/memory/memory_service.py` + `src/advanced_omi_backend/controllers/memory_controller.py`
+- **Configuration**: `memory_config.yaml` + `src/advanced_omi_backend/memory_config_loader.py`
+- **Debug Tracking**: `src/advanced_omi_backend/debug_system_tracker.py` + API endpoints at `/api/debug/memory/*`
 
 ### Authentication & Security
 - **Email Authentication**: Login with email and password
@@ -258,7 +258,7 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 - **Multi-device support**: Single user can connect multiple devices
 - **Security headers**: Proper CORS, cookie security, and token validation
 
-**Implementation**: See `src/auth.py` for authentication logic, `src/users.py` for user management, and [`auth.md`](./auth.md) for comprehensive documentation.
+**Implementation**: See `src/advanced_omi_backend/auth.py` for authentication logic, `src/advanced_omi_backend/users.py` for user management, and [`auth.md`](./auth.md) for comprehensive documentation.
 
 ## Verification
 
@@ -520,7 +520,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 - `GET /api/debug/memory/config` - Current configuration
 - `GET /api/debug/memory/pipeline/{audio_uuid}` - Pipeline trace
 
-**Implementation**: See `src/memory_debug_api.py` for debug endpoints and `../MEMORY_DEBUG_IMPLEMENTATION.md` for complete debug system documentation.
+**Implementation**: See `src/advanced_omi_backend/routers/modules/system_routes.py` for debug endpoints and system utilities.
 
 ## Next Steps
 

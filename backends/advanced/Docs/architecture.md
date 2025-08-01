@@ -6,7 +6,7 @@
 
 Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, and extracts memories. The system features a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard for management, and complete user authentication with role-based access control.
 
-**Core Implementation**: The complete system is implemented in `src/main.py` with supporting services in dedicated modules.
+**Core Implementation**: The complete system is implemented in `src/advanced_omi_backend/main.py` with supporting services in dedicated modules, using a modular router/controller architecture pattern.
 
 ## Architecture Diagram
 
@@ -169,16 +169,16 @@ graph TB
 
 ### Core Application
 
-#### FastAPI Backend (`main.py`)
+#### FastAPI Backend (`src/advanced_omi_backend/main.py`)
 - **Authentication-First Design**: All endpoints require JWT authentication
 - **Wyoming Protocol WebSocket**: Real-time audio streaming using Wyoming protocol (JSONL + binary) for structured session management
-- **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation (`main.py:1562+`)
+- **WebSocket Audio Streaming**: Real-time Opus/PCM audio ingestion with per-client isolation
 - **Conversation Management**: Session-based conversation lifecycle using Wyoming audio-start/stop events
-- **REST API Suite**: Comprehensive endpoints for user, conversation, and memory management (`main.py:1700+`)
-- **Health Monitoring**: Detailed service health checks and performance metrics (`main.py:2500+`)
-- **Audio Cropping**: Intelligent speech segment extraction using FFmpeg (`main.py:174-200`)
+- **REST API Suite**: Comprehensive endpoints organized in modular routers (`src/advanced_omi_backend/routers/`)
+- **Health Monitoring**: Detailed service health checks and performance metrics (`src/advanced_omi_backend/routers/modules/system_routes.py`)
+- **Audio Cropping**: Intelligent speech segment extraction using FFmpeg
 
-#### Authentication System (`auth.py`)
+#### Authentication System (`src/advanced_omi_backend/auth.py`)
 - **FastAPI-Users Integration**: Complete user lifecycle management
 - **Email Authentication**: User authentication via email and password
 - **Multi-Authentication**: JWT tokens,  and cookie-based sessions
@@ -189,7 +189,7 @@ graph TB
 
 > 📖 **Read more**: [Authentication Architecture](./auth.md) for complete authentication system details
 
-#### Streamlit Dashboard (`streamlit_app.py`)
+#### Streamlit Dashboard (`webui/streamlit_app.py`)
 - **User-Friendly Interface**: Complete web-based management interface
 - **Authentication Integration**: Login with backend JWT tokens or Google OAuth
 - **Real-Time Monitoring**: Live client status and conversation management
@@ -519,18 +519,18 @@ stateDiagram-v2
 ### Intelligence Services
 
 
-#### Memory Management (`src/memory/memory_service.py`)
+#### Memory Management (`src/advanced_omi_backend/memory/memory_service.py`)
 - **User-Centric Storage**: All memories keyed by database user_id (not client_id)
 - **Conversation Summarization**: Automatic memory extraction using mem0 framework
 - **Vector Storage**: Semantic memory search with Qdrant embeddings
 - **Client Metadata**: Client information stored in memory metadata for reference
 - **User Isolation**: Complete data separation between users via user_id
 - **Temporal Memory**: Long-term conversation history with semantic retrieval
-- **Processing Trigger**: `main.py:1047-1065` (conversation end) → `main.py:1163-1195` (background processing)
+- **Processing Trigger**: Conversation end events processed by `src/advanced_omi_backend/controllers/memory_controller.py`
 
 > 📖 **Read more**: [Memory System Documentation](./memories.md) for detailed memory extraction and storage
 
-#### Metrics System (`metrics.py`)
+#### Debug System (`src/advanced_omi_backend/debug_system_tracker.py`)
 - **Performance Tracking**: Audio processing latency, transcription success rates
 - **Service Health Monitoring**: External service connectivity and response times
 - **User Analytics**: Connection patterns, conversation statistics
@@ -538,7 +538,7 @@ stateDiagram-v2
 
 ### Data Models & Access
 
-#### User Management (`users.py`)
+#### User Management (`src/advanced_omi_backend/users.py`)
 - **Beanie ODM**: MongoDB document modeling with type safety
 - **User ID System**: MongoDB ObjectId-based user identification
 - **Authentication Data**: Secure password hashing, email verification, email-based login
@@ -547,7 +547,7 @@ stateDiagram-v2
 - **Data Ownership**: All data (conversations, memories) associated via user_id
 - **Client ID Generation**: Helper functions for `objectid_suffix-device_name` format
 
-#### Conversation Data Access (`ChunkRepo`)
+#### Conversation Data Access (`src/advanced_omi_backend/conversation_repository.py`)
 - **Audio Metadata**: File paths, timestamps, duration tracking
 - **Transcript Management**: Speaker identification and timing information
 - **Memory Links**: Connection between conversations and extracted memories
@@ -769,16 +769,13 @@ flowchart TB
 
 **File Upload Flow**:
 1. Audio chunks queued to `transcription_queue` 
-2. Background `_transcription_processor()` creates `TranscriptionManager` on first chunk
+2. Background transcription processor creates `TranscriptionManager` on first chunk
 3. 2-second delay ensures manager exists before flush
-4. `close_client_audio()` → `flush_final_transcript()` → transcription completion
+4. Client audio closure triggers transcript completion
 
 ### Memory & Intelligence Processing
 1. **Conversation Completion**: End-of-session trigger for memory extraction
-2. **Transcript Validation**: Multi-layer validation prevents empty/short transcripts from reaching LLM
-   - Individual transcript filtering during collection (`main.py:594, 717, 858`)
-   - Full conversation length validation before memory processing (`main.py:1224`)
-   - Memory service validation with 10-character minimum (`memory_service.py:242`)
+2. **Transcript Validation**: Multi-layer validation prevents empty/short transcripts from reaching LLM implemented in memory controller
 3. **User Resolution**: Client-ID to database user mapping for proper data association
 4. **LLM Processing**: Ollama-based conversation summarization with user context (only for validated transcripts)
 5. **Vector Storage**: Semantic embeddings stored in Qdrant keyed by user_id
@@ -879,7 +876,26 @@ The HAVPE relay (`extras/havpe-relay/main.py`) provides ESP32 audio streaming ca
 
 ## REST API Architecture
 
-The system provides a comprehensive REST API organized into functional modules:
+The system provides a comprehensive REST API organized into functional modules using a router/controller pattern:
+
+### Router/Controller Architecture
+```
+src/advanced_omi_backend/
+├── routers/                    # Route definitions
+│   ├── api_router.py          # Main API router aggregation
+│   └── modules/               # Modular route organization
+│       ├── user_routes.py     # User management routes
+│       ├── client_routes.py   # Client monitoring routes
+│       ├── conversation_routes.py # Conversation routes
+│       ├── memory_routes.py   # Memory management routes
+│       └── system_routes.py   # System utilities routes
+└── controllers/               # Business logic controllers
+    ├── user_controller.py     # User management logic
+    ├── client_controller.py   # Client monitoring logic
+    ├── conversation_controller.py # Conversation logic
+    ├── memory_controller.py   # Memory processing logic
+    └── system_controller.py   # System utilities logic
+```
 
 ### API Organization
 ```
