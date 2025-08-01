@@ -4,12 +4,12 @@ on:
   push:
     branches: [ main, develop ]
     paths:
-      - 'backends/advanced-backend/**'
+      - 'backends/advanced/src/**'
       - '.github/workflows/integration-tests.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
-      - 'backends/advanced-backend/**'
+      - 'backends/advanced/src/**'
       - '.github/workflows/integration-tests.yml'
 
 jobs:
@@ -43,11 +43,11 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
         
     - name: Change to backend directory
-      run: cd backends/advanced-backend
+      run: cd backends/advanced
       
     - name: Install dependencies with uv
       run: |
-        cd backends/advanced-backend
+        cd backends/advanced
         uv sync --dev --group test
         
     - name: Set up environment variables
@@ -55,7 +55,7 @@ jobs:
         DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
-        cd backends/advanced-backend
+        cd backends/advanced
         echo "Setting up environment variables..."
         echo "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
         echo "OPENAI_API_KEY length: ${#OPENAI_API_KEY}"
@@ -75,7 +75,7 @@ jobs:
         
     - name: Clean test environment
       run: |
-        cd backends/advanced-backend
+        cd backends/advanced
         # Clean any existing test data
         sudo rm -rf ./test_audio_chunks/ ./test_data/ ./test_debug_dir/ ./mongo_data_test/ ./qdrant_data_test/ ./test_neo4j/ || true
         # Stop any existing test containers
@@ -83,7 +83,7 @@ jobs:
         
     - name: Run integration tests
       run: |
-        cd backends/advanced-backend
+        cd backends/advanced
         # Keep CACHED_MODE=False for proper CI testing with fresh environment
         # With the fixed fact extraction prompt, fresh mode should work correctly
         echo "Using fresh mode (CACHED_MODE=False) for clean CI testing"
@@ -96,14 +96,14 @@ jobs:
       with:
         name: test-logs
         path: |
-          backends/advanced-backend/test_integration.log
-          backends/advanced-backend/docker-compose-test.yml
+          backends/advanced/test_integration.log
+          backends/advanced/docker-compose-test.yml
         retention-days: 7
         
     - name: Clean up test containers
       if: always()
       run: |
-        cd backends/advanced-backend
+        cd backends/advanced
         # Clean up test containers and volumes
         docker compose -f docker-compose-test.yml down -v || true
         docker system prune -f || true
