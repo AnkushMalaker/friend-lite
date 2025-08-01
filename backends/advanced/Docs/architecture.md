@@ -530,11 +530,6 @@ stateDiagram-v2
 
 > 📖 **Read more**: [Memory System Documentation](./memories.md) for detailed memory extraction and storage
 
-#### Debug System (`src/advanced_omi_backend/debug_system_tracker.py`)
-- **Performance Tracking**: Audio processing latency, transcription success rates
-- **Service Health Monitoring**: External service connectivity and response times
-- **User Analytics**: Connection patterns, conversation statistics
-- **Resource Monitoring**: System resource usage and bottleneck identification
 
 ### Data Models & Access
 
@@ -963,7 +958,6 @@ src/advanced_omi_backend/
   "stats": {
     "total_memories": 150,
     "total_users": 5,
-    "debug_tracker_initialized": true,
     "users_with_memories": ["user1", "user2"],
     "client_ids_with_memories": ["cd7994-laptop", "e26efe-upload"]
   }

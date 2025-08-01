@@ -747,9 +747,6 @@ class ProcessorManager:
             {"audio_uuid": item.audio_uuid, "started_at": start_time},
         )
 
-        # Debug tracking removed for cleaner architecture
-        # tracker = get_debug_tracker()
-        # transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
 
         try:
             # Use ConversationRepository for clean data access with event coordination
@@ -798,11 +795,6 @@ class ProcessorManager:
                 return None
 
             # Debug tracking removed for cleaner architecture
-            # tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_STARTED,
-            #     metadata={"conversation_length": len(full_conversation)},
-            # )
 
             # Lazy import memory service
             if self.memory_service is None:
@@ -914,12 +906,6 @@ class ProcessorManager:
                         },
                     )
 
-                # Debug tracking removed for cleaner architecture
-                # tracker.track_event(
-                #     transaction_id,
-                #     PipelineStage.MEMORY_COMPLETED,
-                #     metadata={"processing_time": time.time() - start_time},
-                # )
             else:
                 audio_logger.warning(f"⚠️ Memory service returned False for {item.audio_uuid}")
 
@@ -949,14 +935,6 @@ class ProcessorManager:
                     },
                 )
 
-                # Debug tracking removed for cleaner architecture
-                # tracker.track_event(
-                #     transaction_id,
-                #     PipelineStage.MEMORY_COMPLETED,
-                #     success=False,
-                #     error_message="Memory service returned False",
-                #     metadata={"processing_time": time.time() - start_time},
-                # )
 
         except asyncio.TimeoutError:
             audio_logger.error(f"Memory processing timed out for {item.audio_uuid}")
@@ -982,14 +960,6 @@ class ProcessorManager:
                 },
             )
 
-            # Debug tracking removed for cleaner architecture
-            # tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_COMPLETED,
-            #     success=False,
-            #     error_message="Processing timeout (5 minutes)",
-            #     metadata={"processing_time": time.time() - start_time},
-            # )
         except Exception as e:
             audio_logger.error(f"Error processing memory for {item.audio_uuid}: {e}")
 
@@ -1014,14 +984,6 @@ class ProcessorManager:
                 },
             )
 
-            # Debug tracking removed for cleaner architecture
-            # tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_COMPLETED,
-            #     success=False,
-            #     error_message=f"Exception: {str(e)}",
-            #     metadata={"processing_time": time.time() - start_time},
-            # )
 
         end_time = time.time()
         processing_time_ms = (end_time - start_time) * 1000

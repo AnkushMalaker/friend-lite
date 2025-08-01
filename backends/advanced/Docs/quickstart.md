@@ -247,7 +247,6 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 **Implementation**: 
 - **Memory System**: `src/advanced_omi_backend/memory/memory_service.py` + `src/advanced_omi_backend/controllers/memory_controller.py`
 - **Configuration**: `memory_config.yaml` + `src/advanced_omi_backend/memory_config_loader.py`
-- **Debug Tracking**: `src/advanced_omi_backend/debug_system_tracker.py` + API endpoints at `/api/debug/memory/*`
 
 ### Authentication & Security
 - **Email Authentication**: Login with email and password

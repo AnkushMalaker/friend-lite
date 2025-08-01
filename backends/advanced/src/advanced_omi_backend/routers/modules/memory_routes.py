@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse
 
 from advanced_omi_backend.auth import current_active_user, current_superuser
 from advanced_omi_backend.client_manager import get_user_clients_all
-from advanced_omi_backend.debug_system_tracker import get_debug_tracker
 from advanced_omi_backend.memory import get_memory_service
 from advanced_omi_backend.users import User
 
@@ -188,8 +187,6 @@ async def get_all_memories_admin(current_user: User = Depends(current_superuser)
     try:
         memory_service = get_memory_service()
 
-        # Get debug tracker for additional context
-        debug_tracker = get_debug_tracker()
 
         # Get all memories without user filtering
         all_memories = await memory_service.get_all_memories_debug(limit)
@@ -215,7 +212,6 @@ async def get_all_memories_admin(current_user: User = Depends(current_superuser)
         stats = {
             "total_memories": len(all_memories),
             "total_users": len(user_memories),
-            "debug_tracker_initialized": debug_tracker is not None,
             "users_with_memories": sorted(list(users_with_memories)),
             "client_ids_with_memories": sorted(list(client_ids_with_memories)),
         }

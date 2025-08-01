@@ -12,7 +12,6 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-from advanced_omi_backend.debug_system_tracker import get_debug_tracker
 from components.auth import init_auth_state, check_auth_from_url, show_auth_sidebar
 from components.health import get_system_health
 from components.utils import get_data

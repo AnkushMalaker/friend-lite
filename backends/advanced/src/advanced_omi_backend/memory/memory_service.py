@@ -16,8 +16,7 @@ from typing import Optional
 
 from mem0 import Memory
 
-# Import debug tracker and config loader
-from advanced_omi_backend.debug_system_tracker import PipelineStage, get_debug_tracker
+# Import config loader
 from advanced_omi_backend.memory_config_loader import get_config_loader
 from advanced_omi_backend.users import User
 
@@ -463,36 +462,12 @@ def _add_memory_to_store(
     created_memory_ids = []
 
     try:
-        # Get configuration and debug tracker
+        # Get configuration
         config_loader = get_config_loader()
-        # debug_tracker = get_debug_tracker()
-
-        # Create a transaction for memory processing tracking
-        # transaction_id = debug_tracker.create_transaction(
-        #     user_id=user_id,
-        #     client_id=client_id,
-        #     conversation_id=audio_uuid,  # Use audio_uuid as conversation_id
-        # )
-
-        # # Start memory processing stage
-        # debug_tracker.track_event(
-        #     transaction_id,
-        #     PipelineStage.MEMORY_STARTED,
-        #     True,
-        #     transcript_length=len(transcript) if transcript else 0,
-        #     user_email=user_email,
-        #     audio_uuid=audio_uuid,
-        # )
 
         # # Check if transcript is empty or too short to be meaningful
         # MODIFIED: Reduced minimum length from 10 to 1 character to process almost all transcripts
         if not transcript or len(transcript.strip()) < 10:
-            # debug_tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_COMPLETED,
-            #     False,
-            #     error_message=f"Transcript empty: {len(transcript.strip()) if transcript else 0} chars",
-            # )
             memory_logger.info(
                 f"Skipping memory processing for {audio_uuid} - transcript completely empty: {len(transcript.strip()) if transcript else 0} chars"
             )
@@ -507,12 +482,6 @@ def _add_memory_to_store(
                     f"Overriding quality control skip for short transcript {audio_uuid} - ensuring all transcripts are stored"
                 )
             else:
-                # debug_tracker.track_event(
-                #     transaction_id,
-                #     PipelineStage.MEMORY_COMPLETED,
-                #     False,
-                #     error_message="Conversation skipped due to quality control",
-                # )
                 memory_logger.info(
                     f"Skipping memory processing for {audio_uuid} due to quality control"
                 )
@@ -521,12 +490,6 @@ def _add_memory_to_store(
         # Get memory extraction configuration
         memory_config = config_loader.get_memory_extraction_config()
         if not memory_config.get("enabled", True):
-            # debug_tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_COMPLETED,
-            #     False,
-            #     error_message="Memory extraction disabled",
-            # )
             memory_logger.info(f"Memory extraction disabled for {audio_uuid}")
             return True, []
 
@@ -865,16 +828,6 @@ def _add_memory_to_store(
             memory_id = str(result) if result else "unknown"
             memory_text = str(result) if result else "unknown"
 
-        # debug_tracker.track_event(
-        #     transaction_id,
-        #     PipelineStage.MEMORY_COMPLETED,
-        #     True,
-        #     processing_time_ms=processing_time_ms,
-        #     memory_id=memory_id,
-        #     memory_text=str(memory_text)[:100] if memory_text else "none",
-        #     transcript_length=len(transcript),
-        #     llm_model=memory_config.get("llm_settings", {}).get("model", "llama3.1:latest"),
-        # )
 
         memory_logger.info(
             f"Successfully processed memory for {audio_uuid}, created {len(created_memory_ids)} memories: {created_memory_ids}"
@@ -885,15 +838,6 @@ def _add_memory_to_store(
         processing_time_ms = (time.time() - start_time) * 1000
         memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
 
-        # Record debug information for failure
-        # debug_tracker.track_event(
-        #     transaction_id,
-        #     PipelineStage.MEMORY_COMPLETED,
-        #     False,
-        #     error_message=str(e),
-        #     processing_time_ms=processing_time_ms,
-        #     transcript_length=len(transcript) if transcript else 0,
-        # )
 
         return False, []
 

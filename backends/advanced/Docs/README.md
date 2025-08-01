@@ -64,7 +64,6 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 - Debug database schema and API endpoints
 - Performance monitoring and troubleshooting
 - **Code References**:
-  - `src/advanced_omi_backend/debug_system_tracker.py` (debug tracking)
   - `src/advanced_omi_backend/routers/modules/system_routes.py` (debug endpoints)
 
 ---
@@ -97,7 +96,6 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 
 ### **"I want to debug pipeline issues"**
 1. `../MEMORY_DEBUG_IMPLEMENTATION.md` - Debug system overview
-2. `src/advanced_omi_backend/debug_system_tracker.py` - Debug tracking implementation
 3. API: `GET /api/debug/memory/stats` - Live debugging
 4. `src/advanced_omi_backend/routers/modules/system_routes.py` - Debug endpoints
 
@@ -130,7 +128,6 @@ backends/advanced-backend/
 │   ├── controllers/               # Business logic controllers
 │   ├── memory/
 │   │   └── memory_service.py      # Memory system (Mem0)
-│   ├── debug_system_tracker.py    # Debug tracking
 │   └── memory_config_loader.py    # Configuration loading
 │
 ├── memory_config.yaml             # 📋 Central configuration
@@ -148,7 +145,6 @@ backends/advanced-backend/
 
 ### **Data Storage**
 - **Memories**: `src/advanced_omi_backend/memory/memory_service.py` → Mem0 → Qdrant
-- **Debug Data**: `src/advanced_omi_backend/debug_system_tracker.py`
 
 ### **Configuration**
 - **Loading**: `src/advanced_omi_backend/memory_config_loader.py`
