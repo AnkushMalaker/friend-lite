@@ -38,9 +38,10 @@ logger = logging.getLogger(__name__)
 from dotenv import load_dotenv
 
 # Test Configuration Flags
-# Set CACHED_MODE=True for fast development iteration (skip cleanup, reuse containers)
-# Set CACHED_MODE=False for fresh test environment (default, recommended)
-CACHED_MODE = False  # Set to True for debugging - keeps containers running
+# REBUILD=True: Force rebuild of containers (useful when code changes)
+# CACHED_MODE=True: Keep containers running after test (for debugging/reuse)
+REBUILD = True  # Set to True to force rebuild containers with latest code
+CACHED_MODE = True  # Set to True for debugging - keeps containers running
 
 # Test Environment Configuration
 TEST_ENV_VARS = {
@@ -78,6 +79,7 @@ class IntegrationTestRunner:
         self.services_started_by_test = False  # Track if WE started the services
         self.mongo_client: Optional[MongoClient] = None
         self.cached = CACHED_MODE  # Use global configuration flag
+        self.rebuild = REBUILD  # Use global rebuild flag
         
     def load_expected_transcript(self) -> str:
         """Load the expected transcript from the test assets file."""
@@ -229,9 +231,9 @@ class IntegrationTestRunner:
             check_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "ps", "-q"], capture_output=True, text=True)
             running_services = check_result.stdout.strip().split('\n') if check_result.stdout.strip() else []
             
-            if len(running_services) > 0:
+            if len(running_services) > 0 and not self.rebuild:
                 logger.info(f"🔄 Found {len(running_services)} running test services")
-                # Check if test backend is healthy
+                # Check if test backend is healthy (only skip if not rebuilding)
                 try:
                     health_check = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "ps", "friend-backend-test"], capture_output=True, text=True)
                     if "healthy" in health_check.stdout or "Up" in health_check.stdout:
@@ -241,11 +243,17 @@ class IntegrationTestRunner:
                         return
                 except:
                     pass
+            elif self.rebuild:
+                logger.info("🔨 Rebuild flag is True, will rebuild containers with latest code")
             
             logger.info("🔄 Need to start/restart test services...")
             
-            # Handle container management based on cached flag
-            if self.cached:
+            # Handle container management based on rebuild and cached flags
+            if self.rebuild:
+                logger.info("🔨 Rebuild mode: stopping containers and rebuilding with latest code...")
+                # Stop existing test services and remove volumes for fresh rebuild
+                subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "down", "-v"], capture_output=True)
+            elif self.cached:
                 logger.info("🔄 Cached mode: restarting existing containers...")
                 subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "restart"], capture_output=True)
             else:
@@ -259,15 +267,21 @@ class IntegrationTestRunner:
             if is_ci:
                 # In CI, use simpler build process
                 logger.info("🤖 CI environment detected, using optimized build...")
+                if self.rebuild:
+                    # Force rebuild in CI when rebuild flag is set
+                    build_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "build"], capture_output=True, text=True)
+                    if build_result.returncode != 0:
+                        logger.error(f"Build failed: {build_result.stderr}")
+                        raise RuntimeError("Docker compose build failed")
                 cmd = ["docker", "compose", "-f", "docker-compose-test.yml", "up", "-d", "--no-build"]
-                # Build first, then start
-                build_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "build"], capture_output=True, text=True)
-                if build_result.returncode != 0:
-                    logger.error(f"Build failed: {build_result.stderr}")
-                    raise RuntimeError("Docker compose build failed")
             else:
-                # Local development
-                cmd = ["docker", "compose", "-f", "docker-compose-test.yml", "up", "--build", "-d"]
+                # Local development - use rebuild flag to determine build behavior
+                if self.rebuild:
+                    cmd = ["docker", "compose", "-f", "docker-compose-test.yml", "up", "--build", "-d"]
+                    logger.info("🔨 Local rebuild: will rebuild containers with latest code")
+                else:
+                    cmd = ["docker", "compose", "-f", "docker-compose-test.yml", "up", "-d"]
+                    logger.info("🚀 Local start: using existing container images")
             
             # Start test services
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -915,19 +929,21 @@ class IntegrationTestRunner:
         return []
         
     def cleanup(self):
-        """Clean up test resources based on cached flag."""
+        """Clean up test resources based on cached and rebuild flags."""
         logger.info("Cleaning up...")
         
         if self.mongo_client:
             self.mongo_client.close()
             
-        # Handle container cleanup based on cached flag
+        # Handle container cleanup based on cached flag (rebuild flag doesn't affect cleanup)
         if not self.cached and self.services_started_by_test:
             logger.info("🔄 Fresh mode: stopping test docker compose services...")
             subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "down", "-v"], capture_output=True)
             logger.info("✓ Test containers stopped and volumes removed")
         elif self.cached:
             logger.info("🗂️ Cached mode: leaving containers running for reuse")
+            if self.rebuild:
+                logger.info("   (containers were rebuilt with latest code during this test)")
         else:
             logger.info("🔄 Test services were already running, leaving them as-is")
         
