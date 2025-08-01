@@ -6,8 +6,6 @@ example/*
 **/node_modules/*
 **/ollama-data/*
 **/qdrant_data/*
-backends/examples/ai_server/*
-backends/examples/example-satellite/*
 **/model_cache/*
 .vscode/*
 **/audio_chunks/*
@@ -31,9 +29,16 @@ transcription_results.csv
 **/*.egg-info/
 
 untracked/*
-backends/advanced-backend/data/*
+backends/advanced/data/*
 extras/havpe-relay/firmware/secrets.yaml
 extras/test-audios/*
 
 ## Python Build stuff
 **/*egg-info/*
+
+# Speaker Recognition
+extras/speaker-omni-experimental/data/*
+extras/speaker-omni-experimental/cache/*
+
+# AI Stuff
+.claude
