@@ -11,6 +11,7 @@ import time
 import wave
 
 import numpy as np
+from easy_audio_interfaces.filesystem import LocalFileStreamer
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse
 from wyoming.audio import AudioChunk
@@ -248,11 +249,10 @@ async def process_audio_files(
                         )
                         channels = 1
 
-                    # Ensure sample rate is 16kHz (resample if needed)
-                    if sample_rate != 16000:
-                        audio_logger.warning(
-                            f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz. Processing anyway."
-                        )
+                    # Log detected sample rate for processing
+                    audio_logger.info(
+                        f"File {file.filename} has sample rate {sample_rate}Hz - will be processed with correct rate"
+                    )
 
                     # Process audio in larger chunks for faster file processing
                     # Use larger chunks (32KB) for optimal performance

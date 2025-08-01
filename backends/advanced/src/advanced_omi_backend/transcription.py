@@ -44,6 +44,7 @@ class TranscriptionManager:
         self.processor_manager = (
             processor_manager  # Reference to processor manager for completion tracking
         )
+        self._sample_rate = None  # Track audio sample rate from first chunk
 
         # Event-driven ASR event handling for offline ASR
         self._event_queue = asyncio.Queue()
@@ -192,12 +193,17 @@ class TranscriptionManager:
                 logger.error("❌ Online provider is None, this shouldn't happen")
                 return
 
-            # Track Deepgram API call timing
+            # Track Deepgram API call timing  
             api_start_time = time.time()
+            # Sample rate must be detected from audio chunks
+            if self._sample_rate is None:
+                logger.error("❌ Sample rate not detected from audio chunks - cannot transcribe")
+                return
+            
             logger.info(
-                f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes"
+                f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes at {self._sample_rate}Hz"
             )
-            transcript_result = await self.online_provider.transcribe(combined_audio)
+            transcript_result = await self.online_provider.transcribe(combined_audio, self._sample_rate)
             api_duration = time.time() - api_start_time
             logger.info(
                 f"📝 Received transcription result from {self.online_provider.name} in {api_duration:.2f}s: {bool(transcript_result)}"
@@ -656,6 +662,15 @@ class TranscriptionManager:
 
             # Add chunk to buffer if we have audio data
             if chunk.audio and len(chunk.audio) > 0:
+                # Set sample rate from first chunk
+                if self._sample_rate is None:
+                    self._sample_rate = chunk.rate
+                    logger.info(f"📊 Set sample rate to {self._sample_rate}Hz for client {client_id}")
+                elif self._sample_rate != chunk.rate:
+                    logger.warning(
+                        f"⚠️ Sample rate mismatch for {client_id}: expected {self._sample_rate}Hz, got {chunk.rate}Hz"
+                    )
+                
                 self._audio_buffer.append(chunk)
                 logger.debug(
                     f"📦 Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"
