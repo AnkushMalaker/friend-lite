@@ -219,7 +219,7 @@ class ProcessorManager:
 
     async def queue_transcription(self, item: TranscriptionItem):
         """Queue audio for transcription."""
-        audio_logger.info(
+        audio_logger.debug(
             f"📥 queue_transcription called for client {item.client_id}, audio_uuid: {item.audio_uuid}"
         )
         await self.transcription_queue.put(item)
@@ -517,7 +517,7 @@ class ProcessorManager:
 
                         # Queue for transcription
                         audio_uuid = self.active_audio_uuids[item.client_id]
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"🔄 About to queue transcription for client {item.client_id}, audio_uuid: {audio_uuid}"
                         )
                         await self.queue_transcription(
@@ -528,7 +528,7 @@ class ProcessorManager:
                                 audio_chunk=item.audio_chunk,
                             )
                         )
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"✅ Successfully queued transcription for client {item.client_id}, audio_uuid: {audio_uuid}"
                         )
 
