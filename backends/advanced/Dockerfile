@@ -19,6 +19,7 @@ WORKDIR /app
 
 # Copy package structure and dependency files first
 COPY pyproject.toml README.md ./
+COPY uv.lock .
 RUN mkdir -p src/advanced_omi_backend
 COPY src/advanced_omi_backend/__init__.py src/advanced_omi_backend/
 
