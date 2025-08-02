@@ -21,10 +21,7 @@ def show_upload_tab():
 
     # Check if user is admin
     user_info = st.session_state.get("user_info", {})
-    user_email = user_info.get("email", "")
-    
-    # Simple admin check - in a real app you'd check this properly via the backend
-    is_admin = "admin" in user_email.lower()
+    is_admin = user_info.get("is_superuser", False) if isinstance(user_info, dict) else False
     
     if not is_admin:
         st.warning("🔒 This feature is only available to admin users.")
