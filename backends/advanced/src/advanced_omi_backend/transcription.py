@@ -192,12 +192,27 @@ class TranscriptionManager:
                 logger.error("❌ Online provider is None, this shouldn't happen")
                 return
 
-            # Track Deepgram API call timing
+            # Track Deepgram API call timing  
             api_start_time = time.time()
+            
+            # Get sample rate from client state (set by audio processor)
+            current_client = self._get_current_client()
+            sample_rate = None
+            if current_client and current_client.sample_rate:
+                sample_rate = current_client.sample_rate
+                logger.info(f"📊 Using sample rate {sample_rate}Hz from client state for transcription")
+            elif self._audio_buffer:
+                # Fallback: use rate from first audio chunk
+                sample_rate = self._audio_buffer[0].rate
+                logger.warning(f"⚠️ Using fallback sample rate {sample_rate}Hz from audio chunk (no client state)")
+            else:
+                logger.error("❌ No sample rate available - cannot transcribe")
+                return
+            
             logger.info(
-                f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes"
+                f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes at {sample_rate}Hz"
             )
-            transcript_result = await self.online_provider.transcribe(combined_audio)
+            transcript_result = await self.online_provider.transcribe(combined_audio, sample_rate)
             api_duration = time.time() - api_start_time
             logger.info(
                 f"📝 Received transcription result from {self.online_provider.name} in {api_duration:.2f}s: {bool(transcript_result)}"
@@ -656,6 +671,19 @@ class TranscriptionManager:
 
             # Add chunk to buffer if we have audio data
             if chunk.audio and len(chunk.audio) > 0:
+                # Get sample rate from client state (set by audio processor)
+                current_client = self._get_current_client()
+                if current_client and current_client.sample_rate:
+                    # Use sample rate from client state
+                    expected_rate = current_client.sample_rate
+                    if chunk.rate != expected_rate:
+                        logger.warning(
+                            f"⚠️ Sample rate mismatch for {client_id}: expected {expected_rate}Hz, got {chunk.rate}Hz"
+                        )
+                else:
+                    # Fallback: no client state available, just log chunk rate
+                    logger.info(f"📊 Processing chunk with sample rate {chunk.rate}Hz for client {client_id} (no client state)")        
+                
                 self._audio_buffer.append(chunk)
                 logger.debug(
                     f"📦 Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"

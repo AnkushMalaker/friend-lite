@@ -16,13 +16,13 @@ class OnlineTranscriptionProvider(abc.ABC):
     """Abstract base class for online transcription providers."""
 
     @abc.abstractmethod
-    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> dict:
+    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
         """
         Transcribe audio data to text with optional speaker diarization.
 
         Args:
             audio_data: Raw audio bytes (PCM format)
-            sample_rate: Audio sample rate (default 16000 Hz)
+            sample_rate: Audio sample rate (Hz)
 
         Returns:
             Dictionary containing:
@@ -50,7 +50,7 @@ class DeepgramProvider(OnlineTranscriptionProvider):
     def name(self) -> str:
         return "Deepgram"
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> dict:
+    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
         """Transcribe audio using Deepgram's REST API."""
         try:
             params = {
@@ -77,7 +77,7 @@ class DeepgramProvider(OnlineTranscriptionProvider):
             timeout_config = httpx.Timeout(
                 connect=30.0,
                 read=processing_timeout,
-                write=max(180.0, int(len(audio_data) / 16000)),
+                write=max(180.0, int(len(audio_data) / (sample_rate * 2))),  # bytes per second for 16-bit PCM
                 pool=10.0,
             )
 
@@ -248,7 +248,7 @@ class MistralProvider(OnlineTranscriptionProvider):
     def name(self) -> str:
         return "Mistral"
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> dict:
+    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
         """Transcribe audio using Mistral's REST API."""
         try:
             # Mistral expects audio files, so we need to send it as a file upload
@@ -273,7 +273,7 @@ class MistralProvider(OnlineTranscriptionProvider):
             timeout_config = httpx.Timeout(
                 connect=30.0,
                 read=processing_timeout,
-                write=max(180.0, int(len(wav_data) / 16000)),
+                write=max(180.0, int(len(wav_data) / (sample_rate * 2))),  # bytes per second for 16-bit PCM
                 pool=10.0,
             )
 

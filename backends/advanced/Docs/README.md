@@ -13,14 +13,14 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 - What the system does (voice → memories)
 - Key features and capabilities
 - Basic setup and configuration
-- **Code References**: `main.py`, `memory_config.yaml`, `docker-compose.yml`
+- **Code References**: `src/advanced_omi_backend/main.py`, `memory_config.yaml`, `docker-compose.yml`
 
 ### 2. **[System Architecture](./architecture.md)** 
 **Read second** - Complete technical architecture with diagrams
 - Component relationships and data flow
 - Authentication and security architecture
 - Deployment structure and containers
-- **Code References**: `main.py:1-100`, `auth.py`, `users.py`
+- **Code References**: `src/advanced_omi_backend/main.py`, `src/advanced_omi_backend/auth.py`, `src/advanced_omi_backend/users.py`
 
 ---
 
@@ -39,7 +39,7 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 - Mem0 integration and vector storage
 - Configuration and customization options
 - **Code References**: 
-  - `src/memory/memory_service.py:159-282` (main processing)
+  - `src/advanced_omi_backend/memory/memory_service.py` (main processing)
   - `src/advanced_omi_backend/transcript_coordinator.py` (event coordination)
   - `src/advanced_omi_backend/conversation_repository.py` (data access)
   - `src/advanced_omi_backend/conversation_manager.py` (lifecycle management)
@@ -50,9 +50,9 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 - JWT tokens and OAuth integration
 - User-centric data architecture
 - **Code References**:
-  - `src/auth.py` (authentication logic)
-  - `src/users.py` (user management)
-  - `main.py:1555-1563` (auth router setup)
+  - `src/advanced_omi_backend/auth.py` (authentication logic)
+  - `src/advanced_omi_backend/users.py` (user management)
+  - `src/advanced_omi_backend/routers/api_router.py` (API router setup)
 
 ---
 
@@ -64,9 +64,7 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 - Debug database schema and API endpoints
 - Performance monitoring and troubleshooting
 - **Code References**:
-  - `src/memory_debug.py` (SQLite tracking)
-  - `src/memory_debug_api.py` (debug endpoints)
-  - `main.py:1562-1563` (debug router integration)
+  - `src/advanced_omi_backend/routers/modules/system_routes.py` (debug endpoints)
 
 ---
 
@@ -77,8 +75,8 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 - Memory extraction settings and prompts
 - Quality control and debug settings
 - **Code References**:
-  - `src/memory_config_loader.py` (config loading)
-  - `src/memory/memory_service.py:176-204` (config usage)
+  - `src/advanced_omi_backend/memory_config_loader.py` (config loading)
+  - `src/advanced_omi_backend/memory/memory_service.py` (config usage)
 
 ---
 
@@ -87,26 +85,25 @@ Welcome to friend-lite! This guide provides the optimal reading sequence to unde
 ### **"I want to understand the system quickly"** (30 min)
 1. [quickstart.md](./quickstart.md) - System overview
 2. [architecture.md](./architecture.md) - Technical architecture  
-3. `main.py:1-200` - Core imports and setup
+3. `src/advanced_omi_backend/main.py` - Core imports and setup
 4. `memory_config.yaml` - Configuration overview
 
 ### **"I want to work on memory extraction"**
 1. [memories.md](./memories.md) - Memory system details
 2. `../memory_config.yaml` - Memory configuration
-3. `src/memory/memory_service.py` - Implementation
-4. `main.py:1047-1065, 1163-1195` - Processing triggers
+3. `src/advanced_omi_backend/memory/memory_service.py` - Implementation
+4. `src/advanced_omi_backend/controllers/memory_controller.py` - Processing triggers
 
 ### **"I want to debug pipeline issues"**
 1. `../MEMORY_DEBUG_IMPLEMENTATION.md` - Debug system overview
-2. `src/memory_debug.py` - Debug tracking implementation
 3. API: `GET /api/debug/memory/stats` - Live debugging
-4. `src/memory_debug_api.py` - Debug endpoints
+4. `src/advanced_omi_backend/routers/modules/system_routes.py` - Debug endpoints
 
 ### **"I want to understand authentication"**
 1. [auth.md](./auth.md) - Authentication system
-2. `src/auth.py` - Authentication implementation
-3. `src/users.py` - User management
-4. `main.py:1555-1563` - Auth router setup
+2. `src/advanced_omi_backend/auth.py` - Authentication implementation
+3. `src/advanced_omi_backend/users.py` - User management
+4. `src/advanced_omi_backend/routers/api_router.py` - Auth router setup
 
 ---
 
@@ -121,14 +118,16 @@ backends/advanced-backend/
 │   ├── memories.md                # Memory system details
 │   └── auth.md                    # Authentication system
 │
-├── src/                           # 🔧 Source Code
-│   ├── main.py                    # Core application (WebSocket, API)
+├── src/advanced_omi_backend/      # 🔧 Source Code
+│   ├── main.py                    # Core application (WebSocket)
 │   ├── auth.py                    # Authentication system
 │   ├── users.py                   # User management
+│   ├── routers/                   # API route definitions
+│   │   ├── api_router.py          # Main API router
+│   │   └── modules/               # Modular route organization
+│   ├── controllers/               # Business logic controllers
 │   ├── memory/
 │   │   └── memory_service.py      # Memory system (Mem0)
-│   ├── memory_debug.py            # Debug tracking (SQLite)
-│   ├── memory_debug_api.py        # Debug API endpoints
 │   └── memory_config_loader.py    # Configuration loading
 │
 ├── memory_config.yaml             # 📋 Central configuration
@@ -140,23 +139,22 @@ backends/advanced-backend/
 ## 🎯 **Key Code Entry Points**
 
 ### **Audio Processing Pipeline**
-- **Entry**: WebSocket endpoints in `main.py:1562+`
-- **Transcription**: `main.py:1258-1340` (transcription processor)
-- **Memory Trigger**: `main.py:1047-1065` (conversation end)
+- **Entry**: WebSocket endpoints in `src/advanced_omi_backend/main.py`
+- **Transcription**: Audio processing pipeline in `src/advanced_omi_backend/processors.py`
+- **Memory Trigger**: Memory processing in `src/advanced_omi_backend/controllers/memory_controller.py`
 
 ### **Data Storage**
-- **Memories**: `src/memory/memory_service.py` → Mem0 → Qdrant
-- **Debug Data**: `src/memory_debug.py` → SQLite
+- **Memories**: `src/advanced_omi_backend/memory/memory_service.py` → Mem0 → Qdrant
 
 ### **Configuration**
-- **Loading**: `src/memory_config_loader.py`
+- **Loading**: `src/advanced_omi_backend/memory_config_loader.py`
 - **File**: `memory_config.yaml`
-- **Usage**: `src/memory/memory_service.py:176-204`
+- **Usage**: `src/advanced_omi_backend/memory/memory_service.py`
 
 ### **Authentication**
-- **Setup**: `src/auth.py`
-- **Users**: `src/users.py`  
-- **Integration**: `main.py:1555-1563`
+- **Setup**: `src/advanced_omi_backend/auth.py`
+- **Users**: `src/advanced_omi_backend/users.py`  
+- **Integration**: `src/advanced_omi_backend/routers/api_router.py`
 
 ---
 
@@ -178,7 +176,7 @@ backends/advanced-backend/
 2. **Test the API**: Use the curl examples in the documentation to test endpoints
 3. **Explore the debug system**: Check `GET /api/debug/memory/stats` to see live data
 4. **Modify configuration**: Edit `memory_config.yaml` to see how it affects extraction
-5. **Read the code**: Start with `main.py` and follow the references in each doc
+5. **Read the code**: Start with `src/advanced_omi_backend/main.py` and follow the references in each doc
 
 ### **Contributing Guidelines**
 

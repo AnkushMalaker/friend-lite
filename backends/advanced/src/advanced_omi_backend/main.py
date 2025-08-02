@@ -50,10 +50,6 @@ from advanced_omi_backend.constants import (
     OMI_SAMPLE_WIDTH,
 )
 from advanced_omi_backend.database import AudioChunksRepository
-from advanced_omi_backend.debug_system_tracker import (
-    get_debug_tracker,
-    shutdown_debug_tracker,
-)
 from advanced_omi_backend.llm_client import async_health_check
 from advanced_omi_backend.memory import (
     get_memory_service,
@@ -349,8 +345,6 @@ async def lifespan(app: FastAPI):
         # application_logger.info("Task manager shut down")
 
         # Stop metrics collection and save final report
-        # Shutdown debug tracker
-        shutdown_debug_tracker()
         application_logger.info("Metrics collection stopped")
 
         # Shutdown memory service and speaker service
@@ -438,12 +432,6 @@ async def ws_endpoint_omi(
                     f"🎙️ OMI audio session started for {client_id} (explicit start)"
                 )
 
-                # Create transaction for this audio session if not already created
-                # if not hasattr(client_state, "transaction_id"):
-                #     tracker = get_debug_tracker()
-                #     client_state.transaction_id = tracker.create_transaction(
-                #         user.user_id, client_id
-                #     )
 
             elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
@@ -490,17 +478,6 @@ async def ws_endpoint_omi(
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
 
-                    # Create transaction on first audio chunk if not already created
-                    # if packet_count == 1 and not hasattr(client_state, "transaction_id"):
-                    #     tracker = get_debug_tracker()
-                    #     client_state.transaction_id = tracker.create_transaction(
-                    #         user.user_id, client_id
-                    #     )
-
-                    # Track audio chunk with debug tracker
-                    # if hasattr(client_state, "transaction_id") and client_state.transaction_id:
-                    #     tracker = get_debug_tracker()
-                    #     tracker.track_audio_chunk(client_state.transaction_id, len(pcm_data))
 
                     # Log every 1000th packet to avoid spam
                     if packet_count % 1000 == 0:
@@ -594,9 +571,6 @@ async def ws_endpoint_pcm(
         # Create client state
         client_state = await create_client_state(client_id, user, device_name)
 
-        # Track WebSocket connection
-        tracker = get_debug_tracker()
-        tracker.track_websocket_connected(user.user_id, client_id)
 
         # Get processor manager
         processor_manager = get_processor_manager()
@@ -620,10 +594,6 @@ async def ws_endpoint_pcm(
                     f"{audio_format.get('channels')}ch"
                 )
 
-                # Create transaction for this audio session
-                # client_state.transaction_id = tracker.create_transaction(
-                #     user.user_id, client_id
-                # )
 
             elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
@@ -657,9 +627,6 @@ async def ws_endpoint_pcm(
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
 
-                    # Track audio chunk with debug tracker
-                    # if hasattr(client_state, "transaction_id") and client_state.transaction_id:
-                    #     tracker.track_audio_chunk(client_state.transaction_id, len(payload))
 
                     # Log every 1000th packet to avoid spam
                     if packet_count % 1000 == 0:
@@ -711,10 +678,6 @@ async def ws_endpoint_pcm(
         # Clean up pending connection tracking
         pending_connections.discard(pending_client_id)
         
-        # Track WebSocket disconnection
-        if client_id:
-            tracker = get_debug_tracker()
-            tracker.track_websocket_disconnected(client_id)
 
         # Ensure cleanup happens even if client_id is None
         if client_id:
