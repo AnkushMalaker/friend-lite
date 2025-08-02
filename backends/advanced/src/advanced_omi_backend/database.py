@@ -133,15 +133,6 @@ class AudioChunksRepository:
             return document["transcript"]
         return []
 
-    # async def get_chunks_with_memories(self, client_ids: list = None, limit: int = 100):
-    #     """Get chunks that have memory references, optionally filtered by client IDs."""
-    #     query = {"memories": {"$exists": True, "$not": {"$size": 0}}}
-    #     if client_ids:
-    #         query["client_id"] = {"$in": client_ids}
-
-    #     cursor = self.col.find(query).sort("timestamp", -1).limit(limit)
-    #     return await cursor.to_list()
-
     async def update_transcript(self, audio_uuid, full_transcript):
         """Update the entire transcript list (for compatibility)."""
         await self.col.update_one(
