@@ -44,7 +44,6 @@ class TranscriptionManager:
         self.processor_manager = (
             processor_manager  # Reference to processor manager for completion tracking
         )
-        self._sample_rate = None  # Track audio sample rate from first chunk
 
         # Event-driven ASR event handling for offline ASR
         self._event_queue = asyncio.Queue()
@@ -195,15 +194,25 @@ class TranscriptionManager:
 
             # Track Deepgram API call timing  
             api_start_time = time.time()
-            # Sample rate must be detected from audio chunks
-            if self._sample_rate is None:
-                logger.error("❌ Sample rate not detected from audio chunks - cannot transcribe")
+            
+            # Get sample rate from client state (set by audio processor)
+            current_client = self._get_current_client()
+            sample_rate = None
+            if current_client and current_client.sample_rate:
+                sample_rate = current_client.sample_rate
+                logger.info(f"📊 Using sample rate {sample_rate}Hz from client state for transcription")
+            elif self._audio_buffer:
+                # Fallback: use rate from first audio chunk
+                sample_rate = self._audio_buffer[0].rate
+                logger.warning(f"⚠️ Using fallback sample rate {sample_rate}Hz from audio chunk (no client state)")
+            else:
+                logger.error("❌ No sample rate available - cannot transcribe")
                 return
             
             logger.info(
-                f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes at {self._sample_rate}Hz"
+                f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes at {sample_rate}Hz"
             )
-            transcript_result = await self.online_provider.transcribe(combined_audio, self._sample_rate)
+            transcript_result = await self.online_provider.transcribe(combined_audio, sample_rate)
             api_duration = time.time() - api_start_time
             logger.info(
                 f"📝 Received transcription result from {self.online_provider.name} in {api_duration:.2f}s: {bool(transcript_result)}"
@@ -662,14 +671,18 @@ class TranscriptionManager:
 
             # Add chunk to buffer if we have audio data
             if chunk.audio and len(chunk.audio) > 0:
-                # Set sample rate from first chunk
-                if self._sample_rate is None:
-                    self._sample_rate = chunk.rate
-                    logger.info(f"📊 Set sample rate to {self._sample_rate}Hz for client {client_id}")
-                elif self._sample_rate != chunk.rate:
-                    logger.warning(
-                        f"⚠️ Sample rate mismatch for {client_id}: expected {self._sample_rate}Hz, got {chunk.rate}Hz"
-                    )
+                # Get sample rate from client state (set by audio processor)
+                current_client = self._get_current_client()
+                if current_client and current_client.sample_rate:
+                    # Use sample rate from client state
+                    expected_rate = current_client.sample_rate
+                    if chunk.rate != expected_rate:
+                        logger.warning(
+                            f"⚠️ Sample rate mismatch for {client_id}: expected {expected_rate}Hz, got {chunk.rate}Hz"
+                        )
+                else:
+                    # Fallback: no client state available, just log chunk rate
+                    logger.info(f"📊 Processing chunk with sample rate {chunk.rate}Hz for client {client_id} (no client state)")        
                 
                 self._audio_buffer.append(chunk)
                 logger.debug(

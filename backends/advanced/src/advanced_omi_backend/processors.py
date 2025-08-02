@@ -204,11 +204,12 @@ class ProcessorManager:
 
         logger.info("All processors shut down")
 
-    def _new_local_file_sink(self, file_path: str) -> LocalFileSink:
-        """Create a properly configured LocalFileSink."""
+    def _new_local_file_sink(self, file_path: str, sample_rate: Optional[int] = None) -> LocalFileSink:
+        """Create a properly configured LocalFileSink with dynamic sample rate."""
+        effective_sample_rate = sample_rate or OMI_SAMPLE_RATE
         return LocalFileSink(
             file_path=file_path,
-            sample_rate=int(OMI_SAMPLE_RATE),
+            sample_rate=int(effective_sample_rate),
             channels=int(OMI_CHANNELS),
             sample_width=int(OMI_SAMPLE_WIDTH),
         )
@@ -471,12 +472,28 @@ class ProcessorManager:
                     try:
                         # Get or create file sink for this client
                         if item.client_id not in self.active_file_sinks:
+                            # Get client state to access/store sample rate
+                            client_state = self.client_manager.get_client(item.client_id)
+                            
+                            # Store sample rate from first audio chunk
+                            if client_state and client_state.sample_rate is None:
+                                client_state.sample_rate = item.audio_chunk.rate
+                                audio_logger.info(f"📊 Set sample rate to {client_state.sample_rate}Hz for client {item.client_id}")
+                            
+                            # Get sample rate for file sink (use client state or fallback to chunk rate)
+                            file_sample_rate = None
+                            if client_state and client_state.sample_rate:
+                                file_sample_rate = client_state.sample_rate
+                            else:
+                                file_sample_rate = item.audio_chunk.rate
+                                audio_logger.warning(f"Using chunk sample rate {file_sample_rate}Hz for {item.client_id} (no client state)")
+
                             # Create new file
                             audio_uuid = uuid.uuid4().hex
                             timestamp = item.timestamp or int(time.time())
                             wav_filename = f"{timestamp}_{item.client_id}_{audio_uuid}.wav"
 
-                            sink = self._new_local_file_sink(f"{self.chunk_dir}/{wav_filename}")
+                            sink = self._new_local_file_sink(f"{self.chunk_dir}/{wav_filename}", file_sample_rate)
                             await sink.open()
 
                             self.active_file_sinks[item.client_id] = sink
@@ -491,7 +508,6 @@ class ProcessorManager:
                             )
 
                             # Notify client state about new audio UUID
-                            client_state = self.client_manager.get_client(item.client_id)
                             if client_state:
                                 client_state.set_current_audio_uuid(audio_uuid)
 
