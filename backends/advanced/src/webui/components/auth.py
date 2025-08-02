@@ -180,14 +180,16 @@ def login_with_credentials(email, password, backend_url: str = None):
                 st.session_state.auth_token = token
                 st.session_state.auth_method = "credentials"
                 
-                # Fetch complete user profile
+                # Set basic user info first so get_user_profile can find the email
+                st.session_state.user_info = {"user_id": email, "email": email, "name": email}
+                
+                # Now fetch complete user profile
                 user_profile = get_user_profile(backend_url)
                 if user_profile:
                     st.session_state.user_info = user_profile
                     logger.info(f"✅ Credential login successful with profile: is_superuser={user_profile.get('is_superuser', False)}")
                 else:
-                    # Fallback to basic info
-                    st.session_state.user_info = {"user_id": email, "email": email, "name": email}
+                    # Keep the basic info we already set
                     logger.info("✅ Credential login successful (profile fetch failed, using basic info)")
                 
                 return True, "Login successful!"
