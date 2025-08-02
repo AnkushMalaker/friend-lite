@@ -606,9 +606,9 @@ Returns all memories across all users in a clean, searchable format:
 }
 ```
 
-#### Debug Endpoint (`/api/admin/memories/debug`)
+#### Admin Endpoint Details
 
-The admin debug endpoint provides comprehensive debugging information:
+The admin endpoint provides comprehensive memory information:
 
 ```json
 {
@@ -657,7 +657,7 @@ If migrating from an existing system where memories were keyed by client_id:
 1. **Clean existing data**: Remove old memories from Qdrant
 2. **Restart services**: Ensure new architecture is active
 3. **Test with fresh data**: Verify memories are properly keyed by user_id
-4. **Admin verification**: Use `/api/admin/memories/debug` to confirm proper storage
+4. **Admin verification**: Use `/api/memories/admin` to confirm proper storage
 
 The new architecture ensures proper user isolation and simplifies admin debugging while maintaining all client information in metadata.
 
