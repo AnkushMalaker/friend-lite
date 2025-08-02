@@ -575,12 +575,11 @@ The memory service exposes these endpoints:
 - `GET /api/memories` - Get user memories (keyed by database user_id)
 - `GET /api/memories/search?query={query}` - Search memories (user-scoped)  
 - `DELETE /api/memories/{memory_id}` - Delete specific memory (requires authentication)
-- `GET /api/admin/memories` - Admin view of all memories across all users (superuser only)
-- `GET /api/admin/memories/debug` - Admin debug view with user and client information (superuser only)
+- `GET /api/memories/admin` - Admin view of all memories across all users (superuser only)
 
 ### Admin Endpoints
 
-#### All Memories Endpoint (`/api/admin/memories`)
+#### All Memories Endpoint (`/api/memories/admin`)
 
 Returns all memories across all users in a clean, searchable format:
 

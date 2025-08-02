@@ -920,7 +920,6 @@ src/advanced_omi_backend/
 #### Memory Management
 - `GET /api/memories` - User memories (with user_id filter for admin)
 - `GET /api/memories/admin` - All memories grouped by user (admin only)
-- `GET /api/admin/memories` - Consolidated admin view with debug info
 - `GET /api/memories/search?query=` - Semantic memory search
 
 #### Audio & Conversations
