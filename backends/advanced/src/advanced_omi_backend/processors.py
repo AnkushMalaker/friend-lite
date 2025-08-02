@@ -223,7 +223,7 @@ class ProcessorManager:
             f"📥 queue_transcription called for client {item.client_id}, audio_uuid: {item.audio_uuid}"
         )
         await self.transcription_queue.put(item)
-        audio_logger.info(
+        audio_logger.debug(
             f"📤 Successfully put item in transcription_queue for client {item.client_id}, queue size: {self.transcription_queue.qsize()}"
         )
 
