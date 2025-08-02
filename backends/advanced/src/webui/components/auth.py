@@ -7,6 +7,8 @@ import base64
 import requests
 import streamlit as st
 
+from .utils import get_data
+
 logger = logging.getLogger("streamlit-ui")
 
 
@@ -25,6 +27,19 @@ def init_auth_state():
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_user_profile(backend_url: str = None):
+    """Fetch the current user's profile from the backend."""
+    user_data = get_data("/api/me", require_auth=True, backend_url=backend_url)
+    if user_data:
+        return {
+            "user_id": user_data.get("id", "Unknown"),
+            "email": user_data.get("email", "Unknown"),
+            "name": user_data.get("name", user_data.get("email", "Unknown")),
+            "is_superuser": user_data.get("is_superuser", False)
+        }
+    return None
+
+
 def get_auth_config(backend_url: str = None):
     """Get authentication configuration from backend."""
     backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
@@ -126,8 +141,17 @@ def login_with_credentials(email, password, backend_url: str = None):
                 st.session_state.authenticated = True
                 st.session_state.auth_token = token
                 st.session_state.auth_method = "credentials"
-                st.session_state.user_info = {"user_id": email, "email": email, "name": email}
-                logger.info("✅ Credential login successful")
+                
+                # Fetch complete user profile
+                user_profile = get_user_profile(backend_url)
+                if user_profile:
+                    st.session_state.user_info = user_profile
+                    logger.info(f"✅ Credential login successful with profile: is_superuser={user_profile.get('is_superuser', False)}")
+                else:
+                    # Fallback to basic info
+                    st.session_state.user_info = {"user_id": email, "email": email, "name": email}
+                    logger.info("✅ Credential login successful (profile fetch failed, using basic info)")
+                
                 return True, "Login successful!"
             else:
                 logger.error("❌ No access token in response")

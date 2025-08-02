@@ -3,6 +3,7 @@ Utility functions for the Streamlit UI
 """
 import logging
 import time
+
 import requests
 import streamlit as st
 
@@ -16,7 +17,7 @@ def get_auth_headers():
     return {}
 
 
-def get_data(endpoint: str, require_auth: bool = False, backend_url: str = None):
+def get_data(endpoint: str, require_auth: bool = False, backend_url: str | None = None):
     """Helper function to get data from the backend API with retry logic."""
     from .auth import logout  # Import here to avoid circular imports
     
