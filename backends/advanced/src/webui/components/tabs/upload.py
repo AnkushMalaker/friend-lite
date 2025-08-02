@@ -2,8 +2,9 @@
 Audio file upload tab for the Streamlit UI
 """
 import logging
+
 import streamlit as st
-from io import BytesIO
+
 from ..utils import post_data
 
 logger = logging.getLogger("streamlit-ui")
@@ -36,8 +37,8 @@ def show_upload_tab():
         
         uploaded_files = st.file_uploader(
             "Choose audio files",
-            type=['wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac'],
-            accept_multiple_files=True,
+            type=['wav', 'mp3'],
+            accept_multiple_files=False,
             help="Select one or more audio files to process. Supported formats: WAV, MP3, M4A, OGG, FLAC, AAC"
         )
 

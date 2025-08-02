@@ -42,9 +42,11 @@ logger.info(
     f"🔧 Configuration loaded - Backend API: {BACKEND_API_URL}, Public URL: {BACKEND_PUBLIC_URL}"
 )
 
-# Store backend URL in session state for components
+# Store backend URLs in session state for components
 if "backend_api_url" not in st.session_state:
     st.session_state.backend_api_url = BACKEND_API_URL
+if "backend_public_url" not in st.session_state:
+    st.session_state.backend_public_url = BACKEND_PUBLIC_URL
 
 # ---- Streamlit App Configuration ---- #
 logger.info("🎨 Configuring Streamlit app...")
