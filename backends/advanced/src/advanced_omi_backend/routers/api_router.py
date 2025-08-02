@@ -31,6 +31,4 @@ router.include_router(memory_router)
 router.include_router(system_router)
 
 
-
-
 logger.info("API router initialized with all sub-modules")

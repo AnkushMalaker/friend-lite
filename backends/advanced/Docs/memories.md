@@ -575,12 +575,11 @@ The memory service exposes these endpoints:
 - `GET /api/memories` - Get user memories (keyed by database user_id)
 - `GET /api/memories/search?query={query}` - Search memories (user-scoped)  
 - `DELETE /api/memories/{memory_id}` - Delete specific memory (requires authentication)
-- `GET /api/admin/memories` - Admin view of all memories across all users (superuser only)
-- `GET /api/admin/memories/debug` - Admin debug view with user and client information (superuser only)
+- `GET /api/memories/admin` - Admin view of all memories across all users (superuser only)
 
 ### Admin Endpoints
 
-#### All Memories Endpoint (`/api/admin/memories`)
+#### All Memories Endpoint (`/api/memories/admin`)
 
 Returns all memories across all users in a clean, searchable format:
 
@@ -607,9 +606,9 @@ Returns all memories across all users in a clean, searchable format:
 }
 ```
 
-#### Debug Endpoint (`/api/admin/memories/debug`)
+#### Admin Endpoint Details
 
-The admin debug endpoint provides comprehensive debugging information:
+The admin endpoint provides comprehensive memory information:
 
 ```json
 {
@@ -658,7 +657,7 @@ If migrating from an existing system where memories were keyed by client_id:
 1. **Clean existing data**: Remove old memories from Qdrant
 2. **Restart services**: Ensure new architecture is active
 3. **Test with fresh data**: Verify memories are properly keyed by user_id
-4. **Admin verification**: Use `/api/admin/memories/debug` to confirm proper storage
+4. **Admin verification**: Use `/api/memories/admin` to confirm proper storage
 
 The new architecture ensures proper user isolation and simplifies admin debugging while maintaining all client information in metadata.
 

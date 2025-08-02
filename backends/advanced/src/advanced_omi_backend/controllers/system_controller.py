@@ -15,7 +15,6 @@ from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.client_manager import generate_client_id
 from advanced_omi_backend.database import chunks_col
-from advanced_omi_backend.debug_system_tracker import get_debug_tracker
 from advanced_omi_backend.job_tracker import FileStatus, JobStatus, get_job_tracker
 from advanced_omi_backend.processors import AudioProcessingItem, get_processor_manager
 from advanced_omi_backend.task_manager import get_task_manager
@@ -28,23 +27,10 @@ audio_logger = logging.getLogger("audio_processing")
 async def get_current_metrics():
     """Get current system metrics."""
     try:
-        debug_tracker = get_debug_tracker()
-
         # Get basic system metrics
         metrics = {
             "timestamp": int(time.time()),
-            "debug_tracker_available": debug_tracker is not None,
         }
-
-        if debug_tracker:
-            # Add debug tracker metrics if available
-            recent_transactions = debug_tracker.get_recent_transactions(limit=10)
-            metrics.update(
-                {
-                    "recent_transactions_count": len(recent_transactions),
-                    "recent_transactions": recent_transactions,
-                }
-            )
 
         return metrics
 

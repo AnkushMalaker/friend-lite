@@ -8,3 +8,4 @@
 !src
 !.env
 !memory_config.yaml
+!uv.lock

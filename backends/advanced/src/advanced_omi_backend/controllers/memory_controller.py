@@ -8,7 +8,6 @@ from typing import Optional
 
 from fastapi.responses import JSONResponse
 
-from advanced_omi_backend.debug_system_tracker import get_debug_tracker
 from advanced_omi_backend.memory import get_memory_service
 from advanced_omi_backend.users import User
 
@@ -158,9 +157,6 @@ async def get_all_memories_admin(user: User, limit: int):
     try:
         memory_service = get_memory_service()
 
-        # Get debug tracker for additional context
-        debug_tracker = get_debug_tracker()
-
         # Get all memories without user filtering
         all_memories = await memory_service.get_all_memories_debug(limit)
 
@@ -185,7 +181,6 @@ async def get_all_memories_admin(user: User, limit: int):
         stats = {
             "total_memories": len(all_memories),
             "total_users": len(user_memories),
-            "debug_tracker_initialized": debug_tracker is not None,
             "users_with_memories": sorted(list(users_with_memories)),
             "client_ids_with_memories": sorted(list(client_ids_with_memories)),
         }

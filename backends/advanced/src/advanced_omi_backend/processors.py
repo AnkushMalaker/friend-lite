@@ -204,11 +204,12 @@ class ProcessorManager:
 
         logger.info("All processors shut down")
 
-    def _new_local_file_sink(self, file_path: str) -> LocalFileSink:
-        """Create a properly configured LocalFileSink."""
+    def _new_local_file_sink(self, file_path: str, sample_rate: Optional[int] = None) -> LocalFileSink:
+        """Create a properly configured LocalFileSink with dynamic sample rate."""
+        effective_sample_rate = sample_rate or OMI_SAMPLE_RATE
         return LocalFileSink(
             file_path=file_path,
-            sample_rate=int(OMI_SAMPLE_RATE),
+            sample_rate=int(effective_sample_rate),
             channels=int(OMI_CHANNELS),
             sample_width=int(OMI_SAMPLE_WIDTH),
         )
@@ -219,11 +220,11 @@ class ProcessorManager:
 
     async def queue_transcription(self, item: TranscriptionItem):
         """Queue audio for transcription."""
-        audio_logger.info(
+        audio_logger.debug(
             f"📥 queue_transcription called for client {item.client_id}, audio_uuid: {item.audio_uuid}"
         )
         await self.transcription_queue.put(item)
-        audio_logger.info(
+        audio_logger.debug(
             f"📤 Successfully put item in transcription_queue for client {item.client_id}, queue size: {self.transcription_queue.qsize()}"
         )
 
@@ -471,12 +472,28 @@ class ProcessorManager:
                     try:
                         # Get or create file sink for this client
                         if item.client_id not in self.active_file_sinks:
+                            # Get client state to access/store sample rate
+                            client_state = self.client_manager.get_client(item.client_id)
+                            
+                            # Store sample rate from first audio chunk
+                            if client_state and client_state.sample_rate is None:
+                                client_state.sample_rate = item.audio_chunk.rate
+                                audio_logger.info(f"📊 Set sample rate to {client_state.sample_rate}Hz for client {item.client_id}")
+                            
+                            # Get sample rate for file sink (use client state or fallback to chunk rate)
+                            file_sample_rate = None
+                            if client_state and client_state.sample_rate:
+                                file_sample_rate = client_state.sample_rate
+                            else:
+                                file_sample_rate = item.audio_chunk.rate
+                                audio_logger.warning(f"Using chunk sample rate {file_sample_rate}Hz for {item.client_id} (no client state)")
+
                             # Create new file
                             audio_uuid = uuid.uuid4().hex
                             timestamp = item.timestamp or int(time.time())
                             wav_filename = f"{timestamp}_{item.client_id}_{audio_uuid}.wav"
 
-                            sink = self._new_local_file_sink(f"{self.chunk_dir}/{wav_filename}")
+                            sink = self._new_local_file_sink(f"{self.chunk_dir}/{wav_filename}", file_sample_rate)
                             await sink.open()
 
                             self.active_file_sinks[item.client_id] = sink
@@ -491,7 +508,6 @@ class ProcessorManager:
                             )
 
                             # Notify client state about new audio UUID
-                            client_state = self.client_manager.get_client(item.client_id)
                             if client_state:
                                 client_state.set_current_audio_uuid(audio_uuid)
 
@@ -517,7 +533,7 @@ class ProcessorManager:
 
                         # Queue for transcription
                         audio_uuid = self.active_audio_uuids[item.client_id]
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"🔄 About to queue transcription for client {item.client_id}, audio_uuid: {audio_uuid}"
                         )
                         await self.queue_transcription(
@@ -528,7 +544,7 @@ class ProcessorManager:
                                 audio_chunk=item.audio_chunk,
                             )
                         )
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"✅ Successfully queued transcription for client {item.client_id}, audio_uuid: {audio_uuid}"
                         )
 
@@ -747,9 +763,6 @@ class ProcessorManager:
             {"audio_uuid": item.audio_uuid, "started_at": start_time},
         )
 
-        # Debug tracking removed for cleaner architecture
-        # tracker = get_debug_tracker()
-        # transaction_id = tracker.create_transaction(item.user_id, item.client_id, item.audio_uuid)
 
         try:
             # Use ConversationRepository for clean data access with event coordination
@@ -798,11 +811,6 @@ class ProcessorManager:
                 return None
 
             # Debug tracking removed for cleaner architecture
-            # tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_STARTED,
-            #     metadata={"conversation_length": len(full_conversation)},
-            # )
 
             # Lazy import memory service
             if self.memory_service is None:
@@ -914,12 +922,6 @@ class ProcessorManager:
                         },
                     )
 
-                # Debug tracking removed for cleaner architecture
-                # tracker.track_event(
-                #     transaction_id,
-                #     PipelineStage.MEMORY_COMPLETED,
-                #     metadata={"processing_time": time.time() - start_time},
-                # )
             else:
                 audio_logger.warning(f"⚠️ Memory service returned False for {item.audio_uuid}")
 
@@ -949,14 +951,6 @@ class ProcessorManager:
                     },
                 )
 
-                # Debug tracking removed for cleaner architecture
-                # tracker.track_event(
-                #     transaction_id,
-                #     PipelineStage.MEMORY_COMPLETED,
-                #     success=False,
-                #     error_message="Memory service returned False",
-                #     metadata={"processing_time": time.time() - start_time},
-                # )
 
         except asyncio.TimeoutError:
             audio_logger.error(f"Memory processing timed out for {item.audio_uuid}")
@@ -982,14 +976,6 @@ class ProcessorManager:
                 },
             )
 
-            # Debug tracking removed for cleaner architecture
-            # tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_COMPLETED,
-            #     success=False,
-            #     error_message="Processing timeout (5 minutes)",
-            #     metadata={"processing_time": time.time() - start_time},
-            # )
         except Exception as e:
             audio_logger.error(f"Error processing memory for {item.audio_uuid}: {e}")
 
@@ -1014,14 +1000,6 @@ class ProcessorManager:
                 },
             )
 
-            # Debug tracking removed for cleaner architecture
-            # tracker.track_event(
-            #     transaction_id,
-            #     PipelineStage.MEMORY_COMPLETED,
-            #     success=False,
-            #     error_message=f"Exception: {str(e)}",
-            #     metadata={"processing_time": time.time() - start_time},
-            # )
 
         end_time = time.time()
         processing_time_ms = (end_time - start_time) * 1000

@@ -60,6 +60,9 @@ class ClientState:
         # Track if conversation has been closed
         self.conversation_closed: bool = False
 
+        # Audio configuration - sample rate for this client's audio stream
+        self.sample_rate: Optional[int] = None
+
         # Debug tracking
         self.transaction_id: Optional[str] = None
 
