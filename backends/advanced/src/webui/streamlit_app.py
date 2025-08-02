@@ -2,11 +2,8 @@
 Friend-Lite Streamlit Dashboard (Modular Version)
 Web interface for managing conversations, memories, users, and system monitoring.
 """
-import json
 import logging
 import os
-import time
-from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -14,8 +11,12 @@ from dotenv import load_dotenv
 
 from components.auth import init_auth_state, check_auth_from_url, show_auth_sidebar
 from components.health import get_system_health
-from components.utils import get_data
 from components.tabs.upload import show_upload_tab
+from components.tabs.conversations import show_conversations_tab
+from components.tabs.memories import show_memories_tab
+from components.tabs.user_management import show_user_management_tab
+from components.tabs.conversation_management import show_conversation_management_tab
+from components.tabs.system_state import show_system_state_tab
 
 load_dotenv()
 
@@ -96,64 +97,53 @@ with st.sidebar:
     if st.button("🔄 Refresh Health", use_container_width=True):
         st.cache_data.clear()  # Clear health check cache
         st.rerun()
-    
-    # Get and display health status
-    health_data = get_system_health(BACKEND_API_URL)
+
+    # Get system health data
+    with st.spinner("Checking system health..."):
+        health_data = get_system_health(BACKEND_API_URL)
     
     if health_data:
         overall_status = health_data.get("status", "unknown")
         if overall_status == "healthy":
-            st.success("✅ All systems operational")
+            st.success("✅ System Healthy")
         elif overall_status == "partial":
-            st.warning("⚠️ Some services degraded")
+            st.warning("⚠️ Some Issues")
         else:
-            st.error("❌ System issues detected")
+            st.error("❌ System Issues")
             
-        # Show individual service status
+        # Show brief service status
         services = health_data.get("services", {})
         if services:
-            with st.expander("Service Details"):
-                for service, details in services.items():
-                    status_text = details.get("status", "Unknown")
-                    is_healthy = details.get("healthy", False)
-                    
-                    if is_healthy:
-                        st.success(f"✅ {service.title()}")
-                    else:
-                        st.error(f"❌ {service.title()}")
-                    st.caption(status_text)
+            healthy_count = sum(1 for s in services.values() if s.get("healthy", False))
+            total_count = len(services)
+            st.caption(f"Services: {healthy_count}/{total_count} healthy")
     else:
-        st.error("❌ Cannot reach backend")
+        st.error("❌ Health check failed")
 
-# ---- Main Content ---- #
-logger.info("📄 Setting up main content area...")
+    st.divider()
 
-# Add app header
+# ---- Main Content Area ---- #
+logger.info("🎨 Setting up main content area...")
+
+# Page header
 st.title("🎵 Friend-Lite Dashboard")
-st.caption(f"Connected to backend: `{BACKEND_PUBLIC_URL}`")
+st.caption("AI-powered personal audio system management")
 
-# Get user info and determine admin status
-user_info = st.session_state.get("user_info", {})
+# Check if user is authenticated and determine admin status
+is_authenticated = st.session_state.get("authenticated", False)
 is_admin = False
 
-if st.session_state.get("authenticated", False):
-    # Simple admin check - in a real app you'd check this properly via the backend
-    user_email = user_info.get("email", "")
-    is_admin = "admin" in user_email.lower()
-    
-    welcome_msg = f"Welcome back, **{user_info.get('name', 'User')}**!"
-    if is_admin:
-        welcome_msg += " (Admin)"
-    st.success(welcome_msg)
-else:
-    st.info("🔒 Please log in using the sidebar to access dashboard features.")
+if is_authenticated:
+    user_info = st.session_state.get("user_info", {})
+    is_admin = user_info.get("is_superuser", False) if isinstance(user_info, dict) else False
+    logger.info(f"👤 User authenticated: {user_info.get('name', 'Unknown')}, Admin: {is_admin}")
 
-# Show debug user info for admins
-if is_admin:
-    st.sidebar.caption(f"🔧 Admin status: {'✅ Admin' if is_admin else '❌ Regular user'}")
-    
-    with st.sidebar.expander("🔧 Debug User Info", expanded=False):
-        st.json(user_info)
+# Show authentication token preview if available
+if is_authenticated:
+    with st.expander("🔐 Authentication Info", expanded=False):
+        user_info = st.session_state.get("user_info", {})
+        st.info(f"**Welcome:** {user_info.get('name', 'User')}")
+        st.info(f"**Auth Method:** {st.session_state.get('auth_method', 'unknown').title()}")
         
         if st.session_state.get("auth_token"):
             token_preview = st.session_state.auth_token[:20] + "..."
@@ -179,54 +169,21 @@ else:
     tab_upload = None
     tab_debug = None
 
-# For now, show placeholder content for the existing tabs
-# These will be replaced with actual modular components in subsequent commits
+# Tab implementations using modular components
 
 with tab_convos:
-    logger.debug("🗨️ Loading conversations tab...")
-    st.header("Latest Conversations")
-    st.info("🚧 This tab will be migrated to a modular component soon.")
-    
-    if not st.session_state.get("authenticated", False):
-        st.warning("🔒 Please log in to view conversations.")
-    else:
-        # Placeholder - will be replaced with actual conversations component
-        st.write("Conversations will be displayed here after migration.")
+    show_conversations_tab()
 
 with tab_mem:
-    logger.debug("🧠 Loading memories tab...")
-    st.header("Memories")
-    st.info("🚧 This tab will be migrated to a modular component soon.")
-    
-    if not st.session_state.get("authenticated", False):
-        st.warning("🔒 Please log in to view memories.")
-    else:
-        # Placeholder - will be replaced with actual memories component  
-        st.write("Memories will be displayed here after migration.")
+    show_memories_tab()
 
 with tab_users:
-    logger.debug("👥 Loading users tab...")
-    st.header("User Management")
-    st.info("🚧 This tab will be migrated to a modular component soon.")
-    
-    if not st.session_state.get("authenticated", False):
-        st.warning("🔒 Please log in to access user management.")
-    else:
-        # Placeholder - will be replaced with actual users component
-        st.write("User management will be displayed here after migration.")
+    show_user_management_tab()
 
 with tab_manage:
-    logger.debug("🔧 Loading management tab...")
-    st.header("Conversation Management")
-    st.info("🚧 This tab will be migrated to a modular component soon.")
-    
-    if not st.session_state.get("authenticated", False):
-        st.warning("🔒 Please log in to access conversation management.")
-    else:
-        # Placeholder - will be replaced with actual management component
-        st.write("Conversation management will be displayed here after migration.")
+    show_conversation_management_tab()
 
-# New upload tab (only for admins)
+# Upload tab (only for admins)
 if tab_upload is not None:
     with tab_upload:
         logger.debug("📁 Loading upload tab...")
@@ -235,19 +192,11 @@ if tab_upload is not None:
 # System debug tab (only for admins)
 if tab_debug is not None:
     with tab_debug:
-        logger.debug("🔧 Loading debug tab...")
-        st.header("🔧 System State & Failure Recovery")
-        st.info("🚧 This tab will be migrated to a modular component soon.")
-        
-        if not st.session_state.get("authenticated", False):
-            st.warning("🔒 Please log in to access system monitoring features")
-        else:
-            # Placeholder - will be replaced with actual debug component
-            st.write("System monitoring will be displayed here after migration.")
+        show_system_state_tab()
 
 # Footer
 st.divider()
+from datetime import datetime
 st.caption(f"🚀 Friend-Lite Dashboard | Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-st.caption("📡 Modular architecture - easier to maintain and extend!")
 
 logger.info("✅ Streamlit dashboard loaded successfully")
