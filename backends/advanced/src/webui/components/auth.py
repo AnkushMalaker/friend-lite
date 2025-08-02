@@ -17,7 +17,7 @@ def init_auth_state():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if "user_info" not in st.session_state:
-        st.session_state.user_info = None
+        st.session_state.user_info = {}
     if "auth_token" not in st.session_state:
         st.session_state.auth_token = None
     if "auth_method" not in st.session_state:
@@ -195,7 +195,7 @@ def logout():
     logger.info("🚪 User logging out")
     st.session_state.authenticated = False
     st.session_state.auth_token = None
-    st.session_state.user_info = None
+    st.session_state.user_info = {}
     st.session_state.auth_method = None
 
 

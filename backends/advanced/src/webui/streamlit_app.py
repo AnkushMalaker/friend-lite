@@ -136,7 +136,8 @@ is_admin = False
 if is_authenticated:
     user_info = st.session_state.get("user_info", {})
     is_admin = user_info.get("is_superuser", False) if isinstance(user_info, dict) else False
-    logger.info(f"👤 User authenticated: {user_info.get('name', 'Unknown')}, Admin: {is_admin}")
+    user_name = user_info.get('name', 'Unknown') if user_info else 'Unknown'
+    logger.info(f"👤 User authenticated: {user_name}, Admin: {is_admin}")
 
 # Show authentication token preview if available
 if is_authenticated:
