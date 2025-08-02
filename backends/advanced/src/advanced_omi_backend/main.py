@@ -236,15 +236,6 @@ all_client_user_mappings: dict[str, str] = (
 init_client_user_mapping(client_to_user_mapping, all_client_user_mappings)
 
 
-def get_user_clients(user_id: str) -> list[str]:
-    """Get all currently active client IDs that belong to a specific user."""
-    return [
-        client_id
-        for client_id, mapped_user_id in client_to_user_mapping.items()
-        if mapped_user_id == user_id
-    ]
-
-
 async def create_client_state(
     client_id: str, user: User, device_name: Optional[str] = None
 ) -> ClientState:
