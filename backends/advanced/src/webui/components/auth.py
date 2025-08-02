@@ -26,17 +26,30 @@ def init_auth_state():
         st.session_state.auth_config = None
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_user_profile(backend_url: str = None):
     """Fetch the current user's profile from the backend."""
-    user_data = get_data("/api/me", require_auth=True, backend_url=backend_url)
-    if user_data:
-        return {
-            "user_id": user_data.get("id", "Unknown"),
-            "email": user_data.get("email", "Unknown"),
-            "name": user_data.get("name", user_data.get("email", "Unknown")),
-            "is_superuser": user_data.get("is_superuser", False)
-        }
+    # Get the current user's email from session state
+    current_user_info = st.session_state.get("user_info", {})
+    current_email = current_user_info.get("email")
+    
+    if not current_email:
+        return None
+    
+    # Fetch all users (admin endpoint, but if we can access it, we're likely admin)
+    users_data = get_data("/api/users", require_auth=True, backend_url=backend_url)
+    
+    if users_data and isinstance(users_data, list):
+        # Find the current user in the list
+        for user in users_data:
+            if user.get("email") == current_email:
+                return {
+                    "user_id": str(user.get("id", user.get("_id", "Unknown"))),
+                    "email": user.get("email", "Unknown"),
+                    "name": user.get("name", user.get("email", "Unknown")),
+                    "is_superuser": user.get("is_superuser", False)
+                }
+    
+    # If we can't access the users endpoint or find the user, return basic info
     return None
 
 
