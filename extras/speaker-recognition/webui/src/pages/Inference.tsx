@@ -704,7 +704,14 @@ export default function Inference() {
 
               {/* Speaker Segments */}
               <div className="space-y-3">
-                <h4 className="font-medium text-gray-900">🗣️ Speaker Segments</h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium text-gray-900">🗣️ Speaker Segments</h4>
+                  {deepgramResponse?.speaker_enhancement && (
+                    <div className="text-sm text-gray-500">
+                      Enhanced: {deepgramResponse.speaker_enhancement.identified_count || 0} of {deepgramResponse.speaker_enhancement.total_speakers || 0} speakers identified
+                    </div>
+                  )}
+                </div>
                 {filteredSegments(selectedResult.speakers).map((segment, index) => (
                   <div
                     key={index}
@@ -713,15 +720,34 @@ export default function Inference() {
                     <div className="flex-1">
                       <div className="flex items-center space-x-3 mb-2">
                         <span className="font-medium text-gray-900">{segment.speaker_name}</span>
+                        {segment.speaker_status && (
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                            segment.speaker_status === 'identified' ? 'bg-green-100 text-green-800' :
+                            segment.speaker_status === 'unknown' ? 'bg-gray-100 text-gray-800' :
+                            'bg-red-100 text-red-800'
+                          }`}>
+                            {segment.speaker_status}
+                          </span>
+                        )}
                         <span className="text-sm text-gray-500">
                           {segment.start.toFixed(1)}s - {segment.end.toFixed(1)}s
                         </span>
                         <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getConfidenceColor(segment.confidence)}`}>
                           {(segment.confidence * 100).toFixed(0)}% ({getConfidenceLabel(segment.confidence)})
                         </span>
+                        {segment.speaker_identification_confidence && (
+                          <span className="text-xs text-purple-600">
+                            ID: {(segment.speaker_identification_confidence * 100).toFixed(0)}%
+                          </span>
+                        )}
                       </div>
                       {segment.text && (
                         <p className="text-sm text-gray-700 italic">"{segment.text}"</p>
+                      )}
+                      {segment.identified_speaker_id && (
+                        <p className="text-xs text-green-600 mt-1">
+                          📝 Identified as: {segment.identified_speaker_name} ({segment.identified_speaker_id})
+                        </p>
                       )}
                     </div>
                     <div className="flex space-x-2 ml-4">
