@@ -570,12 +570,12 @@ export default function Inference() {
         <h1 className="text-2xl font-bold text-gray-900">🧠 Speaker Inference</h1>
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+      {/* <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
         <p className="text-blue-800 text-sm">
           <span className="font-medium">🆕 Enhanced Mode:</span> Now with Deepgram transcription + speaker identification! 
           Choose between diarization-only or full transcription with enhanced speaker recognition.
         </p>
-      </div>
+      </div> */}
       
       <p className="text-gray-600">
         Upload audio files to identify speakers using trained recognition models.
