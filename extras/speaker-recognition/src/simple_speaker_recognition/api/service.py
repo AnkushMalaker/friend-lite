@@ -1,23 +1,33 @@
 """FastAPI service for speaker recognition and diarization."""
 
 import asyncio
+import json
 import logging
 import os
-import tempfile
 import shutil
-import json
-import aiohttp
+import tempfile
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import List, Optional, cast, Dict, Any
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, cast
 
+import aiohttp
 import librosa
 import numpy as np
 import soundfile as sf
 import torch
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Header, Request, Query
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -25,18 +35,19 @@ from pydantic_settings import BaseSettings
 from simple_speaker_recognition.core.audio_backend import AudioBackend
 from simple_speaker_recognition.core.models import (
     BatchEnrollRequest,
+    DeepgramTranscriptionRequest,
     DiarizeAndIdentifyRequest,
     DiarizeRequest,
+    EnhancedTranscriptionResponse,
     IdentifyRequest,
+    SpeakerStatus,
     UserRequest,
     UserResponse,
     VerifyRequest,
-    DeepgramTranscriptionRequest,
-    EnhancedTranscriptionResponse,
-    SpeakerStatus,
 )
 from simple_speaker_recognition.core.unified_speaker_db import UnifiedSpeakerDB
-from simple_speaker_recognition.database import init_db
+from simple_speaker_recognition.database import get_db_session, init_db
+from simple_speaker_recognition.database.models import Speaker
 from simple_speaker_recognition.utils.audio_processing import get_audio_info
 
 
@@ -193,6 +204,9 @@ async def lifespan(app: FastAPI):
     global audio_backend, speaker_db
     
     # Startup: Initialize database and load models
+    log.info("=== Speaker Recognition Service Starting ===")
+    log.info("Version: 2025-08-03-confidence-fix")
+    log.info("This version includes enhanced confidence value formatting with type checking")
     log.info("Initializing database...")
     init_db()
     
@@ -483,9 +497,6 @@ async def enroll_append(
     log.info(f"Appending to speaker: {speaker_id} (User: {user_id}) with {len(files)} files")
     
     # First, verify the speaker exists
-    from simple_speaker_recognition.database import get_db_session
-    from simple_speaker_recognition.database.models import Speaker
-    import json
     
     db_session = get_db_session()
     try:
@@ -712,7 +723,13 @@ async def diarize_and_identify(
                 # Track identified vs unknown speakers
                 if found and speaker_info:
                     identified_speakers.add(speaker_info["name"])
-                    log.debug(f"Segment {i+1}: Identified as {speaker_info['name']} (confidence: {confidence:.3f})")
+                    # Safe confidence formatting with type checking
+                    try:
+                        conf_val = float(confidence) if confidence is not None else 0.0
+                        log.debug(f"Segment {i+1}: Identified as {speaker_info['name']} (confidence: {conf_val:.3f})")
+                    except (TypeError, ValueError) as fmt_error:
+                        log.warning(f"Error formatting confidence {confidence} (type: {type(confidence)}): {fmt_error}")
+                        log.debug(f"Segment {i+1}: Identified as {speaker_info['name']} (confidence: unknown)")
                 else:
                     unknown_speakers.add(speaker_label)
                     log.debug(f"Segment {i+1}: Unknown speaker {speaker_label}")
@@ -1057,7 +1074,14 @@ async def extract_and_identify_speakers(
                             "confidence": confidence,
                             "status": SpeakerStatus.IDENTIFIED.value
                         }
-                        log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: {confidence:.3f})")
+                        # Safe confidence formatting with type checking
+                        try:
+                            conf_val = float(confidence) if confidence is not None else 0.0
+                            log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: {conf_val:.3f})")
+                            log.debug(f"Confidence type: {type(confidence)}, value: {confidence}")
+                        except (TypeError, ValueError) as fmt_error:
+                            log.warning(f"Error formatting confidence {confidence} (type: {type(confidence)}): {fmt_error}")
+                            log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: unknown)")
                     else:
                         identification_results[speaker_id] = {
                             "speaker_id": None,
@@ -1065,8 +1089,20 @@ async def extract_and_identify_speakers(
                             "confidence": confidence if confidence is not None else 0.0,
                             "status": SpeakerStatus.UNKNOWN.value
                         }
-                        confidence_str = f"{confidence:.3f}" if confidence is not None else "0.0"
-                        log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
+                        # Safe confidence formatting with type checking
+                        try:
+                            if confidence is not None:
+                                # Ensure confidence is a Python float, not numpy scalar
+                                conf_val = float(confidence) if confidence is not None else 0.0
+                                confidence_str = f"{conf_val:.3f}"
+                                log.debug(f"Confidence type: {type(confidence)}, value: {confidence}, formatted: {confidence_str}")
+                            else:
+                                confidence_str = "0.0"
+                            log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
+                        except (TypeError, ValueError) as fmt_error:
+                            log.warning(f"Error formatting confidence {confidence} (type: {type(confidence)}): {fmt_error}")
+                            confidence_str = "0.0"
+                            log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
                         
                 except Exception as e:
                     log.warning(f"Error identifying speaker {speaker_id}: {e}")
