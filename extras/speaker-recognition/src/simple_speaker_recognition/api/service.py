@@ -899,6 +899,28 @@ async def download_speaker_audio_file(speaker_id: str, filename: str, db: Unifie
 # Deepgram API Wrapper Endpoints
 # ============================================================================
 
+def sanitize_params_for_deepgram(params: Dict[str, Any]) -> Dict[str, str]:
+    """Convert parameters to string format expected by Deepgram API."""
+    sanitized = {}
+    for key, value in params.items():
+        if value is None:
+            continue
+        elif isinstance(value, bool):
+            # Convert boolean to lowercase string
+            sanitized[key] = str(value).lower()
+        elif isinstance(value, (int, float)):
+            sanitized[key] = str(value)
+        elif isinstance(value, str):
+            sanitized[key] = value
+        elif isinstance(value, list):
+            # Handle list parameters (like keywords, search terms)
+            sanitized[key] = ','.join(str(item) for item in value)
+        else:
+            # Convert other types to string
+            sanitized[key] = str(value)
+    return sanitized
+
+
 async def forward_to_deepgram(
     audio_data: bytes,
     content_type: str,
@@ -913,12 +935,15 @@ async def forward_to_deepgram(
         "Content-Type": content_type
     }
     
+    # Sanitize parameters for Deepgram API
+    sanitized_params = sanitize_params_for_deepgram(params)
+    
     async with aiohttp.ClientSession() as session:
         async with session.post(
             url,
             headers=headers,
             data=audio_data,
-            params=params
+            params=sanitized_params
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
@@ -1171,8 +1196,13 @@ async def deepgram_compatible_transcription(
             "sentiment": sentiment,
         }
         
-        # Remove None values
+        # Remove None values and custom parameters not for Deepgram
         deepgram_params = {k: v for k, v in deepgram_params.items() if v is not None}
+        
+        # Remove our custom parameters that shouldn't go to Deepgram
+        custom_params = ['enhance_speakers', 'user_id', 'speaker_confidence_threshold']
+        for param in custom_params:
+            deepgram_params.pop(param, None)
         
         log.info(f"Forwarding request to Deepgram API with params: {deepgram_params}")
         
