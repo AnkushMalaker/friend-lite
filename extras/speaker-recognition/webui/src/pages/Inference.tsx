@@ -57,6 +57,7 @@ export default function Inference() {
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
+  const [deepgramResponse, setDeepgramResponse] = useState<any>(null)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -286,60 +287,150 @@ export default function Inference() {
     }
   }, [])
 
-  const startInference = useCallback(async () => {
+  const startInference = useCallback(async (mode: 'diarization' | 'deepgram' = 'diarization') => {
     if (!audioData || !user) return
 
     setIsProcessing(true)
     try {
-      const formData = new FormData()
-      formData.append('file', audioData.file)
-      formData.append('similarity_threshold', confidenceThreshold.toString())
-      formData.append('min_duration', '1.0') // Minimum segment duration
-      formData.append('identify_only_enrolled', 'false') // Show all speakers
+      if (mode === 'deepgram') {
+        // Use Deepgram wrapper endpoint
+        const formData = new FormData()
+        formData.append('file', audioData.file)
+        
+        const response = await apiService.post('/v1/listen', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+          params: {
+            model: 'nova-3',
+            language: 'en',
+            diarize: true,
+            smart_format: true,
+            punctuate: true,
+            enhance_speakers: true,
+            user_id: user.id,
+            speaker_confidence_threshold: confidenceThreshold
+          },
+          timeout: 300000, // 5 minutes for Deepgram + speaker identification
+        })
 
-      const response = await apiService.post('/diarize-and-identify', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 180000, // 3 minutes for inference operations
-      })
-
-      // Process the diarization response directly (no polling needed)
-      const backendSegments = response.data.segments || []
-      const summary = response.data.summary || {}
-      
-      // Convert backend format to frontend format
-      const speakers: SpeakerSegment[] = backendSegments.map((segment: any) => ({
-        start: segment.start,
-        end: segment.end,
-        speaker_id: segment.identified_id || segment.speaker,
-        speaker_name: segment.identified_as || `Unknown (${segment.speaker})`,
-        confidence: segment.confidence || 0,
-        text: undefined // Backend doesn't provide transcription
-      }))
-      
-      // Calculate confidence summary
-      const high_confidence = speakers.filter(s => s.confidence >= 0.8).length
-      const medium_confidence = speakers.filter(s => s.confidence >= 0.6 && s.confidence < 0.8).length
-      const low_confidence = speakers.filter(s => s.confidence >= 0.4 && s.confidence < 0.6).length
-      
-      const newResult: InferenceResult = {
-        id: Math.random().toString(36),
-        filename: audioData.filename,
-        duration: audioData.buffer.duration,
-        status: 'completed',
-        created_at: new Date().toISOString(),
-        speakers,
-        confidence_summary: {
-          total_segments: speakers.length,
-          high_confidence,
-          medium_confidence,
-          low_confidence
+        setDeepgramResponse(response.data)
+        
+        // Extract words and convert to speaker segments
+        const results = response.data.results || {}
+        const channels = results.channels || []
+        const words = channels[0]?.alternatives?.[0]?.words || []
+        
+        // Group words by speaker into segments
+        const speakerSegments: SpeakerSegment[] = []
+        let currentSegment: any = null
+        
+        for (const word of words) {
+          const speaker = word.speaker || 0
+          
+          if (!currentSegment || currentSegment.original_speaker !== speaker) {
+            // Start new segment
+            if (currentSegment) {
+              speakerSegments.push(currentSegment)
+            }
+            currentSegment = {
+              start: word.start,
+              end: word.end,
+              original_speaker: speaker,
+              speaker_id: word.identified_speaker_id || `speaker_${speaker}`,
+              speaker_name: word.identified_speaker_name || `Speaker ${speaker}`,
+              confidence: word.speaker_identification_confidence || 0,
+              text: word.punctuated_word || word.word,
+              identified_speaker_id: word.identified_speaker_id,
+              identified_speaker_name: word.identified_speaker_name,
+              speaker_identification_confidence: word.speaker_identification_confidence,
+              speaker_status: word.speaker_status
+            }
+          } else {
+            // Continue current segment
+            currentSegment.end = word.end
+            currentSegment.text += ' ' + (word.punctuated_word || word.word)
+          }
         }
-      }
+        
+        if (currentSegment) {
+          speakerSegments.push(currentSegment)
+        }
+        
+        // Calculate confidence summary
+        const high_confidence = speakerSegments.filter(s => s.confidence >= 0.8).length
+        const medium_confidence = speakerSegments.filter(s => s.confidence >= 0.6 && s.confidence < 0.8).length
+        const low_confidence = speakerSegments.filter(s => s.confidence >= 0.4 && s.confidence < 0.6).length
+        
+        const newResult: InferenceResult = {
+          id: Math.random().toString(36),
+          filename: audioData.filename,
+          duration: audioData.buffer.duration,
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          speakers: speakerSegments,
+          confidence_summary: {
+            total_segments: speakerSegments.length,
+            high_confidence,
+            medium_confidence,
+            low_confidence
+          }
+        }
 
-      setResults(prev => [newResult, ...prev])
-      setSelectedResult(newResult)
+        setResults(prev => [newResult, ...prev])
+        setSelectedResult(newResult)
+        
+      } else {
+        // Use original diarization endpoint
+        const formData = new FormData()
+        formData.append('file', audioData.file)
+        formData.append('similarity_threshold', confidenceThreshold.toString())
+        formData.append('min_duration', '1.0') // Minimum segment duration
+        formData.append('identify_only_enrolled', 'false') // Show all speakers
+
+        const response = await apiService.post('/diarize-and-identify', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+          timeout: 180000, // 3 minutes for inference operations
+        })
+
+        // Process the diarization response directly (no polling needed)
+        const backendSegments = response.data.segments || []
+        
+        // Convert backend format to frontend format
+        const speakers: SpeakerSegment[] = backendSegments.map((segment: any) => ({
+          start: segment.start,
+          end: segment.end,
+          speaker_id: segment.identified_id || segment.speaker,
+          speaker_name: segment.identified_as || `Unknown (${segment.speaker})`,
+          confidence: segment.confidence || 0,
+          text: undefined // Backend doesn't provide transcription
+        }))
+        
+        // Calculate confidence summary
+        const high_confidence = speakers.filter(s => s.confidence >= 0.8).length
+        const medium_confidence = speakers.filter(s => s.confidence >= 0.6 && s.confidence < 0.8).length
+        const low_confidence = speakers.filter(s => s.confidence >= 0.4 && s.confidence < 0.6).length
+        
+        const newResult: InferenceResult = {
+          id: Math.random().toString(36),
+          filename: audioData.filename,
+          duration: audioData.buffer.duration,
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          speakers,
+          confidence_summary: {
+            total_segments: speakers.length,
+            high_confidence,
+            medium_confidence,
+            low_confidence
+          }
+        }
+
+        setResults(prev => [newResult, ...prev])
+        setSelectedResult(newResult)
+      }
 
     } catch (error) {
       console.error('Failed to start inference:', error)
@@ -479,6 +570,13 @@ export default function Inference() {
         <h1 className="text-2xl font-bold text-gray-900">🧠 Speaker Inference</h1>
       </div>
 
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+        <p className="text-blue-800 text-sm">
+          <span className="font-medium">🆕 Enhanced Mode:</span> Now with Deepgram transcription + speaker identification! 
+          Choose between diarization-only or full transcription with enhanced speaker recognition.
+        </p>
+      </div>
+      
       <p className="text-gray-600">
         Upload audio files to identify speakers using trained recognition models.
       </p>
@@ -552,7 +650,7 @@ export default function Inference() {
             </div>
 
             {/* Configuration */}
-            <div className="grid md:grid-cols-2 gap-4">
+            <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Confidence Threshold: {confidenceThreshold.toFixed(2)}
@@ -572,13 +670,27 @@ export default function Inference() {
                   <span>More Strict</span>
                 </div>
               </div>
-              <div className="flex items-end">
+              
+              {/* Two Processing Options */}
+              <div className="grid md:grid-cols-2 gap-4">
                 <button
-                  onClick={startInference}
+                  onClick={() => startInference('diarization')}
                   disabled={isProcessing}
-                  className="w-full px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                  className="flex flex-col items-center px-6 py-4 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 space-y-2"
                 >
-                  {isProcessing ? 'Processing...' : 'Start Speaker Identification'}
+                  <span className="text-lg">🎯</span>
+                  <span className="font-medium">{isProcessing ? 'Processing...' : 'Start Speaker Identification'}</span>
+                  <span className="text-xs opacity-90">Diarization + speaker recognition only</span>
+                </button>
+                
+                <button
+                  onClick={() => startInference('deepgram')}
+                  disabled={isProcessing}
+                  className="flex flex-col items-center px-6 py-4 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 space-y-2"
+                >
+                  <span className="text-lg">🚀</span>
+                  <span className="font-medium">{isProcessing ? 'Processing...' : 'Transcribe + Identify'}</span>
+                  <span className="text-xs opacity-90">Full transcription with enhanced speaker ID</span>
                 </button>
               </div>
             </div>
