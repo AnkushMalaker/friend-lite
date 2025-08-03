@@ -6,9 +6,10 @@ import os
 import tempfile
 import shutil
 import json
+import aiohttp
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional, cast
+from typing import List, Optional, cast, Dict, Any
 from datetime import datetime
 
 import librosa
@@ -16,7 +17,7 @@ import numpy as np
 import soundfile as sf
 import torch
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Header, Request, Query
 from fastapi.responses import FileResponse
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -30,6 +31,9 @@ from simple_speaker_recognition.core.models import (
     UserRequest,
     UserResponse,
     VerifyRequest,
+    DeepgramTranscriptionRequest,
+    EnhancedTranscriptionResponse,
+    SpeakerStatus,
 )
 from simple_speaker_recognition.core.unified_speaker_db import UnifiedSpeakerDB
 from simple_speaker_recognition.database import init_db
@@ -60,6 +64,8 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default_factory=get_data_directory, description="Directory for storing speaker data")
     enrollment_audio_dir: Path = Field(default_factory=lambda: get_data_directory() / "enrollment_audio", description="Directory for storing enrollment audio files")
     max_file_seconds: int = Field(default=180, description="Maximum file duration in seconds")
+    deepgram_api_key: Optional[str] = Field(default=None, description="Deepgram API key for wrapper service")
+    deepgram_base_url: str = Field(default="https://api.deepgram.com", description="Deepgram API base URL")
 
     class Config:
         case_sensitive = True
@@ -170,6 +176,10 @@ if not hf_token:
 
 hf_token = cast(str, hf_token)
 auth = Settings()  # Load other settings from env vars or .env file
+
+# Override Deepgram API key from environment if available
+if os.getenv("DEEPGRAM_API_KEY"):
+    auth.deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
 
 # Global variables for storing initialized resources
 audio_backend: AudioBackend
@@ -885,6 +895,316 @@ async def download_speaker_audio_file(speaker_id: str, filename: str, db: Unifie
     )
 
 
+# ============================================================================
+# Deepgram API Wrapper Endpoints
+# ============================================================================
+
+async def forward_to_deepgram(
+    audio_data: bytes,
+    content_type: str,
+    params: Dict[str, Any],
+    deepgram_api_key: str
+) -> Dict[str, Any]:
+    """Forward audio to Deepgram API and return response."""
+    url = f"{auth.deepgram_base_url}/v1/listen"
+    
+    headers = {
+        "Authorization": f"Token {deepgram_api_key}",
+        "Content-Type": content_type
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url,
+            headers=headers,
+            data=audio_data,
+            params=params
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                log.error(f"Deepgram API error: {response.status} - {error_text}")
+                raise HTTPException(
+                    status_code=response.status,
+                    detail=f"Deepgram API error: {error_text}"
+                )
+            
+            result = await response.json()
+            log.info("Successfully received Deepgram response")
+            return result
+
+
+async def extract_and_identify_speakers(
+    audio_data: bytes,
+    deepgram_response: Dict[str, Any],
+    user_id: Optional[int],
+    confidence_threshold: float = 0.15
+) -> Dict[str, Any]:
+    """Extract speaker segments and identify speakers."""
+    enhanced_response = deepgram_response.copy()
+    
+    if not user_id:
+        log.warning("No user_id provided, skipping speaker identification")
+        return enhanced_response
+    
+    try:
+        # Parse Deepgram response to extract segments
+        from simple_speaker_recognition.utils.deepgram_parser import DeepgramParser
+        parser = DeepgramParser()
+        
+        # Create temporary file for audio processing
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            tmp_file.write(audio_data)
+            tmp_path = Path(tmp_file.name)
+        
+        try:
+            # Extract words from Deepgram response
+            results = deepgram_response.get("results", {})
+            channels = results.get("channels", [])
+            
+            if not channels:
+                log.warning("No channels found in Deepgram response")
+                return enhanced_response
+            
+            channel = channels[0]
+            alternatives = channel.get("alternatives", [])
+            
+            if not alternatives:
+                log.warning("No alternatives found in Deepgram response")
+                return enhanced_response
+            
+            words = alternatives[0].get("words", [])
+            
+            # Group words by speaker and identify each speaker segment
+            speaker_segments = {}
+            enhanced_words = []
+            
+            for word_info in words:
+                speaker = word_info.get("speaker", 0)
+                start_time = word_info.get("start", 0)
+                end_time = word_info.get("end", 0)
+                
+                # Create enhanced word with default values
+                enhanced_word = word_info.copy()
+                enhanced_word.update({
+                    "identified_speaker_id": None,
+                    "identified_speaker_name": None,
+                    "speaker_identification_confidence": None,
+                    "speaker_status": SpeakerStatus.UNKNOWN.value
+                })
+                
+                # Group consecutive words by speaker for segment identification
+                if speaker not in speaker_segments:
+                    speaker_segments[speaker] = {
+                        "start": start_time,
+                        "end": end_time,
+                        "words": [word_info],
+                        "identified": False
+                    }
+                else:
+                    # Extend the segment
+                    speaker_segments[speaker]["end"] = end_time
+                    speaker_segments[speaker]["words"].append(word_info)
+                
+                enhanced_words.append(enhanced_word)
+            
+            # Process each speaker segment for identification
+            identification_results = {}
+            
+            for speaker_id, segment_info in speaker_segments.items():
+                try:
+                    # Extract audio segment
+                    start_time = segment_info["start"]
+                    end_time = segment_info["end"]
+                    
+                    # Load and extract segment
+                    wav = audio_backend.load_wave(tmp_path, start_time, end_time)
+                    
+                    # Get embedding
+                    emb = await audio_backend.async_embed(wav)
+                    
+                    # Identify speaker
+                    found, speaker_info, confidence = await speaker_db.identify(emb, user_id=user_id)
+                    
+                    if found and confidence >= confidence_threshold:
+                        identification_results[speaker_id] = {
+                            "speaker_id": speaker_info["id"],
+                            "speaker_name": speaker_info["name"],
+                            "confidence": confidence,
+                            "status": SpeakerStatus.IDENTIFIED.value
+                        }
+                        log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: {confidence:.3f})")
+                    else:
+                        identification_results[speaker_id] = {
+                            "speaker_id": None,
+                            "speaker_name": None,
+                            "confidence": confidence if confidence else 0.0,
+                            "status": SpeakerStatus.UNKNOWN.value
+                        }
+                        log.info(f"Speaker {speaker_id} not identified (confidence: {confidence:.3f if confidence else 0.0})")
+                        
+                except Exception as e:
+                    log.warning(f"Error identifying speaker {speaker_id}: {e}")
+                    identification_results[speaker_id] = {
+                        "speaker_id": None,
+                        "speaker_name": None,
+                        "confidence": 0.0,
+                        "status": SpeakerStatus.ERROR.value
+                    }
+            
+            # Apply identification results to enhanced words
+            for word in enhanced_words:
+                speaker = word.get("speaker", 0)
+                if speaker in identification_results:
+                    result = identification_results[speaker]
+                    word.update({
+                        "identified_speaker_id": result["speaker_id"],
+                        "identified_speaker_name": result["speaker_name"],
+                        "speaker_identification_confidence": result["confidence"],
+                        "speaker_status": result["status"]
+                    })
+            
+            # Update the response with enhanced words
+            enhanced_response["results"]["channels"][0]["alternatives"][0]["words"] = enhanced_words
+            
+            # Add speaker enhancement metadata
+            enhanced_response["speaker_enhancement"] = {
+                "enabled": True,
+                "user_id": user_id,
+                "confidence_threshold": confidence_threshold,
+                "identified_speakers": {
+                    speaker_id: result for speaker_id, result in identification_results.items()
+                    if result["status"] == SpeakerStatus.IDENTIFIED.value
+                },
+                "total_speakers": len(speaker_segments),
+                "identified_count": len([r for r in identification_results.values() if r["status"] == SpeakerStatus.IDENTIFIED.value])
+            }
+            
+        finally:
+            # Clean up temporary file
+            tmp_path.unlink(missing_ok=True)
+    
+    except Exception as e:
+        log.error(f"Error during speaker identification: {e}")
+        # Add error info to response but don't fail the request
+        enhanced_response["speaker_enhancement"] = {
+            "enabled": True,
+            "error": str(e),
+            "status": "failed"
+        }
+    
+    return enhanced_response
+
+
+@app.post("/v1/listen")
+async def deepgram_compatible_transcription(
+    request: Request,
+    file: UploadFile = File(..., description="Audio file to transcribe"),
+    # Deepgram-compatible query parameters
+    model: str = Query(default="nova-3", description="Model to use for transcription"),
+    language: str = Query(default="en", description="Language code"),
+    version: str = Query(default="latest", description="Model version"),
+    punctuate: bool = Query(default=True, description="Add punctuation"),
+    profanity_filter: bool = Query(default=False, description="Filter profanity"),
+    diarize: bool = Query(default=True, description="Enable speaker diarization"),
+    diarize_version: str = Query(default="latest", description="Diarization model version"),
+    multichannel: bool = Query(default=False, description="Process multiple channels"),
+    alternatives: int = Query(default=1, description="Number of alternative transcripts"),
+    numerals: bool = Query(default=True, description="Convert numbers to numerals"),
+    smart_format: bool = Query(default=True, description="Enable smart formatting"),
+    paragraphs: bool = Query(default=True, description="Organize into paragraphs"),
+    utterances: bool = Query(default=True, description="Organize into utterances"),
+    detect_language: bool = Query(default=False, description="Detect language automatically"),
+    summarize: bool = Query(default=False, description="Generate summary"),
+    sentiment: bool = Query(default=False, description="Analyze sentiment"),
+    # Speaker enhancement parameters
+    enhance_speakers: bool = Query(default=True, description="Enable speaker identification enhancement"),
+    user_id: Optional[int] = Query(default=None, description="User ID for speaker identification"),
+    speaker_confidence_threshold: float = Query(default=0.15, description="Minimum confidence for speaker identification"),
+    # Authentication
+    authorization: Optional[str] = Header(default=None, description="Authorization header"),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """Deepgram-compatible transcription endpoint with speaker enhancement."""
+    
+    # Extract API key from authorization header
+    api_key = None
+    if authorization:
+        if authorization.startswith("Token "):
+            api_key = authorization[6:]
+        elif authorization.startswith("Bearer "):
+            api_key = authorization[7:]
+        else:
+            api_key = authorization
+    
+    # Use provided API key or fall back to service default
+    deepgram_key = api_key or auth.deepgram_api_key
+    if not deepgram_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Deepgram API key required. Provide via Authorization header or DEEPGRAM_API_KEY environment variable."
+        )
+    
+    log.info(f"Processing Deepgram-compatible transcription request: {file.filename}")
+    
+    try:
+        # Read audio file
+        audio_data = await file.read()
+        content_type = file.content_type or "audio/wav"
+        
+        # Prepare parameters for Deepgram API
+        deepgram_params = {
+            "model": model,
+            "language": language,
+            "version": version,
+            "punctuate": punctuate,
+            "profanity_filter": profanity_filter,
+            "diarize": diarize,
+            "diarize_version": diarize_version,
+            "multichannel": multichannel,
+            "alternatives": alternatives,
+            "numerals": numerals,
+            "smart_format": smart_format,
+            "paragraphs": paragraphs,
+            "utterances": utterances,
+            "detect_language": detect_language,
+            "summarize": summarize,
+            "sentiment": sentiment,
+        }
+        
+        # Remove None values
+        deepgram_params = {k: v for k, v in deepgram_params.items() if v is not None}
+        
+        log.info(f"Forwarding request to Deepgram API with params: {deepgram_params}")
+        
+        # Forward to Deepgram
+        deepgram_response = await forward_to_deepgram(
+            audio_data=audio_data,
+            content_type=content_type,
+            params=deepgram_params,
+            deepgram_api_key=deepgram_key
+        )
+        
+        # Enhance with speaker identification if enabled
+        if enhance_speakers and diarize:
+            log.info("Enhancing transcription with speaker identification")
+            enhanced_response = await extract_and_identify_speakers(
+                audio_data=audio_data,
+                deepgram_response=deepgram_response,
+                user_id=user_id,
+                confidence_threshold=speaker_confidence_threshold
+            )
+            return enhanced_response
+        else:
+            log.info("Returning original Deepgram response (speaker enhancement disabled)")
+            return deepgram_response
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Error in Deepgram-compatible transcription: {e}")
+        raise HTTPException(500, f"Transcription failed: {str(e)}")
+
+
 @app.post("/speakers/reset")
 async def reset_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = Depends(get_db)):
     """Reset all speakers (optionally for a specific user)."""
@@ -950,6 +1270,19 @@ def main():
     
     log.info(f"Starting Speaker Service on {host}:{port}")
     uvicorn.run("simple_speaker_recognition.api.service:app", host=host, port=port, reload=bool(os.getenv("DEV", False)))
+
+
+@app.get("/v1/health")
+async def deepgram_health():
+    """Health check endpoint for Deepgram wrapper compatibility."""
+    return {
+        "status": "ok",
+        "service": "Deepgram Speaker Enhancement Wrapper",
+        "deepgram_configured": bool(auth.deepgram_api_key),
+        "speaker_recognition_available": True,
+        "device": str(device),
+        "enrolled_speakers": speaker_db.get_speaker_count()
+    }
 
 
 if __name__ == "__main__":
