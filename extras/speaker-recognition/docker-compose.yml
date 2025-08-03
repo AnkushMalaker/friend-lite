@@ -57,12 +57,13 @@ services:
       - VITE_API_URL=http://localhost:${SPEAKER_SERVICE_PORT:-8085}
       - REACT_UI_HOST=${REACT_UI_HOST:-0.0.0.0}
       - REACT_UI_PORT=${REACT_UI_PORT:-5173}
+      - REACT_UI_HTTPS=${REACT_UI_HTTPS:-false}
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
     depends_on:
       - speaker-service
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173"]
+      test: ["CMD", "sh", "-c", "if [ \"$REACT_UI_HTTPS\" = \"true\" ]; then wget --no-check-certificate --no-verbose --tries=1 --spider https://localhost:5173; else wget --no-verbose --tries=1 --spider http://localhost:5173; fi"]
       interval: 30s
       timeout: 10s
       retries: 3

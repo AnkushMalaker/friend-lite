@@ -23,10 +23,10 @@ docker-compose up --build -d
 
 This starts two services:
 - **FastAPI backend** on http://localhost:8085 (speaker recognition API)
-- **React web UI** on http://localhost:5173 (Modern React interface)
+- **React web UI** on https://localhost:5173 (Modern React interface with HTTPS)
 
 ### 3. Access the Web UI
-- **React UI**: http://localhost:5173
+- **React UI**: https://localhost:5173 (with HTTPS enabled for microphone access)
 
 ### 4. Get Started
 1. **Create a user** using the sidebar
@@ -142,6 +142,7 @@ SIMILARITY_THRESHOLD="0.15"             # Speaker similarity threshold (0.1-0.3 
 # React Web UI Configuration
 REACT_UI_HOST="0.0.0.0"                # Web UI bind host  
 REACT_UI_PORT="5173"                    # Web UI port (default: 5173)
+REACT_UI_HTTPS="true"                   # Enable HTTPS for microphone access (default: true)
 
 # Optional
 DEEPGRAM_API_KEY="your_key"             # For transcript import features
@@ -153,6 +154,27 @@ Copy `.env.template` to `.env` and configure your settings:
 cp .env.template .env
 # Edit .env with your configuration
 ```
+
+## 🔒 HTTPS and Microphone Access
+
+**For Internal VPN/Network Usage:**
+
+The React UI is configured with HTTPS enabled by default (`REACT_UI_HTTPS=true`) to support microphone recording features, which require secure contexts in modern browsers.
+
+### **First-time Setup:**
+1. **Access**: Navigate to https://localhost:5173
+2. **Certificate Warning**: Your browser will show a security warning for the self-signed certificate
+3. **Accept Certificate**: Click "Advanced" → "Proceed to localhost (unsafe)" or similar
+4. **One-time Setup**: This only needs to be done once per browser
+
+### **Why HTTPS is Required:**
+- **Browser Security**: Modern browsers require HTTPS for microphone access via `getUserMedia()` API
+- **Internal Networks**: Self-signed certificates are acceptable for VPN/internal tools
+- **Recording Features**: Both Enrollment and Inference pages need microphone access for live recording
+
+### **Alternative Access:**
+- **HTTP Fallback**: Set `REACT_UI_HTTPS=false` in `.env` and use http://localhost:5173
+- **Limitation**: Microphone recording will not work without HTTPS (file upload still works)
 
 ## 🚨 Troubleshooting
 
