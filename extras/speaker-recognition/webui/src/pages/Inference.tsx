@@ -68,7 +68,7 @@ export default function Inference() {
   useEffect(() => {
     return () => {
       // Stop recording if active
-      if (mediaRecorderRef.current && isRecording) {
+      if (mediaRecorderRef.current) {
         mediaRecorderRef.current.stop()
       }
       
@@ -87,7 +87,7 @@ export default function Inference() {
         audioContextRef.current.close()
       }
     }
-  }, [isRecording])
+  }, [])
 
   const handleFileUpload = useCallback(async (files: File[]) => {
     if (!files.length || !user) return

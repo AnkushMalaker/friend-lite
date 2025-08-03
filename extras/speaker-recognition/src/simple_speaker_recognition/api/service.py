@@ -4,9 +4,12 @@ import asyncio
 import logging
 import os
 import tempfile
+import shutil
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional, cast
+from datetime import datetime
 
 import librosa
 import numpy as np
@@ -14,6 +17,7 @@ import soundfile as sf
 import torch
 import uvicorn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -29,6 +33,21 @@ from simple_speaker_recognition.core.models import (
 )
 from simple_speaker_recognition.core.unified_speaker_db import UnifiedSpeakerDB
 from simple_speaker_recognition.database import init_db
+from simple_speaker_recognition.utils.audio_processing import get_audio_info
+
+
+def get_data_directory() -> Path:
+    """Get the appropriate data directory.
+    
+    Uses Docker path if available (/app/data), otherwise falls back to local development path.
+    This pattern matches the database module's approach.
+    """
+    docker_path = Path("/app/data")
+    if docker_path.exists():
+        return docker_path
+    else:
+        # For local development, use 'data' directory relative to project root
+        return Path("data")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -38,7 +57,8 @@ log = logging.getLogger("speaker_service")
 class Settings(BaseSettings):
     """Service configuration settings."""
     similarity_threshold: float = Field(default=0.15, description="Cosine similarity threshold for speaker identification (0.1-0.3 typical for ECAPA-TDNN)")
-    data_dir: Path = Field(default=Path("data"), description="Directory for storing speaker data")
+    data_dir: Path = Field(default_factory=get_data_directory, description="Directory for storing speaker data")
+    enrollment_audio_dir: Path = Field(default_factory=lambda: get_data_directory() / "enrollment_audio", description="Directory for storing enrollment audio files")
     max_file_seconds: int = Field(default=180, description="Maximum file duration in seconds")
 
     class Config:
@@ -65,6 +85,82 @@ def extract_user_id_from_speaker_id(speaker_id: str) -> int:
         return user_id
     except (ValueError, IndexError):
         raise HTTPException(400, f"Invalid speaker_id format. Cannot extract user_id from: {speaker_id}")
+
+
+def save_enrollment_audio(user_id: int, speaker_id: str, audio_data: bytes, filename: str, enrollment_type: str = "upload") -> Path:
+    """Save enrollment audio file to disk.
+    
+    Args:
+        user_id: User ID
+        speaker_id: Speaker ID
+        audio_data: Audio file data
+        filename: Original filename
+        enrollment_type: Type of enrollment (upload, recording, append)
+    
+    Returns:
+        Path to saved audio file
+    """
+    # Create directory structure: data/enrollment_audio/{user_id}/{speaker_id}/
+    speaker_audio_dir = auth.enrollment_audio_dir / str(user_id) / speaker_id
+    speaker_audio_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_filename = Path(filename).stem.replace(" ", "_").replace("/", "_")
+    extension = Path(filename).suffix or ".wav"
+    unique_filename = f"{timestamp}_{enrollment_type}_{safe_filename}{extension}"
+    
+    # Save audio file
+    audio_path = speaker_audio_dir / unique_filename
+    with open(audio_path, "wb") as f:
+        f.write(audio_data)
+    
+    log.info(f"Saved enrollment audio: {audio_path}")
+    return audio_path
+
+
+def save_enrollment_manifest(user_id: int, speaker_id: str, audio_files: List[dict]) -> Path:
+    """Save or update enrollment manifest file.
+    
+    Args:
+        user_id: User ID
+        speaker_id: Speaker ID
+        audio_files: List of audio file information
+    
+    Returns:
+        Path to manifest file
+    """
+    manifest_dir = auth.enrollment_audio_dir / str(user_id) / speaker_id
+    manifest_path = manifest_dir / "enrollment_manifest.json"
+    
+    # Load existing manifest if it exists
+    existing_files = []
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, "r") as f:
+                manifest_data = json.load(f)
+                existing_files = manifest_data.get("audio_files", [])
+        except Exception as e:
+            log.warning(f"Failed to load existing manifest: {e}")
+    
+    # Combine existing and new files
+    all_files = existing_files + audio_files
+    
+    # Create manifest data
+    manifest_data = {
+        "speaker_id": speaker_id,
+        "user_id": user_id,
+        "total_files": len(all_files),
+        "last_updated": datetime.now().isoformat(),
+        "audio_files": all_files
+    }
+    
+    # Save manifest
+    with open(manifest_path, "w") as f:
+        json.dump(manifest_data, f, indent=2)
+    
+    log.info(f"Updated enrollment manifest: {manifest_path}")
+    return manifest_path
 
 
 # Get HF_TOKEN from environment and create settings
@@ -99,6 +195,10 @@ async def lifespan(app: FastAPI):
         similarity_thr=auth.similarity_threshold,
     )
     log.info("Models ready ✔ – device=%s", device)
+    
+    # Ensure enrollment audio directory exists
+    auth.enrollment_audio_dir.mkdir(parents=True, exist_ok=True)
+    log.info("Enrollment audio directory ready: %s", auth.enrollment_audio_dir)
     
     # Yield control to the application
     yield
@@ -177,28 +277,63 @@ async def enroll_upload(
     user_id = extract_user_id_from_speaker_id(speaker_id)
     log.info(f"Enrolling speaker: {speaker_name} (ID: {speaker_id}, User: {user_id})")
     
-    # Persist temporary file
+    # Read file content
+    file_content = await file.read()
+    
+    # Persist temporary file for processing
     with secure_temp_file() as tmp:
-        tmp.write(await file.read())
+        tmp.write(file_content)
         tmp_path = Path(tmp.name)
     try:
         log.info(f"Loading audio file: {tmp_path}")
         wav = audio_backend.load_wave(tmp_path, start, end)
         log.info(f"Audio loaded, shape: {wav.shape}")
         
+        # Get audio info
+        audio_info = get_audio_info(str(tmp_path))
+        duration = audio_info["duration_seconds"]
+        
         log.info("Computing speaker embedding...")
         emb = await audio_backend.async_embed(wav)
         log.info(f"Embedding computed, shape: {emb.shape}")
         
+        # Save audio file to enrollment directory
+        saved_path = save_enrollment_audio(
+            user_id=user_id,
+            speaker_id=speaker_id,
+            audio_data=file_content,
+            filename=file.filename or "upload.wav",
+            enrollment_type="upload"
+        )
+        
+        # Create manifest entry
+        audio_file_info = {
+            "filename": saved_path.name,
+            "path": str(saved_path.relative_to(auth.enrollment_audio_dir)),
+            "duration_seconds": duration,
+            "start_time": start,
+            "end_time": end,
+            "upload_time": datetime.now().isoformat(),
+            "original_filename": file.filename
+        }
+        
+        # Save manifest
+        save_enrollment_manifest(user_id, speaker_id, [audio_file_info])
+        
         log.info(f"Adding speaker to database...")
-        updated = await db.add_speaker(speaker_id, speaker_name, emb[0], user_id)
+        updated = await db.add_speaker(speaker_id, speaker_name, emb[0], user_id, sample_count=1, total_duration=duration)
         
         if updated:
             log.info(f"Successfully updated existing speaker: {speaker_id}")
         else:
             log.info(f"Successfully enrolled new speaker: {speaker_id}")
         
-        return {"updated": updated, "speaker_id": speaker_id}
+        return {
+            "updated": updated, 
+            "speaker_id": speaker_id,
+            "audio_saved": True,
+            "audio_path": str(saved_path.relative_to(auth.enrollment_audio_dir))
+        }
     except Exception as e:
         log.error(f"Error during enrollment: {e}")
         raise HTTPException(500, f"Enrollment failed: {str(e)}") from e
@@ -221,34 +356,63 @@ async def enroll_batch(
     embeddings = []
     temp_paths = []
     total_duration = 0.0
+    saved_audio_files = []
     
     try:
         # Process each audio file
         for i, file in enumerate(files):
             log.info(f"Processing file {i+1}/{len(files)}: {file.filename}")
             
-            # Save to temporary file
+            # Read file content
+            file_content = await file.read()
+            
+            # Save to temporary file for processing
             with secure_temp_file() as tmp:
-                tmp.write(await file.read())
+                tmp.write(file_content)
                 tmp_path = Path(tmp.name)
                 temp_paths.append(tmp_path)
             
             # Load and embed
             try:
-                wav = audio_backend.load_wave(tmp_path)
-                # Calculate duration from audio data
-                duration = len(wav) / 16000.0  # Assuming 16kHz sample rate
+                # Get accurate duration from original file
+                audio_info = get_audio_info(str(tmp_path))
+                duration = audio_info["duration_seconds"]
                 total_duration += duration
                 
+                wav = audio_backend.load_wave(tmp_path)
                 emb = await audio_backend.async_embed(wav)
                 embeddings.append(emb[0])
-                log.info(f"Successfully embedded file {i+1}, duration: {duration:.2f}s")
+                
+                # Save audio file to enrollment directory
+                saved_path = save_enrollment_audio(
+                    user_id=user_id,
+                    speaker_id=speaker_id,
+                    audio_data=file_content,
+                    filename=file.filename or f"batch_{i+1}.wav",
+                    enrollment_type="batch"
+                )
+                
+                # Track saved audio file info
+                audio_file_info = {
+                    "filename": saved_path.name,
+                    "path": str(saved_path.relative_to(auth.enrollment_audio_dir)),
+                    "duration_seconds": duration,
+                    "upload_time": datetime.now().isoformat(),
+                    "original_filename": file.filename,
+                    "batch_index": i + 1
+                }
+                saved_audio_files.append(audio_file_info)
+                
+                log.info(f"Successfully embedded and saved file {i+1}, duration: {duration:.2f}s")
             except Exception as e:
                 log.warning(f"Failed to process file {i+1}: {e}")
                 continue
         
         if not embeddings:
             raise HTTPException(400, "No valid audio files could be processed")
+        
+        # Save manifest with all audio files
+        save_enrollment_manifest(user_id, speaker_id, saved_audio_files)
         
         # Compute average embedding
         log.info(f"Computing average embedding from {len(embeddings)} segments")
@@ -280,7 +444,9 @@ async def enroll_batch(
             "speaker_id": speaker_id,
             "num_segments": len(embeddings),
             "num_files": len(files),
-            "total_duration": round(total_duration, 2)
+            "total_duration": round(total_duration, 2),
+            "audio_saved": True,
+            "saved_files": len(saved_audio_files)
         }
         
     except Exception as e:
@@ -337,34 +503,64 @@ async def enroll_append(
     embeddings = []
     temp_paths = []
     new_total_duration = 0.0
+    saved_audio_files = []
     
     try:
         # Process each new audio file
         for i, file in enumerate(files):
             log.info(f"Processing new file {i+1}/{len(files)}: {file.filename}")
             
-            # Save to temporary file
+            # Read file content
+            file_content = await file.read()
+            
+            # Save to temporary file for processing
             with secure_temp_file() as tmp:
-                tmp.write(await file.read())
+                tmp.write(file_content)
                 tmp_path = Path(tmp.name)
                 temp_paths.append(tmp_path)
             
             # Load and embed
             try:
-                wav = audio_backend.load_wave(tmp_path)
-                # Calculate duration from audio data
-                duration = len(wav) / 16000.0  # Assuming 16kHz sample rate
+                # Get accurate duration from original file
+                audio_info = get_audio_info(str(tmp_path))
+                duration = audio_info["duration_seconds"]
                 new_total_duration += duration
                 
+                wav = audio_backend.load_wave(tmp_path)
                 emb = await audio_backend.async_embed(wav)
                 embeddings.append(emb[0])
-                log.info(f"Successfully embedded new file {i+1}, duration: {duration:.2f}s")
+                
+                # Save audio file to enrollment directory
+                saved_path = save_enrollment_audio(
+                    user_id=user_id,
+                    speaker_id=speaker_id,
+                    audio_data=file_content,
+                    filename=file.filename or f"append_{i+1}.wav",
+                    enrollment_type="append"
+                )
+                
+                # Track saved audio file info
+                audio_file_info = {
+                    "filename": saved_path.name,
+                    "path": str(saved_path.relative_to(auth.enrollment_audio_dir)),
+                    "duration_seconds": duration,
+                    "upload_time": datetime.now().isoformat(),
+                    "original_filename": file.filename,
+                    "append_index": i + 1,
+                    "append_operation": True
+                }
+                saved_audio_files.append(audio_file_info)
+                
+                log.info(f"Successfully embedded and saved new file {i+1}, duration: {duration:.2f}s")
             except Exception as e:
                 log.warning(f"Failed to process file {i+1}: {e}")
                 continue
         
         if not embeddings:
             raise HTTPException(400, "No valid audio files could be processed")
+        
+        # Update manifest with appended files
+        save_enrollment_manifest(user_id, speaker_id, saved_audio_files)
         
         # Compute average of new embeddings
         log.info(f"Computing average embedding from {len(embeddings)} new segments")
@@ -402,7 +598,9 @@ async def enroll_append(
             "total_samples": total_count,
             "previous_duration": round(existing_duration, 2),
             "new_duration": round(new_total_duration, 2),
-            "total_duration": round(existing_duration + new_total_duration, 2)
+            "total_duration": round(existing_duration + new_total_duration, 2),
+            "audio_saved": True,
+            "saved_files": len(saved_audio_files)
         }
         
     except Exception as e:
@@ -587,6 +785,106 @@ async def list_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = De
     return {"speakers": speakers}
 
 
+@app.get("/speakers/{speaker_id}/audio")
+async def get_speaker_audio_files(speaker_id: str, db: UnifiedSpeakerDB = Depends(get_db)):
+    """Get list of saved audio files for a speaker."""
+    # Extract user_id from speaker_id for authorization
+    user_id = extract_user_id_from_speaker_id(speaker_id)
+    
+    # Check if speaker exists
+    from simple_speaker_recognition.database import get_db_session
+    from simple_speaker_recognition.database.models import Speaker
+    
+    db_session = get_db_session()
+    try:
+        speaker = db_session.query(Speaker).filter(
+            Speaker.id == speaker_id,
+            Speaker.user_id == user_id
+        ).first()
+        
+        if not speaker:
+            raise HTTPException(404, f"Speaker {speaker_id} not found for user {user_id}")
+            
+    finally:
+        db_session.close()
+    
+    # Check if manifest file exists
+    manifest_path = auth.enrollment_audio_dir / str(user_id) / speaker_id / "enrollment_manifest.json"
+    
+    if not manifest_path.exists():
+        return {
+            "speaker_id": speaker_id,
+            "audio_files": [],
+            "total_files": 0,
+            "message": "No audio files found for this speaker"
+        }
+    
+    try:
+        with open(manifest_path, "r") as f:
+            manifest_data = json.load(f)
+        
+        return {
+            "speaker_id": speaker_id,
+            "user_id": user_id,
+            "audio_files": manifest_data.get("audio_files", []),
+            "total_files": manifest_data.get("total_files", 0),
+            "last_updated": manifest_data.get("last_updated")
+        }
+        
+    except Exception as e:
+        log.error(f"Error reading manifest for speaker {speaker_id}: {e}")
+        raise HTTPException(500, f"Failed to read audio files manifest: {str(e)}")
+
+
+@app.get("/speakers/{speaker_id}/audio/{filename}")
+async def download_speaker_audio_file(speaker_id: str, filename: str, db: UnifiedSpeakerDB = Depends(get_db)):
+    """Download a specific audio file for a speaker."""
+    # Extract user_id from speaker_id for authorization
+    user_id = extract_user_id_from_speaker_id(speaker_id)
+    
+    # Check if speaker exists
+    from simple_speaker_recognition.database import get_db_session
+    from simple_speaker_recognition.database.models import Speaker
+    
+    db_session = get_db_session()
+    try:
+        speaker = db_session.query(Speaker).filter(
+            Speaker.id == speaker_id,
+            Speaker.user_id == user_id
+        ).first()
+        
+        if not speaker:
+            raise HTTPException(404, f"Speaker {speaker_id} not found for user {user_id}")
+            
+    finally:
+        db_session.close()
+    
+    # Construct file path (security: only allow files within speaker's directory)
+    speaker_audio_dir = auth.enrollment_audio_dir / str(user_id) / speaker_id
+    file_path = speaker_audio_dir / filename
+    
+    # Security check: ensure file is within the expected directory
+    try:
+        file_path = file_path.resolve()
+        speaker_audio_dir = speaker_audio_dir.resolve()
+        if not str(file_path).startswith(str(speaker_audio_dir)):
+            raise HTTPException(403, "Access to file outside speaker directory is forbidden")
+    except Exception:
+        raise HTTPException(400, "Invalid file path")
+    
+    if not file_path.exists():
+        raise HTTPException(404, f"Audio file {filename} not found for speaker {speaker_id}")
+    
+    if not file_path.is_file():
+        raise HTTPException(400, f"Path {filename} is not a file")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type="audio/wav"
+    )
+
+
 @app.post("/speakers/reset")
 async def reset_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = Depends(get_db)):
     """Reset all speakers (optionally for a specific user)."""
@@ -608,13 +906,37 @@ async def reset_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = D
 
 
 @app.delete("/speakers/{speaker_id}")
-async def delete_speaker(speaker_id: str, db: UnifiedSpeakerDB = Depends(get_db)):
-    """Delete a speaker."""
+async def delete_speaker(
+    speaker_id: str, 
+    delete_audio: bool = False,
+    db: UnifiedSpeakerDB = Depends(get_db)
+):
+    """Delete a speaker and optionally delete associated audio files."""
     try:
         # Extract user_id from speaker_id for authorization
         user_id = extract_user_id_from_speaker_id(speaker_id)
+        
+        # Delete audio files if requested
+        audio_deleted = False
+        if delete_audio:
+            speaker_audio_dir = auth.enrollment_audio_dir / str(user_id) / speaker_id
+            if speaker_audio_dir.exists():
+                try:
+                    shutil.rmtree(speaker_audio_dir)
+                    audio_deleted = True
+                    log.info(f"Deleted audio directory for speaker {speaker_id}: {speaker_audio_dir}")
+                except Exception as e:
+                    log.warning(f"Failed to delete audio directory for speaker {speaker_id}: {e}")
+        
+        # Delete speaker from database
         await db.delete_speaker(speaker_id, user_id)
-        return {"deleted": True}
+        
+        result = {"deleted": True}
+        if delete_audio:
+            result["audio_deleted"] = audio_deleted
+            
+        return result
+        
     except KeyError:
         raise HTTPException(404, "speaker not found") from None
 
