@@ -1062,10 +1062,11 @@ async def extract_and_identify_speakers(
                         identification_results[speaker_id] = {
                             "speaker_id": None,
                             "speaker_name": None,
-                            "confidence": confidence if confidence else 0.0,
+                            "confidence": confidence if confidence is not None else 0.0,
                             "status": SpeakerStatus.UNKNOWN.value
                         }
-                        log.info(f"Speaker {speaker_id} not identified (confidence: {confidence:.3f if confidence else 0.0})")
+                        confidence_str = f"{confidence:.3f}" if confidence is not None else "0.0"
+                        log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
                         
                 except Exception as e:
                     log.warning(f"Error identifying speaker {speaker_id}: {e}")
