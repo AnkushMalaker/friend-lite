@@ -53,7 +53,7 @@ export default function Enrollment() {
   useEffect(() => {
     return () => {
       // Stop recording if active
-      if (mediaRecorderRef.current && isRecording) {
+      if (mediaRecorderRef.current) {
         mediaRecorderRef.current.stop()
       }
       
@@ -72,7 +72,7 @@ export default function Enrollment() {
         audioContextRef.current.close()
       }
     }
-  }, [isRecording])
+  }, [])
 
   const createNewSession = useCallback((speakerName: string) => {
     const newSession: EnrollmentSession = {
@@ -428,7 +428,10 @@ export default function Enrollment() {
       })
       
       updateSession(currentSession.id, { status: 'completed' })
-      alert('Speaker enrollment completed successfully!')
+      const message = response.data?.audio_saved 
+        ? `Speaker enrollment completed successfully! ${response.data.saved_files || 0} audio files saved.`
+        : 'Speaker enrollment completed successfully!'
+      alert(message)
       setCurrentSession(null)
       
     } catch (error) {
@@ -486,6 +489,12 @@ export default function Enrollment() {
         )}
       </div>
 
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+        <p className="text-blue-800 text-sm">
+          <span className="font-medium">💾 Audio Storage:</span> All enrollment audio files are automatically saved for future reference and reprocessing.
+        </p>
+      </div>
+      
       <p className="text-gray-600">
         Enroll new speakers by uploading audio files or recording directly in your browser.
       </p>
@@ -577,7 +586,12 @@ export default function Enrollment() {
           {/* Audio Samples List */}
           {currentSession.audioFiles.length > 0 && (
             <div className="space-y-4">
-              <h3 className="text-lg font-medium">Audio Samples</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-medium">Audio Samples</h3>
+                <span className="text-sm text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                  💾 Files will be saved during enrollment
+                </span>
+              </div>
               <div className="space-y-3">
                 {currentSession.audioFiles.map((audio) => (
                   <div
@@ -595,6 +609,7 @@ export default function Enrollment() {
                             <span>{audio.quality}</span>
                           </span>
                           <span className="text-blue-600">({audio.source})</span>
+                          <span className="text-green-600">• will be saved</span>
                         </div>
                       </div>
                     </div>
