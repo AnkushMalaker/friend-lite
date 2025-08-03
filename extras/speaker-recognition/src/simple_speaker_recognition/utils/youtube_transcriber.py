@@ -11,11 +11,7 @@ from deepgram import DeepgramClient, PrerecordedOptions
 from pydub import AudioSegment
 
 # Import caching utilities
-try:
-    from .cache_manager import get_cached_deepgram_response, cache_deepgram_response
-except ImportError:
-    # Fallback for when running as standalone script
-    from cache_manager import get_cached_deepgram_response, cache_deepgram_response
+from simple_speaker_recognition.utils.cache_manager import get_cached_deepgram_response, cache_deepgram_response
 
 # Configure logging
 logging.basicConfig(

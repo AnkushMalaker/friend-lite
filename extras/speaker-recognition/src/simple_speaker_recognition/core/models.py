@@ -5,6 +5,18 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class UserRequest(BaseModel):
+    """Request model for user creation."""
+    username: str
+
+
+class UserResponse(BaseModel):
+    """Response model for user data."""
+    id: int
+    username: str
+    created_at: str
+
+
 class EnrollRequest(BaseModel):
     """Request model for speaker enrollment."""
     speaker_id: str
@@ -43,6 +55,7 @@ class DiarizeAndIdentifyRequest(BaseModel):
     min_duration: Optional[float] = Field(default=0.5, description="Minimum duration for speaker segments (seconds)")
     similarity_threshold: Optional[float] = Field(default=None, description="Override default similarity threshold for identification")
     identify_only_enrolled: bool = Field(default=False, description="Only return segments for enrolled speakers")
+    user_id: Optional[int] = Field(default=None, description="User ID to scope speaker identification to user's enrolled speakers")
 
 
 class InferenceRequest(BaseModel):

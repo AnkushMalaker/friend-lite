@@ -8,6 +8,8 @@ services:
     ports:
       - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"
     volumes:
+      # Mount source code for development (live reload)
+      - ./src:/app/src
       # Persist Hugging Face cache (models) between restarts
       - ./model_cache:/models
       - ./audio_chunks:/app/audio_chunks
@@ -45,6 +47,8 @@ services:
     ports:
       - "${STREAMLIT_PORT:-8502}:${STREAMLIT_PORT:-8502}"
     volumes:
+      # Mount source code for development (live reload)
+      - ./src:/app/src
       # Share data directory with speaker service
       - ./data:/app/data
       - ./audio_chunks:/app/audio_chunks

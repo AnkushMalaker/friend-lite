@@ -7,6 +7,8 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import Tuple, List, Dict, Any, Optional
 import pandas as pd
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
 
 def create_waveform_plot(
     audio: np.ndarray, 
@@ -272,10 +274,8 @@ def create_embedding_visualization(
         Plotly figure object
     """
     if method == "tsne":
-        from sklearn.manifold import TSNE
         reducer = TSNE(n_components=2, random_state=42, perplexity=min(30, len(embeddings)-1))
     else:  # PCA
-        from sklearn.decomposition import PCA
         reducer = PCA(n_components=2, random_state=42)
     
     # Reduce dimensionality
@@ -401,27 +401,3 @@ def create_audio_stats_plot(
     
     return fig
 
-def add_selection_overlay(fig: go.Figure, start_time: float, end_time: float) -> go.Figure:
-    """
-    Add a selection overlay to an existing plot.
-    
-    Args:
-        fig: Existing Plotly figure
-        start_time: Selection start time
-        end_time: Selection end time
-    
-    Returns:
-        Updated figure with selection overlay
-    """
-    fig.add_vrect(
-        x0=start_time, 
-        x1=end_time,
-        fillcolor="yellow", 
-        opacity=0.3,
-        line_width=2,
-        line_color="orange",
-        annotation_text="Selected",
-        annotation_position="top left"
-    )
-    
-    return fig
