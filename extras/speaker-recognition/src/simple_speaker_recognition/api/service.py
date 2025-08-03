@@ -1,6 +1,5 @@
 """FastAPI service for speaker recognition and diarization."""
 
-import asyncio
 import json
 import logging
 import os
@@ -12,9 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 import aiohttp
-import librosa
 import numpy as np
-import soundfile as sf
 import torch
 import uvicorn
 from fastapi import (
@@ -67,6 +64,64 @@ def get_data_directory() -> Path:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("speaker_service")
+
+
+def safe_format_confidence(confidence: Any, context: str = "") -> str:
+    """Safely format confidence values with comprehensive validation and logging.
+    
+    Args:
+        confidence: The confidence value to format (can be any type)
+        context: Context string for logging (e.g., "speaker_identification", "audio_processing")
+    
+    Returns:
+        str: Safely formatted confidence string (e.g., "0.856" or "invalid")
+    """
+    try:
+        # Log the raw input for debugging
+        log.debug(f"safe_format_confidence called with: type={type(confidence)}, value={confidence}, context='{context}'")
+        
+        # Handle None values
+        if confidence is None:
+            log.debug(f"Confidence is None in context '{context}', returning '0.000'")
+            return "0.000"
+        
+        # Convert to Python float, handling various input types
+        if isinstance(confidence, (int, float)):
+            conf_val = float(confidence)
+        elif isinstance(confidence, np.number):
+            # Handle numpy scalars (including float32, float64, etc.)
+            conf_val = float(confidence.item())
+            log.debug(f"Converted numpy {type(confidence)} to Python float: {conf_val}")
+        elif hasattr(confidence, '__float__'):
+            # Handle objects that can be converted to float
+            conf_val = float(confidence)
+            log.debug(f"Converted {type(confidence)} to float via __float__: {conf_val}")
+        else:
+            log.warning(f"Cannot convert confidence type {type(confidence)} to float in context '{context}': {confidence}")
+            return "invalid"
+        
+        # Check for special float values
+        if np.isnan(conf_val):
+            log.warning(f"Confidence is NaN in context '{context}', returning '0.000'")
+            return "0.000"
+        elif np.isinf(conf_val):
+            log.warning(f"Confidence is infinite ({conf_val}) in context '{context}', returning '1.000' or '0.000'")
+            return "1.000" if conf_val > 0 else "0.000"
+        elif conf_val < 0:
+            log.warning(f"Confidence is negative ({conf_val}) in context '{context}', clamping to 0.000")
+            return "0.000"
+        elif conf_val > 1:
+            log.warning(f"Confidence is > 1 ({conf_val}) in context '{context}', clamping to 1.000")
+            return "1.000"
+        
+        # Format the valid confidence value
+        formatted = f"{conf_val:.3f}"
+        log.debug(f"Successfully formatted confidence {conf_val} -> '{formatted}' in context '{context}'")
+        return formatted
+        
+    except Exception as e:
+        log.error(f"Exception in safe_format_confidence for {confidence} (type: {type(confidence)}) in context '{context}': {e}")
+        return "error"
 
 
 class Settings(BaseSettings):
@@ -705,6 +760,15 @@ async def diarize_and_identify(
                 db.similarity_thr = threshold
                 try:
                     found, speaker_info, confidence = await db.identify(emb, user_id=req.user_id)
+                    
+                    # Validate confidence value at source
+                    if confidence is not None:
+                        if not isinstance(confidence, (int, float, np.number)):
+                            log.warning(f"Invalid confidence type from speaker_db.identify: {type(confidence)}, value: {confidence}")
+                            confidence = 0.0
+                        elif np.isnan(confidence) or np.isinf(confidence):
+                            log.warning(f"Invalid confidence value from speaker_db.identify: {confidence} (NaN/Inf)")
+                            confidence = 0.0
                 finally:
                     db.similarity_thr = original_threshold
                 
@@ -723,13 +787,9 @@ async def diarize_and_identify(
                 # Track identified vs unknown speakers
                 if found and speaker_info:
                     identified_speakers.add(speaker_info["name"])
-                    # Safe confidence formatting with type checking
-                    try:
-                        conf_val = float(confidence) if confidence is not None else 0.0
-                        log.debug(f"Segment {i+1}: Identified as {speaker_info['name']} (confidence: {conf_val:.3f})")
-                    except (TypeError, ValueError) as fmt_error:
-                        log.warning(f"Error formatting confidence {confidence} (type: {type(confidence)}): {fmt_error}")
-                        log.debug(f"Segment {i+1}: Identified as {speaker_info['name']} (confidence: unknown)")
+                    # Use safe confidence formatting utility
+                    confidence_str = safe_format_confidence(confidence, "diarization_segment")
+                    log.debug(f"Segment {i+1}: Identified as {speaker_info['name']} (confidence: {confidence_str})")
                 else:
                     unknown_speakers.add(speaker_label)
                     log.debug(f"Segment {i+1}: Unknown speaker {speaker_label}")
@@ -1067,6 +1127,15 @@ async def extract_and_identify_speakers(
                     # Identify speaker
                     found, speaker_info, confidence = await speaker_db.identify(emb, user_id=user_id)
                     
+                    # Validate confidence value at source
+                    if confidence is not None:
+                        if not isinstance(confidence, (int, float, np.number)):
+                            log.warning(f"Invalid confidence type from speaker_db.identify: {type(confidence)}, value: {confidence}")
+                            confidence = 0.0
+                        elif np.isnan(confidence) or np.isinf(confidence):
+                            log.warning(f"Invalid confidence value from speaker_db.identify: {confidence} (NaN/Inf)")
+                            confidence = 0.0
+                    
                     if found and confidence >= confidence_threshold:
                         identification_results[speaker_id] = {
                             "speaker_id": speaker_info["id"],
@@ -1074,14 +1143,9 @@ async def extract_and_identify_speakers(
                             "confidence": confidence,
                             "status": SpeakerStatus.IDENTIFIED.value
                         }
-                        # Safe confidence formatting with type checking
-                        try:
-                            conf_val = float(confidence) if confidence is not None else 0.0
-                            log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: {conf_val:.3f})")
-                            log.debug(f"Confidence type: {type(confidence)}, value: {confidence}")
-                        except (TypeError, ValueError) as fmt_error:
-                            log.warning(f"Error formatting confidence {confidence} (type: {type(confidence)}): {fmt_error}")
-                            log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: unknown)")
+                        # Use safe confidence formatting utility
+                        confidence_str = safe_format_confidence(confidence, "deepgram_speaker_identification")
+                        log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: {confidence_str})")
                     else:
                         identification_results[speaker_id] = {
                             "speaker_id": None,
@@ -1089,20 +1153,9 @@ async def extract_and_identify_speakers(
                             "confidence": confidence if confidence is not None else 0.0,
                             "status": SpeakerStatus.UNKNOWN.value
                         }
-                        # Safe confidence formatting with type checking
-                        try:
-                            if confidence is not None:
-                                # Ensure confidence is a Python float, not numpy scalar
-                                conf_val = float(confidence) if confidence is not None else 0.0
-                                confidence_str = f"{conf_val:.3f}"
-                                log.debug(f"Confidence type: {type(confidence)}, value: {confidence}, formatted: {confidence_str}")
-                            else:
-                                confidence_str = "0.0"
-                            log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
-                        except (TypeError, ValueError) as fmt_error:
-                            log.warning(f"Error formatting confidence {confidence} (type: {type(confidence)}): {fmt_error}")
-                            confidence_str = "0.0"
-                            log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
+                        # Use safe confidence formatting utility
+                        confidence_str = safe_format_confidence(confidence, "deepgram_speaker_unknown")
+                        log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
                         
                 except Exception as e:
                     log.warning(f"Error identifying speaker {speaker_id}: {e}")
