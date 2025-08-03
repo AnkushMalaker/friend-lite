@@ -21,12 +21,15 @@ cd extras/speaker-recognition
 docker-compose up --build -d
 ```
 
-This starts two services:
-- **FastAPI backend** on http://localhost:8001 (speaker recognition API)
-- **Streamlit web UI** on http://localhost:8501 (main interface)
+This starts three services:
+- **FastAPI backend** on http://localhost:8085 (speaker recognition API)
+- **Streamlit web UI** on http://localhost:8502 (Python-based interface)
+- **React web UI** on http://localhost:5173 (Modern React interface)
 
 ### 3. Access the Web UI
-Open http://localhost:8501 in your browser
+Choose your preferred interface:
+- **React UI** (Recommended): http://localhost:5173
+- **Streamlit UI**: http://localhost:8502
 
 ### 4. Get Started
 1. **Create a user** using the sidebar
@@ -53,6 +56,29 @@ Open http://localhost:8501 in your browser
   - Concatenated audio (max 10min per file)
   - Segmented files: `./exported_data/speaker-1/audio001.wav`
   - Metadata and annotations as JSON
+- **Enrollment Tracking**: Tracks audio sample counts and total duration per speaker
+- **Weighted Embeddings**: Smart speaker updates using weighted averaging
+
+## 🖥️ React Web UI
+
+The modern React interface provides an enhanced user experience with:
+
+### Pages
+- **Audio Viewer**: Interactive waveform visualization with click-to-play
+- **Annotation**: Label speaker segments with Deepgram transcript support
+- **Enrollment**: Record or upload audio with real-time quality assessment
+- **Speakers**: Manage enrolled speakers with sample counts and duration metrics
+- **Inference**: Identify speakers in new audio files with confidence scores
+
+### Key Features
+- **Recording Support**: Direct microphone recording with WebM to WAV conversion
+- **Enrollment Options**: 
+  - Create new speaker enrollment
+  - Append to existing speaker (weighted embedding averaging)
+  - Direct enrollment from annotation segments
+- **Real-time Metrics**: Track sample counts and total audio duration
+- **Quality Assessment**: SNR-based quality scoring with visual indicators
+- **Export Options**: Download processed audio and annotation data
 
 ## 📖 Deepgram Terminology in Speaker Recognition Context
 
@@ -197,7 +223,38 @@ Content-Type: multipart/form-data
   "updated": false,
   "speaker_id": "john_doe",
   "num_segments": 3,
-  "num_files": 3
+  "num_files": 3,
+  "total_duration": 45.2
+}
+```
+
+### Speaker Enrollment - Append
+```bash
+POST /enroll/append
+Content-Type: multipart/form-data
+```
+**Form Fields:**
+- `files`: Multiple audio files to append to existing speaker
+- `speaker_id`: Existing speaker identifier (must exist)
+
+**Description:**
+Appends new audio samples to an existing speaker enrollment using weighted embedding averaging. The system:
+- Retrieves the existing speaker's embedding and sample count
+- Processes new audio files to generate embeddings
+- Computes weighted average: `(old_embedding * old_count + new_embeddings * new_count) / (old_count + new_count)`
+- Updates the speaker with the combined embedding and new counts
+
+**Response:**
+```json
+{
+  "updated": true,
+  "speaker_id": "john_doe",
+  "previous_samples": 3,
+  "new_samples": 2,
+  "total_samples": 5,
+  "previous_duration": 45.2,
+  "new_duration": 28.7,
+  "total_duration": 73.9
 }
 ```
 
@@ -249,7 +306,12 @@ GET /speakers
   "speakers": [
     {
       "id": "john_doe",
-      "name": "John Doe"
+      "name": "John Doe",
+      "user_id": 1,
+      "created_at": "2024-01-15T10:30:00",
+      "updated_at": "2024-01-15T14:20:00",
+      "audio_sample_count": 5,
+      "total_audio_duration": 73.9
     }
   ]
 }

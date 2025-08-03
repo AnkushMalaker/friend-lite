@@ -1,10 +1,11 @@
 """Embedding generation and management strategies for speaker recognition."""
 
-import numpy as np
 import json
-from typing import List, Dict, Any, Protocol, Optional
-from abc import ABC, abstractmethod
 import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 

@@ -14,15 +14,17 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files and source code
+# Copy dependency files first (for better caching)
 COPY pyproject.toml ./
 COPY uv.lock ./
-COPY src/ ./src/
+
+# Create minimal package structure for dependency installation
+RUN mkdir -p src/simple_speaker_recognition
+COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 
 # Install dependencies and package
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev
-# RUN uv pip install -e .
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
@@ -32,7 +34,7 @@ ENV HF_HOME=/models
 ENV PYTHONPATH=/app
 
 # Expose port
-EXPOSE 8001
+EXPOSE 8085
 
 # Run the service
 CMD ["uv", "run", "simple-speaker-service"] 
