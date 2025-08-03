@@ -9,7 +9,7 @@ A comprehensive speaker recognition system with web-based UI for audio annotatio
 - Hugging Face account (for model access)
 - 8GB+ RAM, 10GB+ disk space
 
-### 1. Set up your Hugging Face token
+### 1. Set up your Hugging Face token (use .env recommended)
 ```bash
 export HF_TOKEN="your_huggingface_token"
 ```
@@ -21,15 +21,12 @@ cd extras/speaker-recognition
 docker-compose up --build -d
 ```
 
-This starts three services:
+This starts two services:
 - **FastAPI backend** on http://localhost:8085 (speaker recognition API)
-- **Streamlit web UI** on http://localhost:8502 (Python-based interface)
 - **React web UI** on http://localhost:5173 (Modern React interface)
 
 ### 3. Access the Web UI
-Choose your preferred interface:
-- **React UI** (Recommended): http://localhost:5173
-- **Streamlit UI**: http://localhost:8502
+- **React UI**: http://localhost:5173
 
 ### 4. Get Started
 1. **Create a user** using the sidebar
@@ -79,6 +76,17 @@ The modern React interface provides an enhanced user experience with:
 - **Real-time Metrics**: Track sample counts and total audio duration
 - **Quality Assessment**: SNR-based quality scoring with visual indicators
 - **Export Options**: Download processed audio and annotation data
+
+### Confidence Threshold Control
+
+The React UI includes an adjustable confidence threshold on the Inference page that controls speaker identification strictness:
+
+- **Range**: 0.00 to 1.00 (adjustable in 0.05 increments)
+- **Default**: 0.50 (balanced accuracy vs coverage)
+- **"Less Strict" (lower values)**: More segments identified as known speakers, but potentially more false positives
+- **"More Strict" (higher values)**: Fewer segments identified, but higher accuracy for identified speakers
+- **Typical ECAPA-TDNN values**: 0.10-0.30 for most use cases
+- **Additional filtering**: Results can be filtered by confidence after processing
 
 ## 📖 Deepgram Terminology in Speaker Recognition Context
 
@@ -131,9 +139,9 @@ SPEAKER_SERVICE_PORT="8085"             # Speaker service port (default: 8085)
 SPEAKER_SERVICE_URL="http://speaker-service:8085"  # URL for internal Docker communication
 SIMILARITY_THRESHOLD="0.15"             # Speaker similarity threshold (0.1-0.3 typical for ECAPA-TDNN)
 
-# Streamlit Web UI Configuration
-STREAMLIT_HOST="0.0.0.0"               # Web UI bind host  
-STREAMLIT_PORT="8502"                   # Web UI port (default: 8502)
+# React Web UI Configuration
+REACT_UI_HOST="0.0.0.0"                # Web UI bind host  
+REACT_UI_PORT="5173"                    # Web UI port (default: 5173)
 
 # Optional
 DEEPGRAM_API_KEY="your_key"             # For transcript import features
@@ -168,8 +176,8 @@ For local development without Docker:
 uv sync
 uv run python speaker_service.py
 
-# Terminal 2 - Web UI  
-uv run streamlit run web_ui.py
+# Terminal 2 - React Web UI  
+cd webui && npm run dev
 ```
 
 ## API Endpoints

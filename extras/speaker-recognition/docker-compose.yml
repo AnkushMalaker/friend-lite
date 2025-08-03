@@ -37,34 +37,32 @@ services:
       timeout: 10s
       retries: 3
   
-  # Streamlit Web UI
+  # React Web UI
   web-ui:
     build:
-      context: .
+      context: webui
       dockerfile: Dockerfile
-    image: speaker-recognition:latest
-    command: ["uv", "run", "streamlit", "run", "src/simple_speaker_recognition/web/app.py", "--server.port=${STREAMLIT_PORT:-8502}", "--server.address=${STREAMLIT_HOST:-0.0.0.0}"]
     ports:
-      - "${STREAMLIT_PORT:-8502}:${STREAMLIT_PORT:-8502}"
+      - "${REACT_UI_PORT:-5173}:5173"
     volumes:
       # Mount source code for development (live reload)
-      - ./src:/app/src
-      # Share data directory with speaker service
-      - ./data:/app/data
-      - ./audio_chunks:/app/audio_chunks
-      - ./debug:/app/debug
-      # Persist SQLite database and exports
-      - ./data:/app/data
+      - ./webui/src:/app/src
+      - ./webui/public:/app/public
+      - ./webui/package.json:/app/package.json
+      - ./webui/vite.config.ts:/app/vite.config.ts
+      - ./webui/tailwind.config.js:/app/tailwind.config.js
+      - ./webui/postcss.config.js:/app/postcss.config.js
+      - ./webui/tsconfig.json:/app/tsconfig.json
     environment:
-      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL:-http://speaker-service:8085}
-      - STREAMLIT_HOST=${STREAMLIT_HOST:-0.0.0.0}
-      - STREAMLIT_PORT=${STREAMLIT_PORT:-8502}
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - VITE_API_URL=http://localhost:${SPEAKER_SERVICE_PORT:-8085}
+      - REACT_UI_HOST=${REACT_UI_HOST:-0.0.0.0}
+      - REACT_UI_PORT=${REACT_UI_PORT:-5173}
+      - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
     depends_on:
       - speaker-service
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${STREAMLIT_PORT:-8502}/_stcore/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173"]
       interval: 30s
       timeout: 10s
-      retries: 3 
+      retries: 3
