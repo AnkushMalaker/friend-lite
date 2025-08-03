@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, cast
 
 import faiss
 import numpy as np
@@ -73,11 +73,12 @@ class UnifiedSpeakerDB:
             
             vectors = []
             for i, speaker in enumerate(speakers):
-                if speaker.embedding_data:
+                embedding_data = cast(Optional[str], speaker.embedding_data)
+                if embedding_data:
                     try:
-                        embedding = np.array(json.loads(speaker.embedding_data), dtype=np.float32)
+                        embedding = np.array(json.loads(embedding_data), dtype=np.float32)
                         vectors.append(embedding)
-                        self.faiss_to_speaker[i] = (speaker.user_id, speaker.id)
+                        self.faiss_to_speaker[i] = (cast(int, speaker.user_id), cast(str, speaker.id))
                     except (json.JSONDecodeError, ValueError) as e:
                         log.warning("Invalid embedding data for speaker %s: %s", speaker.id, e)
             
@@ -117,10 +118,10 @@ class UnifiedSpeakerDB:
                 
                 if is_update:
                     # Update existing speaker (replace enrollment)
-                    existing_speaker.name = name
-                    existing_speaker.embedding_data = embedding_json
-                    existing_speaker.audio_sample_count = sample_count
-                    existing_speaker.total_audio_duration = total_duration
+                    existing_speaker.name = name  # type: ignore[assignment]
+                    existing_speaker.embedding_data = embedding_json  # type: ignore[assignment]
+                    existing_speaker.audio_sample_count = sample_count  # type: ignore[assignment]
+                    existing_speaker.total_audio_duration = total_duration  # type: ignore[assignment]
                     log.info("Updated existing speaker: %s (user: %d) with %d samples", speaker_id, user_id, sample_count)
                 else:
                     # Create new speaker
@@ -221,9 +222,10 @@ class UnifiedSpeakerDB:
             speakers = query.all()
             
             for speaker in speakers:
-                if speaker.embedding_data:
+                embedding_data = cast(Optional[str], speaker.embedding_data)
+                if embedding_data:
                     try:
-                        stored_emb = np.array(json.loads(speaker.embedding_data), dtype=np.float32)
+                        stored_emb = np.array(json.loads(embedding_data), dtype=np.float32)
                         stored_emb = _normalize(stored_emb)
                         
                         # Compute cosine similarity
@@ -240,7 +242,7 @@ class UnifiedSpeakerDB:
                         log.warning("Invalid embedding for speaker %s: %s", speaker.id, e)
             
             # Check if best similarity meets threshold
-            if best_similarity >= self.similarity_thr:
+            if best_similarity >= self.similarity_thr and best_speaker is not None:
                 log.info("Identified speaker: %s (similarity: %.4f)", 
                         best_speaker['name'], best_similarity)
                 return True, best_speaker, best_similarity
@@ -263,10 +265,11 @@ class UnifiedSpeakerDB:
                 Speaker.user_id == user_id
             ).first()
             
-            if not speaker or not speaker.embedding_data:
+            embedding_data = cast(Optional[str], speaker.embedding_data) if speaker else None
+            if not speaker or not embedding_data:
                 raise KeyError(f"Speaker {speaker_id} not enrolled for user {user_id}")
             
-            stored_emb = np.array(json.loads(speaker.embedding_data), dtype=np.float32)
+            stored_emb = np.array(json.loads(embedding_data), dtype=np.float32)
             return float(np.dot(_normalize(embedding.flatten()), _normalize(stored_emb)))
             
         except Exception as e:
@@ -282,13 +285,13 @@ class UnifiedSpeakerDB:
             speakers = db.query(Speaker).filter(Speaker.user_id == user_id).all()
             return [
                 {
-                    "id": speaker.id,
-                    "name": speaker.name,
-                    "user_id": speaker.user_id,
+                    "id": cast(str, speaker.id),
+                    "name": cast(str, speaker.name),
+                    "user_id": cast(int, speaker.user_id),
                     "created_at": speaker.created_at,
                     "updated_at": speaker.updated_at,
-                    "audio_sample_count": speaker.audio_sample_count or 0,
-                    "total_audio_duration": speaker.total_audio_duration or 0.0
+                    "audio_sample_count": cast(Optional[int], speaker.audio_sample_count) or 0,
+                    "total_audio_duration": cast(Optional[float], speaker.total_audio_duration) or 0.0
                 }
                 for speaker in speakers
             ]
@@ -302,11 +305,12 @@ class UnifiedSpeakerDB:
             speakers = db.query(Speaker).filter(Speaker.user_id == user_id).all()
             result = {}
             for speaker in speakers:
-                if speaker.embedding_data:
+                embedding_data = cast(Optional[str], speaker.embedding_data)
+                if embedding_data:
                     try:
-                        embedding = json.loads(speaker.embedding_data)
-                        result[speaker.id] = {
-                            "name": speaker.name,
+                        embedding = json.loads(embedding_data)
+                        result[cast(str, speaker.id)] = {
+                            "name": cast(str, speaker.name),
                             "embedding": embedding
                         }
                     except (json.JSONDecodeError, ValueError) as e:
@@ -328,6 +332,6 @@ class UnifiedSpeakerDB:
         db = get_db_session()
         try:
             admin_user = UserQueries.get_or_create_user(db, "admin")
-            return admin_user.id
+            return cast(int, admin_user.id)
         finally:
             db.close()
