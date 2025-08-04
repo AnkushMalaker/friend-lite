@@ -99,28 +99,42 @@ class SpeakerDB:
             self._save_state()
 
     async def identify(self, embedding: np.ndarray) -> Tuple[bool, Optional[Dict], float]:
-        """Identify speaker from embedding using cosine similarity."""
-        if not self.speakers:
+        """Identify speaker from embedding using FAISS search."""
+        if not self.speakers or self.index.ntotal == 0:
             return False, None, 0.0
         
         # Normalize query embedding to unit length for cosine similarity
         query_emb = _normalize(embedding.astype(np.float32))
         
-        best_similarity = -1.0  # Start with worst possible similarity
+        # Use FAISS to find nearest neighbors
+        k = min(10, self.index.ntotal)  # Search top-k candidates
+        similarities, indices = self.index.search(query_emb.reshape(1, -1), k)
+        
+        best_similarity = -1.0
         best_speaker = None
         
-        # Compare with all enrolled speakers using cosine similarity
-        for spk_id, data in self.speakers.items():
-            stored_emb = np.array(data["embedding"], dtype=np.float32)
-            stored_emb = _normalize(stored_emb)
+        # Check each candidate from FAISS search
+        for idx, similarity in zip(indices[0], similarities[0]):
+            if idx == -1:  # FAISS returns -1 for invalid indices
+                continue
             
-            # Compute cosine similarity (dot product of normalized vectors)
-            similarity = float(np.dot(query_emb.flatten(), stored_emb.flatten()))
+            # Find speaker by FAISS index
+            speaker_found = None
+            for spk_id, data in self.speakers.items():
+                if data.get("faiss_index") == idx:
+                    speaker_found = (spk_id, data)
+                    break
             
-            log.debug(f"Speaker {spk_id}: similarity = {similarity:.4f}")
+            if speaker_found is None:
+                continue
+                
+            spk_id, data = speaker_found
+            cosine_similarity = float(similarity)
             
-            if similarity > best_similarity:
-                best_similarity = similarity
+            log.debug(f"Speaker {spk_id}: similarity = {cosine_similarity:.4f}")
+            
+            if cosine_similarity > best_similarity:
+                best_similarity = cosine_similarity
                 best_speaker = {"id": spk_id, "name": data["name"]}
         
         # Check if best similarity meets threshold
