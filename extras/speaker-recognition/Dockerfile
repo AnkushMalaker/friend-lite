@@ -23,8 +23,8 @@ RUN mkdir -p src/simple_speaker_recognition
 COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 
 # Install dependencies and package
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev
+# RUN --mount=type=cache,target=/root/.cache/uv \
+RUN uv sync --no-dev
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /app/data /models

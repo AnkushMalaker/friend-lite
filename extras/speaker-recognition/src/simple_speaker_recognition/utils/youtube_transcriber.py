@@ -154,7 +154,7 @@ class YouTubeTranscriber:
                 "multichannel": False,
                 "smart_format": True,
                 "punctuate": True,
-                "language": self.options.get("language", "en"),
+                "language": self.options.get("language", "multi"),
                 "utterances": True,
                 "paragraphs": True,
             }
@@ -189,7 +189,7 @@ class YouTubeTranscriber:
                 multichannel=False,  # Changed to False since we're using mono audio
                 smart_format=True,
                 punctuate=True,
-                language=self.options.get("language", "en"),
+                language=self.options.get("language", "multi"),
                 utterances=True,
                 paragraphs=True,
             )

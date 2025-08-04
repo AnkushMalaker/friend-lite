@@ -12,6 +12,13 @@ import {
   createAudioBlob
 } from '../utils/audioUtils'
 import { apiService } from '../services/api'
+import { 
+  transcribeWithDeepgram, 
+  processDeepgramResponse, 
+  calculateConfidenceSummary,
+  DEFAULT_DEEPGRAM_OPTIONS,
+  type DeepgramResponse 
+} from '../services/deepgram'
 import FileUploader from '../components/FileUploader'
 import WaveformPlot from '../components/WaveformPlot'
 
@@ -57,7 +64,7 @@ export default function Inference() {
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.15)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
-  const [deepgramResponse, setDeepgramResponse] = useState<any>(null)
+  const [deepgramResponse, setDeepgramResponse] = useState<DeepgramResponse | null>(null)
   const [showJsonOutput, setShowJsonOutput] = useState(false)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -288,80 +295,41 @@ export default function Inference() {
     }
   }, [])
 
-  const startInference = useCallback(async (mode: 'diarization' | 'deepgram' = 'diarization') => {
+  const startInference = useCallback(async (mode: 'diarization' | 'deepgram' | 'hybrid' = 'diarization') => {
     if (!audioData || !user) return
 
     setIsProcessing(true)
     try {
       if (mode === 'deepgram') {
-        // Use Deepgram wrapper endpoint
-        const formData = new FormData()
-        formData.append('file', audioData.file)
-        
-        const response = await apiService.post('/v1/listen', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-          params: {
-            model: 'nova-3',
-            language: 'en',
-            diarize: true,
-            smart_format: true,
-            punctuate: true,
-            enhance_speakers: true,
-            user_id: user.id,
-            speaker_confidence_threshold: confidenceThreshold
-          },
-          timeout: 300000, // 5 minutes for Deepgram + speaker identification
+        // Use shared Deepgram service
+        const response = await transcribeWithDeepgram(audioData.file, {
+          enhanceSpeakers: true,
+          userId: user.id,
+          speakerConfidenceThreshold: confidenceThreshold,
+          mode: 'standard'
         })
 
-        setDeepgramResponse(response.data)
+        setDeepgramResponse(response)
         
-        // Extract words and convert to speaker segments
-        const results = response.data.results || {}
-        const channels = results.channels || []
-        const words = channels[0]?.alternatives?.[0]?.words || []
+        // Process response using shared service
+        const deepgramSegments = processDeepgramResponse(response)
         
-        // Group words by speaker into segments
-        const speakerSegments: SpeakerSegment[] = []
-        let currentSegment: any = null
+        // Convert to SpeakerSegment format expected by Inference page
+        const speakerSegments: SpeakerSegment[] = deepgramSegments.map(segment => ({
+          start: segment.start,
+          end: segment.end,
+          speaker_id: segment.speakerId || `speaker_${segment.speaker}`,
+          speaker_name: segment.speakerName || `Speaker ${segment.speaker}`,
+          confidence: segment.confidence,
+          text: segment.text,
+          identified_speaker_id: segment.identifiedSpeakerId,
+          identified_speaker_name: segment.identifiedSpeakerName,
+          speaker_identification_confidence: segment.speakerIdentificationConfidence,
+          speaker_status: segment.speakerStatus
+        }))
         
-        for (const word of words) {
-          const speaker = word.speaker || 0
-          
-          if (!currentSegment || currentSegment.original_speaker !== speaker) {
-            // Start new segment
-            if (currentSegment) {
-              speakerSegments.push(currentSegment)
-            }
-            currentSegment = {
-              start: word.start,
-              end: word.end,
-              original_speaker: speaker,
-              speaker_id: word.identified_speaker_id || `speaker_${speaker}`,
-              speaker_name: word.identified_speaker_name || `Speaker ${speaker}`,
-              confidence: word.speaker_identification_confidence || 0,
-              text: word.punctuated_word || word.word,
-              identified_speaker_id: word.identified_speaker_id,
-              identified_speaker_name: word.identified_speaker_name,
-              speaker_identification_confidence: word.speaker_identification_confidence,
-              speaker_status: word.speaker_status
-            }
-          } else {
-            // Continue current segment
-            currentSegment.end = word.end
-            currentSegment.text += ' ' + (word.punctuated_word || word.word)
-          }
-        }
-        
-        if (currentSegment) {
-          speakerSegments.push(currentSegment)
-        }
-        
-        // Calculate confidence summary
-        const high_confidence = speakerSegments.filter(s => s.confidence >= 0.8).length
-        const medium_confidence = speakerSegments.filter(s => s.confidence >= 0.6 && s.confidence < 0.8).length
-        const low_confidence = speakerSegments.filter(s => s.confidence >= 0.4 && s.confidence < 0.6).length
+        // Calculate confidence summary using shared service
+        const confidenceSummary = calculateConfidenceSummary(deepgramSegments)
         
         const newResult: InferenceResult = {
           id: Math.random().toString(36),
@@ -370,12 +338,51 @@ export default function Inference() {
           status: 'completed',
           created_at: new Date().toISOString(),
           speakers: speakerSegments,
-          confidence_summary: {
-            total_segments: speakerSegments.length,
-            high_confidence,
-            medium_confidence,
-            low_confidence
-          }
+          confidence_summary: confidenceSummary
+        }
+
+        setResults(prev => [newResult, ...prev])
+        setSelectedResult(newResult)
+        
+      } else if (mode === 'hybrid') {
+        // Use shared Deepgram service in hybrid mode
+        const response = await transcribeWithDeepgram(audioData.file, {
+          enhanceSpeakers: true,
+          userId: user.id,
+          speakerConfidenceThreshold: confidenceThreshold,
+          mode: 'hybrid'
+        })
+
+        setDeepgramResponse(response)
+        
+        // Process response using shared service
+        const deepgramSegments = processDeepgramResponse(response)
+        
+        // Convert to SpeakerSegment format expected by Inference page
+        const speakerSegments: SpeakerSegment[] = deepgramSegments.map(segment => ({
+          start: segment.start,
+          end: segment.end,
+          speaker_id: segment.speakerId || `speaker_${segment.speaker}`,
+          speaker_name: segment.speakerName || `Speaker ${segment.speaker}`,
+          confidence: segment.confidence,
+          text: segment.text,
+          identified_speaker_id: segment.identifiedSpeakerId,
+          identified_speaker_name: segment.identifiedSpeakerName,
+          speaker_identification_confidence: segment.speakerIdentificationConfidence,
+          speaker_status: segment.speakerStatus
+        }))
+        
+        // Calculate confidence summary using shared service
+        const confidenceSummary = calculateConfidenceSummary(deepgramSegments)
+        
+        const newResult: InferenceResult = {
+          id: Math.random().toString(36),
+          filename: audioData.filename,
+          duration: audioData.buffer.duration,
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          speakers: speakerSegments,
+          confidence_summary: confidenceSummary
         }
 
         setResults(prev => [newResult, ...prev])
@@ -672,26 +679,40 @@ export default function Inference() {
                 </div>
               </div>
               
-              {/* Two Processing Options */}
-              <div className="grid md:grid-cols-2 gap-4">
-                <button
-                  onClick={() => startInference('diarization')}
-                  disabled={isProcessing}
-                  className="flex flex-col items-center px-6 py-4 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 space-y-2"
-                >
-                  <span className="text-lg">🎯</span>
-                  <span className="font-medium">{isProcessing ? 'Processing...' : 'Start Speaker Identification'}</span>
-                  <span className="text-xs opacity-90">Diarization + speaker recognition only</span>
-                </button>
+              {/* Three Processing Options */}
+              <div className="space-y-4">
+                {/* Top row: Two existing buttons */}
+                <div className="grid md:grid-cols-2 gap-4">
+                  <button
+                    onClick={() => startInference('diarization')}
+                    disabled={isProcessing}
+                    className="flex flex-col items-center px-6 py-4 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 space-y-2"
+                  >
+                    <span className="text-lg">🎯</span>
+                    <span className="font-medium">{isProcessing ? 'Processing...' : 'Start Speaker Identification'}</span>
+                    <span className="text-xs opacity-90">Diarization + speaker recognition only</span>
+                  </button>
+                  
+                  <button
+                    onClick={() => startInference('deepgram')}
+                    disabled={isProcessing}
+                    className="flex flex-col items-center px-6 py-4 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 space-y-2"
+                  >
+                    <span className="text-lg">🚀</span>
+                    <span className="font-medium">{isProcessing ? 'Processing...' : 'Transcribe + Identify'}</span>
+                    <span className="text-xs opacity-90">Full transcription with enhanced speaker ID</span>
+                  </button>
+                </div>
                 
+                {/* Bottom row: Full-width hybrid button */}
                 <button
-                  onClick={() => startInference('deepgram')}
+                  onClick={() => startInference('hybrid')}
                   disabled={isProcessing}
-                  className="flex flex-col items-center px-6 py-4 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 space-y-2"
+                  className="w-full flex flex-col items-center px-6 py-4 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 space-y-2"
                 >
-                  <span className="text-lg">🚀</span>
-                  <span className="font-medium">{isProcessing ? 'Processing...' : 'Transcribe + Identify'}</span>
-                  <span className="text-xs opacity-90">Full transcription with enhanced speaker ID</span>
+                  <span className="text-lg">🔄</span>
+                  <span className="font-medium">{isProcessing ? 'Processing...' : 'Hybrid: Deepgram Transcription + Internal Diarization'}</span>
+                  <span className="text-xs opacity-90">Best of both: High-quality transcription with accurate speaker segmentation</span>
                 </button>
               </div>
             </div>
@@ -916,7 +937,7 @@ export default function Inference() {
                     {deepgramResponse && (
                       <div className="bg-gray-50 rounded-lg p-4">
                         <h5 className="font-medium text-gray-900 mb-2">Deepgram API Response</h5>
-                        <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800">
+                        <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800 text-left">
                           {JSON.stringify(deepgramResponse, null, 2)}
                         </pre>
                       </div>
@@ -925,7 +946,7 @@ export default function Inference() {
                     {/* Our System Response */}
                     <div className="bg-gray-50 rounded-lg p-4">
                       <h5 className="font-medium text-gray-900 mb-2">Speaker Recognition Results</h5>
-                      <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800">
+                      <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800 text-left">
                         {JSON.stringify({
                           filename: selectedResult.filename,
                           duration: selectedResult.duration,

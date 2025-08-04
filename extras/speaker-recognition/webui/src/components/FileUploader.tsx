@@ -8,6 +8,7 @@ interface FileUploaderProps {
   multiple?: boolean
   disabled?: boolean
   className?: string
+  title?: string
 }
 
 export default function FileUploader({
@@ -15,7 +16,8 @@ export default function FileUploader({
   accept = '*',
   multiple = false,
   disabled = false,
-  className = ''
+  className = '',
+  title
 }: FileUploaderProps) {
   const [isDragOver, setIsDragOver] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
@@ -126,7 +128,7 @@ export default function FileUploader({
           
           <div>
             <p className={`text-lg font-medium ${disabled ? 'text-gray-400' : 'text-gray-900'}`}>
-              {isDragOver ? 'Drop files here' : 'Upload Audio Files'}
+              {isDragOver ? 'Drop files here' : (title || 'Upload Audio Files')}
             </p>
             <p className={`text-sm ${disabled ? 'text-gray-300' : 'text-gray-500'}`}>
               Drag and drop or click to select files

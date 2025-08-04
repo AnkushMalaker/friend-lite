@@ -16,13 +16,13 @@ services:
       - ./debug:/app/debug
       # Persist speaker database (faiss.index + speakers.json)
       - ./speaker_data:/app/data
-    # deploy:
-        #   resources:
-        #     reservations:
-        #       devices:
-        #         - driver: nvidia
-        #           count: all
-        #           capabilities: [gpu]
+    deploy:
+          resources:
+            reservations:
+              devices:
+                - driver: nvidia
+                  count: all
+                  capabilities: [gpu]
     environment:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}

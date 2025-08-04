@@ -87,7 +87,7 @@ class DeepgramTranscriptionRequest(BaseModel):
     """Request model for Deepgram-compatible transcription endpoint."""
     # Core parameters
     model: Optional[str] = Field(default="nova-3", description="Model to use for transcription")
-    language: Optional[str] = Field(default="en", description="Language code")
+    language: Optional[str] = Field(default="multi", description="Language code")
     version: Optional[str] = Field(default="latest", description="Model version")
     
     # Audio processing

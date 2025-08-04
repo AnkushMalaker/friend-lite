@@ -872,6 +872,99 @@ async def list_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = De
     return {"speakers": speakers}
 
 
+@app.get("/speakers/analysis")
+async def get_speakers_analysis(
+    user_id: Optional[int] = Query(default=None, description="User ID to filter speakers"),
+    method: str = Query(default="umap", description="Dimensionality reduction method: umap, tsne, pca"),
+    cluster_method: str = Query(default="dbscan", description="Clustering method: dbscan, kmeans"),
+    similarity_threshold: float = Query(default=0.8, description="Threshold for finding similar speakers"),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """Get comprehensive analysis of speaker embeddings including clustering and visualization data."""
+    from simple_speaker_recognition.database import get_db_session
+    from simple_speaker_recognition.database.models import Speaker
+    from simple_speaker_recognition.utils.analysis import create_speaker_analysis
+    
+    log.info(f"Generating speaker analysis for user_id={user_id}, method={method}, cluster_method={cluster_method}")
+    
+    db_session = get_db_session()
+    try:
+        # Get speakers, optionally filtered by user
+        if user_id is not None:
+            query_speakers = db_session.query(Speaker).filter(Speaker.user_id == user_id).all()
+        else:
+            query_speakers = db_session.query(Speaker).all()
+        
+        if not query_speakers:
+            return {
+                "status": "success",
+                "message": "No speakers found",
+                "visualization": {
+                    "speakers": [],
+                    "embeddings_2d": [],
+                    "embeddings_3d": [],
+                    "cluster_labels": [],
+                    "colors": []
+                },
+                "clustering": {"n_clusters": 0, "method": cluster_method},
+                "similar_speakers": [],
+                "quality_metrics": {"n_speakers": 0},
+                "parameters": {
+                    "reduction_method": method,
+                    "cluster_method": cluster_method,
+                    "similarity_threshold": similarity_threshold
+                }
+            }
+        
+        # Extract embeddings for analysis
+        embeddings_dict = {}
+        for speaker in query_speakers:
+            if speaker.embedding_data:
+                try:
+                    embedding = np.array(json.loads(speaker.embedding_data), dtype=np.float32)
+                    embeddings_dict[speaker.id] = embedding
+                except (json.JSONDecodeError, ValueError) as e:
+                    log.warning(f"Invalid embedding data for speaker {speaker.id}: {e}")
+                    continue
+        
+        if not embeddings_dict:
+            return {
+                "status": "success",
+                "message": "No valid embeddings found",
+                "visualization": {
+                    "speakers": [],
+                    "embeddings_2d": [],
+                    "embeddings_3d": [],
+                    "cluster_labels": [],
+                    "colors": []
+                },
+                "clustering": {"n_clusters": 0, "method": cluster_method},
+                "similar_speakers": [],
+                "quality_metrics": {"n_speakers": 0},
+                "parameters": {
+                    "reduction_method": method,
+                    "cluster_method": cluster_method,
+                    "similarity_threshold": similarity_threshold
+                }
+            }
+        
+        # Perform analysis
+        analysis_result = create_speaker_analysis(
+            embeddings_dict=embeddings_dict,
+            method=method,
+            cluster_method=cluster_method,
+            similarity_threshold=similarity_threshold
+        )
+        
+        return analysis_result
+        
+    except Exception as e:
+        log.error(f"Error in speaker analysis: {e}")
+        raise HTTPException(500, f"Analysis failed: {str(e)}")
+    finally:
+        db_session.close()
+
+
 @app.get("/speakers/{speaker_id}/audio")
 async def get_speaker_audio_files(speaker_id: str, db: UnifiedSpeakerDB = Depends(get_db)):
     """Get list of saved audio files for a speaker."""
@@ -1059,6 +1152,11 @@ async def extract_and_identify_speakers(
             tmp_path = Path(tmp_file.name)
         
         try:
+            # Get actual audio duration for boundary validation
+            audio_info = get_audio_info(str(tmp_path))
+            audio_duration = audio_info["duration_seconds"]
+            log.info(f"Audio file duration: {audio_duration:.6f}s")
+            
             # Extract words from Deepgram response
             results = deepgram_response.get("results", {})
             channels = results.get("channels", [])
@@ -1076,9 +1174,10 @@ async def extract_and_identify_speakers(
             
             words = alternatives[0].get("words", [])
             
-            # Group words by speaker and identify each speaker segment
-            speaker_segments = {}
+            # Group consecutive words by speaker to create segments
+            speaker_segments = []
             enhanced_words = []
+            current_segment = None
             
             for word_info in words:
                 speaker = word_info.get("speaker", 0)
@@ -1094,29 +1193,69 @@ async def extract_and_identify_speakers(
                     "speaker_status": SpeakerStatus.UNKNOWN.value
                 })
                 
-                # Group consecutive words by speaker for segment identification
-                if speaker not in speaker_segments:
-                    speaker_segments[speaker] = {
+                # Check if we need to start a new segment (speaker changed)
+                if current_segment is None or current_segment["speaker"] != speaker:
+                    # Save previous segment
+                    if current_segment is not None:
+                        speaker_segments.append(current_segment)
+                    
+                    # Start new segment
+                    current_segment = {
+                        "speaker": speaker,
                         "start": start_time,
                         "end": end_time,
                         "words": [word_info],
+                        "word_indices": [len(enhanced_words)],  # Track word indices for later update
                         "identified": False
                     }
                 else:
-                    # Extend the segment
-                    speaker_segments[speaker]["end"] = end_time
-                    speaker_segments[speaker]["words"].append(word_info)
+                    # Continue current segment
+                    current_segment["end"] = end_time
+                    current_segment["words"].append(word_info)
+                    current_segment["word_indices"].append(len(enhanced_words))
                 
                 enhanced_words.append(enhanced_word)
             
-            # Process each speaker segment for identification
-            identification_results = {}
+            # Don't forget the last segment
+            if current_segment is not None:
+                speaker_segments.append(current_segment)
             
-            for speaker_id, segment_info in speaker_segments.items():
+            # Process each speaker segment for identification
+            
+            for segment_idx, segment_info in enumerate(speaker_segments):
                 try:
                     # Extract audio segment
                     start_time = segment_info["start"]
                     end_time = segment_info["end"]
+                    
+                    # Validate segment boundaries against actual audio duration
+                    if start_time >= audio_duration:
+                        log.warning(f"Segment {segment_idx} start time {start_time:.6f}s exceeds audio duration {audio_duration:.6f}s, skipping")
+                        # Apply error status to all words in this segment
+                        for word_idx in segment_info["word_indices"]:
+                            enhanced_words[word_idx].update({
+                                "identified_speaker_id": None,
+                                "identified_speaker_name": None,
+                                "speaker_identification_confidence": 0.0,
+                                "speaker_status": SpeakerStatus.ERROR.value
+                            })
+                        continue
+                        
+                    if end_time > audio_duration:
+                        log.warning(f"Segment {segment_idx} end time {end_time:.6f}s exceeds audio duration {audio_duration:.6f}s, clipping to {audio_duration:.6f}s")
+                        end_time = audio_duration
+                        
+                    if end_time <= start_time:
+                        log.warning(f"Segment {segment_idx} has invalid duration (start: {start_time:.6f}s, end: {end_time:.6f}s), skipping")
+                        # Apply error status to all words in this segment
+                        for word_idx in segment_info["word_indices"]:
+                            enhanced_words[word_idx].update({
+                                "identified_speaker_id": None,
+                                "identified_speaker_name": None,
+                                "speaker_identification_confidence": 0.0,
+                                "speaker_status": SpeakerStatus.ERROR.value
+                            })
+                        continue
                     
                     # Load and extract segment
                     wav = audio_backend.load_wave(tmp_path, start_time, end_time)
@@ -1136,8 +1275,11 @@ async def extract_and_identify_speakers(
                             log.warning(f"Invalid confidence value from speaker_db.identify: {confidence} (NaN/Inf)")
                             confidence = 0.0
                     
+                    # Store identification result for this segment
+                    segment_result = None
+                    
                     if found and confidence >= confidence_threshold:
-                        identification_results[speaker_id] = {
+                        segment_result = {
                             "speaker_id": speaker_info["id"],
                             "speaker_name": speaker_info["name"],
                             "confidence": confidence,
@@ -1145,9 +1287,9 @@ async def extract_and_identify_speakers(
                         }
                         # Use safe confidence formatting utility
                         confidence_str = safe_format_confidence(confidence, "deepgram_speaker_identification")
-                        log.info(f"Identified speaker {speaker_id} as {speaker_info['name']} (confidence: {confidence_str})")
+                        log.info(f"Identified segment {segment_idx} (speaker {segment_info['speaker']}) as {speaker_info['name']} (confidence: {confidence_str})")
                     else:
-                        identification_results[speaker_id] = {
+                        segment_result = {
                             "speaker_id": None,
                             "speaker_name": None,
                             "confidence": confidence if confidence is not None else 0.0,
@@ -1155,43 +1297,56 @@ async def extract_and_identify_speakers(
                         }
                         # Use safe confidence formatting utility
                         confidence_str = safe_format_confidence(confidence, "deepgram_speaker_unknown")
-                        log.info(f"Speaker {speaker_id} not identified (confidence: {confidence_str})")
+                        log.info(f"Segment {segment_idx} (speaker {segment_info['speaker']}) not identified (confidence: {confidence_str})")
+                    
+                    # Apply identification to all words in this segment
+                    for word_idx in segment_info["word_indices"]:
+                        enhanced_words[word_idx].update({
+                            "identified_speaker_id": segment_result["speaker_id"],
+                            "identified_speaker_name": segment_result["speaker_name"],
+                            "speaker_identification_confidence": segment_result["confidence"],
+                            "speaker_status": segment_result["status"]
+                        })
+                    
+                    # Store result for summary
+                    segment_info["identification"] = segment_result
                         
                 except Exception as e:
-                    log.warning(f"Error identifying speaker {speaker_id}: {e}")
-                    identification_results[speaker_id] = {
-                        "speaker_id": None,
-                        "speaker_name": None,
-                        "confidence": 0.0,
-                        "status": SpeakerStatus.ERROR.value
-                    }
-            
-            # Apply identification results to enhanced words
-            for word in enhanced_words:
-                speaker = word.get("speaker", 0)
-                if speaker in identification_results:
-                    result = identification_results[speaker]
-                    word.update({
-                        "identified_speaker_id": result["speaker_id"],
-                        "identified_speaker_name": result["speaker_name"],
-                        "speaker_identification_confidence": result["confidence"],
-                        "speaker_status": result["status"]
-                    })
+                    log.warning(f"Error identifying segment {segment_idx}: {e}")
+                    # Apply error status to all words in this segment
+                    for word_idx in segment_info["word_indices"]:
+                        enhanced_words[word_idx].update({
+                            "identified_speaker_id": None,
+                            "identified_speaker_name": None,
+                            "speaker_identification_confidence": 0.0,
+                            "speaker_status": SpeakerStatus.ERROR.value
+                        })
             
             # Update the response with enhanced words
             enhanced_response["results"]["channels"][0]["alternatives"][0]["words"] = enhanced_words
+            
+            # Collect unique identified speakers
+            identified_speakers = {}
+            for segment in speaker_segments:
+                if "identification" in segment:
+                    result = segment["identification"]
+                    if result["status"] == SpeakerStatus.IDENTIFIED.value:
+                        # Use the original Deepgram speaker ID as key
+                        speaker_key = str(segment["speaker"])
+                        # Only store the first occurrence of each identified speaker
+                        if speaker_key not in identified_speakers:
+                            identified_speakers[speaker_key] = result
             
             # Add speaker enhancement metadata
             enhanced_response["speaker_enhancement"] = {
                 "enabled": True,
                 "user_id": user_id,
                 "confidence_threshold": confidence_threshold,
-                "identified_speakers": {
-                    speaker_id: result for speaker_id, result in identification_results.items()
-                    if result["status"] == SpeakerStatus.IDENTIFIED.value
-                },
-                "total_speakers": len(speaker_segments),
-                "identified_count": len([r for r in identification_results.values() if r["status"] == SpeakerStatus.IDENTIFIED.value])
+                "identified_speakers": identified_speakers,
+                "total_segments": len(speaker_segments),
+                "identified_segments": len([s for s in speaker_segments if s.get("identification", {}).get("status") == SpeakerStatus.IDENTIFIED.value]),
+                "total_speakers": len(set(s["speaker"] for s in speaker_segments)),
+                "identified_count": len(identified_speakers)
             }
             
         finally:
@@ -1216,7 +1371,7 @@ async def deepgram_compatible_transcription(
     file: UploadFile = File(..., description="Audio file to transcribe"),
     # Deepgram-compatible query parameters
     model: str = Query(default="nova-3", description="Model to use for transcription"),
-    language: str = Query(default="en", description="Language code"),
+    language: str = Query(default="multi", description="Language code"),
     version: str = Query(default="latest", description="Model version"),
     punctuate: bool = Query(default=True, description="Add punctuation"),
     profanity_filter: bool = Query(default=False, description="Filter profanity"),
@@ -1325,6 +1480,396 @@ async def deepgram_compatible_transcription(
         raise HTTPException(500, f"Transcription failed: {str(e)}")
 
 
+async def combine_transcription_and_diarization(
+    deepgram_response: Dict[str, Any],
+    diarization_segments: List[Dict[str, Any]],
+    user_id: Optional[int],
+    confidence_threshold: float = 0.15
+) -> Dict[str, Any]:
+    """Combine Deepgram transcription with internal diarization segments."""
+    enhanced_response = deepgram_response.copy()
+    
+    try:
+        # Debug: Log diarization segments for boundary analysis
+        log.info(f"Debug - Received {len(diarization_segments)} diarization segments:")
+        for i, seg in enumerate(diarization_segments):
+            log.info(f"  Segment {i}: speaker={seg.get('speaker')}, start={seg.get('start'):.3f}s, end={seg.get('end'):.3f}s, status={seg.get('status')}, id={seg.get('identified_as')}")
+        
+        # Extract words from Deepgram response
+        results = deepgram_response.get("results", {})
+        channels = results.get("channels", [])
+        
+        if not channels:
+            log.warning("No channels found in Deepgram response")
+            return enhanced_response
+        
+        channel = channels[0]
+        alternatives = channel.get("alternatives", [])
+        
+        if not alternatives:
+            log.warning("No alternatives found in Deepgram response")
+            return enhanced_response
+        
+        words = alternatives[0].get("words", [])
+        
+        # Create enhanced words by matching timestamps with diarization segments
+        enhanced_words = []
+        
+        for word_info in words:
+            word_start = word_info.get("start", 0)
+            word_end = word_info.get("end", 0)
+            word_middle = (word_start + word_end) / 2
+            word_text = word_info.get("punctuated_word", word_info.get("word", ""))
+            
+            # Find which diarization segment this word belongs to
+            matching_segment = None
+            best_overlap = 0
+            best_overlap_ratio = 0
+            
+            # First try: find segment with best overlap ratio
+            # This is more robust than just checking if word middle is within segment
+            for segment in diarization_segments:
+                # Calculate overlap between word and segment
+                overlap_start = max(word_start, segment["start"])
+                overlap_end = min(word_end, segment["end"])
+                overlap_duration = max(0, overlap_end - overlap_start)
+                word_duration = word_end - word_start
+                
+                # Calculate overlap ratio (what percentage of the word overlaps)
+                overlap_ratio = overlap_duration / word_duration if word_duration > 0 else 0
+                
+                # Prefer segments with higher overlap ratio
+                if overlap_ratio > best_overlap_ratio or (overlap_ratio == best_overlap_ratio and overlap_duration > best_overlap):
+                    best_overlap = overlap_duration
+                    best_overlap_ratio = overlap_ratio
+                    matching_segment = segment
+            
+            # Second try: if no good overlap, find nearest segment
+            # But only use this as fallback if overlap ratio is very low
+            if not matching_segment or best_overlap_ratio < 0.1:
+                min_distance = float('inf')
+                nearest_segment = None
+                
+                for segment in diarization_segments:
+                    # Calculate distance from word middle to segment
+                    if word_middle < segment["start"]:
+                        distance = segment["start"] - word_middle
+                    elif word_middle > segment["end"]:
+                        distance = word_middle - segment["end"]
+                    else:
+                        distance = 0  # Word is within segment
+                    
+                    if distance < min_distance:
+                        min_distance = distance
+                        nearest_segment = segment
+                
+                # Only use nearest segment if it's reasonably close (within 1 second)
+                # and we don't have a decent overlap already
+                if nearest_segment and min_distance < 1.0 and best_overlap_ratio < 0.5:
+                    matching_segment = nearest_segment
+            
+            # Debug logging for problematic boundary words
+            if word_text.lower() in ["her", "her.", "so"] or 11.0 <= word_middle <= 13.0:
+                assigned_speaker = matching_segment.get("identified_as", "unknown") if matching_segment else "none"
+                log.info(f"Debug boundary word: '{word_text}' ({word_start:.3f}s-{word_end:.3f}s) → {assigned_speaker} (overlap_ratio: {best_overlap_ratio:.3f})")
+            
+            # Create enhanced word with speaker information
+            enhanced_word = word_info.copy()
+            
+            if matching_segment:
+                # Map internal diarization labels to Deepgram-style speaker IDs
+                speaker_id = matching_segment["speaker"]
+                
+                enhanced_word.update({
+                    "speaker": speaker_id,
+                    "speaker_confidence": min(matching_segment["confidence"], 1.0),
+                    "identified_speaker_id": matching_segment.get("identified_id"),
+                    "identified_speaker_name": matching_segment.get("identified_as"),
+                    "speaker_identification_confidence": matching_segment["confidence"],
+                    "speaker_status": matching_segment["status"]
+                })
+            else:
+                # Fallback for words not in any segment (should be rare now)
+                enhanced_word.update({
+                    "speaker": 0,
+                    "speaker_confidence": 0.0,
+                    "identified_speaker_id": None,
+                    "identified_speaker_name": None,
+                    "speaker_identification_confidence": 0.0,
+                    "speaker_status": "unknown"
+                })
+            
+            enhanced_words.append(enhanced_word)
+        
+        # Update the response with enhanced words
+        enhanced_response["results"]["channels"][0]["alternatives"][0]["words"] = enhanced_words
+        
+        # Group consecutive words with same speaker into segments for cleaner output
+        grouped_segments = []
+        if enhanced_words:
+            current_segment = None
+            
+            for word in enhanced_words:
+                speaker = word.get("speaker")
+                speaker_name = word.get("identified_speaker_name")
+                speaker_id = word.get("identified_speaker_id")
+                confidence = word.get("speaker_identification_confidence", 0.0)
+                status = word.get("speaker_status", "unknown")
+                
+                # Check if we need to start a new segment (speaker changed)
+                if (current_segment is None or 
+                    current_segment["speaker"] != speaker or 
+                    current_segment.get("identified_speaker_id") != speaker_id):
+                    
+                    # Save previous segment if it exists
+                    if current_segment is not None:
+                        grouped_segments.append(current_segment)
+                    
+                    # Start new segment
+                    current_segment = {
+                        "speaker": speaker,
+                        "start": word.get("start", 0),
+                        "end": word.get("end", 0),
+                        "text": word.get("punctuated_word", word.get("word", "")),
+                        "identified_speaker_id": speaker_id,
+                        "identified_speaker_name": speaker_name,
+                        "confidence": confidence,
+                        "speaker_identification_confidence": confidence,
+                        "speaker_status": status
+                    }
+                else:
+                    # Continue current segment
+                    current_segment["end"] = word.get("end", current_segment["end"])
+                    current_segment["text"] += " " + word.get("punctuated_word", word.get("word", ""))
+                    # Update confidence to average if we have multiple words
+                    if confidence > 0:
+                        current_segment["confidence"] = max(current_segment["confidence"], confidence)
+                        current_segment["speaker_identification_confidence"] = current_segment["confidence"]
+            
+            # Add final segment
+            if current_segment is not None:
+                grouped_segments.append(current_segment)
+        
+        # Add grouped segments to response for easier consumption
+        enhanced_response["speaker_segments"] = grouped_segments
+        
+        # Create speaker enhancement metadata
+        identified_speakers = {}
+        for segment in diarization_segments:
+            if segment["status"] == "identified" and segment.get("identified_id"):
+                speaker_key = str(segment["speaker"])
+                if speaker_key not in identified_speakers:
+                    identified_speakers[speaker_key] = {
+                        "speaker_id": segment["identified_id"],
+                        "speaker_name": segment["identified_as"],
+                        "confidence": segment["confidence"],
+                        "status": "identified"
+                    }
+        
+        # Add speaker enhancement metadata
+        enhanced_response["speaker_enhancement"] = {
+            "enabled": True,
+            "method": "hybrid_deepgram_internal",
+            "user_id": user_id,
+            "confidence_threshold": confidence_threshold,
+            "identified_speakers": identified_speakers,
+            "total_segments": len(diarization_segments),
+            "identified_segments": len([s for s in diarization_segments if s["status"] == "identified"]),
+            "total_speakers": len(set(s["speaker"] for s in diarization_segments)),
+            "identified_count": len(identified_speakers)
+        }
+        
+        return enhanced_response
+        
+    except Exception as e:
+        log.error(f"Error combining transcription and diarization: {e}")
+        # Return original response with error info
+        enhanced_response["speaker_enhancement"] = {
+            "enabled": True,
+            "method": "hybrid_deepgram_internal",
+            "error": str(e),
+            "status": "failed"
+        }
+        return enhanced_response
+
+
+@app.post("/v1/transcribe-and-diarize")
+async def hybrid_transcribe_and_diarize(
+    request: Request,
+    file: UploadFile = File(..., description="Audio file to transcribe and diarize"),
+    # Deepgram-compatible query parameters for transcription
+    model: str = Query(default="nova-3", description="Model to use for transcription"),
+    language: str = Query(default="multi", description="Language code"),
+    version: str = Query(default="latest", description="Model version"),
+    punctuate: bool = Query(default=True, description="Add punctuation"),
+    profanity_filter: bool = Query(default=False, description="Filter profanity"),
+    multichannel: bool = Query(default=False, description="Process multiple channels"),
+    alternatives: int = Query(default=1, description="Number of alternative transcripts"),
+    numerals: bool = Query(default=True, description="Convert numbers to numerals"),
+    smart_format: bool = Query(default=True, description="Enable smart formatting"),
+    paragraphs: bool = Query(default=True, description="Organize into paragraphs"),
+    utterances: bool = Query(default=True, description="Organize into utterances"),
+    detect_language: bool = Query(default=False, description="Detect language automatically"),
+    summarize: bool = Query(default=False, description="Generate summary"),
+    sentiment: bool = Query(default=False, description="Analyze sentiment"),
+    # Speaker diarization parameters (for internal service)
+    user_id: Optional[int] = Query(default=None, description="User ID for speaker identification"),
+    speaker_confidence_threshold: float = Query(default=0.15, description="Minimum confidence for speaker identification"),
+    similarity_threshold: float = Query(default=0.15, description="Cosine similarity threshold for speaker identification"),
+    min_duration: float = Query(default=1.0, description="Minimum segment duration in seconds"),
+    # Authentication
+    authorization: Optional[str] = Header(default=None, description="Authorization header"),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """Hybrid endpoint: Deepgram transcription + internal speaker diarization and identification."""
+    
+    # Extract API key from authorization header
+    api_key = None
+    if authorization:
+        if authorization.startswith("Token "):
+            api_key = authorization[6:]
+        elif authorization.startswith("Bearer "):
+            api_key = authorization[7:]
+        else:
+            api_key = authorization
+    
+    # Use provided API key or fall back to service default
+    deepgram_key = api_key or auth.deepgram_api_key
+    if not deepgram_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Deepgram API key required. Provide via Authorization header or DEEPGRAM_API_KEY environment variable."
+        )
+    
+    log.info(f"Processing hybrid transcribe-and-diarize request: {file.filename}")
+    
+    try:
+        # Read audio file
+        audio_data = await file.read()
+        content_type = file.content_type or "audio/wav"
+        
+        # Step 1: Get transcription from Deepgram (NO diarization)
+        deepgram_params = {
+            "model": model,
+            "language": language,
+            "version": version,
+            "punctuate": punctuate,
+            "profanity_filter": profanity_filter,
+            "diarize": False,  # Disable Deepgram diarization
+            "multichannel": multichannel,
+            "alternatives": alternatives,
+            "numerals": numerals,
+            "smart_format": smart_format,
+            "paragraphs": paragraphs,
+            "utterances": utterances,
+            "detect_language": detect_language,
+            "summarize": summarize,
+            "sentiment": sentiment,
+        }
+        
+        # Remove None values
+        deepgram_params = {k: v for k, v in deepgram_params.items() if v is not None}
+        
+        log.info(f"Getting transcription from Deepgram API with params: {deepgram_params}")
+        
+        # Forward to Deepgram for transcription only
+        deepgram_response = await forward_to_deepgram(
+            audio_data=audio_data,
+            content_type=content_type,
+            params=deepgram_params,
+            deepgram_api_key=deepgram_key
+        )
+        
+        # Step 2: Get speaker diarization from internal service
+        log.info("Performing internal speaker diarization and identification")
+        
+        # Create temporary file for internal diarization
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            tmp_file.write(audio_data)
+            tmp_path = Path(tmp_file.name)
+        
+        try:
+            # Step 2a: Perform diarization
+            log.info(f"Performing speaker diarization on {tmp_path}")
+            segments = await audio_backend.async_diarize(tmp_path)
+            
+            # Apply minimum duration filter
+            original_count = len(segments)
+            segments = [s for s in segments if s["duration"] >= min_duration]
+            if len(segments) < original_count:
+                log.info(f"Filtered out {original_count - len(segments)} segments shorter than {min_duration}s")
+            
+            # Step 2b: Identify speakers for each segment
+            log.info(f"Identifying speakers for {len(segments)} segments")
+            enhanced_segments = []
+            
+            for i, segment in enumerate(segments):
+                try:
+                    speaker_label = segment["speaker"]
+                    start_time = segment["start"]
+                    end_time = segment["end"]
+                    
+                    # Load audio segment
+                    wav = audio_backend.load_wave(tmp_path, start_time, end_time)
+                    
+                    # Generate embedding
+                    emb = await audio_backend.async_embed(wav)
+                    
+                    # Identify speaker
+                    found, speaker_info, confidence = await speaker_db.identify(emb, user_id=user_id)
+                    
+                    # Validate confidence value
+                    if confidence is not None:
+                        if not isinstance(confidence, (int, float, np.number)):
+                            log.warning(f"Invalid confidence type: {type(confidence)}, value: {confidence}")
+                            confidence = 0.0
+                        elif np.isnan(confidence) or np.isinf(confidence):
+                            log.warning(f"Invalid confidence value: {confidence} (NaN/Inf)")
+                            confidence = 0.0
+                    
+                    # Build enhanced segment
+                    enhanced_segment = {
+                        "speaker": speaker_label,
+                        "start": round(start_time, 3),
+                        "end": round(end_time, 3),
+                        "duration": round(end_time - start_time, 3),
+                        "identified_as": speaker_info["name"] if found and speaker_info else None,
+                        "identified_id": speaker_info["id"] if found and speaker_info else None,
+                        "confidence": round(float(confidence), 3) if confidence else 0.0,
+                        "status": "identified" if found else "unknown"
+                    }
+                    
+                    enhanced_segments.append(enhanced_segment)
+                    
+                    if found and speaker_info:
+                        confidence_str = safe_format_confidence(confidence, "hybrid_segment")
+                        log.debug(f"Segment {i+1}: Identified as {speaker_info['name']} (confidence: {confidence_str})")
+                    
+                except Exception as e:
+                    log.warning(f"Error processing segment {i+1}: {e}")
+                    continue
+            
+            # Step 3: Combine Deepgram transcription with internal diarization
+            enhanced_response = await combine_transcription_and_diarization(
+                deepgram_response=deepgram_response,
+                diarization_segments=enhanced_segments,
+                user_id=user_id,
+                confidence_threshold=speaker_confidence_threshold
+            )
+            
+            return enhanced_response
+            
+        finally:
+            # Clean up temporary file
+            tmp_path.unlink(missing_ok=True)
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Error in hybrid transcribe-and-diarize: {e}")
+        raise HTTPException(500, f"Hybrid processing failed: {str(e)}")
+
+
 @app.post("/speakers/reset")
 async def reset_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = Depends(get_db)):
     """Reset all speakers (optionally for a specific user)."""
@@ -1402,6 +1947,191 @@ async def deepgram_health():
         "speaker_recognition_available": True,
         "device": str(device),
         "enrolled_speakers": speaker_db.get_speaker_count()
+    }
+
+
+@app.get("/deepgram/config")
+async def get_deepgram_config():
+    """Get Deepgram configuration for frontend.
+    
+    Returns the Deepgram API key if configured, allowing the frontend
+    to make direct WebSocket connections to Deepgram for streaming.
+    """
+    deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
+    
+    if not deepgram_api_key:
+        raise HTTPException(
+            status_code=404,
+            detail="Deepgram API key not configured on server"
+        )
+    
+    return {
+        "api_key": deepgram_api_key,
+        "status": "configured"
+    }
+
+
+@app.get("/speakers/export")
+async def export_speakers(
+    user_id: Optional[int] = Query(None, description="Export speakers for specific user (admin can export all)"),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """Export all speakers with embeddings for backup.
+    
+    Returns a JSON file containing all speaker data including embeddings,
+    suitable for backup and restore operations.
+    """
+    db_session = get_db_session()
+    try:
+        # Query speakers based on user_id
+        query = db_session.query(Speaker)
+        if user_id:
+            query = query.filter(Speaker.user_id == user_id)
+        
+        speakers = query.all()
+        
+        # Build export data
+        export_data = {
+            "version": "1.0",
+            "export_date": datetime.utcnow().isoformat() + "Z",
+            "user_id": user_id,
+            "total_speakers": len(speakers),
+            "speakers": []
+        }
+        
+        for speaker in speakers:
+            speaker_data = {
+                "id": speaker.id,
+                "name": speaker.name,
+                "user_id": speaker.user_id,
+                "created_at": speaker.created_at.isoformat() + "Z" if speaker.created_at else None,
+                "updated_at": speaker.updated_at.isoformat() + "Z" if speaker.updated_at else None,
+                "audio_sample_count": speaker.audio_sample_count,
+                "total_audio_duration": speaker.total_audio_duration,
+                "embedding_version": speaker.embedding_version,
+                "notes": speaker.notes
+            }
+            
+            # Include embedding data if available
+            if speaker.embedding_data:
+                try:
+                    embedding = json.loads(speaker.embedding_data)
+                    speaker_data["embedding_data"] = embedding
+                except json.JSONDecodeError:
+                    log.warning(f"Invalid embedding data for speaker {speaker.id}")
+                    speaker_data["embedding_data"] = None
+            else:
+                speaker_data["embedding_data"] = None
+            
+            export_data["speakers"].append(speaker_data)
+        
+        # Return as downloadable JSON file
+        return export_data
+        
+    except Exception as e:
+        log.error(f"Error exporting speakers: {e}")
+        raise HTTPException(status_code=500, detail="Failed to export speakers")
+    finally:
+        db_session.close()
+
+
+@app.post("/speakers/import")
+async def import_speakers(
+    file: UploadFile = File(..., description="JSON file containing speaker data"),
+    merge_strategy: str = Form("skip", description="How to handle conflicts: 'skip' or 'replace'"),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """Import speakers from a JSON backup file.
+    
+    Supports two merge strategies:
+    - skip: Skip speakers that already exist
+    - replace: Replace existing speakers with imported data
+    """
+    if not file.filename.endswith('.json'):
+        raise HTTPException(status_code=400, detail="File must be a JSON file")
+    
+    # Read and parse JSON file
+    try:
+        contents = await file.read()
+        import_data = json.loads(contents)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON file: {str(e)}")
+    
+    # Validate format
+    if "version" not in import_data or "speakers" not in import_data:
+        raise HTTPException(status_code=400, detail="Invalid import file format")
+    
+    if import_data["version"] != "1.0":
+        raise HTTPException(status_code=400, detail=f"Unsupported version: {import_data['version']}")
+    
+    # Import statistics
+    imported_count = 0
+    skipped_count = 0
+    replaced_count = 0
+    errors = []
+    
+    db_session = get_db_session()
+    try:
+        for speaker_data in import_data["speakers"]:
+            try:
+                # Check if speaker exists
+                existing_speaker = db_session.query(Speaker).filter(
+                    Speaker.id == speaker_data["id"]
+                ).first()
+                
+                if existing_speaker:
+                    if merge_strategy == "skip":
+                        skipped_count += 1
+                        continue
+                    elif merge_strategy == "replace":
+                        # Delete existing speaker
+                        db_session.delete(existing_speaker)
+                        replaced_count += 1
+                
+                # Create new speaker
+                speaker = Speaker(
+                    id=speaker_data["id"],
+                    name=speaker_data["name"],
+                    user_id=speaker_data["user_id"],
+                    audio_sample_count=speaker_data.get("audio_sample_count", 0),
+                    total_audio_duration=speaker_data.get("total_audio_duration", 0.0),
+                    embedding_version=speaker_data.get("embedding_version", 1),
+                    notes=speaker_data.get("notes")
+                )
+                
+                # Set embedding data if available
+                if speaker_data.get("embedding_data"):
+                    speaker.embedding_data = json.dumps(speaker_data["embedding_data"])
+                
+                db_session.add(speaker)
+                imported_count += 1
+                
+            except Exception as e:
+                errors.append(f"Failed to import speaker {speaker_data.get('id', 'unknown')}: {str(e)}")
+                log.error(f"Error importing speaker: {e}")
+        
+        # Commit all changes
+        db_session.commit()
+        
+        # Rebuild FAISS index after import
+        db._rebuild_faiss_mapping()
+        db._save_faiss_index()
+        
+    except Exception as e:
+        db_session.rollback()
+        log.error(f"Error during import: {e}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+    finally:
+        db_session.close()
+    
+    # Return import summary
+    return {
+        "success": True,
+        "imported": imported_count,
+        "skipped": skipped_count,
+        "replaced": replaced_count,
+        "errors": errors,
+        "total_processed": len(import_data["speakers"])
     }
 
 
