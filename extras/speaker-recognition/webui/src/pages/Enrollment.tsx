@@ -307,7 +307,10 @@ export default function Enrollment() {
     if (!currentSession) return
     
     for (const file of files) {
-      if (!isAudioFile(file)) continue
+      if (!file.name.toLowerCase().endsWith('.wav')) {
+        alert('Please select a WAV audio file. Other formats are not currently supported.')
+        continue
+      }
       
       try {
         const arrayBuffer = await loadAudioBuffer(file)
@@ -577,7 +580,7 @@ export default function Enrollment() {
               <h3 className="text-lg font-medium mb-4">📁 Upload Audio</h3>
               <FileUploader
                 onUpload={handleFileUpload}
-                accept=".wav,.flac,.mp3,.m4a,.ogg"
+                accept=".wav"
                 multiple={true}
               />
             </div>

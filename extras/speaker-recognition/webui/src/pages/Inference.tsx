@@ -54,7 +54,7 @@ export default function Inference() {
   const [selectedResult, setSelectedResult] = useState<InferenceResult | null>(null)
   const [playingSegment, setPlayingSegment] = useState<SpeakerSegment | null>(null)
   const [showConfidenceFilter, setShowConfidenceFilter] = useState(false)
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.5)
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.15)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
   const [deepgramResponse, setDeepgramResponse] = useState<any>(null)
@@ -95,8 +95,8 @@ export default function Inference() {
     if (!files.length || !user) return
 
     const file = files[0]
-    if (!isAudioFile(file)) {
-      alert('Please select a valid audio file (WAV, FLAC, MP3, M4A, OGG)')
+    if (!file.name.toLowerCase().endsWith('.wav')) {
+      alert('Please select a WAV audio file. Other formats are not currently supported.')
       return
     }
 
@@ -593,7 +593,7 @@ export default function Inference() {
             <h4 className="font-medium mb-3">📁 Upload Audio File</h4>
             <FileUploader
               onUpload={handleFileUpload}
-              accept=".wav,.flac,.mp3,.m4a,.ogg"
+              accept=".wav"
               multiple={false}
               disabled={isProcessing || isRecording}
             />
