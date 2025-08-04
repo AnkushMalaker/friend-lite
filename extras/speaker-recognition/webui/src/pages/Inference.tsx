@@ -58,6 +58,7 @@ export default function Inference() {
   const [isRecording, setIsRecording] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
   const [deepgramResponse, setDeepgramResponse] = useState<any>(null)
+  const [showJsonOutput, setShowJsonOutput] = useState(false)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -770,13 +771,26 @@ export default function Inference() {
                     />
                     <span className="text-sm text-gray-700">Filter by confidence</span>
                   </label>
-                  <button
-                    onClick={() => exportResults(selectedResult)}
-                    className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                  >
-                    <Download className="h-4 w-4" />
-                    <span>Export</span>
-                  </button>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => setShowJsonOutput(!showJsonOutput)}
+                      className={`flex items-center space-x-2 px-4 py-2 rounded-md ${
+                        showJsonOutput 
+                          ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      <span>📄</span>
+                      <span>{showJsonOutput ? 'Hide' : 'Show'} JSON</span>
+                    </button>
+                    <button
+                      onClick={() => exportResults(selectedResult)}
+                      className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                    >
+                      <Download className="h-4 w-4" />
+                      <span>Export</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -882,6 +896,49 @@ export default function Inference() {
                     </div>
                   </div>
                 ))}
+              </div>
+
+              {/* JSON Output Section */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="font-medium text-gray-900">🔍 Debug Output</h4>
+                  <button
+                    onClick={() => setShowJsonOutput(!showJsonOutput)}
+                    className="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+                  >
+                    <span>{showJsonOutput ? 'Hide' : 'Show'} JSON</span>
+                  </button>
+                </div>
+                
+                {showJsonOutput && (
+                  <div className="space-y-4">
+                    {/* Deepgram Response */}
+                    {deepgramResponse && (
+                      <div className="bg-gray-50 rounded-lg p-4">
+                        <h5 className="font-medium text-gray-900 mb-2">Deepgram API Response</h5>
+                        <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800">
+                          {JSON.stringify(deepgramResponse, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    
+                    {/* Our System Response */}
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <h5 className="font-medium text-gray-900 mb-2">Speaker Recognition Results</h5>
+                      <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800">
+                        {JSON.stringify({
+                          filename: selectedResult.filename,
+                          duration: selectedResult.duration,
+                          status: selectedResult.status,
+                          created_at: selectedResult.created_at,
+                          confidence_summary: selectedResult.confidence_summary,
+                          speakers: selectedResult.speakers,
+                          deepgram_enhancement: deepgramResponse?.speaker_enhancement
+                        }, null, 2)}
+                      </pre>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
