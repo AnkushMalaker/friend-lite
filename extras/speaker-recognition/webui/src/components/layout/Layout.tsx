@@ -1,6 +1,6 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Mic, Music, FileText, Users, Brain, User } from 'lucide-react'
+import { Mic, Music, FileText, Users, Brain, User, Radio } from 'lucide-react'
 import UserSelector from '../UserSelector'
 
 interface LayoutProps {
@@ -16,6 +16,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: '/enrollment', label: 'Enrollment', icon: User },
     { path: '/speakers', label: 'Speakers', icon: Users },
     { path: '/inference', label: 'Inference', icon: Brain },
+    { path: '/infer-live', label: 'Live Inference', icon: Radio },
   ]
 
   return (
