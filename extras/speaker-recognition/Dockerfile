@@ -23,7 +23,7 @@ RUN mkdir -p src/simple_speaker_recognition
 COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 
 # Install dependencies and package
-# RUN --mount=type=cache,target=/root/.cache/uv \
+# RUN --mount=type=cache,target=/root/.cache/uv \ # This is not working for some reason
 RUN uv sync --no-dev
 
 # Create directories
