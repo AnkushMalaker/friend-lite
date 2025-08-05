@@ -255,6 +255,18 @@ export interface StreamingConfig {
   sample_rate?: number
 }
 
+export interface SpeechStartedEvent {
+  type: 'SpeechStarted'
+  channel: number[]
+  timestamp: number
+}
+
+export interface UtteranceEndEvent {
+  type: 'UtteranceEnd'
+  channel: number[]
+  last_word_end: number
+}
+
 export interface StreamingTranscript {
   transcript: string
   confidence: number
@@ -276,6 +288,8 @@ export class DeepgramStreaming {
   private onTranscriptCallback?: (transcript: StreamingTranscript) => void
   private onErrorCallback?: (error: Error) => void
   private onStatusCallback?: (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void
+  private onSpeechStartedCallback?: (event: SpeechStartedEvent) => void
+  private onUtteranceEndCallback?: (event: UtteranceEndEvent) => void
   private connectionTime?: number
   private firstAudioTime?: number
   private audioPacketCount = 0
@@ -302,34 +316,64 @@ export class DeepgramStreaming {
         console.log('🌐 [DEEPGRAM] Connecting to Deepgram...')
         this.onStatusCallback?.('connecting')
 
-        // Build WebSocket URL with parameters (no API key in URL for security)
+        // Validate API key format
+        if (!this.config.apiKey || this.config.apiKey.length < 30) {
+          const error = new Error('Invalid Deepgram API key format')
+          console.error('🌐 [DEEPGRAM] API key validation failed:', this.config.apiKey?.length, 'characters')
+          reject(error)
+          return
+        }
+
+        // Include ALL configuration parameters for VAD events and full functionality
         const params = new URLSearchParams({
           model: this.config.model!,
           language: this.config.language!,
-          smart_format: this.config.punctuate!.toString(),  // Fixed: was 'punctuate'
-          diarize: this.config.diarize!.toString(),
-          interim_results: this.config.interim_results!.toString(),
-          endpointing: this.config.endpointing!.toString(),
-          vad_events: this.config.vad_events!.toString(),
-          utterance_end_ms: this.config.utterance_end_ms!.toString(),
-          encoding: this.config.encoding!,
-          sample_rate: this.config.sample_rate!.toString(),
-          channels: '1'
+          smart_format: 'true',
+          encoding: this.config.encoding || 'linear16',
+          sample_rate: (this.config.sample_rate || 16000).toString()
         })
 
-        const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`
-
-        // Create WebSocket using Sec-WebSocket-Protocol header for browser authentication
-        // This is the correct way to authenticate with Deepgram from browsers
-        this.ws = new WebSocket(wsUrl, ['token', this.config.apiKey])
-
-        this.ws.onopen = () => {
-          console.log('🌐 [DEEPGRAM] ✅ Connected!')
-          this.isConnected = true
-          this.connectionTime = Date.now()
-          this.onStatusCallback?.('connected')
-          resolve()
+        // Add VAD and speech detection parameters
+        if (this.config.interim_results) {
+          params.append('interim_results', 'true')
         }
+        if (this.config.vad_events) {
+          params.append('vad_events', 'true')
+        }
+        if (this.config.utterance_end_ms) {
+          params.append('utterance_end_ms', this.config.utterance_end_ms.toString())
+        }
+        if (this.config.endpointing) {
+          params.append('endpointing', this.config.endpointing.toString())
+        }
+
+        // Create WebSocket URL without token (token goes in subprotocol)
+        const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`
+        
+        console.log('🌐 [DEEPGRAM] WebSocket URL:', wsUrl)
+        console.log('🌐 [DEEPGRAM] VAD Configuration:', {
+          interim_results: this.config.interim_results,
+          vad_events: this.config.vad_events,
+          utterance_end_ms: this.config.utterance_end_ms,
+          endpointing: this.config.endpointing,
+          language: this.config.language
+        })
+        console.log('🌐 [DEEPGRAM] API key length:', this.config.apiKey.length)
+        console.log('🌐 [DEEPGRAM] API key format check:', /^[a-f0-9]+$/i.test(this.config.apiKey))
+
+        // Create WebSocket connection with subprotocol authentication (official method)
+        this.ws = new WebSocket(wsUrl, ['token', this.config.apiKey])
+        
+        console.log('🌐 [DEEPGRAM] WebSocket created with subprotocol auth, readyState:', this.ws.readyState)
+
+        // This is already handled above in the timeout section
+        // this.ws.onopen = () => {
+        //   console.log('🌐 [DEEPGRAM] ✅ Connected!')
+        //   this.isConnected = true
+        //   this.connectionTime = Date.now()
+        //   this.onStatusCallback?.('connected')
+        //   resolve()
+        // }
 
         this.ws.onclose = (event) => {
           console.log('🌐 [DEEPGRAM] WebSocket connection closed:', {
@@ -347,8 +391,8 @@ export class DeepgramStreaming {
           console.error('🌐 [DEEPGRAM] ❌ WebSocket error occurred:', error)
           console.error('🌐 [DEEPGRAM] Error event details:', {
             type: error.type,
-            target: error.target?.readyState,
-            currentTarget: error.currentTarget?.readyState
+            target: (error.target as WebSocket)?.readyState,
+            currentTarget: (error.currentTarget as WebSocket)?.readyState
           })
           console.log('🌐 [DEEPGRAM] Setting isConnected = false due to error')
           this.isConnected = false
@@ -366,66 +410,38 @@ export class DeepgramStreaming {
           try {
             const data = JSON.parse(event.data)
             
-            // More focused logging for different message types
-            if (data.type === 'Results') {
-              console.log('📝 [DEEPGRAM] TRANSCRIPT:', data.channel?.alternatives?.[0]?.transcript || '[empty]', {
+            // Enhanced logging for VAD events and transcripts
+            if (data.type === 'Results' && data.channel?.alternatives?.[0]?.transcript) {
+              console.log('📝 [DEEPGRAM] TRANSCRIPT:', data.channel.alternatives[0].transcript, {
                 is_final: data.is_final,
-                confidence: data.channel?.alternatives?.[0]?.confidence,
-                words: data.channel?.alternatives?.[0]?.words?.length || 0
+                confidence: data.channel.alternatives[0].confidence
               })
             } else if (data.type === 'Metadata') {
-              console.log('🌐 [DEEPGRAM] Connected - ready for audio')
+              console.log('🌐 [DEEPGRAM] ✅ Connected - ready for audio')
+            } else if (data.type === 'SpeechStarted') {
+              console.log('🎙️ [VAD] 🗣️ SPEECH STARTED at', data.timestamp, 'channel:', data.channel)
+              this.onSpeechStartedCallback?.(data as SpeechStartedEvent)
+            } else if (data.type === 'UtteranceEnd') {
+              console.log('🔚 [VAD] 🛑 UTTERANCE ENDED at', data.last_word_end, 'channel:', data.channel)
+              this.onUtteranceEndCallback?.(data as UtteranceEndEvent)
             } else {
-              console.log('🌐 [DEEPGRAM]', data.type + ':', data)
-            }
-            
-            // Log timing for connection health
-            if (this.connectionTime) {
-              const timeSinceConnection = Date.now() - this.connectionTime
-              console.log('🌐 [DEEPGRAM] ⏱️ Time since connection:', timeSinceConnection + 'ms')
+              // Log any other message types we might be receiving
+              console.log('🌐 [DEEPGRAM] Other message:', data.type, data)
             }
             
             // Handle different message types
             if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
-              console.log('🌐 [DEEPGRAM] Processing Results message')
               const transcript = data.channel.alternatives[0]
-              console.log('🌐 [DEEPGRAM] Transcript data:', {
-                text: transcript.transcript,
-                confidence: transcript.confidence,
-                is_final: data.is_final,
-                words_count: transcript.words?.length || 0
-              })
               
               // Only emit if we have actual content
               if (transcript.transcript && transcript.transcript.trim()) {
-                console.log('🌐 [DEEPGRAM] Emitting transcript to callback')
                 this.onTranscriptCallback?.({
                   transcript: transcript.transcript,
                   confidence: transcript.confidence || 0,
                   words: transcript.words || [],
                   is_final: data.is_final || false
                 })
-              } else {
-                console.log('🌐 [DEEPGRAM] Skipping empty transcript')
               }
-            } else if (data.type === 'Metadata') {
-              console.log('🌐 [DEEPGRAM] 📋 Received metadata:', {
-                request_id: data.request_id,
-                created: data.created,
-                model_info: data.model_info,
-                channels: data.channels,
-                models: data.models
-              })
-              console.log('🌐 [DEEPGRAM] ✅ Connection ready - metadata confirms successful setup')
-            } else if (data.type === 'UtteranceEnd') {
-              console.log('🌐 [DEEPGRAM] 🔚 Utterance ended at', data.timestamp)
-            } else if (data.type === 'SpeechStarted') {
-              console.log('🌐 [DEEPGRAM] 🎙️ Speech started at', data.timestamp)
-            } else if (data.type === 'Close') {
-              console.log('🌐 [DEEPGRAM] 🔒 Close message received:', data)
-            } else {
-              console.log('🌐 [DEEPGRAM] ❓ Unknown message type:', data.type)
-              console.log('🌐 [DEEPGRAM] Full unknown message:', data)
             }
           } catch (error) {
             console.error('🌐 [DEEPGRAM] ❌ Error parsing message:', error)
@@ -440,19 +456,37 @@ export class DeepgramStreaming {
           }
         }
 
-        // Connection timeout
-        console.log('🌐 [DEEPGRAM] Setting 10-second connection timeout')
-        setTimeout(() => {
-          if (!this.isConnected) {
-            console.error('🌐 [DEEPGRAM] ⏰ Connection timeout after 10 seconds')
+        // Shorter connection timeout for faster feedback
+        console.log('🌐 [DEEPGRAM] Setting 5-second connection timeout')
+        const timeoutId = setTimeout(() => {
+          if (!this.isConnected && this.ws) {
+            console.error('🌐 [DEEPGRAM] ⏰ Connection timeout after 5 seconds')
             console.error('🌐 [DEEPGRAM] WebSocket readyState at timeout:', this.ws?.readyState)
-            const timeoutError = new Error('Connection timeout - Deepgram did not respond within 10 seconds')
+            
+            // Clean up the failed connection
+            if (this.ws) {
+              this.ws.close()
+              this.ws = null
+            }
+            
+            const timeoutError = new Error('Connection timeout - Deepgram did not respond within 5 seconds. Check your API key and internet connection.')
             console.error('🌐 [DEEPGRAM] Rejecting with timeout error')
+            this.onStatusCallback?.('error')
             reject(timeoutError)
           } else {
             console.log('🌐 [DEEPGRAM] Connection established before timeout')
           }
-        }, 10000)
+        }, 5000)
+
+        // Clear timeout if connection succeeds
+        this.ws.onopen = () => {
+          clearTimeout(timeoutId)
+          console.log('🌐 [DEEPGRAM] ✅ Connected!')
+          this.isConnected = true
+          this.connectionTime = Date.now()
+          this.onStatusCallback?.('connected')
+          resolve()
+        }
 
       } catch (error) {
         console.error('🌐 [DEEPGRAM] ❌ Exception in connect() method:', error)
@@ -496,9 +530,9 @@ export class DeepgramStreaming {
         }
       }
       
-      // Log periodic audio packet info (every 50 packets to avoid spam)
-      if (this.audioPacketCount % 50 === 0) {
-        console.log('🌐 [DEEPGRAM] 📊 Audio packets sent:', this.audioPacketCount)
+      // Minimal logging for audio packets
+      if (this.audioPacketCount % 200 === 0) {
+        console.log('🌐 [DEEPGRAM] Audio packets sent:', this.audioPacketCount)
       }
       
       this.ws.send(audioData)
@@ -529,6 +563,14 @@ export class DeepgramStreaming {
 
   onStatus(callback: (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void): void {
     this.onStatusCallback = callback
+  }
+
+  onSpeechStarted(callback: (event: SpeechStartedEvent) => void): void {
+    this.onSpeechStartedCallback = callback
+  }
+
+  onUtteranceEnd(callback: (event: UtteranceEndEvent) => void): void {
+    this.onUtteranceEndCallback = callback
   }
 
   getConnectionStatus(): 'connecting' | 'connected' | 'disconnected' | 'error' {
