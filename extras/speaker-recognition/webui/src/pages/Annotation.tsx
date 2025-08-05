@@ -21,6 +21,7 @@ import {
 } from '../services/deepgram'
 import FileUploader from '../components/FileUploader'
 import WaveformPlot from '../components/WaveformPlot'
+import AnnotationEmbeddingAnalysis from '../components/AnnotationEmbeddingAnalysis'
 
 interface AudioData {
   file: File
@@ -908,6 +909,17 @@ export default function Annotation() {
               </div>
             </div>
           )}
+
+          {/* Embedding Analysis Section */}
+          <div className="space-y-4">
+            <AnnotationEmbeddingAnalysis 
+              segments={segments}
+              audioFile={audioData?.file || null}
+              onAnalysisComplete={(analysis) => {
+                console.log('Embedding analysis completed:', analysis)
+              }}
+            />
+          </div>
 
           {/* Save and Export Actions */}
           <div className="flex justify-end space-x-3 pt-6 border-t">
