@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Search, Download, Trash2, Eye, BarChart3, User, Clock, CheckCircle, XCircle } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Search, Download, Trash2, Eye, BarChart3, User, Clock, CheckCircle, XCircle, Upload, FileJson } from 'lucide-react'
 import { useUser } from '../contexts/UserContext'
 import { apiService } from '../services/api'
 import { formatDuration } from '../utils/audioUtils'
+import EmbeddingPlot from '../components/EmbeddingPlot'
 
 interface Speaker {
   id: string
@@ -40,6 +41,12 @@ export default function Speakers() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
   const [selectedSpeaker, setSelectedSpeaker] = useState<Speaker | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'speakers' | 'analysis'>('speakers')
+  const [showImportDialog, setShowImportDialog] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importMergeStrategy, setImportMergeStrategy] = useState<'skip' | 'replace'>('skip')
+  const [importLoading, setImportLoading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadSpeakers = useCallback(async () => {
     if (!user) return
@@ -177,6 +184,74 @@ export default function Speakers() {
     }
   }, [])
 
+  const exportAllSpeakers = useCallback(async () => {
+    if (!user) return
+
+    try {
+      const response = await apiService.get('/speakers/export', {
+        params: { user_id: user.id }
+      })
+
+      const timestamp = new Date().toISOString().split('T')[0]
+      const filename = `speakers_backup_${timestamp}.json`
+
+      const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to export speakers:', error)
+      alert('Failed to export speakers. Please try again.')
+    }
+  }, [user])
+
+  const handleImportFile = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file && file.type === 'application/json') {
+      setImportFile(file)
+      setShowImportDialog(true)
+    } else {
+      alert('Please select a valid JSON file')
+    }
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [])
+
+  const performImport = useCallback(async () => {
+    if (!importFile || !user) return
+
+    setImportLoading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', importFile)
+      formData.append('merge_strategy', importMergeStrategy)
+
+      const response = await apiService.post('/speakers/import', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+
+      const result = response.data
+      alert(`Import successful!\n\nImported: ${result.imported}\nSkipped: ${result.skipped}\nReplaced: ${result.replaced}\n${result.errors.length > 0 ? '\nErrors:\n' + result.errors.join('\n') : ''}`)
+      
+      // Reload speakers list
+      await loadSpeakers()
+      setShowImportDialog(false)
+      setImportFile(null)
+    } catch (error: any) {
+      console.error('Import failed:', error)
+      alert(`Import failed: ${error.response?.data?.detail || error.message}`)
+    } finally {
+      setImportLoading(false)
+    }
+  }, [importFile, importMergeStrategy, user, loadSpeakers])
+
   const getQualityColor = useCallback((quality: number) => {
     if (quality >= 25) return 'text-green-600 bg-green-100'
     if (quality >= 20) return 'text-blue-600 bg-blue-100'
@@ -231,6 +306,30 @@ export default function Speakers() {
         <h1 className="text-2xl font-bold text-gray-900">👥 Speaker Management</h1>
         <div className="flex space-x-2">
           <button
+            onClick={exportAllSpeakers}
+            className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+            title="Export all speakers to JSON"
+          >
+            <Download className="h-4 w-4" />
+            <span>Export All</span>
+          </button>
+          <label
+            htmlFor="import-file"
+            className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 cursor-pointer"
+            title="Import speakers from JSON"
+          >
+            <Upload className="h-4 w-4" />
+            <span>Import</span>
+          </label>
+          <input
+            ref={fileInputRef}
+            id="import-file"
+            type="file"
+            accept=".json"
+            onChange={handleImportFile}
+            className="hidden"
+          />
+          <button
             onClick={loadSpeakers}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
           >
@@ -243,8 +342,37 @@ export default function Speakers() {
         Manage enrolled speakers and view their quality metrics.
       </p>
 
-      {/* Statistics Cards */}
-      {stats && (
+      {/* Tab Navigation */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8">
+          <button
+            onClick={() => setActiveTab('speakers')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'speakers'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            👥 Speakers List
+          </button>
+          <button
+            onClick={() => setActiveTab('analysis')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'analysis'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            📊 Embedding Analysis
+          </button>
+        </nav>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'speakers' && (
+        <>
+          {/* Statistics Cards */}
+          {stats && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white border rounded-lg p-4">
             <div className="text-sm font-medium text-gray-500">Total Speakers</div>
@@ -497,6 +625,13 @@ export default function Speakers() {
           </div>
         </div>
       )}
+        </>
+      )}
+
+      {/* Analysis Tab */}
+      {activeTab === 'analysis' && (
+        <EmbeddingPlot userId={user?.id} onRefresh={loadSpeakers} />
+      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
@@ -519,6 +654,103 @@ export default function Speakers() {
                   className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
                 >
                   Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Dialog Modal */}
+      {showImportDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-lg w-full">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">Import Speakers</h3>
+                <button
+                  onClick={() => {
+                    setShowImportDialog(false)
+                    setImportFile(null)
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  ×
+                </button>
+              </div>
+              
+              {importFile && (
+                <div className="mb-6">
+                  <div className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg">
+                    <FileJson className="h-8 w-8 text-blue-600" />
+                    <div>
+                      <p className="font-medium text-gray-900">{importFile.name}</p>
+                      <p className="text-sm text-gray-500">{(importFile.size / 1024).toFixed(1)} KB</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="mb-6">
+                <h4 className="text-sm font-medium text-gray-900 mb-3">Conflict Resolution</h4>
+                <p className="text-sm text-gray-600 mb-3">
+                  How should existing speakers be handled?
+                </p>
+                <div className="space-y-2">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="skip"
+                      checked={importMergeStrategy === 'skip'}
+                      onChange={(e) => setImportMergeStrategy(e.target.value as 'skip' | 'replace')}
+                      className="mr-2"
+                    />
+                    <span className="text-sm">
+                      <span className="font-medium">Skip existing speakers</span> - Keep current data unchanged
+                    </span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="replace"
+                      checked={importMergeStrategy === 'replace'}
+                      onChange={(e) => setImportMergeStrategy(e.target.value as 'skip' | 'replace')}
+                      className="mr-2"
+                    />
+                    <span className="text-sm">
+                      <span className="font-medium">Replace existing speakers</span> - Overwrite with imported data
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowImportDialog(false)
+                    setImportFile(null)
+                  }}
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+                  disabled={importLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={performImport}
+                  disabled={!importFile || importLoading}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                >
+                  {importLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      <span>Importing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-4 w-4" />
+                      <span>Import Speakers</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

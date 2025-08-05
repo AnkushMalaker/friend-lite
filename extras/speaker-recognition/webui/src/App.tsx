@@ -6,6 +6,7 @@ import Annotation from './pages/Annotation'
 import Enrollment from './pages/Enrollment'
 import Speakers from './pages/Speakers'
 import Inference from './pages/Inference'
+import InferLive from './pages/InferLive'
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
             <Route path="/enrollment" element={<Enrollment />} />
             <Route path="/speakers" element={<Speakers />} />
             <Route path="/inference" element={<Inference />} />
+            <Route path="/infer-live" element={<InferLive />} />
           </Routes>
         </Layout>
       </Router>

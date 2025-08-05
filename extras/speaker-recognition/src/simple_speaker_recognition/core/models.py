@@ -1,7 +1,7 @@
 """Pydantic models for speaker recognition API."""
 
-from typing import List, Optional, Dict, Any, Union
 from enum import Enum
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -59,6 +59,25 @@ class DiarizeAndIdentifyRequest(BaseModel):
     user_id: Optional[int] = Field(default=None, description="User ID to scope speaker identification to user's enrolled speakers")
 
 
+class SpeakerStatus(str, Enum):
+    """Speaker identification status."""
+    IDENTIFIED = "identified"
+    UNKNOWN = "unknown" 
+    ERROR = "error"
+    PROCESSING = "processing"
+
+
+class IdentifyResponse(BaseModel):
+    """Response model for speaker identification."""
+    found: bool = Field(description="Whether a speaker was identified")
+    speaker_id: Optional[str] = Field(default=None, description="Identified speaker ID")
+    speaker_name: Optional[str] = Field(default=None, description="Identified speaker name")
+    confidence: float = Field(description="Identification confidence score")
+    status: SpeakerStatus = Field(description="Speaker identification status")
+    similarity_threshold: float = Field(description="Threshold used for identification")
+    duration: float = Field(description="Duration of the processed audio in seconds")
+
+
 class InferenceRequest(BaseModel):
     """Request model for speaker inference on diarized segments."""
     segments: List[dict] = Field(..., description="Diarized transcript segments with speaker, start, end, text")
@@ -74,20 +93,12 @@ class InferenceSegment(BaseModel):
     confidence: Optional[float] = Field(None, description="Identification confidence score")
 
 
-class SpeakerStatus(str, Enum):
-    """Speaker identification status."""
-    IDENTIFIED = "identified"
-    UNKNOWN = "unknown" 
-    ERROR = "error"
-    PROCESSING = "processing"
-
-
 # Deepgram API Wrapper Models
 class DeepgramTranscriptionRequest(BaseModel):
     """Request model for Deepgram-compatible transcription endpoint."""
     # Core parameters
     model: Optional[str] = Field(default="nova-3", description="Model to use for transcription")
-    language: Optional[str] = Field(default="en", description="Language code")
+    language: Optional[str] = Field(default="multi", description="Language code")
     version: Optional[str] = Field(default="latest", description="Model version")
     
     # Audio processing

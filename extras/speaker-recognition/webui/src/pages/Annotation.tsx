@@ -14,6 +14,11 @@ import {
 } from '../utils/audioUtils'
 import { databaseService } from '../services/database'
 import { apiService, type Annotation } from '../services/api'
+import { 
+  transcribeWithDeepgram, 
+  convertToAnnotationSegments,
+  DEFAULT_DEEPGRAM_OPTIONS 
+} from '../services/deepgram'
 import FileUploader from '../components/FileUploader'
 import WaveformPlot from '../components/WaveformPlot'
 
@@ -55,6 +60,9 @@ export default function Annotation() {
   const [playingSegmentId, setPlayingSegmentId] = useState<string | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [enrollingSpeaker, setEnrollingSpeaker] = useState<string | null>(null)
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const [deepgramResponse, setDeepgramResponse] = useState<any>(null)
+  const [showJsonOutput, setShowJsonOutput] = useState(false)
   
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null)
@@ -88,6 +96,130 @@ export default function Annotation() {
     
     loadEnrolledSpeakers()
   }, [user])
+
+  const handleDeepgramTranscribe = useCallback(async () => {
+    if (!audioData || !user) return
+
+    setIsTranscribing(true)
+    try {
+      // Use shared Deepgram service
+      const response = await transcribeWithDeepgram(audioData.file, {
+        enhanceSpeakers: true,
+        userId: user.id,
+        speakerConfidenceThreshold: 0.15,
+        mode: 'standard'
+      })
+
+      // Store response for JSON debugging
+      setDeepgramResponse(response)
+
+      // Convert Deepgram response to annotation segments
+      const results = response.results || {}
+      const channels = results.channels || []
+      
+      if (!channels.length) {
+        alert('No transcription results found')
+        return
+      }
+
+      const words = channels[0]?.alternatives?.[0]?.words || []
+      
+      if (!words.length) {
+        alert('No words found in transcription')
+        return
+      }
+
+      // Debug: Log word count and speaker distribution
+      console.log(`Total words received: ${words.length}`)
+      const speakerCounts = {}
+      words.forEach(word => {
+        const speaker = word.speaker || 0
+        speakerCounts[speaker] = (speakerCounts[speaker] || 0) + 1
+      })
+      console.log('Speaker distribution in words:', speakerCounts)
+
+      // Group words by speaker into segments (similar to existing Deepgram JSON import logic)
+      const newSegments: AnnotationSegment[] = []
+      let currentSpeaker = null
+      let currentSegmentStart = null
+      let currentWords: any[] = []
+
+      for (const word of words) {
+        if (word.speaker !== currentSpeaker) {
+          // Save previous segment
+          if (currentSpeaker !== null && currentWords.length > 0) {
+            const segmentEnd = currentWords[currentWords.length - 1].end
+            // FIX: Use the first word of the CURRENT segment, not the new word
+            const firstWordOfSegment = currentWords[0]
+            newSegments.push({
+              id: Math.random().toString(36),
+              start: currentSegmentStart,
+              end: segmentEnd,
+              duration: segmentEnd - currentSegmentStart,
+              speakerLabel: firstWordOfSegment.identified_speaker_name || `Speaker ${currentSpeaker + 1}`,
+              deepgramSpeakerLabel: `speaker_${currentSpeaker}`,
+              label: 'UNCERTAIN' as const,
+              confidence: Math.min(...currentWords.map(w => w.confidence || 0)),
+              transcription: currentWords.map(w => w.punctuated_word || w.word).join(' ')
+            })
+            console.log(`Created segment for speaker ${currentSpeaker}: ${currentSegmentStart}s - ${segmentEnd}s`)
+          }
+
+          // Start new segment
+          currentSpeaker = word.speaker
+          currentSegmentStart = word.start
+          currentWords = [word]
+        } else {
+          currentWords.push(word)
+        }
+      }
+
+      // Add final segment
+      if (currentWords.length > 0) {
+        const segmentEnd = currentWords[currentWords.length - 1].end
+        // FIX: Use the first word of the CURRENT segment for speaker info
+        const firstWordOfSegment = currentWords[0]
+        newSegments.push({
+          id: Math.random().toString(36),
+          start: currentSegmentStart,
+          end: segmentEnd,
+          duration: segmentEnd - currentSegmentStart,
+          speakerLabel: firstWordOfSegment.identified_speaker_name || `Speaker ${currentSpeaker + 1}`,
+          deepgramSpeakerLabel: `speaker_${currentSpeaker}`,
+          label: 'UNCERTAIN' as const,
+          confidence: Math.min(...currentWords.map(w => w.confidence || 0)),
+          transcription: currentWords.map(w => w.punctuated_word || w.word).join(' ')
+        })
+        console.log(`Created final segment for speaker ${currentSpeaker}: ${currentSegmentStart}s - ${segmentEnd}s`)
+      }
+
+      console.log(`Total segments created: ${newSegments.length}`)
+
+      // Add unique speaker labels to available speakers
+      const uniqueSpeakerLabels = new Set(
+        newSegments
+          .map(s => s.speakerLabel)
+          .filter(label => label && !availableSpeakers.some(sp => sp.label === label))
+      )
+
+      if (uniqueSpeakerLabels.size > 0) {
+        setAvailableSpeakers(prev => [
+          ...prev,
+          ...Array.from(uniqueSpeakerLabels).map(label => ({ label }))
+        ])
+      }
+
+      setSegments(newSegments)
+      setHasUnsavedChanges(true)
+      alert(`Transcribed ${newSegments.length} segments from audio`)
+
+    } catch (error) {
+      console.error('Failed to transcribe audio:', error)
+      alert('Failed to transcribe audio. Please try again.')
+    } finally {
+      setIsTranscribing(false)
+    }
+  }, [audioData, user, availableSpeakers])
 
   const handleFileUpload = useCallback(async (files: File[]) => {
     if (!files.length || !user) return
@@ -564,17 +696,51 @@ export default function Annotation() {
           />
         </div>
 
-        <div className="border-2 border-dashed border-blue-300 rounded-lg p-6">
-          <h3 className="text-lg font-medium mb-4">📄 Import Deepgram JSON</h3>
-          <FileUploader
-            onUpload={handleDeepgramUpload}
-            accept=".json"
-            multiple={false}
-            disabled={!audioData}
-          />
-          {!audioData && (
-            <p className="text-sm text-gray-500 mt-2">Upload audio file first</p>
-          )}
+        {/* Right column - Split vertically */}
+        <div className="space-y-4">
+          {/* Top half - Import JSON */}
+          <div className="border-2 border-dashed border-blue-300 rounded-lg p-4">
+            <h3 className="text-lg font-medium mb-3">📄 Import Deepgram JSON</h3>
+            <FileUploader
+              onUpload={handleDeepgramUpload}
+              accept=".json"
+              multiple={false}
+              disabled={!audioData}
+              title="Upload Transcript JSON"
+            />
+            {!audioData && (
+              <p className="text-sm text-gray-500 mt-2">Upload audio file first</p>
+            )}
+          </div>
+
+          {/* Bottom half - Transcribe with Deepgram */}
+          <div className="border-2 border-dashed border-green-300 rounded-lg p-4">
+            <h3 className="text-lg font-medium mb-3">🎤 Transcribe with Deepgram</h3>
+            <div className="text-center">
+              <button
+                onClick={handleDeepgramTranscribe}
+                disabled={!audioData || isTranscribing || isLoading}
+                className="w-full px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+              >
+                {isTranscribing ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Transcribing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🚀</span>
+                    <span>Transcribe Audio</span>
+                  </>
+                )}
+              </button>
+              <p className="text-sm text-gray-500 mt-2">
+                {!audioData 
+                  ? 'Upload audio file first' 
+                  : 'Generate transcript with speaker diarization'}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -745,6 +911,19 @@ export default function Annotation() {
 
           {/* Save and Export Actions */}
           <div className="flex justify-end space-x-3 pt-6 border-t">
+            {deepgramResponse && (
+              <button
+                onClick={() => setShowJsonOutput(!showJsonOutput)}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-md ${
+                  showJsonOutput 
+                    ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                <span>📄</span>
+                <span>{showJsonOutput ? 'Hide' : 'Show'} JSON</span>
+              </button>
+            )}
             <button
               onClick={saveAnnotations}
               disabled={!hasUnsavedChanges || segments.length === 0}
@@ -762,6 +941,39 @@ export default function Annotation() {
               <span>Export JSON</span>
             </button>
           </div>
+
+          {/* JSON Output Section */}
+          {showJsonOutput && deepgramResponse && (
+            <div className="mt-6">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-medium text-gray-900">🔍 Debug Output</h4>
+                <button
+                  onClick={() => setShowJsonOutput(!showJsonOutput)}
+                  className="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+                >
+                  <span>{showJsonOutput ? 'Hide' : 'Show'} JSON</span>
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                {/* Deepgram Response */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <h5 className="font-medium text-gray-900 mb-2">Deepgram API Response</h5>
+                  <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800 text-left">
+                    {JSON.stringify(deepgramResponse, null, 2)}
+                  </pre>
+                </div>
+                
+                {/* Annotation Segments */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <h5 className="font-medium text-gray-900 mb-2">Annotation Segments</h5>
+                  <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800 text-left">
+                    {JSON.stringify(segments, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
