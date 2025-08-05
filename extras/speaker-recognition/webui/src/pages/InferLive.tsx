@@ -1,14 +1,21 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Mic, Users, AlertCircle, Volume2, Clock } from 'lucide-react'
 import { useUser } from '../contexts/UserContext'
 import { apiService } from '../services/api'
 import { 
   DeepgramStreaming, 
   StreamingConfig, 
-  StreamingTranscript, 
-  convertAudioForDeepgram,
+  StreamingTranscript,
+  SpeechStartedEvent,
+  UtteranceEndEvent,
   DEFAULT_DEEPGRAM_OPTIONS 
 } from '../services/deepgram'
+
+interface SpeakerPart {
+  speaker: string
+  text: string
+  confidence: number
+}
 
 interface TranscriptSegment {
   id: string
@@ -17,20 +24,21 @@ interface TranscriptSegment {
   text: string
   confidence: number
   isInterim: boolean
-  identifiedSpeaker?: {
-    id: string
-    name: string
-    confidence: number
-  }
+  speakerParts?: SpeakerPart[]  // Inline speaker labels within the text
 }
 
-interface SpeakerIdentificationResult {
+
+
+
+
+interface IdentifyResult {
   found: boolean
-  speaker_info?: {
-    id: string
-    name: string
-  }
+  speaker_id: string | null
+  speaker_name: string | null
   confidence: number
+  status: string
+  similarity_threshold: number
+  duration: number
 }
 
 interface LiveStats {
@@ -69,6 +77,25 @@ export default function InferLive() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const apiKeyFetchedRef = useRef(false)
+  const audioBufferRef = useRef<Float32Array[]>([])
+  const lastTranscriptRef = useRef<string>('')
+
+  const utteranceTranscriptsRef = useRef<string[]>([])
+  const currentUtteranceSegmentIds = useRef<string[]>([])
+  const processingUtteranceRef = useRef(false)
+  
+  // Utterance timing tracking
+  const utteranceStartTimeRef = useRef<number | null>(null)
+  const streamStartTimeRef = useRef<number | null>(null) // When the Deepgram stream started
+  const audioBufferStartIndexRef = useRef<number>(0)
+  
+  // Helper function to reset utterance refs
+  const _resetRefs = () => {
+    utteranceTranscriptsRef.current = []
+    currentUtteranceSegmentIds.current = []
+    utteranceStartTimeRef.current = null
+    processingUtteranceRef.current = false
+  }
 
   // Fetch Deepgram API key from server on component mount
   useEffect(() => {
@@ -95,19 +122,14 @@ export default function InferLive() {
   // Auto-scroll to bottom of transcript
   useEffect(() => {
     if (transcriptEndRef.current) {
-      console.log('🎙️ [LIFECYCLE] Auto-scrolling to latest transcript segment')
       transcriptEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
   }, [transcriptSegments])
 
   // Update session duration
   useEffect(() => {
-    if (!isRecording) {
-      console.log('🎙️ [LIFECYCLE] Session duration timer stopped - not recording')
-      return
-    }
+    if (!isRecording) return
 
-    console.log('🎙️ [LIFECYCLE] Starting session duration timer')
     const interval = setInterval(() => {
       setStats(prev => ({
         ...prev,
@@ -115,77 +137,69 @@ export default function InferLive() {
       }))
     }, 1000)
 
-    return () => {
-      console.log('🎙️ [LIFECYCLE] Cleaning up session duration timer')
-      clearInterval(interval)
-    }
+    return () => clearInterval(interval)
   }, [isRecording])
 
-  const identifySpeaker = async (audioBuffer: Float32Array, sampleRate: number): Promise<SpeakerIdentificationResult> => {
+  // Helper function to create WAV blob from Float32Array
+  const createWAVBlob = (audioBuffer: Float32Array, sampleRate: number): Blob => {
+    const length = audioBuffer.length
+    const arrayBuffer = new ArrayBuffer(length * 2)
+    const view = new DataView(arrayBuffer)
+    
+    // Convert to 16-bit PCM
+    for (let i = 0; i < length; i++) {
+      const sample = Math.max(-1, Math.min(1, audioBuffer[i]))
+      view.setInt16(i * 2, sample * 0x7FFF, true)
+    }
+    
+    // Create WAV blob
+    return new Blob([createWAVHeader(sampleRate, 1, 16, arrayBuffer.byteLength), arrayBuffer], {
+      type: 'audio/wav'
+    })
+  }
+
+  // Simplified utterance speaker identification
+  const identifyUtteranceSpeaker = async (audioBuffer: Float32Array, sampleRate: number): Promise<IdentifyResult> => {
     try {
-      console.log('🔍 [SPEAKER_ID] Starting speaker identification for audio segment')
-      console.log('🔍 [SPEAKER_ID] Audio buffer:', audioBuffer.length, 'samples at', sampleRate, 'Hz')
-      
-      // Convert Float32Array to WAV blob
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-      const audioBufferNode = audioContext.createBuffer(1, audioBuffer.length, sampleRate)
-      audioBufferNode.getChannelData(0).set(audioBuffer)
-      
-      // Create blob from audio buffer
-      const length = audioBuffer.length
-      const arrayBuffer = new ArrayBuffer(length * 2)
-      const view = new DataView(arrayBuffer)
-      
-      // Convert to 16-bit PCM
-      for (let i = 0; i < length; i++) {
-        const sample = Math.max(-1, Math.min(1, audioBuffer[i]))
-        view.setInt16(i * 2, sample * 0x7FFF, true)
-      }
+      console.log('🔍 [UTTERANCE_ID] Starting utterance speaker identification')
       
       // Create WAV blob
-      const wavBlob = new Blob([createWAVHeader(sampleRate, 1, 16, arrayBuffer.byteLength), arrayBuffer], {
-        type: 'audio/wav'
-      })
+      const wavBlob = createWAVBlob(audioBuffer, sampleRate)
       
-      console.log('🔍 [SPEAKER_ID] Created WAV blob:', wavBlob.size, 'bytes')
-      
-      // Call the diarize-and-identify endpoint
+      // Call the simple identify-utterance endpoint
       const formData = new FormData()
-      formData.append('file', wavBlob, 'segment.wav')
+      formData.append('file', wavBlob, 'utterance.wav')
       formData.append('similarity_threshold', '0.15')
-      formData.append('min_duration', '1.0')
-      formData.append('identify_only_enrolled', 'false')
+      if (user?.id) {
+        formData.append('user_id', user.id.toString())
+      }
       
-      console.log('🔍 [SPEAKER_ID] Calling /diarize-and-identify endpoint...')
-      const response = await apiService.post('/diarize-and-identify', formData, {
+      const response = await apiService.post('/identify', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
-        timeout: 30000, // 30 seconds for speaker identification
+        timeout: 15000, // 15 seconds for utterance identification
       })
       
-      console.log('🔍 [SPEAKER_ID] Response received:', response.data)
+      console.log('🔍 [UTTERANCE_ID] API Response:', response.data)
       
-      // Process the response
-      if (response.data.speakers && response.data.speakers.length > 0) {
-        const firstSpeaker = response.data.speakers[0]
-        return {
-          found: !!firstSpeaker.identified_speaker_id,
-          speaker_info: firstSpeaker.identified_speaker_id ? {
-            id: firstSpeaker.identified_speaker_id,
-            name: firstSpeaker.identified_speaker_name || firstSpeaker.speaker_name
-          } : undefined,
-          confidence: firstSpeaker.speaker_identification_confidence || firstSpeaker.confidence || 0
-        }
-      }
-      
-      return { found: false, confidence: 0 }
+      return response.data as IdentifyResult
       
     } catch (error) {
-      console.error('🔍 [SPEAKER_ID] Error during speaker identification:', error)
-      return { found: false, confidence: 0 }
+      console.error('🔍 [UTTERANCE_ID] Error during utterance identification:', error)
+      return { 
+        found: false, 
+        speaker_id: null, 
+        speaker_name: null, 
+        confidence: 0, 
+        status: 'error',
+        similarity_threshold: 0.15,
+        duration: 0
+      }
     }
   }
+
+
 
   // Helper method to create WAV header
   const createWAVHeader = (sampleRate: number, channels: number, bitsPerSample: number, dataLength: number) => {
@@ -237,18 +251,19 @@ export default function InferLive() {
     sessionStartRef.current = Date.now()
     
     try {
-      // Initialize Deepgram streaming for Opus format
+      // Initialize Deepgram streaming with VAD events for better speaker detection
       const config: StreamingConfig = {
-        ...DEFAULT_DEEPGRAM_OPTIONS,
         apiKey: deepgramApiKey,
-        diarize: false,
-        interim_results: true,
-        endpointing: 300,
-        vad_events: true,
-        utterance_end_ms: 1000,
-        // Configure for Opus since MediaRecorder uses WebM/Opus
-        encoding: 'opus',
-        sample_rate: 48000 // Opus typically uses 48kHz
+        model: 'nova-3',
+        language: 'multi',         // Multilingual support
+        // Use standard linear16 format for maximum compatibility
+        encoding: 'linear16',
+        sample_rate: 16000,
+        // Enable speech detection events
+        interim_results: true,      // Required for UtteranceEnd
+        vad_events: true,          // Enables SpeechStarted events  
+        utterance_end_ms: 1000,    // UtteranceEnd after 1s gap
+        endpointing: 300           // Still use endpointing for speech_final
       }
 
       console.log('🎙️ [SESSION] Deepgram config:', {
@@ -280,28 +295,34 @@ export default function InferLive() {
           isInterim: !transcript.is_final
         }
 
-        // Speaker identification for final transcripts
-        if (transcript.is_final && enableSpeakerIdentification) {
-          if (!currentSpeakers.has(segment.speaker)) {
-            // For now, use basic speaker labels - actual audio segment capture would be needed for real identification
-            const speakerKey = `Speaker ${segment.speaker + 1}`
-            segment.identifiedSpeaker = {
-              id: `speaker_${segment.speaker}`,
-              name: speakerKey,
-              confidence: 0.5
-            }
-            setCurrentSpeakers(prev => new Map(prev.set(segment.speaker, speakerKey)))
-          } else {
-            const knownSpeakerName = currentSpeakers.get(segment.speaker)!
-            segment.identifiedSpeaker = {
-              id: `speaker_${segment.speaker}`,
-              name: knownSpeakerName,
-              confidence: 0.9
-            }
+        // Always start with N/A - will be split into speaker parts after identification
+        segment.speakerParts = [{
+          speaker: 'N/A',
+          text: segment.text,
+          confidence: 0.0
+        }]
+
+        // Store the latest transcript for UtteranceEnd processing
+        lastTranscriptRef.current = transcript.transcript
+        
+        // Collect transcript segments for utterance processing
+        if (!segment.isInterim) {
+          utteranceTranscriptsRef.current.push(transcript.transcript)
+          currentUtteranceSegmentIds.current.push(segment.id)
+          
+          // Track the start of the utterance (first segment)
+          if (utteranceTranscriptsRef.current.length === 1 && transcript.words.length > 0) {
+            utteranceStartTimeRef.current = transcript.words[0].start
+            console.log('📝 [UTTERANCE] ⏰ Utterance started at:', utteranceStartTimeRef.current)
           }
+          
+          console.log('📝 [UTTERANCE] Collected segment:', transcript.transcript)
+          console.log('📝 [UTTERANCE] Segment ID:', segment.id)
+          console.log('📝 [UTTERANCE] Total segments so far:', utteranceTranscriptsRef.current.length)
+          console.log('📝 [UTTERANCE] Current segment IDs:', currentUtteranceSegmentIds.current)
         }
 
-        // Update segments
+        // Add segment to display immediately (for real-time feedback)
         setTranscriptSegments(prev => {
           if (segment.isInterim) {
             const withoutLastInterim = prev.filter(s => !s.isInterim)
@@ -316,8 +337,13 @@ export default function InferLive() {
         if (transcript.is_final) {
           setStats(prev => {
             const newIdentified = new Set(prev.identifiedSpeakers)
-            if (segment.identifiedSpeaker) {
-              newIdentified.add(segment.identifiedSpeaker.name)
+            // Collect all identified speakers from speaker parts
+            if (segment.speakerParts) {
+              segment.speakerParts.forEach(part => {
+                if (part.speaker !== 'N/A') {
+                  newIdentified.add(part.speaker)
+                }
+              })
             }
 
             const wordCount = transcript.words.length
@@ -336,9 +362,175 @@ export default function InferLive() {
         }
       })
 
+      // Handle SpeechStarted events - just log for debugging
+      deepgramRef.current.onSpeechStarted((event: SpeechStartedEvent) => {
+        console.log('🎙️ [SPEECH] Speech started at', event.timestamp, '(VAD detection)')
+      })
+
+      // Handle UtteranceEnd events - trigger simple speaker identification
+      deepgramRef.current.onUtteranceEnd(async (event: UtteranceEndEvent) => {
+        if (!enableSpeakerIdentification) return
+        
+        // Prevent duplicate processing
+        if (processingUtteranceRef.current) {
+          console.log('🔚 [UTTERANCE] ⚠️ Already processing an utterance, skipping duplicate event')
+          return
+        }
+        
+        console.log('🔚 [UTTERANCE] Utterance ended, triggering speaker identification')
+        console.log('🔚 [UTTERANCE] Collected transcripts:', utteranceTranscriptsRef.current)
+        console.log('🔚 [UTTERANCE] Collected segment IDs:', currentUtteranceSegmentIds.current)
+        
+        if (utteranceTranscriptsRef.current.length === 0) {
+          console.log('🔚 [UTTERANCE] No transcripts to process')
+          return
+        }
+
+        if (currentUtteranceSegmentIds.current.length === 0) {
+          console.log('🔚 [UTTERANCE] ⚠️ No segment IDs collected - this is unexpected!')
+          console.log('🔚 [UTTERANCE] This might be a timing issue or duplicate utterance event')
+          return
+        }
+
+        processingUtteranceRef.current = true
+
+        // Capture segment IDs locally to prevent race conditions
+        const segmentIdsToUpdate = [...currentUtteranceSegmentIds.current]
+        const transcriptsToProcess = [...utteranceTranscriptsRef.current]
+        
+        console.log('🔚 [UTTERANCE] Captured for processing:', {
+          segmentIds: segmentIdsToUpdate,
+          transcripts: transcriptsToProcess
+        })
+
+        try {
+          // Calculate utterance timing and extract the exact audio segment
+          const utteranceStartTime = utteranceStartTimeRef.current
+          const utteranceEndTime = event.last_word_end
+          const streamStartTime = streamStartTimeRef.current
+          
+          if (!utteranceStartTime || !streamStartTime) {
+            console.error('🔚 [UTTERANCE] ❌ Missing timing information - cannot extract utterance audio')
+            console.error('🔚 [UTTERANCE] utteranceStartTime:', utteranceStartTime, 'streamStartTime:', streamStartTime)
+            _resetRefs()
+            return
+          }
+          
+          // Calculate which buffers correspond to the utterance timing
+          const utteranceDuration = utteranceEndTime - utteranceStartTime
+          const bufferDurationMs = 256 // Each buffer is ~256ms (4096 samples at 16kHz)
+          
+          // Calculate buffer indices based on stream-relative timing
+          // utteranceStartTime and utteranceEndTime are in seconds from stream start
+          const startBufferIndex = Math.max(0, Math.floor(utteranceStartTime * 1000 / bufferDurationMs))
+          const endBufferIndex = Math.min(audioBufferRef.current.length, Math.ceil(utteranceEndTime * 1000 / bufferDurationMs))
+          
+          console.log('🔚 [UTTERANCE] Timing calculation:', {
+            utteranceStartTime,
+            utteranceEndTime,
+            utteranceDuration,
+            streamStartTime,
+            startBufferIndex,
+            endBufferIndex,
+            totalBuffers: audioBufferRef.current.length
+          })
+          
+          if (startBufferIndex >= endBufferIndex || startBufferIndex >= audioBufferRef.current.length) {
+            console.error('🔚 [UTTERANCE] ❌ Invalid buffer range - cannot extract utterance audio')
+            console.error('🔚 [UTTERANCE] startBufferIndex:', startBufferIndex, 'endBufferIndex:', endBufferIndex, 'totalBuffers:', audioBufferRef.current.length)
+            _resetRefs()
+            return
+          }
+          
+          // Extract the exact utterance buffers
+          const utteranceBuffers = audioBufferRef.current.slice(startBufferIndex, endBufferIndex)
+          
+          if (utteranceBuffers.length === 0) {
+            console.error('🔚 [UTTERANCE] ❌ No utterance buffers in calculated range')
+            _resetRefs()
+            return
+          }
+          
+          // Concatenate the utterance audio buffers
+          const totalLength = utteranceBuffers.reduce((sum, buf) => sum + buf.length, 0)
+          const audioBuffer = new Float32Array(totalLength)
+          let offset = 0
+          for (const buffer of utteranceBuffers) {
+            audioBuffer.set(buffer, offset)
+            offset += buffer.length
+          }
+          
+          console.log('🔚 [UTTERANCE] ✅ Exact utterance audio buffer created:', {
+            bufferCount: utteranceBuffers.length,
+            totalSamples: audioBuffer.length,
+            durationSeconds: audioBuffer.length / 16000,
+            calculatedDuration: utteranceDuration,
+            startBufferIndex,
+            endBufferIndex
+          })
+          
+          // Call simplified speaker identification API
+          const identification = await identifyUtteranceSpeaker(audioBuffer, 16000)
+          
+          console.log('🔍 [SPEAKER_ID] Identification result:', identification)
+          
+          // Update transcript segments with speaker information
+          setTranscriptSegments(prev => {
+            const updatedSegments = [...prev]
+            
+            console.log('🔍 [SPEAKER_ID] Updating segments with IDs:', segmentIdsToUpdate)
+            
+            // Apply speaker identification only to segments from this utterance
+            segmentIdsToUpdate.forEach((segmentId) => {
+              const segmentIndex = updatedSegments.findIndex(seg => seg.id === segmentId)
+              
+              if (segmentIndex >= 0) {
+                const speakerName = identification.found ? 
+                  identification.speaker_name : 'Unknown'
+                
+                updatedSegments[segmentIndex] = {
+                  ...updatedSegments[segmentIndex],
+                  speakerParts: [{
+                    speaker: speakerName || 'Unknown',
+                    text: updatedSegments[segmentIndex].text,
+                    confidence: identification.confidence
+                  }]
+                }
+                
+                console.log(`🔍 [SPEAKER_ID] Updated segment ${segmentId} with speaker: ${speakerName}`)
+              } else {
+                console.warn(`🔍 [SPEAKER_ID] Could not find segment with ID: ${segmentId}`)
+              }
+            })
+            
+            return updatedSegments
+          })
+          
+          // Update current speakers mapping
+          if (identification.found && identification.speaker_name) {
+            setCurrentSpeakers(prev => {
+              const newSpeakers = new Map(prev)
+              newSpeakers.set(0, identification.speaker_name!)
+              return newSpeakers
+            })
+          }
+          
+        } catch (error) {
+          console.error('🔍 [SPEAKER_ID] Error during utterance identification:', error)
+          _resetRefs()
+        }
+        
+        // Reset for next utterance
+        _resetRefs()
+      })
+
       // Connect to Deepgram
       await deepgramRef.current.connect()
       console.log('🎙️ [SESSION] Connected to Deepgram')
+      
+      // Record when the stream started for timing calculations
+      streamStartTimeRef.current = Date.now() / 1000 // Unix timestamp when stream started
+      audioBufferStartIndexRef.current = 0
 
       // Start MediaRecorder audio capture
       await startAudioCapture()
@@ -357,7 +549,7 @@ export default function InferLive() {
 
   const startAudioCapture = async () => {
     try {
-      // Request microphone access
+      // Request microphone access with standard 16kHz settings
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: 16000,
@@ -370,69 +562,51 @@ export default function InferLive() {
 
       mediaStreamRef.current = stream
 
-      // Try different formats for better Deepgram compatibility
-      let mimeType = 'audio/ogg;codecs=opus'  // Try OGG/Opus first (might work better)
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/wav'  // WAV would be ideal but unlikely supported
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'audio/webm;codecs=opus'  // Fallback to WebM/Opus
-          if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'audio/webm'
-            if (!MediaRecorder.isTypeSupported(mimeType)) {
-              mimeType = '' // Let browser choose
-            }
-          }
-        }
-      }
+      // Use Web Audio API to process audio directly to linear16 format
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000
+      })
       
-      console.log('🎤 [AUDIO] Selected mimeType:', mimeType)
+      const source = audioContext.createMediaStreamSource(stream)
+      const processor = audioContext.createScriptProcessor(4096, 1, 1)
 
-      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
-      mediaRecorderRef.current = mediaRecorder
+      console.log('🎤 [AUDIO] Using Web Audio API for linear16 processing at 16kHz')
 
-      mediaRecorder.ondataavailable = async (event) => {
-        console.log('🎤 [AUDIO] Received audio chunk:', event.data.size, 'bytes, type:', event.data.type)
-        
-        if (event.data.size > 0 && deepgramRef.current && deepgramRef.current.getConnectionStatus() === 'connected') {
-          try {
-            console.log('🎤 [AUDIO] Processing chunk - deepgram connected, format:', event.data.type)
-            
-            // Convert blob to ArrayBuffer
-            const arrayBuffer = await event.data.arrayBuffer()
-            console.log('🎤 [AUDIO] ArrayBuffer created:', arrayBuffer.byteLength, 'bytes')
-            
-            // Send raw WebM/Opus data directly to Deepgram (no decoding needed)
-            console.log('🎤 [AUDIO] Sending raw WebM/Opus data to Deepgram (configured for opus/48kHz)...')
-            
-            // Deepgram is configured with encoding=opus to handle WebM/Opus directly
-            deepgramRef.current.sendAudio(arrayBuffer)
-            
-            console.log('🎤 [AUDIO] ✅ Audio sent to Deepgram successfully')
-            
-          } catch (error) {
-            console.error('🎤 [AUDIO] ❌ Error processing audio chunk:', error)
-            console.error('🎤 [AUDIO] Error details:', {
-              name: error.name,
-              message: error.message,
-              chunkSize: event.data.size,
-              chunkType: event.data.type,
-              mimeType: mimeType
-            })
+      processor.onaudioprocess = (event) => {
+        if (deepgramRef.current && deepgramRef.current.getConnectionStatus() === 'connected') {
+          const inputBuffer = event.inputBuffer
+          const inputData = inputBuffer.getChannelData(0)
+          
+          // Buffer audio for speaker identification (keep last 30 seconds)
+          const audioCopy = new Float32Array(inputData)
+          audioBufferRef.current.push(audioCopy)
+          if (audioBufferRef.current.length > 750) { // 30 seconds at 4096 samples per 250ms
+            audioBufferRef.current.shift()
           }
-        } else {
-          const actualStatus = deepgramRef.current?.getConnectionStatus() || 'no-ref'
-          console.log('🎤 [AUDIO] Skipping chunk - size:', event.data.size, 'deepgram ref:', !!deepgramRef.current, 'state status:', deepgramStatus, 'actual status:', actualStatus)
+          
+          // Convert Float32Array to Int16 (linear16)
+          const int16Buffer = new Int16Array(inputData.length)
+          for (let i = 0; i < inputData.length; i++) {
+            const sample = Math.max(-1, Math.min(1, inputData[i]))
+            int16Buffer[i] = sample * 0x7FFF
+          }
+          
+          // Reduced logging - only log every 100 packets to reduce spam
+          if (Math.random() < 0.01) {
+            console.log('🎤 [AUDIO] Sending audio data...')
+          }
+          deepgramRef.current.sendAudio(int16Buffer.buffer)
         }
       }
 
-      mediaRecorder.onerror = (error) => {
-        console.error('🎤 [AUDIO] MediaRecorder error:', error)
-        setError('Audio recording failed. Please check microphone permissions.')
-      }
+      source.connect(processor)
+      processor.connect(audioContext.destination)
 
-      // Start recording with 250ms chunks for real-time streaming
-      mediaRecorder.start(250)
-      console.log('🎤 [AUDIO] MediaRecorder started with 250ms chunks')
+      // Store references for cleanup
+      ;(mediaStreamRef.current as any).audioContext = audioContext
+      ;(mediaStreamRef.current as any).processor = processor
+
+      console.log('🎤 [AUDIO] Web Audio API processing started')
 
     } catch (error) {
       console.error('🎤 [AUDIO] Failed to start audio capture:', error)
@@ -453,16 +627,27 @@ export default function InferLive() {
   const stopSession = () => {
     console.log('🛑 [SESSION] Stopping session...')
     
-    // Stop MediaRecorder
+    // Stop Web Audio API components
+    if (mediaStreamRef.current) {
+      const stream = mediaStreamRef.current as any
+      
+      // Stop audio context and processor
+      if (stream.audioContext) {
+        stream.audioContext.close()
+      }
+      if (stream.processor) {
+        stream.processor.disconnect()
+      }
+      
+      // Stop media stream tracks
+      mediaStreamRef.current.getTracks().forEach(track => track.stop())
+      mediaStreamRef.current = null
+    }
+    
+    // Stop MediaRecorder if it exists (fallback cleanup)
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop()
       mediaRecorderRef.current = null
-    }
-    
-    // Stop media stream
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop())
-      mediaStreamRef.current = null
     }
     
     // Disconnect Deepgram
@@ -470,6 +655,11 @@ export default function InferLive() {
       deepgramRef.current.disconnect()
       deepgramRef.current = null
     }
+    
+    // Clear audio buffer and transcript references
+    audioBufferRef.current = []
+    lastTranscriptRef.current = ''
+    _resetRefs()
     
     setIsRecording(false)
     setDeepgramStatus('disconnected')
@@ -679,14 +869,6 @@ export default function InferLive() {
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center space-x-2">
-                      <span className={`text-sm font-medium ${segment.isInterim ? 'text-gray-600' : 'text-gray-900'}`}>
-                        {segment.identifiedSpeaker?.name || `Speaker ${segment.speaker + 1}`}
-                      </span>
-                      {segment.identifiedSpeaker && !segment.isInterim && (
-                        <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded-full">
-                          ID: {(segment.identifiedSpeaker.confidence * 100).toFixed(0)}%
-                        </span>
-                      )}
                       {segment.isInterim && (
                         <span className="text-xs text-yellow-600 bg-yellow-100 px-2 py-1 rounded-full">
                           typing...
@@ -697,9 +879,32 @@ export default function InferLive() {
                       {new Date(segment.timestamp).toLocaleTimeString()}
                     </div>
                   </div>
-                  <p className={`${segment.isInterim ? 'text-gray-600 italic' : 'text-gray-900 font-medium'}`}>
-                    {segment.text}
-                  </p>
+                  <div className={`${segment.isInterim ? 'text-gray-600 italic' : 'text-gray-900'}`}>
+                    {segment.speakerParts?.map((part, partIndex) => (
+                      <span key={partIndex} className="inline-block mr-2">
+                        <span className={`font-semibold ${
+                          part.speaker === 'N/A' 
+                            ? 'text-gray-500' 
+                            : 'text-blue-700'
+                        }`}>
+                          {part.speaker}:
+                        </span>
+                        <span className="ml-1">
+                          "{part.text}"
+                        </span>
+                        {part.speaker !== 'N/A' && part.confidence > 0 && (
+                          <span className="text-xs text-green-600 bg-green-100 px-1 py-0.5 rounded ml-1">
+                            {(part.confidence * 100).toFixed(0)}%
+                          </span>
+                        )}
+                      </span>
+                    )) || (
+                      <span className="text-gray-500">
+                        <span className="font-semibold">N/A:</span>
+                        <span className="ml-1">"{segment.text}"</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
               <div ref={transcriptEndRef} />

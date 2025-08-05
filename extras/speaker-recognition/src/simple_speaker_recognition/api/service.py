@@ -28,7 +28,6 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import Field
 from pydantic_settings import BaseSettings
-
 from simple_speaker_recognition.core.audio_backend import AudioBackend
 from simple_speaker_recognition.core.models import (
     BatchEnrollRequest,
@@ -37,6 +36,7 @@ from simple_speaker_recognition.core.models import (
     DiarizeRequest,
     EnhancedTranscriptionResponse,
     IdentifyRequest,
+    IdentifyResponse,
     SpeakerStatus,
     UserRequest,
     UserResponse,
@@ -835,6 +835,120 @@ async def diarize_and_identify(
     except Exception as e:
         log.error(f"Error during diarize-and-identify: {e}")
         raise HTTPException(500, f"Diarize and identify failed: {str(e)}") from e
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/identify", response_model=IdentifyResponse)
+async def identify(
+    file: UploadFile = File(..., description="Audio file for speaker identification"),
+    req: DiarizeAndIdentifyRequest = Depends(),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """
+    Identify the speaker in an audio file.
+    
+    This endpoint is optimized for real-time processing:
+    1. Assumes the audio contains speech from a single speaker
+    2. Extracts embedding from the entire audio chunk
+    3. Identifies the enrolled speaker
+    4. Returns a single identification result
+    
+    Designed for use with utterance boundaries in real-time transcription.
+    """
+    log.info("Processing identify request")
+    
+    with secure_temp_file() as tmp:
+        tmp.write(await file.read())
+        tmp_path = Path(tmp.name)
+        
+        # Debug: Copy WAV file to debug directory
+        try:
+            debug_dir = Path("/app/debug")
+            if not debug_dir.exists():
+                log.error(f"Debug directory does not exist, creating: {debug_dir}")
+            
+            # Create filename with timestamp and original filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # milliseconds
+            original_name = getattr(file, 'filename', 'utterance.wav') or 'utterance.wav'
+            debug_filename = f"{timestamp}_{original_name}"
+            debug_path = debug_dir / debug_filename
+            
+            # Copy the temp file to debug location
+            shutil.copy2(tmp_path, debug_path)
+            
+            log.info(f"🐛 [DEBUG] WAV file dumped to: {debug_path}")
+        except Exception as e:
+            log.warning(f"Failed to dump debug WAV file: {e}")
+    
+    try:
+        # Get audio info for duration
+        audio_info = get_audio_info(str(tmp_path))
+        duration = audio_info.get('duration', 0.0)
+        
+        log.info(f"Processing audio: {duration:.2f}s duration")
+        
+        # Load the entire audio file (no segmentation needed)
+        wav = audio_backend.load_wave(tmp_path)
+        
+        # Generate embedding for the entire utterance
+        emb = await audio_backend.async_embed(wav)
+        
+        # Use custom threshold if provided, otherwise use default
+        threshold = req.similarity_threshold if req.similarity_threshold is not None else db.similarity_thr
+        
+        # Identify speaker with custom threshold
+        found = False
+        speaker_info = None
+        confidence = 0.0
+        
+        # Temporarily override threshold for this identification
+        original_threshold = db.similarity_thr
+        db.similarity_thr = threshold
+        try:
+            found, speaker_info, confidence = await db.identify(emb, user_id=req.user_id)
+            
+            # Validate confidence value
+            if confidence is not None:
+                if not isinstance(confidence, (int, float, np.number)):
+                    log.warning(f"Invalid confidence type from speaker_db.identify: {type(confidence)}, value: {confidence}")
+                    confidence = 0.0
+                elif np.isnan(confidence) or np.isinf(confidence):
+                    log.warning(f"Invalid confidence value from speaker_db.identify: {confidence} (NaN/Inf)")
+                    confidence = 0.0
+        finally:
+            db.similarity_thr = original_threshold
+        
+        # Build response
+        if found and speaker_info:
+            confidence_str = safe_format_confidence(confidence, "speaker_identification")
+            log.info(f"Speaker identified as {speaker_info['name']} (confidence: {confidence_str})")
+            
+            return IdentifyResponse(
+                found=True,
+                speaker_id=speaker_info["id"],
+                speaker_name=speaker_info["name"],
+                confidence=round(float(confidence), 3),
+                status=SpeakerStatus.IDENTIFIED,
+                similarity_threshold=threshold,
+                duration=round(duration, 3)
+            )
+        else:
+            log.info(f"Speaker not identified (confidence: {confidence:.3f} < threshold: {threshold:.3f})")
+            
+            return IdentifyResponse(
+                found=False,
+                speaker_id=None,
+                speaker_name=None,
+                confidence=round(float(confidence), 3),
+                status=SpeakerStatus.UNKNOWN,
+                similarity_threshold=threshold,
+                duration=round(duration, 3)
+            )
+        
+    except Exception as e:
+        log.error(f"Error during speaker identification: {e}")
+        raise HTTPException(500, f"Speaker identification failed: {str(e)}") from e
     finally:
         tmp_path.unlink(missing_ok=True)
 
