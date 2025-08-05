@@ -43,7 +43,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["simple_speaker_recognition*"]
+# include = ["simple_speaker_recognition*"]
 
 [project.scripts]
 simple-speaker-service = "simple_speaker_recognition.api.service:main"

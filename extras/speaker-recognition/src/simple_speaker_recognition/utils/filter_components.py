@@ -2,8 +2,8 @@
 
 import streamlit as st
 from typing import List, Dict, Any, Tuple
-from database import get_db_session
-from database.queries import SpeakerQueries
+from simple_speaker_recognition.database import get_db_session
+from simple_speaker_recognition.database.queries import SpeakerQueries
 
 
 def quality_filter_component(key_prefix: str = "") -> List[str]:

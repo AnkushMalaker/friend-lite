@@ -1,8 +1,21 @@
 """Pydantic models for speaker recognition API."""
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Union
+from enum import Enum
 
 from pydantic import BaseModel, Field
+
+
+class UserRequest(BaseModel):
+    """Request model for user creation."""
+    username: str
+
+
+class UserResponse(BaseModel):
+    """Response model for user data."""
+    id: int
+    username: str
+    created_at: str
 
 
 class EnrollRequest(BaseModel):
@@ -43,6 +56,7 @@ class DiarizeAndIdentifyRequest(BaseModel):
     min_duration: Optional[float] = Field(default=0.5, description="Minimum duration for speaker segments (seconds)")
     similarity_threshold: Optional[float] = Field(default=None, description="Override default similarity threshold for identification")
     identify_only_enrolled: bool = Field(default=False, description="Only return segments for enrolled speakers")
+    user_id: Optional[int] = Field(default=None, description="User ID to scope speaker identification to user's enrolled speakers")
 
 
 class InferenceRequest(BaseModel):
@@ -58,3 +72,92 @@ class InferenceSegment(BaseModel):
     text: str = Field(..., description="Transcript text")
     identified_speaker: Optional[str] = Field(None, description="Identified speaker name")
     confidence: Optional[float] = Field(None, description="Identification confidence score")
+
+
+class SpeakerStatus(str, Enum):
+    """Speaker identification status."""
+    IDENTIFIED = "identified"
+    UNKNOWN = "unknown" 
+    ERROR = "error"
+    PROCESSING = "processing"
+
+
+# Deepgram API Wrapper Models
+class DeepgramTranscriptionRequest(BaseModel):
+    """Request model for Deepgram-compatible transcription endpoint."""
+    # Core parameters
+    model: Optional[str] = Field(default="nova-3", description="Model to use for transcription")
+    language: Optional[str] = Field(default="en", description="Language code")
+    version: Optional[str] = Field(default="latest", description="Model version")
+    
+    # Audio processing
+    sample_rate: Optional[int] = Field(default=None, description="Sample rate of audio")
+    channels: Optional[int] = Field(default=None, description="Number of audio channels")
+    encoding: Optional[str] = Field(default=None, description="Audio encoding")
+    
+    # Formatting and output
+    punctuate: Optional[bool] = Field(default=True, description="Add punctuation")
+    profanity_filter: Optional[bool] = Field(default=False, description="Filter profanity")
+    redact: Optional[List[str]] = Field(default=None, description="Information to redact")
+    diarize: Optional[bool] = Field(default=True, description="Enable speaker diarization")
+    diarize_version: Optional[str] = Field(default="latest", description="Diarization model version")
+    multichannel: Optional[bool] = Field(default=False, description="Process multiple channels")
+    alternatives: Optional[int] = Field(default=1, description="Number of alternative transcripts")
+    numerals: Optional[bool] = Field(default=True, description="Convert numbers to numerals")
+    search: Optional[List[str]] = Field(default=None, description="Search terms")
+    replace: Optional[Dict[str, str]] = Field(default=None, description="Text replacement rules")
+    keywords: Optional[List[str]] = Field(default=None, description="Keywords to boost")
+    keyword_boost: Optional[str] = Field(default=None, description="Keyword boosting mode")
+    
+    # Smart formatting
+    smart_format: Optional[bool] = Field(default=True, description="Enable smart formatting")
+    dates: Optional[bool] = Field(default=True, description="Format dates")
+    times: Optional[bool] = Field(default=True, description="Format times")
+    currencies: Optional[bool] = Field(default=True, description="Format currencies")
+    phone_numbers: Optional[bool] = Field(default=True, description="Format phone numbers")
+    addresses: Optional[bool] = Field(default=True, description="Format addresses")
+    
+    # Structure and segments
+    paragraphs: Optional[bool] = Field(default=True, description="Organize into paragraphs")
+    utterances: Optional[bool] = Field(default=True, description="Organize into utterances")
+    utt_split: Optional[float] = Field(default=None, description="Utterance splitting threshold")
+    dictation: Optional[bool] = Field(default=False, description="Dictation mode")
+    measurements: Optional[bool] = Field(default=True, description="Format measurements")
+    
+    # Analysis features
+    detect_language: Optional[bool] = Field(default=False, description="Detect language automatically")
+    detect_topics: Optional[bool] = Field(default=False, description="Detect topics")
+    summarize: Optional[Union[bool, str]] = Field(default=False, description="Generate summary")
+    sentiment: Optional[bool] = Field(default=False, description="Analyze sentiment")
+    intents: Optional[bool] = Field(default=False, description="Detect intents")
+    
+    # Speaker recognition enhancement (our custom parameters)
+    enhance_speakers: Optional[bool] = Field(default=True, description="Enable speaker identification enhancement")
+    user_id: Optional[int] = Field(default=None, description="User ID for speaker identification")
+    speaker_confidence_threshold: Optional[float] = Field(default=0.15, description="Minimum confidence for speaker identification")
+
+
+class EnhancedWordInfo(BaseModel):
+    """Enhanced word information with speaker identification."""
+    word: str
+    start: float
+    end: float
+    confidence: float
+    speaker: Optional[int] = None
+    speaker_confidence: Optional[float] = None
+    punctuated_word: Optional[str] = None
+    
+    # Enhanced speaker identification fields
+    identified_speaker_id: Optional[str] = None
+    identified_speaker_name: Optional[str] = None
+    speaker_identification_confidence: Optional[float] = None
+    speaker_status: Optional[SpeakerStatus] = None
+
+
+class EnhancedTranscriptionResponse(BaseModel):
+    """Enhanced Deepgram-compatible response with speaker identification."""
+    metadata: Dict[str, Any]
+    results: Dict[str, Any]
+    
+    # Additional enhancement metadata
+    speaker_enhancement: Optional[Dict[str, Any]] = None
