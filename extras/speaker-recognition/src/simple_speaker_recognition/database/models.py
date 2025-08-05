@@ -34,6 +34,8 @@ class Speaker(Base):
     embedding_data = Column(Text)  # JSON: serialized embedding vector
     audio_segments_metadata = Column(Text)  # JSON: references to audio segments
     notes = Column(Text)  # Optional notes about the speaker
+    audio_sample_count = Column(Integer, default=0)  # Number of audio segments used for enrollment
+    total_audio_duration = Column(Float, default=0.0)  # Total duration of all audio segments in seconds
     
     # Relationships
     user = relationship("User", back_populates="speakers")

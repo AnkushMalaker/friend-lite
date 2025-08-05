@@ -7,7 +7,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Create data directory if it doesn't exist
-DATA_DIR = Path(__file__).parent.parent / "data"
+# Use the mounted volume path in Docker, fallback to local path for development
+DATA_DIR = Path("/app/data") if Path("/app/data").exists() else Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 # Database configuration

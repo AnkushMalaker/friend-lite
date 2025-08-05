@@ -9,7 +9,7 @@ A comprehensive speaker recognition system with web-based UI for audio annotatio
 - Hugging Face account (for model access)
 - 8GB+ RAM, 10GB+ disk space
 
-### 1. Set up your Hugging Face token
+### 1. Set up your Hugging Face token (use .env recommended)
 ```bash
 export HF_TOKEN="your_huggingface_token"
 ```
@@ -22,11 +22,11 @@ docker-compose up --build -d
 ```
 
 This starts two services:
-- **FastAPI backend** on http://localhost:8001 (speaker recognition API)
-- **Streamlit web UI** on http://localhost:8501 (main interface)
+- **FastAPI backend** on http://localhost:8085 (speaker recognition API)
+- **React web UI** on https://localhost:5173 (Modern React interface with HTTPS)
 
 ### 3. Access the Web UI
-Open http://localhost:8501 in your browser
+- **React UI**: https://localhost:5173 (with HTTPS enabled for microphone access)
 
 ### 4. Get Started
 1. **Create a user** using the sidebar
@@ -53,6 +53,40 @@ Open http://localhost:8501 in your browser
   - Concatenated audio (max 10min per file)
   - Segmented files: `./exported_data/speaker-1/audio001.wav`
   - Metadata and annotations as JSON
+- **Enrollment Tracking**: Tracks audio sample counts and total duration per speaker
+- **Weighted Embeddings**: Smart speaker updates using weighted averaging
+
+## 🖥️ React Web UI
+
+The modern React interface provides an enhanced user experience with:
+
+### Pages
+- **Audio Viewer**: Interactive waveform visualization with click-to-play
+- **Annotation**: Label speaker segments with Deepgram transcript support
+- **Enrollment**: Record or upload audio with real-time quality assessment
+- **Speakers**: Manage enrolled speakers with sample counts and duration metrics
+- **Inference**: Identify speakers in new audio files with confidence scores
+
+### Key Features
+- **Recording Support**: Direct microphone recording with WebM to WAV conversion
+- **Enrollment Options**: 
+  - Create new speaker enrollment
+  - Append to existing speaker (weighted embedding averaging)
+  - Direct enrollment from annotation segments
+- **Real-time Metrics**: Track sample counts and total audio duration
+- **Quality Assessment**: SNR-based quality scoring with visual indicators
+- **Export Options**: Download processed audio and annotation data
+
+### Confidence Threshold Control
+
+The React UI includes an adjustable confidence threshold on the Inference page that controls speaker identification strictness:
+
+- **Range**: 0.00 to 1.00 (adjustable in 0.05 increments)
+- **Default**: 0.50 (balanced accuracy vs coverage)
+- **"Less Strict" (lower values)**: More segments identified as known speakers, but potentially more false positives
+- **"More Strict" (higher values)**: Fewer segments identified, but higher accuracy for identified speakers
+- **Typical ECAPA-TDNN values**: 0.10-0.30 for most use cases
+- **Additional filtering**: Results can be filtered by confidence after processing
 
 ## 📖 Deepgram Terminology in Speaker Recognition Context
 
@@ -105,9 +139,10 @@ SPEAKER_SERVICE_PORT="8085"             # Speaker service port (default: 8085)
 SPEAKER_SERVICE_URL="http://speaker-service:8085"  # URL for internal Docker communication
 SIMILARITY_THRESHOLD="0.15"             # Speaker similarity threshold (0.1-0.3 typical for ECAPA-TDNN)
 
-# Streamlit Web UI Configuration
-STREAMLIT_HOST="0.0.0.0"               # Web UI bind host  
-STREAMLIT_PORT="8502"                   # Web UI port (default: 8502)
+# React Web UI Configuration
+REACT_UI_HOST="0.0.0.0"                # Web UI bind host  
+REACT_UI_PORT="5173"                    # Web UI port (default: 5173)
+REACT_UI_HTTPS="true"                   # Enable HTTPS for microphone access (default: true)
 
 # Optional
 DEEPGRAM_API_KEY="your_key"             # For transcript import features
@@ -119,6 +154,27 @@ Copy `.env.template` to `.env` and configure your settings:
 cp .env.template .env
 # Edit .env with your configuration
 ```
+
+## 🔒 HTTPS and Microphone Access
+
+**For Internal VPN/Network Usage:**
+
+The React UI is configured with HTTPS enabled by default (`REACT_UI_HTTPS=true`) to support microphone recording features, which require secure contexts in modern browsers.
+
+### **First-time Setup:**
+1. **Access**: Navigate to https://localhost:5173
+2. **Certificate Warning**: Your browser will show a security warning for the self-signed certificate
+3. **Accept Certificate**: Click "Advanced" → "Proceed to localhost (unsafe)" or similar
+4. **One-time Setup**: This only needs to be done once per browser
+
+### **Why HTTPS is Required:**
+- **Browser Security**: Modern browsers require HTTPS for microphone access via `getUserMedia()` API
+- **Internal Networks**: Self-signed certificates are acceptable for VPN/internal tools
+- **Recording Features**: Both Enrollment and Inference pages need microphone access for live recording
+
+### **Alternative Access:**
+- **HTTP Fallback**: Set `REACT_UI_HTTPS=false` in `.env` and use http://localhost:5173
+- **Limitation**: Microphone recording will not work without HTTPS (file upload still works)
 
 ## 🚨 Troubleshooting
 
@@ -142,8 +198,8 @@ For local development without Docker:
 uv sync
 uv run python speaker_service.py
 
-# Terminal 2 - Web UI  
-uv run streamlit run web_ui.py
+# Terminal 2 - React Web UI  
+cd webui && npm run dev
 ```
 
 ## API Endpoints
@@ -197,7 +253,38 @@ Content-Type: multipart/form-data
   "updated": false,
   "speaker_id": "john_doe",
   "num_segments": 3,
-  "num_files": 3
+  "num_files": 3,
+  "total_duration": 45.2
+}
+```
+
+### Speaker Enrollment - Append
+```bash
+POST /enroll/append
+Content-Type: multipart/form-data
+```
+**Form Fields:**
+- `files`: Multiple audio files to append to existing speaker
+- `speaker_id`: Existing speaker identifier (must exist)
+
+**Description:**
+Appends new audio samples to an existing speaker enrollment using weighted embedding averaging. The system:
+- Retrieves the existing speaker's embedding and sample count
+- Processes new audio files to generate embeddings
+- Computes weighted average: `(old_embedding * old_count + new_embeddings * new_count) / (old_count + new_count)`
+- Updates the speaker with the combined embedding and new counts
+
+**Response:**
+```json
+{
+  "updated": true,
+  "speaker_id": "john_doe",
+  "previous_samples": 3,
+  "new_samples": 2,
+  "total_samples": 5,
+  "previous_duration": 45.2,
+  "new_duration": 28.7,
+  "total_duration": 73.9
 }
 ```
 
@@ -249,7 +336,12 @@ GET /speakers
   "speakers": [
     {
       "id": "john_doe",
-      "name": "John Doe"
+      "name": "John Doe",
+      "user_id": 1,
+      "created_at": "2024-01-15T10:30:00",
+      "updated_at": "2024-01-15T14:20:00",
+      "audio_sample_count": 5,
+      "total_audio_duration": 73.9
     }
   ]
 }
