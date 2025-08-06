@@ -1,6 +1,7 @@
 """
 Utility functions for the Streamlit UI
 """
+
 import logging
 import time
 
@@ -20,9 +21,11 @@ def get_auth_headers():
 def get_data(endpoint: str, require_auth: bool = False, backend_url: str | None = None):
     """Helper function to get data from the backend API with retry logic."""
     from .auth import logout  # Import here to avoid circular imports
-    
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     logger.debug(f"📡 GET request to endpoint: {endpoint}")
     start_time = time.time()
 
@@ -86,9 +89,11 @@ def post_data(
 ):
     """Helper function to post data to the backend API."""
     from .auth import logout  # Import here to avoid circular imports
-    
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     logger.debug(f"📤 POST request to endpoint: {endpoint} with params: {params}")
     start_time = time.time()
 
@@ -138,8 +143,10 @@ def post_data(
         # Check for HTTP errors before raising
         if not response.ok:
             duration = time.time() - start_time
-            logger.error(f"❌ POST {endpoint} failed with status {response.status_code} in {duration:.3f}s")
-            
+            logger.error(
+                f"❌ POST {endpoint} failed with status {response.status_code} in {duration:.3f}s"
+            )
+
             # Try to extract detailed error message from JSON response
             try:
                 error_data = response.json()
@@ -151,7 +158,7 @@ def post_data(
                 logger.error(f"❌ Could not parse error response from backend")
                 st.error(f"❌ HTTP {response.status_code} error from backend")
             return None
-            
+
         duration = time.time() - start_time
         logger.info(f"✅ POST {endpoint} successful in {duration:.3f}s")
         return response.json()
@@ -162,12 +169,16 @@ def post_data(
         return None
 
 
-def delete_data(endpoint: str, params: dict | None = None, require_auth: bool = False, backend_url: str = None):
+def delete_data(
+    endpoint: str, params: dict | None = None, require_auth: bool = False, backend_url: str = None
+):
     """Helper function to delete data from the backend API."""
     from .auth import logout  # Import here to avoid circular imports
-    
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     logger.debug(f"🗑️ DELETE request to endpoint: {endpoint} with params: {params}")
     start_time = time.time()
 

@@ -1,6 +1,7 @@
 """
 Authentication functions for the Streamlit UI
 """
+
 import json
 import logging
 import base64
@@ -31,57 +32,67 @@ def get_user_profile(backend_url: str = None):
     # Get the current user's email from session state
     current_user_info = st.session_state.get("user_info", {})
     current_email = current_user_info.get("email")
-    
+
     logger.info(f"🔍 get_user_profile: Starting profile fetch for email: {current_email}")
     logger.debug(f"🔍 get_user_profile: Current user_info in session: {current_user_info}")
-    
+
     if not current_email:
         logger.warning("🔍 get_user_profile: No email found in session state")
         return None
-    
+
     # Fetch all users (admin endpoint, but if we can access it, we're likely admin)
     logger.info(f"🔍 get_user_profile: Calling /api/users endpoint...")
     users_data = get_data("/api/users", require_auth=True, backend_url=backend_url)
-    
-    logger.info(f"🔍 get_user_profile: /api/users returned type: {type(users_data)}, length: {len(users_data) if users_data else 0}")
-    
+
+    logger.info(
+        f"🔍 get_user_profile: /api/users returned type: {type(users_data)}, length: {len(users_data) if users_data else 0}"
+    )
+
     if users_data and isinstance(users_data, list):
         logger.info(f"🔍 get_user_profile: Searching through {len(users_data)} users...")
-        
+
         # Log first few users to see the data structure
         for i, user in enumerate(users_data[:3]):  # Log first 3 users
-            logger.debug(f"🔍 get_user_profile: User {i}: email={user.get('email')}, is_superuser={user.get('is_superuser', 'NOT_FOUND')}, keys={list(user.keys())}")
-        
+            logger.debug(
+                f"🔍 get_user_profile: User {i}: email={user.get('email')}, is_superuser={user.get('is_superuser', 'NOT_FOUND')}, keys={list(user.keys())}"
+            )
+
         # Find the current user in the list
         for user in users_data:
             user_email = user.get("email")
-            
+
             if user_email == current_email:
                 logger.info(f"✅ get_user_profile: Found user {current_email}!")
                 logger.info(f"✅ get_user_profile: User data keys: {list(user.keys())}")
-                logger.info(f"✅ get_user_profile: is_superuser value: {user.get('is_superuser', 'NOT_FOUND')}")
-                
+                logger.info(
+                    f"✅ get_user_profile: is_superuser value: {user.get('is_superuser', 'NOT_FOUND')}"
+                )
+
                 profile = {
                     "user_id": str(user.get("id", user.get("_id", "Unknown"))),
                     "email": user.get("email", "Unknown"),
                     "name": user.get("name", user.get("email", "Unknown")),
-                    "is_superuser": user.get("is_superuser", False)
+                    "is_superuser": user.get("is_superuser", False),
                 }
                 logger.info(f"✅ get_user_profile: Returning profile: {profile}")
                 return profile
-        
+
         logger.warning(f"❌ get_user_profile: User {current_email} not found in users list")
     else:
-        logger.warning(f"❌ get_user_profile: Failed to get users data or wrong format. Response: {users_data}")
-    
+        logger.warning(
+            f"❌ get_user_profile: Failed to get users data or wrong format. Response: {users_data}"
+        )
+
     logger.warning("❌ get_user_profile: Returning None (profile fetch failed)")
     return None
 
 
 def get_auth_config(backend_url: str = None):
     """Get authentication configuration from backend."""
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     try:
         response = requests.get(f"{backend_api_url}/api/auth/config", timeout=5)
         if response.status_code == 200:
@@ -96,8 +107,10 @@ def get_auth_config(backend_url: str = None):
 
 def check_auth_from_url(backend_url: str = None):
     """Check for authentication token in URL parameters."""
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     try:
         # Check URL parameters for token
         query_params = st.query_params
@@ -160,8 +173,10 @@ def check_auth_from_url(backend_url: str = None):
 
 def login_with_credentials(email, password, backend_url: str = None):
     """Login with email and password."""
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     try:
         logger.info(f"🔐 Attempting login for email: {email}")
         response = requests.post(
@@ -179,19 +194,23 @@ def login_with_credentials(email, password, backend_url: str = None):
                 st.session_state.authenticated = True
                 st.session_state.auth_token = token
                 st.session_state.auth_method = "credentials"
-                
+
                 # Set basic user info first so get_user_profile can find the email
                 st.session_state.user_info = {"user_id": email, "email": email, "name": email}
-                
+
                 # Now fetch complete user profile
                 user_profile = get_user_profile(backend_url)
                 if user_profile:
                     st.session_state.user_info = user_profile
-                    logger.info(f"✅ Credential login successful with profile: is_superuser={user_profile.get('is_superuser', False)}")
+                    logger.info(
+                        f"✅ Credential login successful with profile: is_superuser={user_profile.get('is_superuser', False)}"
+                    )
                 else:
                     # Keep the basic info we already set
-                    logger.info("✅ Credential login successful (profile fetch failed, using basic info)")
-                
+                    logger.info(
+                        "✅ Credential login successful (profile fetch failed, using basic info)"
+                    )
+
                 return True, "Login successful!"
             else:
                 logger.error("❌ No access token in response")
@@ -228,8 +247,10 @@ def logout():
 
 def generate_jwt_token(email, password, backend_url: str = None):
     """Generate JWT token for given credentials."""
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     try:
         logger.info(f"🔑 Generating JWT token for: {email}")
         response = requests.post(
@@ -273,8 +294,10 @@ def generate_jwt_token(email, password, backend_url: str = None):
 
 def show_auth_sidebar(backend_url: str = None):
     """Show authentication status and controls in sidebar."""
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     with st.sidebar:
         st.header("🔐 Authentication")
 

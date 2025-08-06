@@ -1,6 +1,7 @@
 """
 Memories tab component for the Streamlit UI
 """
+
 import logging
 
 import pandas as pd
@@ -9,6 +10,7 @@ import streamlit as st
 from ..utils import get_data
 
 logger = logging.getLogger("streamlit-ui")
+
 
 def show_memories_tab():
     """Display the memories tab with full functionality"""
@@ -51,9 +53,15 @@ def show_memories_tab():
             )
 
         # Handle the API response format with "results" wrapper for memories
-        if (memories_response and isinstance(memories_response, dict) and "results" in memories_response):
+        if (
+            memories_response
+            and isinstance(memories_response, dict)
+            and "results" in memories_response
+        ):
             memories = memories_response["results"]
-            logger.debug(f"🧠 Memories response has 'results' wrapper, extracted {len(memories)} memories")
+            logger.debug(
+                f"🧠 Memories response has 'results' wrapper, extracted {len(memories)} memories"
+            )
         else:
             memories = memories_response
             logger.debug(f"🧠 Memories response format: {type(memories_response)}")
@@ -64,13 +72,13 @@ def show_memories_tab():
         # Display Memories Section
         if memories is not None:
             _display_memories_section(memories, user_id_input.strip())
-        
+
     else:
         # Show instruction to enter a username
         logger.debug("👆 No user ID provided, showing instructions")
         st.info("👆 Please enter a username above to view their memories.")
         st.markdown("💡 **Tip:** You can find existing usernames in the 'User Management' tab.")
-        
+
         # Show admin debug section for admin users
         _show_admin_debug_section()
 
@@ -79,7 +87,7 @@ def _show_admin_debug_section():
     """Show admin debug section for admin users"""
     if not st.session_state.get("authenticated", False):
         return
-        
+
     user_info = st.session_state.get("user_info", {})
 
     # Check if user is admin
@@ -179,7 +187,8 @@ def _display_admin_memories():
 
             if search_term:
                 filtered_memories = [
-                    m for m in memories
+                    m
+                    for m in memories
                     if search_term.lower() in m.get("memory", "").lower()
                     or search_term.lower() in m.get("owner_email", "").lower()
                     or search_term.lower() in m.get("user_id", "").lower()
@@ -197,7 +206,9 @@ def _display_admin_memories():
                     with col1:
                         st.write(f"**Memory {i+1}**")
                     with col2:
-                        st.caption(f"👤 {memory.get('owner_email', memory.get('user_id', 'Unknown'))}")
+                        st.caption(
+                            f"👤 {memory.get('owner_email', memory.get('user_id', 'Unknown'))}"
+                        )
                     with col3:
                         st.caption(f"📅 {memory.get('created_at', 'Unknown')}")
 
@@ -213,7 +224,9 @@ def _display_admin_memories():
                             st.write(f"**Owner Email:** {memory.get('owner_email', 'Unknown')}")
                             st.write(f"**Client ID:** {memory.get('client_id', 'Unknown')}")
                         with col2:
-                            st.write(f"**Memory ID:** {memory.get('id', memory.get('memory_id', 'Unknown'))}")
+                            st.write(
+                                f"**Memory ID:** {memory.get('id', memory.get('memory_id', 'Unknown'))}"
+                            )
                             metadata = memory.get("metadata", {})
                             if metadata:
                                 st.write(f"**Source:** {metadata.get('source', 'Unknown')}")
@@ -308,29 +321,38 @@ def _display_transcript_analysis_view(user_id):
             # Create enhanced dataframe for transcript analysis
             analysis_data = []
             for memory in enriched_memories:
-                analysis_data.append({
-                    "Audio UUID": (
-                        memory.get("audio_uuid", "N/A")[:12] + "..."
-                        if memory.get("audio_uuid") else "N/A"
-                    ),
-                    "Memory Text": (
-                        memory.get("memory_text", "")[:100] + "..."
-                        if len(memory.get("memory_text", "")) > 100
-                        else memory.get("memory_text", "")
-                    ),
-                    "Transcript": (
-                        memory.get("transcript", "")[:100] + "..."
-                        if memory.get("transcript") and len(memory.get("transcript", "")) > 100
-                        else (memory.get("transcript", "N/A")[:100] if memory.get("transcript") else "N/A")
-                    ),
-                    "Transcript Chars": memory.get("transcript_length", 0),
-                    "Memory Chars": memory.get("memory_length", 0),
-                    "Compression %": f"{memory.get('compression_ratio', 0)}%",
-                    "Client ID": memory.get("client_id", "N/A"),
-                    "Created": (
-                        memory.get("created_at", "N/A")[:19] if memory.get("created_at") else "N/A"
-                    ),
-                })
+                analysis_data.append(
+                    {
+                        "Audio UUID": (
+                            memory.get("audio_uuid", "N/A")[:12] + "..."
+                            if memory.get("audio_uuid")
+                            else "N/A"
+                        ),
+                        "Memory Text": (
+                            memory.get("memory_text", "")[:100] + "..."
+                            if len(memory.get("memory_text", "")) > 100
+                            else memory.get("memory_text", "")
+                        ),
+                        "Transcript": (
+                            memory.get("transcript", "")[:100] + "..."
+                            if memory.get("transcript") and len(memory.get("transcript", "")) > 100
+                            else (
+                                memory.get("transcript", "N/A")[:100]
+                                if memory.get("transcript")
+                                else "N/A"
+                            )
+                        ),
+                        "Transcript Chars": memory.get("transcript_length", 0),
+                        "Memory Chars": memory.get("memory_length", 0),
+                        "Compression %": f"{memory.get('compression_ratio', 0)}%",
+                        "Client ID": memory.get("client_id", "N/A"),
+                        "Created": (
+                            memory.get("created_at", "N/A")[:19]
+                            if memory.get("created_at")
+                            else "N/A"
+                        ),
+                    }
+                )
 
             # Display the enhanced table
             if analysis_data:
@@ -347,9 +369,7 @@ def _display_transcript_analysis_view(user_id):
                     compression_ratio = memory.get("compression_ratio", 0)
 
                     # Create meaningful title
-                    title_text = (
-                        memory_text[:50] + "..." if len(memory_text) > 50 else memory_text
-                    )
+                    title_text = memory_text[:50] + "..." if len(memory_text) > 50 else memory_text
                     if not title_text.strip():
                         title_text = f"Memory {i+1}"
 

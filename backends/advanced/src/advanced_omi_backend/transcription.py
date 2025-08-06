@@ -54,7 +54,7 @@ class TranscriptionManager:
         # Collection state tracking
         self._collecting = False
         self._collection_task = None
-        
+
         # Optional speaker recognition
         self.speaker_client = SpeakerRecognitionClient()
         if self.speaker_client.enabled:
@@ -65,7 +65,6 @@ class TranscriptionManager:
         if not self._client_id:
             return None
         return self.client_manager.get_client(self._client_id)
-
 
     # REMOVED: Memory processing is now handled exclusively by conversation closure
     # to prevent duplicate processing. The _queue_memory_processing method has been
@@ -97,292 +96,352 @@ class TranscriptionManager:
             self.client = None
             raise
 
-    async def flush_final_transcript(self, audio_duration_seconds: Optional[float] = None):
-        """Process collected audio and generate final transcript."""
-        logger.info(
-            f"🚀 flush_final_transcript called for client {self._client_id} - online: {self.use_online_transcription}"
-        )
+    async def process_collected_audio(self, audio_duration_seconds: Optional[float] = None):
+        """Unified processing for all transcription providers."""
+        logger.info(f"🚀 process_collected_audio called for client {self._client_id}")
         logger.info(
             f"📊 Current state - buffer size: {len(self._audio_buffer) if self._audio_buffer else 0}, collecting: {self._collecting}"
         )
 
+        # Cancel collection timeout task first to prevent interference (online only)
+        if (
+            self.use_online_transcription
+            and self._collection_task
+            and not self._collection_task.done()
+        ):
+            logger.info(f"🛑 Cancelling collection timeout task before processing")
+            self._collection_task.cancel()
+            try:
+                await self._collection_task
+            except asyncio.CancelledError:
+                logger.info(f"✅ Collection task cancelled successfully")
+            except Exception as e:
+                logger.error(f"❌ Error cancelling collection task: {e}")
+
+        # Get transcript from appropriate provider
+        transcript_result = await self._get_transcript(audio_duration_seconds)
+
+        # Process the result uniformly
+        await self._process_transcript_result(transcript_result)
+
+    async def _get_transcript(self, audio_duration_seconds: Optional[float] = None):
+        """Get transcript from online or offline provider."""
         if self.use_online_transcription:
-            # Cancel collection timeout task first to prevent interference
-            if self._collection_task and not self._collection_task.done():
-                logger.info(f"🛑 Cancelling collection timeout task before flush")
-                self._collection_task.cancel()
-                try:
-                    await self._collection_task
-                except asyncio.CancelledError:
-                    logger.info(f"✅ Collection task cancelled successfully")
-                except Exception as e:
-                    logger.error(f"❌ Error cancelling collection task: {e}")
-
-            logger.info(f"🌐 Using online transcription - calling _process_collected_audio")
-            await self._process_collected_audio()
+            return await self._get_online_transcript()
         else:
-            logger.info(f"🖥️ Using offline ASR - calling _flush_offline_asr")
-            await self._flush_offline_asr(audio_duration_seconds)
+            return await self._get_offline_transcript(audio_duration_seconds)
 
-    async def _process_collected_audio(self):
-        """Process all collected audio chunks using Deepgram file upload API."""
-        start_time = time.time()
-        logger.info(f"🔄 _process_collected_audio called for client {self._client_id}")
-        logger.info(
-            f"📦 Audio buffer state: {len(self._audio_buffer)} chunks, collecting: {self._collecting}, audio_uuid: {self._current_audio_uuid}"
-        )
-
+    async def _get_online_transcript(self):
+        """Get transcript from online provider (Deepgram, etc.)."""
         if not self._audio_buffer:
             logger.info(f"⚠️ No audio data collected for client {self._client_id}")
-            return
+            return None
 
         try:
-            logger.info(
-                f"📊 Processing {len(self._audio_buffer)} audio chunks for client {self._client_id}"
-            )
-
             # Combine all audio chunks into a single buffer
             combined_audio = b"".join(chunk.audio for chunk in self._audio_buffer if chunk.audio)
-
             if not combined_audio:
                 logger.warning(f"No valid audio data found for client {self._client_id}")
-                return
+                return None
 
-            # Send to online provider for transcription
-            if self.online_provider is None:
-                logger.error("❌ Online provider is None, this shouldn't happen")
-                return
-
-            # Track Deepgram API call timing  
-            api_start_time = time.time()
-            
-            # Get sample rate from client state (set by audio processor)
+            # Get sample rate from client state
             current_client = self._get_current_client()
             sample_rate = None
             if current_client and current_client.sample_rate:
                 sample_rate = current_client.sample_rate
-                logger.info(f"📊 Using sample rate {sample_rate}Hz from client state for transcription")
             elif self._audio_buffer:
-                # Fallback: use rate from first audio chunk
                 sample_rate = self._audio_buffer[0].rate
-                logger.warning(f"⚠️ Using fallback sample rate {sample_rate}Hz from audio chunk (no client state)")
             else:
                 logger.error("❌ No sample rate available - cannot transcribe")
-                return
-            
-            logger.info(
-                f"🌐 Calling {self.online_provider.name} API for transcription of {len(combined_audio)} bytes at {sample_rate}Hz"
-            )
+                return None
+
+            # Call transcription provider
             transcript_result = await self.online_provider.transcribe(combined_audio, sample_rate)
-            api_duration = time.time() - api_start_time
-            logger.info(
-                f"📝 Received transcription result from {self.online_provider.name} in {api_duration:.2f}s: {bool(transcript_result)}"
-            )
-
-            if transcript_result and transcript_result.get("text") and self._current_audio_uuid:
-                transcript_text = transcript_result["text"]
-                logger.info(
-                    f"📝 {self.online_provider.name} batch transcript for {self._current_audio_uuid} ({len(transcript_text)} chars): {transcript_text[:200]}..."
-                )
-
-                # Check if speaker recognition service is available and configured
-                speaker_segments = []
-                if self.speaker_client.enabled and self._current_audio_uuid and self.chunk_repo:
-                    try:
-                        # Get audio file path from database
-                        chunk_data = await self.chunk_repo.get_chunk(self._current_audio_uuid)
-                        if chunk_data and 'audio_path' in chunk_data:
-                            audio_path = chunk_data['audio_path']
-                            # Construct full path (assuming chunk_dir is /app/audio_chunks in docker)
-                            full_audio_path = f"/app/audio_chunks/{audio_path}"
-                            
-                            logger.info(f"Using speaker recognition service for segmentation: {full_audio_path}")
-                            # Speaker service will handle all segmentation and identification
-                            speaker_result = await self.speaker_client.diarize_and_identify(
-                                full_audio_path, transcript_result.get('words', [])
-                            )
-                            
-                            if speaker_result and speaker_result.get('segments'):
-                                speaker_segments = speaker_result['segments']
-                                logger.info(f"Speaker service returned {len(speaker_segments)} segments")
-                            else:
-                                logger.warning("Speaker service returned no segments, using fallback")
-                        else:
-                            logger.warning("No audio path found in database for speaker recognition")
-                    except Exception as e:
-                        logger.warning(f"Speaker recognition service failed: {e}, using fallback")
-                        # Continue with fallback if speaker service fails
-
-                # Store segments from speaker service or fallback to single segment
-                if self.chunk_repo and speaker_segments:
-                    speakers_found = set()
-                    for segment in speaker_segments:
-                        await self.chunk_repo.add_transcript_segment(
-                            self._current_audio_uuid, segment
-                        )
-                        speakers_found.add(segment["speaker"])
-
-                    # Add all identified speakers
-                    for speaker in speakers_found:
-                        await self.chunk_repo.add_speaker(self._current_audio_uuid, speaker)
-
-                    logger.info(
-                        f"Added {len(speaker_segments)} segments for {len(speakers_found)} speakers"
-                    )
-                elif self.chunk_repo:
-                    # Fallback: store as single segment with placeholder speaker when speaker service unavailable
-                    transcript_segment = {
-                        "speaker": "placeholder_speaker",
-                        "text": transcript_text,
-                        "start": 0.0,
-                        "end": 0.0,
-                    }
-                    await self.chunk_repo.add_transcript_segment(
-                        self._current_audio_uuid, transcript_segment
-                    )
-                    await self.chunk_repo.add_speaker(
-                        self._current_audio_uuid, "placeholder_speaker"
-                    )
-                    logger.info("Stored transcript with placeholder speaker (speaker service not available)")
-
-                # Update client state
-                current_client = self._get_current_client()
-                if current_client:
-                    current_client.update_transcript_received()
-
-                logger.info(
-                    f"Added {self.online_provider.name} batch transcript for {self._current_audio_uuid} to DB"
-                )
-
-                # Signal transcript coordinator that transcription is complete
-                coordinator = get_transcript_coordinator()
-                coordinator.signal_transcript_ready(self._current_audio_uuid)
-
-                # Update database transcription status
-                if self.chunk_repo and self._current_audio_uuid:
-                    status = "EMPTY" if not transcript_text.strip() else "COMPLETED"
-                    await self.chunk_repo.update_transcription_status(
-                        self._current_audio_uuid, status, provider=self.online_provider.name
-                    )
-                    logger.info(
-                        f"📝 Updated transcription status to {status} for {self._current_audio_uuid}"
-                    )
-
-                # Mark transcription as completed for this client
-                if self.processor_manager and self._client_id:
-                    segment_count = len(speaker_segments) if speaker_segments else 1
-                    logger.info(
-                        f"✅ Marking transcription as COMPLETED for client {self._client_id} (segments: {segment_count})"
-                    )
-                    self.processor_manager.track_processing_stage(
-                        self._client_id,
-                        "transcription",
-                        "completed",
-                        {
-                            "audio_uuid": self._current_audio_uuid,
-                            "segments": segment_count,
-                            "provider": self.online_provider.name,
-                        },
-                    )
-                    logger.info(
-                        f"🎉 Successfully marked transcription as completed for client {self._client_id}"
-                    )
-
-                    # Memory processing removed - handled by conversation closure instead
+            return transcript_result
 
         except Exception as e:
-            logger.error(f"Error processing collected audio: {e}")
-
-            # Update database transcription status to failed
-            if self.chunk_repo and self._current_audio_uuid:
-                await self.chunk_repo.update_transcription_status(
-                    self._current_audio_uuid, "FAILED", error_message=str(e)
-                )
-                logger.error(
-                    f"📝 Updated transcription status to FAILED for {self._current_audio_uuid}"
-                )
+            logger.error(f"Error getting online transcript: {e}")
+            return None
         finally:
             # Clear the buffer
             self._audio_buffer.clear()
             self._audio_start_time = None
             self._collecting = False
 
+    async def _get_offline_transcript(self, audio_duration_seconds: Optional[float] = None):
+        """Get transcript from offline ASR."""
+        if not self.client or not self._current_audio_uuid:
+            return None
+
+        try:
+            # Send AudioStop to signal end of audio stream
+            audio_stop = AudioStop(timestamp=int(time.time()))
+            await self.client.write_event(audio_stop.event())
+
+            # Calculate timeout
+            if audio_duration_seconds:
+                proportional_timeout = audio_duration_seconds / 6.0
+                max_wait = max(3.0, min(60.0, proportional_timeout))
+            else:
+                max_wait = 5.0
+
+            start_time = time.time()
+            collected_text = []
+
+            # Wait for events from the background queue
+            while (time.time() - start_time) < max_wait:
+                try:
+                    event = await asyncio.wait_for(self._event_queue.get(), timeout=0.5)
+                    if Transcript.is_type(event.type):
+                        transcript_obj = Transcript.from_event(event)
+                        transcript_text = transcript_obj.text.strip()
+                        if transcript_text:
+                            collected_text.append(transcript_text)
+                except asyncio.TimeoutError:
+                    break
+
+            # Return text if we got any
+            if collected_text:
+                return {"text": " ".join(collected_text), "words": [], "segments": []}
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting offline transcript: {e}")
+            return None
+
+    async def _process_transcript_result(self, transcript_result):
+        """Process transcript result uniformly for all providers."""
+        if not transcript_result or not self._current_audio_uuid:
+            logger.info(f"⚠️ No transcript result to process for {self._current_audio_uuid}")
+            # Even with no transcript, signal completion to unblock memory processing
+            if self._current_audio_uuid:
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_ready(self._current_audio_uuid)
+                logger.info(f"⚠️ Signaled transcript completion (no data) for {self._current_audio_uuid}")
+            return
+
+        start_time = time.time()
+
+        try:
+            # Store raw transcript data
+            provider_name = (
+                self.online_provider.name if self.use_online_transcription else "offline_asr"
+            )
+            if self.chunk_repo:
+                await self.chunk_repo.store_raw_transcript_data(
+                    self._current_audio_uuid, transcript_result, provider_name
+                )
+
+            # Normalize transcript result
+            normalized_result = self._normalize_transcript_result(transcript_result)
+            if not normalized_result.get("text"):
+                logger.warning(
+                    f"No text in normalized transcript result for {self._current_audio_uuid}"
+                )
+                # Signal completion even with empty text to unblock memory processing
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_ready(self._current_audio_uuid)
+                logger.warning(f"⚠️ Signaled transcript completion (empty text) for {self._current_audio_uuid}")
+                return
+
+            # Get speaker diarization with word matching (if available)
+            final_segments = []
+            if self.speaker_client.enabled and self._current_audio_uuid and self.chunk_repo:
+                try:
+                    # Get audio file path from database
+                    chunk_data = await self.chunk_repo.get_chunk(self._current_audio_uuid)
+                    if chunk_data and "audio_path" in chunk_data:
+                        audio_path = chunk_data["audio_path"]
+                        full_audio_path = f"/app/audio_chunks/{audio_path}"
+
+                        logger.info(f"🎤 Getting speaker diarization with word matching for: {full_audio_path}")
+
+                        # Prepare transcript data for speaker service
+                        transcript_data = {
+                            "words": normalized_result.get("words", []),
+                            "text": normalized_result.get("text", "")
+                        }
+
+                        # Get user_id from client state
+                        current_client = self._get_current_client()
+                        user_id = current_client.user_id if current_client else None
+                        
+                        # Call new speaker service endpoint
+                        speaker_result = await self.speaker_client.diarize_identify_match(
+                            full_audio_path, transcript_data, user_id=user_id
+                        )
+
+                        if speaker_result and speaker_result.get("segments"):
+                            final_segments = speaker_result["segments"]
+                            logger.info(
+                                f"🎤 Speaker service returned {len(final_segments)} segments with matched text"
+                            )
+                        else:
+                            logger.info("🎤 Speaker service returned no segments")
+                    else:
+                        logger.warning("No audio path found for speaker diarization")
+
+                except Exception as e:
+                    logger.warning(f"Speaker diarization with matching failed: {e}")
+
+            # Only store segments if we got them from speaker service
+            if not final_segments:
+                logger.info(
+                    f"📝 No diarization available - storing raw transcript without segments for {self._current_audio_uuid}"
+                )
+
+            # Store final segments with required fields
+            if self.chunk_repo and final_segments:
+                for segment in final_segments:
+                    # Add required fields for database storage
+                    segment_to_store = {
+                        "text": segment.get("text", ""),
+                        "start": segment.get("start", 0.0),
+                        "end": segment.get("end", 0.0),
+                        "speaker": segment.get("identified_as") or segment.get("speaker", ""),
+                        "speaker_id": segment.get("speaker_id", ""),
+                        "confidence": segment.get("confidence", 0.0),
+                        "chunk_sequence": 0,
+                        "absolute_timestamp": time.time() + segment.get("start", 0.0),
+                    }
+                    await self.chunk_repo.add_transcript_segment(self._current_audio_uuid, segment_to_store)
+
+                # Add speakers if we have them
+                speakers_found = set()
+                for segment in final_segments:
+                    if segment.get("speaker"):
+                        speakers_found.add(segment["speaker"])
+
+                for speaker in speakers_found:
+                    await self.chunk_repo.add_speaker(self._current_audio_uuid, speaker)
+
+            # Update client state
+            current_client = self._get_current_client()
+            if current_client:
+                current_client.update_transcript_received()
+
+            # Signal transcript coordinator
+            coordinator = get_transcript_coordinator()
+            coordinator.signal_transcript_ready(self._current_audio_uuid)
+
+            # Queue audio cropping if we have diarization segments and cropping is enabled
+            if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "false").lower() == "true":
+                await self._queue_diarization_based_cropping(final_segments)
+
+            # Update database transcription status
+            if self.chunk_repo:
+                status = "EMPTY" if not normalized_result.get("text").strip() else "COMPLETED"
+                await self.chunk_repo.update_transcription_status(
+                    self._current_audio_uuid, status, provider=provider_name
+                )
+
+            # Mark transcription as completed
+            if self.processor_manager and self._client_id:
+                self.processor_manager.track_processing_stage(
+                    self._client_id,
+                    "transcription",
+                    "completed",
+                    {
+                        "audio_uuid": self._current_audio_uuid,
+                        "segments": len(final_segments),
+                        "provider": provider_name,
+                    },
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing transcript result: {e}")
+            # Update database transcription status to failed
+            if self.chunk_repo and self._current_audio_uuid:
+                await self.chunk_repo.update_transcription_status(
+                    self._current_audio_uuid, "FAILED", error_message=str(e)
+                )
+        finally:
             # Log total processing time
             total_duration = time.time() - start_time
             logger.info(
-                f"⏱️ Total transcription processing time: {total_duration:.2f}s for client {self._client_id}"
+                f"⏱️ Total transcript processing time: {total_duration:.2f}s for client {self._client_id}"
             )
 
-    async def _flush_offline_asr(self, audio_duration_seconds: Optional[float] = None):
-        """Flush final transcript from offline ASR by sending AudioStop."""
-        if self.client and self._current_audio_uuid:
-            try:
-                logger.info(
-                    f"🏁 Flushing final transcript from offline ASR for audio {self._current_audio_uuid}"
+    def _normalize_transcript_result(self, transcript_result):
+        """Normalize transcript result to consistent format."""
+        if isinstance(transcript_result, str):
+            # Handle string response (legacy offline ASR)
+            return {"text": transcript_result, "words": [], "segments": []}
+        elif isinstance(transcript_result, dict):
+            # Handle dict response (modern providers)
+            return {
+                "text": transcript_result.get("text", ""),
+                "words": transcript_result.get("words", []),
+                "segments": transcript_result.get("segments", []),
+            }
+        else:
+            # Invalid format
+            return {"text": "", "words": [], "segments": []}
+
+    # REMOVED: All segment creation methods have been removed.
+    # Segments are now only created by the speaker service endpoint /v1/diarize-identify-match
+    # which handles diarization, speaker identification, and word-to-speaker matching.
+    # This keeps all the segment creation logic in one place (speaker service).
+
+    async def _queue_diarization_based_cropping(self, segments):
+        """Queue audio cropping based on diarization segments."""
+        try:
+            # Import here to avoid circular imports
+            from advanced_omi_backend.processors import AudioCroppingItem, get_processor_manager
+            
+            # Get current client for user info
+            current_client = self._get_current_client()
+            if not current_client:
+                logger.warning(f"No client state available for cropping {self._current_audio_uuid}")
+                return
+                
+            # Get audio file path from database
+            if not self.chunk_repo:
+                logger.warning(f"No chunk repository available for cropping {self._current_audio_uuid}")
+                return
+                
+            chunk_data = await self.chunk_repo.get_chunk(self._current_audio_uuid)
+            if not chunk_data or "audio_path" not in chunk_data:
+                logger.warning(f"No audio path found for cropping {self._current_audio_uuid}")
+                return
+                
+            # Build file paths
+            audio_filename = chunk_data["audio_path"]
+            original_path = f"/app/audio_chunks/{audio_filename}"
+            cropped_path = original_path.replace(".wav", "_cropped.wav")
+            
+            # Convert segments to cropping format (start, end tuples)
+            cropping_segments = []
+            for seg in segments:
+                start = seg.get("start", 0.0)
+                end = seg.get("end", 0.0)
+                if end > start:  # Only include valid segments
+                    cropping_segments.append((start, end))
+                    
+            if not cropping_segments:
+                logger.debug(f"No valid cropping segments from diarization for {self._current_audio_uuid}")
+                return
+                
+            logger.info(
+                f"✂️ Queuing diarization-based cropping for {self._current_audio_uuid} "
+                f"with {len(cropping_segments)} segments"
+            )
+            
+            # Queue cropping with processor manager
+            processor_manager = get_processor_manager()
+            await processor_manager.queue_cropping(
+                AudioCroppingItem(
+                    client_id=self._client_id,
+                    user_id=current_client.user_id,
+                    audio_uuid=self._current_audio_uuid,
+                    original_path=original_path,
+                    speech_segments=cropping_segments,
+                    output_path=cropped_path,
                 )
-                # Send AudioStop to signal end of audio stream
-                audio_stop = AudioStop(timestamp=int(time.time()))
-                await self.client.write_event(audio_stop.event())
-
-                # Calculate proportional timeout: 5 seconds per 30 seconds of audio
-                # Ratio: 5/30 = 1/6 ≈ 0.167
-                if audio_duration_seconds:
-                    proportional_timeout = audio_duration_seconds / 6.0
-                    # Set reasonable bounds: minimum 3 seconds, maximum 60 seconds
-                    max_wait = max(3.0, min(60.0, proportional_timeout))
-                    logger.info(
-                        f"🏁 Calculated timeout: {max_wait:.1f}s for {audio_duration_seconds:.1f}s of audio"
-                    )
-                else:
-                    max_wait = 5.0  # Default fallback
-                    logger.info("🏁 Using default timeout: 5.0s (no audio duration provided)")
-
-                start_time = time.time()
-
-                # Wait for events from the background queue instead of direct reading
-                # This avoids conflicts with the background event reader task
-                while (time.time() - start_time) < max_wait:
-                    try:
-                        # Try to get event from queue with a short timeout
-                        event = await asyncio.wait_for(self._event_queue.get(), timeout=0.5)
-
-                        logger.info(f"🏁 Final flush - received event type: {event.type}")
-                        if Transcript.is_type(event.type):
-                            transcript_obj = Transcript.from_event(event)
-                            transcript_text = transcript_obj.text.strip()
-                            if transcript_text:
-                                logger.info(f"🏁 Final transcript: {transcript_text}")
-
-                                # Process final transcript the same way
-                                transcript_segment = {
-                                    "speaker": "placeholder_speaker",
-                                    "text": transcript_text,
-                                    "start": 0.0,
-                                    "end": 0.0,
-                                }
-
-                                if self.chunk_repo:
-                                    await self.chunk_repo.add_transcript_segment(
-                                        self._current_audio_uuid, transcript_segment
-                                    )
-
-                                # Update client state
-                                current_client = self._get_current_client()
-                                if current_client:
-                                    current_client.update_transcript_received()
-                                    logger.info(f"🏁 Updated transcript timestamp for conversation")
-
-                                # Signal transcript coordinator for final transcript
-                                coordinator = get_transcript_coordinator()
-                                coordinator.signal_transcript_ready(self._current_audio_uuid)
-
-                    except asyncio.TimeoutError:
-                        # No more events available
-                        break
-
-                logger.info(f"🏁 Finished flushing ASR for {self._current_audio_uuid}")
-            except Exception as e:
-                logger.error(f"Error flushing offline ASR transcript: {e}")
+            )
+            
+        except Exception as e:
+            logger.error(f"Error queuing diarization-based cropping for {self._current_audio_uuid}: {e}")
 
     async def disconnect(self):
         """Cleanly disconnect from ASR service."""
@@ -407,7 +466,7 @@ class TranscriptionManager:
                 logger.info(
                     f"📊 Processing remaining audio on disconnect - buffer size: {len(self._audio_buffer)}"
                 )
-                await self._process_collected_audio()
+                await self.process_collected_audio()
 
             logger.info(
                 f"{self.online_provider.name if self.online_provider else 'Online'} batch transcription disconnected for client {self._client_id}"
@@ -505,35 +564,12 @@ class TranscriptionManager:
                 # Note: Transaction tracking requires user_id which isn't available here
                 # Individual transcription success tracked in main processing pipeline
 
-                # Create transcript segment with placeholder speaker
-                transcript_segment = {
-                    "speaker": "placeholder_speaker",
-                    "text": transcript_text,
-                    "start": 0.0,
-                    "end": 0.0,
-                }
-
-                # Store transcript segment in DB immediately
-                if self.chunk_repo:
-                    await self.chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
-                    await self.chunk_repo.add_speaker(audio_uuid, "placeholder_speaker")
-                    logger.info(f"📝 Added transcript segment for {audio_uuid} to DB.")
-
-                    # Mark transcription as completed for this client (offline ASR processes one segment at a time)
-                    if self.processor_manager and client_id:
-                        self.processor_manager.track_processing_stage(
-                            client_id,
-                            "transcription",
-                            "completed",
-                            {
-                                "audio_uuid": audio_uuid,
-                                "segments": 1,  # Offline ASR processes one segment at a time
-                                "provider": "offline_asr",
-                            },
-                        )
-                        logger.info(
-                            f"Marked transcription as completed for client {client_id} (offline ASR)"
-                        )
+                # For offline ASR, we no longer process individual segments here
+                # They get collected and processed through the unified flow
+                logger.info(
+                    f"📝 Received offline transcript segment for {audio_uuid}: {transcript_text}"
+                )
+                # The text will be collected by _get_offline_transcript() method
 
                 # Update transcript time for conversation timeout tracking
                 current_client = self.client_manager.get_client(client_id)
@@ -582,7 +618,7 @@ class TranscriptionManager:
                 logger.info(
                     f"⏰ Collection timeout reached for client {self._client_id}, processing audio (buffer: {len(self._audio_buffer)} chunks)"
                 )
-                await self._process_collected_audio()
+                await self.process_collected_audio()
             else:
                 logger.info(
                     f"⏰ Collection timeout reached but no audio to process (collecting: {self._collecting}, buffer: {len(self._audio_buffer) if self._audio_buffer else 0})"
@@ -638,8 +674,10 @@ class TranscriptionManager:
                         )
                 else:
                     # Fallback: no client state available, just log chunk rate
-                    logger.info(f"📊 Processing chunk with sample rate {chunk.rate}Hz for client {client_id} (no client state)")        
-                
+                    logger.info(
+                        f"📊 Processing chunk with sample rate {chunk.rate}Hz for client {client_id} (no client state)"
+                    )
+
                 self._audio_buffer.append(chunk)
                 logger.debug(
                     f"📦 Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"

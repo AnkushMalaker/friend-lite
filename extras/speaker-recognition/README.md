@@ -123,6 +123,16 @@ The modern React interface provides an enhanced user experience with:
 - **Quality Assessment**: SNR-based quality scoring with visual indicators
 - **Export Options**: Download processed audio and annotation data
 
+### Live Inference Improvements
+
+The live inference feature has been significantly enhanced with the following improvements:
+
+- **Dynamic Sample Rate Detection**: No longer assumes 16kHz, automatically detects browser audio context sample rate
+- **Extended Audio Buffer Retention**: Increased from 30 seconds to 120 seconds for better utterance capture
+- **Fixed Timing Synchronization**: Resolved timestamp display issues and audio/speaker alignment
+- **Enhanced Debugging**: Comprehensive logging for troubleshooting live audio processing
+- **Audio Buffer Stability**: Fixed stale closure issues with audio buffer management using React refs
+
 ### Confidence Threshold Control
 
 The React UI includes an adjustable confidence threshold on the Inference page that controls speaker identification strictness:
@@ -618,5 +628,5 @@ The advanced backend communicates with this service through the `client.py` modu
 - First inference may be slow due to model loading
 - GPU memory usage scales with model size (~2-4GB)
 - Audio files should be accessible from both services (use shared volumes)
-- Microphone recording uses 16kHz sample rate for optimal compatibility
+- Microphone recording dynamically detects browser sample rate (typically 44.1kHz or 48kHz) for optimal compatibility
 - Microphone recording requires `pyaudio` and proper audio device setup 

@@ -67,6 +67,7 @@ class AudioChunksRepository:
             "memories": memories or [],  # List of memory references created from this audio
             "transcription_status": transcription_status,  # PENDING, COMPLETED, FAILED, EMPTY
             "memory_processing_status": memory_processing_status,  # PENDING, COMPLETED, FAILED, SKIPPED
+            "raw_transcript_data": {},  # Raw response from transcription provider
         }
         await self.col.insert_one(doc)
 
@@ -82,6 +83,25 @@ class AudioChunksRepository:
             {"audio_uuid": audio_uuid},
             {"$addToSet": {"speakers_identified": speaker_id}},
         )
+
+    async def store_raw_transcript_data(self, audio_uuid, raw_data, provider):
+        """Store raw transcript data from transcription provider."""
+        await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {
+                "$set": {
+                    "raw_transcript_data": {
+                        "provider": provider,
+                        "data": raw_data,
+                        "stored_at": datetime.now(UTC).isoformat(),
+                    }
+                }
+            },
+        )
+
+    async def get_chunk(self, audio_uuid):
+        """Get a chunk by audio_uuid."""
+        return await self.col.find_one({"audio_uuid": audio_uuid})
 
     async def add_memory_reference(self, audio_uuid: str, memory_id: str, status: str = "created"):
         """Add memory reference to audio chunk."""

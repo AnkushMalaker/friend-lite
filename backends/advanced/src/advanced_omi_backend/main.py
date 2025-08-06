@@ -389,7 +389,7 @@ async def ws_endpoint_omi(
     # Generate pending client_id to track connection even if auth fails
     pending_client_id = f"pending_{uuid.uuid4()}"
     pending_connections.add(pending_client_id)
-    
+
     client_id = None
     client_state = None
 
@@ -404,7 +404,7 @@ async def ws_endpoint_omi(
 
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
-        
+
         # Remove from pending now that we have real client_id
         pending_connections.discard(pending_client_id)
         application_logger.info(
@@ -433,7 +433,6 @@ async def ws_endpoint_omi(
                 application_logger.info(
                     f"🎙️ OMI audio session started for {client_id} (explicit start)"
                 )
-
 
             elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
@@ -480,7 +479,6 @@ async def ws_endpoint_omi(
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
 
-
                     # Log every 1000th packet to avoid spam
                     if packet_count % 1000 == 0:
                         application_logger.info(
@@ -523,7 +521,7 @@ async def ws_endpoint_omi(
     finally:
         # Clean up pending connection tracking
         pending_connections.discard(pending_client_id)
-        
+
         # Ensure cleanup happens even if client_id is None
         if client_id:
             try:
@@ -547,7 +545,7 @@ async def ws_endpoint_pcm(
     # Generate pending client_id to track connection even if auth fails
     pending_client_id = f"pending_{uuid.uuid4()}"
     pending_connections.add(pending_client_id)
-    
+
     client_id = None
     client_state = None
 
@@ -563,7 +561,7 @@ async def ws_endpoint_pcm(
 
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
-        
+
         # Remove from pending now that we have real client_id
         pending_connections.discard(pending_client_id)
         application_logger.info(
@@ -572,7 +570,6 @@ async def ws_endpoint_pcm(
 
         # Create client state
         client_state = await create_client_state(client_id, user, device_name)
-
 
         # Get processor manager
         processor_manager = get_processor_manager()
@@ -595,7 +592,6 @@ async def ws_endpoint_pcm(
                     f"{audio_format.get('width')}bytes, "
                     f"{audio_format.get('channels')}ch"
                 )
-
 
             elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
@@ -628,7 +624,6 @@ async def ws_endpoint_pcm(
 
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
-
 
                     # Log every 1000th packet to avoid spam
                     if packet_count % 1000 == 0:
@@ -679,7 +674,6 @@ async def ws_endpoint_pcm(
     finally:
         # Clean up pending connection tracking
         pending_connections.discard(pending_client_id)
-        
 
         # Ensure cleanup happens even if client_id is None
         if client_id:
@@ -914,8 +908,7 @@ async def health_check():
             # Make a health check request to the speaker service
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{speaker_service_url}/health", 
-                    timeout=aiohttp.ClientTimeout(total=5)
+                    f"{speaker_service_url}/health", timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     if response.status == 200:
                         health_status["services"]["speaker_recognition"] = {

@@ -204,7 +204,9 @@ class ProcessorManager:
 
         logger.info("All processors shut down")
 
-    def _new_local_file_sink(self, file_path: str, sample_rate: Optional[int] = None) -> LocalFileSink:
+    def _new_local_file_sink(
+        self, file_path: str, sample_rate: Optional[int] = None
+    ) -> LocalFileSink:
         """Create a properly configured LocalFileSink with dynamic sample rate."""
         effective_sample_rate = sample_rate or OMI_SAMPLE_RATE
         return LocalFileSink(
@@ -230,7 +232,9 @@ class ProcessorManager:
 
     async def queue_memory(self, item: MemoryProcessingItem):
         """Queue conversation for memory processing."""
-        audio_logger.info(f"📥 queue_memory called for client {item.client_id}, audio_uuid: {item.audio_uuid}")
+        audio_logger.info(
+            f"📥 queue_memory called for client {item.client_id}, audio_uuid: {item.audio_uuid}"
+        )
         audio_logger.info(f"📥 Memory queue size before: {self.memory_queue.qsize()}")
         await self.memory_queue.put(item)
         audio_logger.info(f"📥 Memory queue size after: {self.memory_queue.qsize()}")
@@ -348,17 +352,17 @@ class ProcessorManager:
 
     async def mark_transcription_failed(self, client_id: str, error: str):
         """Mark transcription as failed and clean up transcription manager.
-        
+
         This method handles transcription failures without closing audio files,
         allowing long recordings to continue even if intermediate transcriptions fail.
-        
+
         Args:
             client_id: The client ID whose transcription failed
             error: The error message describing the failure
         """
         # Mark as failed in state tracking
         self.track_processing_stage(client_id, "transcription", "failed", {"error": error})
-        
+
         # Remove transcription manager to allow fresh retry
         if client_id in self.transcription_managers:
             try:
@@ -366,11 +370,15 @@ class ProcessorManager:
                 await manager.disconnect()
                 audio_logger.info(f"🧹 Removed failed transcription manager for {client_id}")
             except Exception as cleanup_error:
-                audio_logger.error(f"❌ Error cleaning up transcription manager for {client_id}: {cleanup_error}")
-        
+                audio_logger.error(
+                    f"❌ Error cleaning up transcription manager for {client_id}: {cleanup_error}"
+                )
+
         # Do NOT close audio files - client may still be streaming
         # Audio will be closed when client disconnects or sends audio-stop
-        audio_logger.warning(f"❌ Transcription failed for {client_id}: {error}, keeping audio session open")
+        audio_logger.warning(
+            f"❌ Transcription failed for {client_id}: {error}, keeping audio session open"
+        )
 
     async def close_client_audio(self, client_id: str):
         """Close audio file for a client when conversation ends."""
@@ -407,7 +415,7 @@ class ProcessorManager:
                     f"📤 Calling flush_final_transcript for client {client_id} (manager: {manager})"
                 )
                 try:
-                    await manager.flush_final_transcript(audio_duration)
+                    await manager.process_collected_audio(audio_duration)
                     flush_duration = time.time() - flush_start_time
                     audio_logger.info(
                         f"✅ ASR flush completed for client {client_id} in {flush_duration:.2f}s"
@@ -474,26 +482,32 @@ class ProcessorManager:
                         if item.client_id not in self.active_file_sinks:
                             # Get client state to access/store sample rate
                             client_state = self.client_manager.get_client(item.client_id)
-                            
+
                             # Store sample rate from first audio chunk
                             if client_state and client_state.sample_rate is None:
                                 client_state.sample_rate = item.audio_chunk.rate
-                                audio_logger.info(f"📊 Set sample rate to {client_state.sample_rate}Hz for client {item.client_id}")
-                            
+                                audio_logger.info(
+                                    f"📊 Set sample rate to {client_state.sample_rate}Hz for client {item.client_id}"
+                                )
+
                             # Get sample rate for file sink (use client state or fallback to chunk rate)
                             file_sample_rate = None
                             if client_state and client_state.sample_rate:
                                 file_sample_rate = client_state.sample_rate
                             else:
                                 file_sample_rate = item.audio_chunk.rate
-                                audio_logger.warning(f"Using chunk sample rate {file_sample_rate}Hz for {item.client_id} (no client state)")
+                                audio_logger.warning(
+                                    f"Using chunk sample rate {file_sample_rate}Hz for {item.client_id} (no client state)"
+                                )
 
                             # Create new file
                             audio_uuid = uuid.uuid4().hex
                             timestamp = item.timestamp or int(time.time())
                             wav_filename = f"{timestamp}_{item.client_id}_{audio_uuid}.wav"
 
-                            sink = self._new_local_file_sink(f"{self.chunk_dir}/{wav_filename}", file_sample_rate)
+                            sink = self._new_local_file_sink(
+                                f"{self.chunk_dir}/{wav_filename}", file_sample_rate
+                            )
                             await sink.open()
 
                             self.active_file_sinks[item.client_id] = sink
@@ -635,7 +649,10 @@ class ProcessorManager:
                             )
                             # Mark transcription as failed on timeout
                             self.track_processing_stage(
-                                item.client_id, "transcription", "failed", {"error": "Transcription timeout (5 minutes)"}
+                                item.client_id,
+                                "transcription",
+                                "failed",
+                                {"error": "Transcription timeout (5 minutes)"},
                             )
                         except Exception as e:
                             audio_logger.error(
@@ -762,7 +779,6 @@ class ProcessorManager:
             "started",
             {"audio_uuid": item.audio_uuid, "started_at": start_time},
         )
-
 
         try:
             # Use ConversationRepository for clean data access with event coordination
@@ -951,7 +967,6 @@ class ProcessorManager:
                     },
                 )
 
-
         except asyncio.TimeoutError:
             audio_logger.error(f"Memory processing timed out for {item.audio_uuid}")
 
@@ -999,7 +1014,6 @@ class ProcessorManager:
                     "processing_time": time.time() - start_time,
                 },
             )
-
 
         end_time = time.time()
         processing_time_ms = (end_time - start_time) * 1000

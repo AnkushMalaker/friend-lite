@@ -58,7 +58,9 @@ async def process_audio_files(
     auto_generate_client: bool = Query(default=True),
 ):
     """Process uploaded audio files through the transcription pipeline. Admin only."""
-    return await system_controller.process_audio_files(current_user, files, device_name, auto_generate_client)
+    return await system_controller.process_audio_files(
+        current_user, files, device_name, auto_generate_client
+    )
 
 
 @router.post("/process-audio-files-async")
@@ -69,7 +71,9 @@ async def process_audio_files_async(
     device_name: str = Query(default="upload"),
 ):
     """Start async processing of uploaded audio files. Returns job ID immediately. Admin only."""
-    return await system_controller.process_audio_files_async(background_tasks, current_user, files, device_name)
+    return await system_controller.process_audio_files_async(
+        background_tasks, current_user, files, device_name
+    )
 
 
 @router.get("/process-audio-files/jobs/{job_id}")
