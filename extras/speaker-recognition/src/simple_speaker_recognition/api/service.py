@@ -91,6 +91,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Simple Speaker Recognition Service", version="0.2.0", lifespan=lifespan)
 
+
 # Import and include all routers
 from .routers import (
     users_router,

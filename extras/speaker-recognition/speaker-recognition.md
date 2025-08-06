@@ -8,6 +8,17 @@ The speaker recognition service will provide the following functionality:
 The speaker recognition service will be used to identify speakers in chunks of audio
 The service will make use of SpeechBrain, FAISS, pytorch and pyannote to do speaker recognition.
 
+## Processing Modes
+
+The speaker recognition service supports multiple processing modes for different use cases:
+
+### Mode Overview
+1. **Diarization Only**: Pure speaker separation without identification
+2. **Speaker Identification**: Diarization + identify enrolled speakers
+3. **Deepgram Enhanced**: Deepgram transcription + diarization + enhanced speaker ID
+4. **Deepgram + Internal Speakers**: Deepgram transcription + internal diarization + speaker ID
+5. **Plain**: Legacy mode (same as Speaker Identification)
+
 ## Flow
 
 ### 1. Service Initialization Flow
@@ -63,26 +74,81 @@ The service will make use of SpeechBrain, FAISS, pytorch and pyannote to do spea
    - Return speaker ID and info if similarity > threshold
    - Return "not identified" if no match found
 
-### 4. Speaker Diarization Flow
+### 4. Processing Mode Flows
+
+#### 4a. Diarization Only Flow (`/v1/diarize-only`)
 1. **Audio Processing**
    - Run pyannote diarization pipeline on entire audio file
    - Extract speaker segments with timestamps
+   - Apply minimum duration filter
 
-2. **Speaker Segmentation**
-   - Identify distinct speakers (SPEAKER_00, SPEAKER_01, etc.)
-   - Get temporal boundaries for each speaker's speech
+2. **Result Formatting**
+   - Return segments with generic speaker labels (SPEAKER_00, SPEAKER_01, etc.)
+   - No speaker identification performed
+   - No transcription provided
 
-3. **Speaker Verification**
-   - For each detected speaker:
-     - Find longest speech segment for that speaker
-     - Extract embedding from longest segment
-     - Attempt to identify against enrolled speakers
-     - Assign verified speaker ID or generate unknown speaker ID
+3. **Output**
+   - Timestamped segments with generic speaker IDs
+   - Summary statistics (duration, speaker count)
+   - Processing metadata
 
-4. **Result Compilation**
-   - Return segments with timestamps and speaker assignments
-   - Include both diarization labels and verified speaker IDs
-   - Provide speaker embeddings for further processing
+#### 4b. Speaker Identification Flow (`/diarize-and-identify`)
+1. **Audio Processing**
+   - Run pyannote diarization pipeline on entire audio file
+   - Extract speaker segments with timestamps
+   - Apply minimum duration filter
+
+2. **Speaker Identification**
+   - For each detected speaker segment:
+     - Extract audio segment from timestamps
+     - Generate speaker embedding using SpeechBrain model
+     - Query FAISS index for closest enrolled speaker match
+     - Apply similarity threshold to determine identification
+
+3. **Result Compilation**
+   - Return segments with both diarization labels and identified speaker names
+   - Include confidence scores for identification
+   - Filter results based on identification requirements
+
+#### 4c. Deepgram Enhanced Flow (`/v1/listen`)
+1. **Deepgram Processing**
+   - Forward audio to Deepgram API with diarization enabled
+   - Receive transcription with speaker diarization
+   - Extract word-level speaker assignments
+
+2. **Speaker Enhancement**
+   - Group consecutive words by Deepgram speaker labels
+   - For each speaker segment:
+     - Extract audio segment from timestamps
+     - Generate embedding using internal model
+     - Identify against enrolled speakers
+     - Replace Deepgram speaker labels with identified names
+
+3. **Response Enhancement**
+   - Modify Deepgram response with identified speaker information
+   - Add speaker enhancement metadata
+   - Preserve original transcription quality
+
+#### 4d. Deepgram + Internal Speakers Flow (`/v1/transcribe-and-diarize`)
+1. **Deepgram Transcription**
+   - Forward audio to Deepgram API for transcription only (diarization disabled)
+   - Receive high-quality transcript without speaker labels
+
+2. **Internal Diarization**
+   - Run pyannote diarization pipeline on audio file
+   - Extract speaker segments with timestamps
+   - Apply minimum duration filter
+
+3. **Speaker Identification**
+   - For each diarized segment:
+     - Extract audio segment
+     - Generate embedding
+     - Identify against enrolled speakers
+
+4. **Hybrid Response**
+   - Combine Deepgram transcript with internal speaker mapping
+   - Provide both transcription and speaker identification
+   - Return enhanced response with multiple data sources
 
 ### 5. Speaker Management Flow
 1. **List Speakers**
@@ -103,12 +169,39 @@ The service will make use of SpeechBrain, FAISS, pytorch and pyannote to do spea
    - Return overall service health status
 
 ### Data Flow Architecture
+
+#### Diarization Only Mode
 ```
-Audio Input → Audio Loader → Embedding Model → FAISS Index
-                                ↓
-Enrolled Speakers Database ← Speaker Registration
-                                ↓
-Similarity Search → Identity Resolution → API Response
+Audio Input → Pyannote Diarization → Segment Extraction → Generic Labels → API Response
+```
+
+#### Speaker Identification Mode  
+```
+Audio Input → Pyannote Diarization → Segment Extraction → Embedding Model → FAISS Index
+                                                                              ↓
+                                         Enrolled Speakers Database ← Speaker Registration
+                                                                              ↓
+                                                        Similarity Search → Identity Resolution → API Response
+```
+
+#### Deepgram Enhanced Mode
+```
+Audio Input → Deepgram API (Transcription + Diarization) → Word Grouping → Embedding Model → FAISS Index
+                                                                                              ↓
+                                                             Enrolled Speakers Database ← Speaker Registration
+                                                                                              ↓
+                                                                        Similarity Search → Response Enhancement → API Response
+```
+
+#### Deepgram + Internal Speakers Mode
+```
+Audio Input → Deepgram API (Transcription Only) → Transcript
+               ↓
+           Pyannote Diarization → Segment Extraction → Embedding Model → FAISS Index
+                                                                          ↓
+                                        Enrolled Speakers Database ← Speaker Registration
+                                                                          ↓
+                                                Similarity Search → Hybrid Response → API Response
 ```
 
 ### Key Components

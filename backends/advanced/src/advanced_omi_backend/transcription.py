@@ -66,45 +66,6 @@ class TranscriptionManager:
             return None
         return self.client_manager.get_client(self._client_id)
 
-    def _parse_speaker_segments(self, formatted_text: str) -> list:
-        """
-        Parse formatted speaker text into individual segments.
-
-        Args:
-            formatted_text: Text with speaker labels like "Speaker 0: text\\nSpeaker 1: text"
-
-        Returns:
-            List of transcript segments with speaker, text, start, end
-        """
-        if not formatted_text:
-            return []
-
-        segments = []
-        lines = formatted_text.strip().split("\n")
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            # Check if line starts with "Speaker X:"
-            if line.startswith("Speaker ") and ":" in line:
-                # Extract speaker number and text
-                colon_pos = line.find(":")
-                speaker_part = line[:colon_pos].strip()
-                text_part = line[colon_pos + 1 :].strip()
-
-                if text_part:  # Only add if there's actual text
-                    segments.append(
-                        {
-                            "speaker": speaker_part,
-                            "text": text_part,
-                            "start": 0.0,  # TODO: Use actual timestamps from word data
-                            "end": 0.0,
-                        }
-                    )
-
-        return segments
 
     # REMOVED: Memory processing is now handled exclusively by conversation closure
     # to prevent duplicate processing. The _queue_memory_processing method has been
@@ -224,11 +185,9 @@ class TranscriptionManager:
                     f"📝 {self.online_provider.name} batch transcript for {self._current_audio_uuid} ({len(transcript_text)} chars): {transcript_text[:200]}..."
                 )
 
-                # Parse speaker segments from formatted text
-                speaker_segments = self._parse_speaker_segments(transcript_text)
-                
-                # Optional: Enhance segments with speaker recognition
-                if self.speaker_client.enabled and speaker_segments and self._current_audio_uuid and self.chunk_repo:
+                # Check if speaker recognition service is available and configured
+                speaker_segments = []
+                if self.speaker_client.enabled and self._current_audio_uuid and self.chunk_repo:
                     try:
                         # Get audio file path from database
                         chunk_data = await self.chunk_repo.get_chunk(self._current_audio_uuid)
@@ -237,28 +196,24 @@ class TranscriptionManager:
                             # Construct full path (assuming chunk_dir is /app/audio_chunks in docker)
                             full_audio_path = f"/app/audio_chunks/{audio_path}"
                             
-                            logger.info(f"Enhancing transcript with speaker recognition for {full_audio_path}")
-                            speaker_mapping = await self.speaker_client.identify_speakers(
-                                full_audio_path, speaker_segments
+                            logger.info(f"Using speaker recognition service for segmentation: {full_audio_path}")
+                            # Speaker service will handle all segmentation and identification
+                            speaker_result = await self.speaker_client.diarize_and_identify(
+                                full_audio_path, transcript_result.get('words', [])
                             )
-                        
-                        if speaker_mapping:
-                            # Apply speaker mapping to segments
-                            for segment in speaker_segments:
-                                original_speaker = segment.get('speaker', '')
-                                if original_speaker in speaker_mapping:
-                                    segment['speaker'] = speaker_mapping[original_speaker]
-                                    logger.debug(
-                                        f"Mapped {original_speaker} -> {speaker_mapping[original_speaker]}"
-                                    )
-                            logger.info(f"Enhanced {len(speaker_mapping)} speakers in transcript")
+                            
+                            if speaker_result and speaker_result.get('segments'):
+                                speaker_segments = speaker_result['segments']
+                                logger.info(f"Speaker service returned {len(speaker_segments)} segments")
+                            else:
+                                logger.warning("Speaker service returned no segments, using fallback")
                         else:
                             logger.warning("No audio path found in database for speaker recognition")
                     except Exception as e:
-                        logger.warning(f"Speaker recognition enhancement failed: {e}")
-                        # Continue with original segments if enhancement fails
+                        logger.warning(f"Speaker recognition service failed: {e}, using fallback")
+                        # Continue with fallback if speaker service fails
 
-                # Store each speaker segment separately in database
+                # Store segments from speaker service or fallback to single segment
                 if self.chunk_repo and speaker_segments:
                     speakers_found = set()
                     for segment in speaker_segments:
@@ -275,9 +230,9 @@ class TranscriptionManager:
                         f"Added {len(speaker_segments)} segments for {len(speakers_found)} speakers"
                     )
                 elif self.chunk_repo:
-                    # Fallback: store as single segment if parsing fails
+                    # Fallback: store as single segment with placeholder speaker when speaker service unavailable
                     transcript_segment = {
-                        "speaker": f"speaker_{self._client_id}",
+                        "speaker": "placeholder_speaker",
                         "text": transcript_text,
                         "start": 0.0,
                         "end": 0.0,
@@ -286,8 +241,9 @@ class TranscriptionManager:
                         self._current_audio_uuid, transcript_segment
                     )
                     await self.chunk_repo.add_speaker(
-                        self._current_audio_uuid, f"speaker_{self._client_id}"
+                        self._current_audio_uuid, "placeholder_speaker"
                     )
+                    logger.info("Stored transcript with placeholder speaker (speaker service not available)")
 
                 # Update client state
                 current_client = self._get_current_client()
@@ -399,7 +355,7 @@ class TranscriptionManager:
 
                                 # Process final transcript the same way
                                 transcript_segment = {
-                                    "speaker": f"speaker_{self._client_id}",
+                                    "speaker": "placeholder_speaker",
                                     "text": transcript_text,
                                     "start": 0.0,
                                     "end": 0.0,
@@ -549,9 +505,9 @@ class TranscriptionManager:
                 # Note: Transaction tracking requires user_id which isn't available here
                 # Individual transcription success tracked in main processing pipeline
 
-                # Create transcript segment with new format
+                # Create transcript segment with placeholder speaker
                 transcript_segment = {
-                    "speaker": f"speaker_{client_id}",
+                    "speaker": "placeholder_speaker",
                     "text": transcript_text,
                     "start": 0.0,
                     "end": 0.0,
@@ -560,7 +516,7 @@ class TranscriptionManager:
                 # Store transcript segment in DB immediately
                 if self.chunk_repo:
                     await self.chunk_repo.add_transcript_segment(audio_uuid, transcript_segment)
-                    await self.chunk_repo.add_speaker(audio_uuid, f"speaker_{client_id}")
+                    await self.chunk_repo.add_speaker(audio_uuid, "placeholder_speaker")
                     logger.info(f"📝 Added transcript segment for {audio_uuid} to DB.")
 
                     # Mark transcription as completed for this client (offline ASR processes one segment at a time)

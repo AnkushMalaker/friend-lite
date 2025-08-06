@@ -630,7 +630,10 @@ export default function Speakers() {
 
       {/* Analysis Tab */}
       {activeTab === 'analysis' && (
-        <EmbeddingPlot userId={user?.id} onRefresh={loadSpeakers} />
+        <EmbeddingPlot 
+          dataSource={{ type: 'speakers', userId: user?.id }} 
+          onRefresh={loadSpeakers} 
+        />
       )}
 
       {/* Delete Confirmation Modal */}

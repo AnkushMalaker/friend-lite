@@ -148,13 +148,12 @@ class DeepgramProvider(OnlineTranscriptionProvider):
                                         f"Deepgram confidence: avg={avg_confidence:.2f}, {low_confidence_count}/{len(words)} words <0.5 confidence"
                                     )
 
-                                # Convert word-level speaker data to speaker segments
-                                formatted_transcript = self._format_speaker_segments(words)
+                                # Keep raw transcript and word data without formatting
                                 logger.info(
-                                    f"Formatted transcript with speaker segments: {len(formatted_transcript)} characters"
+                                    f"Keeping raw transcript with word-level data: {len(transcript)} characters"
                                 )
                                 return {
-                                    "text": formatted_transcript,
+                                    "text": transcript,
                                     "words": words,
                                     "segments": [],
                                 }
@@ -192,48 +191,6 @@ class DeepgramProvider(OnlineTranscriptionProvider):
             logger.error(f"Error calling Deepgram API: {e}")
             return {"text": "", "words": [], "segments": []}
 
-    def _format_speaker_segments(self, words: list) -> str:
-        """
-        Convert word-level speaker data into formatted transcript with speaker labels.
-
-        Args:
-            words: List of word objects with speaker information
-
-        Returns:
-            Formatted transcript string with speaker labels
-        """
-        if not words:
-            return ""
-
-        segments = []
-        current_speaker = None
-        current_text = []
-
-        for word in words:
-            speaker = word.get("speaker", 0)
-            word_text = word.get("punctuated_word", word.get("word", ""))
-
-            if speaker != current_speaker:
-                # Save previous segment if it exists
-                if current_speaker is not None and current_text:
-                    segment_text = " ".join(current_text).strip()
-                    if segment_text:
-                        segments.append(f"Speaker {current_speaker}: {segment_text}")
-
-                # Start new segment
-                current_speaker = speaker
-                current_text = [word_text]
-            else:
-                # Continue current segment
-                current_text.append(word_text)
-
-        # Add final segment
-        if current_speaker is not None and current_text:
-            segment_text = " ".join(current_text).strip()
-            if segment_text:
-                segments.append(f"Speaker {current_speaker}: {segment_text}")
-
-        return "\n".join(segments)
 
 
 class MistralProvider(OnlineTranscriptionProvider):

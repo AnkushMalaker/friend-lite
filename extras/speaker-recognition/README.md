@@ -56,6 +56,52 @@ This starts two services:
 - **Enrollment Tracking**: Tracks audio sample counts and total duration per speaker
 - **Weighted Embeddings**: Smart speaker updates using weighted averaging
 
+## 🎯 Processing Modes Comparison
+
+The system offers multiple processing modes for different use cases:
+
+| Mode | Name | Transcription | Diarization | Speaker ID | Use Case |
+|------|------|--------------|-------------|------------|----------|
+| **diarization-only** | Diarization Only | ❌ | ✅ Internal | ❌ | Basic speaker separation without identification |
+| **speaker-identification** | Speaker Identification | ❌ | ✅ Internal | ✅ Enrolled | Identify known speakers without transcripts |
+| **deepgram-enhanced** | Deepgram Enhanced | ✅ Deepgram | ✅ Deepgram | ✅ Replace | Full transcription with enhanced speaker names |
+| **deepgram-transcript-internal-speakers** | Deepgram + Internal | ✅ Deepgram | ✅ Internal | ✅ Enrolled | Best transcription + precise speaker identification |
+| **plain** | Plain (Legacy) | ❌ | ✅ Internal | ✅ Enrolled | Same as Speaker Identification |
+
+### Mode Details
+
+#### 🔹 Diarization Only
+- **What it does**: Separates speakers into generic labels (Speaker A, Speaker B, etc.)
+- **Best for**: Understanding speaker changes without needing names
+- **Output**: Timestamped segments with generic speaker labels
+- **Requirements**: Audio file only
+
+#### 🔹 Speaker Identification  
+- **What it does**: Separates speakers AND identifies enrolled speakers by name
+- **Best for**: Identifying known speakers in meetings or conversations
+- **Output**: Timestamped segments with actual speaker names
+- **Requirements**: Enrolled speakers in the system
+
+#### 🔹 Deepgram Enhanced
+- **What it does**: Uses Deepgram for both transcription and diarization, then replaces generic speaker labels with enrolled speaker names
+- **Best for**: High-quality transcription with speaker identification
+- **Output**: Full transcript with identified speaker names
+- **Requirements**: Deepgram API key + enrolled speakers
+
+#### 🔹 Deepgram + Internal Speakers
+- **What it does**: Uses Deepgram for transcription only, internal system for precise speaker diarization and identification
+- **Best for**: Maximum accuracy for both transcription and speaker identification
+- **Output**: Deepgram transcript with precisely identified speakers
+- **Requirements**: Deepgram API key + enrolled speakers
+
+### Quick Mode Selection Guide
+
+- **Need transcription?** → Use Deepgram modes
+- **Only need speaker names?** → Use Speaker Identification
+- **Just want to see speaker changes?** → Use Diarization Only
+- **Maximum accuracy?** → Use Deepgram + Internal Speakers
+- **Best balance?** → Use Deepgram Enhanced
+
 ## 🖥️ React Web UI
 
 The modern React interface provides an enhanced user experience with:
@@ -288,16 +334,52 @@ Appends new audio samples to an existing speaker enrollment using weighted embed
 }
 ```
 
-### Speaker Diarization and Identification
+### Processing Mode Endpoints
+
+#### Diarization Only
+```bash
+POST /v1/diarize-only
+Content-Type: multipart/form-data
+```
+**Form Fields:**
+- `file`: Audio file for diarization
+- `min_duration`: Minimum segment duration (optional, default: 0.5)
+
+**Response:**
+```json
+{
+  "segments": [
+    {
+      "speaker": "SPEAKER_00",
+      "start": 1.234,
+      "end": 5.678,
+      "duration": 4.444,
+      "speaker_label": "SPEAKER_00",
+      "identified": false,
+      "status": "diarized_only"
+    }
+  ],
+  "summary": {
+    "total_duration": 120.5,
+    "num_segments": 15,
+    "num_speakers": 2,
+    "speakers": ["SPEAKER_00", "SPEAKER_01"],
+    "processing_mode": "diarization_only"
+  }
+}
+```
+
+#### Speaker Identification
 ```bash
 POST /diarize-and-identify
 Content-Type: multipart/form-data
 ```
 **Form Fields:**
 - `file`: Audio file for processing
-- `min_duration`: Minimum segment duration in seconds (optional, default: 0.5)
-- `similarity_threshold`: Override default threshold (optional)
+- `min_duration`: Minimum segment duration (optional, default: 0.5)
+- `similarity_threshold`: Speaker similarity threshold (optional, default: 0.15)
 - `identify_only_enrolled`: Return only identified speakers (optional, default: false)
+- `user_id`: User ID for speaker identification (optional)
 
 **Response:**
 ```json
@@ -325,6 +407,35 @@ Content-Type: multipart/form-data
   }
 }
 ```
+
+#### Deepgram Enhanced
+```bash
+POST /v1/listen
+Content-Type: multipart/form-data
+Authorization: Token YOUR_DEEPGRAM_API_KEY
+```
+**Query Parameters:**
+- `model`: Deepgram model (default: nova-3)
+- `language`: Language code (default: multi)
+- `diarize`: Enable diarization (default: true)
+- `enhance_speakers`: Enable speaker identification (default: true)
+- `user_id`: User ID for speaker identification
+- `speaker_confidence_threshold`: Speaker confidence threshold (default: 0.15)
+
+**Response:** Deepgram response with enhanced speaker identification
+
+#### Deepgram + Internal Speakers (Hybrid)
+```bash
+POST /v1/transcribe-and-diarize
+Content-Type: multipart/form-data
+Authorization: Token YOUR_DEEPGRAM_API_KEY
+```
+**Query Parameters:**
+- Same as Deepgram Enhanced, plus:
+- `similarity_threshold`: Internal speaker matching threshold (default: 0.15)
+- `min_duration`: Minimum segment duration (default: 1.0)
+
+**Response:** Deepgram transcription with internal speaker diarization and identification
 
 ### List Speakers
 ```bash

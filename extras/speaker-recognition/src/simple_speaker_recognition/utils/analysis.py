@@ -279,6 +279,38 @@ def create_speaker_analysis(
         
         log.info(f"Analyzing {len(speaker_ids)} speakers with {embeddings.shape[1]}D embeddings")
         
+        # Handle single embedding case specially
+        if len(embeddings) == 1:
+            log.info("Single embedding detected - using simplified analysis")
+            # For single embedding, create minimal valid response
+            return {
+                "visualization": {
+                    "speakers": speaker_ids,
+                    "embeddings_2d": [[0.0, 0.0]],  # Center point
+                    "embeddings_3d": [[0.0, 0.0, 0.0]],  # Center point
+                    "cluster_labels": [0],  # Single cluster
+                    "colors": ["hsl(180, 70%, 50%)"]  # Single color
+                },
+                "clustering": {
+                    "method": cluster_method,
+                    "n_clusters": 1,
+                    "silhouette_score": None,
+                    "n_noise": 0
+                },
+                "similar_speakers": [],  # No pairs with single speaker
+                "quality_metrics": {
+                    "n_speakers": 1,
+                    "mean_similarity": None,
+                    "std_similarity": None,
+                    "separation_quality": None
+                },
+                "parameters": {
+                    "reduction_method": method,
+                    "cluster_method": cluster_method,
+                    "similarity_threshold": similarity_threshold
+                }
+            }
+        
         # Dimensionality reduction for visualization
         reduced_2d = reduce_dimensionality(embeddings, method=method, n_components=2)
         reduced_3d = reduce_dimensionality(embeddings, method=method, n_components=3)

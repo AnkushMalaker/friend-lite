@@ -21,7 +21,10 @@ import {
 } from '../services/deepgram'
 import FileUploader from '../components/FileUploader'
 import WaveformPlot from '../components/WaveformPlot'
-import AnnotationEmbeddingAnalysis from '../components/AnnotationEmbeddingAnalysis'
+import EmbeddingPlot from '../components/EmbeddingPlot'
+import ProcessingModeSelector from '../components/ProcessingModeSelector'
+import { audioProcessingService } from '../services/audioProcessing'
+import { useSpeakerIdentification } from '../hooks/useSpeakerIdentification'
 
 interface AudioData {
   file: File
@@ -52,6 +55,13 @@ export default function Annotation() {
   const [isLoading, setIsLoading] = useState(false)
   const [segments, setSegments] = useState<AnnotationSegment[]>([])
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null)
+  
+  // Add speaker processing hook for unified processing modes
+  const speakerProcessing = useSpeakerIdentification({
+    defaultMode: 'speaker-identification',
+    userId: user?.id,
+    onError: (error) => console.error('Processing error:', error),
+  })
   const [availableSpeakers, setAvailableSpeakers] = useState<AvailableSpeaker[]>([
     { label: 'Speaker 1' },
     { label: 'Speaker 2' },
@@ -64,6 +74,8 @@ export default function Annotation() {
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [deepgramResponse, setDeepgramResponse] = useState<any>(null)
   const [showJsonOutput, setShowJsonOutput] = useState(false)
+  const [speakerThreshold, setSpeakerThreshold] = useState(0.3)
+  const [expectedSpeakers, setExpectedSpeakers] = useState(2)
   
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null)
@@ -107,7 +119,7 @@ export default function Annotation() {
       const response = await transcribeWithDeepgram(audioData.file, {
         enhanceSpeakers: true,
         userId: user.id,
-        speakerConfidenceThreshold: 0.15,
+        speakerConfidenceThreshold: speakerThreshold,
         mode: 'standard'
       })
 
@@ -138,6 +150,12 @@ export default function Annotation() {
         speakerCounts[speaker] = (speakerCounts[speaker] || 0) + 1
       })
       console.log('Speaker distribution in words:', speakerCounts)
+      
+      // Log first few words to check structure
+      if (words.length > 0) {
+        console.log('First word structure:', words[0])
+        console.log('Sample words:', words.slice(0, 3))
+      }
 
       // Group words by speaker into segments (similar to existing Deepgram JSON import logic)
       const newSegments: AnnotationSegment[] = []
@@ -152,12 +170,27 @@ export default function Annotation() {
             const segmentEnd = currentWords[currentWords.length - 1].end
             // FIX: Use the first word of the CURRENT segment, not the new word
             const firstWordOfSegment = currentWords[0]
+            
+            // Only use identified speaker name if properly identified with sufficient confidence
+            const isProperlyIdentified = firstWordOfSegment.identified_speaker_name && 
+                                       firstWordOfSegment.speaker_status === 'IDENTIFIED' &&
+                                       (firstWordOfSegment.speaker_identification_confidence || 0) >= speakerThreshold
+            
+            // Debug logging
+            console.log(`Segment ${newSegments.length} first word:`, {
+              identified_speaker_name: firstWordOfSegment.identified_speaker_name,
+              speaker_status: firstWordOfSegment.speaker_status,
+              confidence: firstWordOfSegment.speaker_identification_confidence,
+              threshold: speakerThreshold,
+              isProperlyIdentified
+            })
+            
             newSegments.push({
               id: Math.random().toString(36),
               start: currentSegmentStart,
               end: segmentEnd,
               duration: segmentEnd - currentSegmentStart,
-              speakerLabel: firstWordOfSegment.identified_speaker_name || `Speaker ${currentSpeaker + 1}`,
+              speakerLabel: isProperlyIdentified ? firstWordOfSegment.identified_speaker_name : `Speaker ${currentSpeaker + 1}`,
               deepgramSpeakerLabel: `speaker_${currentSpeaker}`,
               label: 'UNCERTAIN' as const,
               confidence: Math.min(...currentWords.map(w => w.confidence || 0)),
@@ -180,12 +213,27 @@ export default function Annotation() {
         const segmentEnd = currentWords[currentWords.length - 1].end
         // FIX: Use the first word of the CURRENT segment for speaker info
         const firstWordOfSegment = currentWords[0]
+        
+        // Only use identified speaker name if properly identified with sufficient confidence
+        const isProperlyIdentified = firstWordOfSegment.identified_speaker_name && 
+                                   firstWordOfSegment.speaker_status === 'IDENTIFIED' &&
+                                   (firstWordOfSegment.speaker_identification_confidence || 0) >= speakerThreshold
+        
+        // Debug logging for final segment
+        console.log(`Final segment ${newSegments.length} first word:`, {
+          identified_speaker_name: firstWordOfSegment.identified_speaker_name,
+          speaker_status: firstWordOfSegment.speaker_status,
+          confidence: firstWordOfSegment.speaker_identification_confidence,
+          threshold: speakerThreshold,
+          isProperlyIdentified
+        })
+        
         newSegments.push({
           id: Math.random().toString(36),
           start: currentSegmentStart,
           end: segmentEnd,
           duration: segmentEnd - currentSegmentStart,
-          speakerLabel: firstWordOfSegment.identified_speaker_name || `Speaker ${currentSpeaker + 1}`,
+          speakerLabel: isProperlyIdentified ? firstWordOfSegment.identified_speaker_name : `Speaker ${currentSpeaker + 1}`,
           deepgramSpeakerLabel: `speaker_${currentSpeaker}`,
           label: 'UNCERTAIN' as const,
           confidence: Math.min(...currentWords.map(w => w.confidence || 0)),
@@ -221,6 +269,67 @@ export default function Annotation() {
       setIsTranscribing(false)
     }
   }, [audioData, user, availableSpeakers])
+
+  // Handle processing with unified modes (diarization, deepgram, hybrid, plain)
+  const handleProcessAudio = useCallback(async (mode: any) => {
+    if (!audioData || !user) return
+
+    try {
+      // Convert audioData to ProcessedAudio format expected by speaker processing
+      const processedAudio = {
+        file: audioData.file, // <-- This was missing! 
+        filename: audioData.file.name,
+        buffer: {
+          samples: audioData.samples,
+          sampleRate: audioData.buffer.sampleRate,
+          channels: audioData.buffer.numberOfChannels,
+          duration: audioData.buffer.duration
+        },
+        quality: null // Not needed for annotation processing
+      }
+
+      // Process using the unified speaker identification service
+      const result = await speakerProcessing.processAudio(processedAudio, mode)
+      
+      if (result && result.speakers) {
+        // Convert processing result to annotation segments
+        const newSegments: AnnotationSegment[] = result.speakers.map((speaker, index) => ({
+          id: `${result.id}_segment_${index}_${Date.now()}`, // Create truly unique ID for each segment
+          start: speaker.start,
+          end: speaker.end,
+          duration: speaker.end - speaker.start,
+          speakerLabel: speaker.speaker_name || speaker.identified_speaker_name || `Speaker ${Math.floor(Math.random() * 1000)}`,
+          deepgramSpeakerLabel: undefined,
+          label: 'UNCERTAIN' as const,
+          confidence: speaker.confidence,
+          transcription: speaker.text,
+          notes: undefined
+        }))
+
+        // Add unique speaker labels to available speakers
+        const uniqueSpeakerLabels = new Set(
+          newSegments
+            .map(s => s.speakerLabel)
+            .filter(label => label && !availableSpeakers.some(sp => sp.label === label))
+        )
+
+        if (uniqueSpeakerLabels.size > 0) {
+          setAvailableSpeakers(prev => [
+            ...prev,
+            ...Array.from(uniqueSpeakerLabels).map(label => ({ label }))
+          ])
+        }
+
+        setSegments(newSegments)
+        setHasUnsavedChanges(true)
+        alert(`Processed ${newSegments.length} segments using ${mode} mode`)
+      }
+
+    } catch (error) {
+      console.error('Failed to process audio:', error)
+      alert('Failed to process audio. Please try again.')
+    }
+  }, [audioData, user, availableSpeakers, speakerProcessing])
 
   const handleFileUpload = useCallback(async (files: File[]) => {
     if (!files.length || !user) return
@@ -598,10 +707,31 @@ export default function Annotation() {
         const segment = speakerSegments[i]
         console.log(`Extracting segment ${i + 1}: ${segment.start}s - ${segment.end}s`)
         
-        const samples = extractAudioSegment(audioData.buffer, segment.start, segment.end)
-        const blob = createAudioBlob(samples, audioData.buffer.sampleRate)
-        audioBlobs.push(blob)
+        try {
+          const audioSamples = extractAudioSamples(audioData.buffer)
+          const samples = extractAudioSegment(audioSamples, segment.start, segment.end, audioData.buffer.sampleRate)
+          
+          if (samples.length === 0) {
+            console.warn(`Segment ${i + 1} resulted in empty audio, skipping`)
+            continue
+          }
+          
+          const blob = createAudioBlob(samples, audioData.buffer.sampleRate)
+          audioBlobs.push(blob)
+          console.log(`Successfully created ${blob.size} byte WAV blob for segment ${i + 1}`)
+        } catch (error) {
+          console.error(`Failed to extract segment ${i + 1}:`, error)
+          alert(`❌ Failed to extract audio segment ${i + 1}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          return
+        }
       }
+      
+      if (audioBlobs.length === 0) {
+        alert('❌ No valid audio segments could be extracted. Please check that the selected segments contain audio.')
+        return
+      }
+      
+      console.log(`Successfully extracted ${audioBlobs.length} audio segments`)
       
       // Create FormData for enrollment
       const formData = new FormData()
@@ -650,7 +780,7 @@ export default function Annotation() {
       
       alert(
         `✅ Speaker "${speakerLabel}" enrolled successfully!\n\n` +
-        `Processed ${speakerSegments.length} segments (${formatDuration(speakerSegments.reduce((sum, seg) => sum + seg.duration, 0))} total)`
+        `Processed ${speakerSegments.length} segments (${formatDuration(speakerSegments.reduce((sum, seg) => sum + seg.duration, 0) * 1000)} total)`
       )
       
     } catch (error) {
@@ -714,31 +844,113 @@ export default function Annotation() {
             )}
           </div>
 
-          {/* Bottom half - Transcribe with Deepgram */}
+          {/* Processing Mode Selector */}
           <div className="border-2 border-dashed border-green-300 rounded-lg p-4">
-            <h3 className="text-lg font-medium mb-3">🎤 Transcribe with Deepgram</h3>
+            <h3 className="text-lg font-medium mb-3">🎯 Speaker Processing Modes</h3>
+            
+            {audioData ? (
+              <ProcessingModeSelector
+                selectedMode={speakerProcessing.currentMode}
+                onModeChange={speakerProcessing.setProcessingMode}
+                onProcessAudio={handleProcessAudio}
+                audioData={{
+                  filename: audioData.file.name,
+                  buffer: {
+                    samples: audioData.samples,
+                    sampleRate: audioData.buffer.sampleRate,
+                    channels: audioData.buffer.numberOfChannels,
+                    duration: audioData.buffer.duration
+                  },
+                  quality: null
+                }}
+                isProcessing={speakerProcessing.isProcessing}
+                confidenceThreshold={speakerProcessing.confidenceThreshold}
+                onConfidenceThresholdChange={speakerProcessing.setConfidenceThreshold}
+                showSettings={true}
+                compact={true}
+              />
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <p>Upload audio file first to enable processing modes</p>
+              </div>
+            )}
+          </div>
+
+          {/* Legacy Deepgram Transcribe (keep as backup option) */}
+          <div className="border-2 border-dashed border-blue-300 rounded-lg p-4">
+            <h3 className="text-lg font-medium mb-3">🔧 Legacy Deepgram Transcribe</h3>
+            
+            {/* Speaker Settings */}
+            <div className="mb-4 space-y-4">
+              {/* Expected Speakers */}
+              <div className="p-3 bg-blue-50 rounded-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Expected Speakers: {expectedSpeakers}
+                </label>
+                <input 
+                  type="range" 
+                  min="1" 
+                  max="8" 
+                  step="1"
+                  value={expectedSpeakers}
+                  onChange={(e) => setExpectedSpeakers(parseInt(e.target.value))}
+                  className="w-full h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer"
+                />
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>1</span>
+                  <span>8</span>
+                </div>
+                <p className="text-xs text-gray-600 mt-1">
+                  How many distinct speakers do you expect in this audio? This helps with smart threshold suggestions.
+                </p>
+              </div>
+
+              {/* Speaker ID Threshold */}
+              <div className="p-3 bg-gray-50 rounded-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Speaker ID Threshold: {speakerThreshold.toFixed(2)}
+                </label>
+                <input 
+                  type="range" 
+                  min="0.1" 
+                  max="0.9" 
+                  step="0.05"
+                  value={speakerThreshold}
+                  onChange={(e) => setSpeakerThreshold(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>0.1 (Permissive)</span>
+                  <span>0.9 (Strict)</span>
+                </div>
+                <p className="text-xs text-gray-600 mt-1">
+                  Higher values = more strict speaker identification. Use 0.3+ for better accuracy.
+                </p>
+              </div>
+            </div>
+            
             <div className="text-center">
               <button
                 onClick={handleDeepgramTranscribe}
                 disabled={!audioData || isTranscribing || isLoading}
-                className="w-full px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                className="w-full px-4 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
               >
                 {isTranscribing ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    <span>Transcribing...</span>
+                    <span>Legacy Transcribing...</span>
                   </>
                 ) : (
                   <>
-                    <span>🚀</span>
-                    <span>Transcribe Audio</span>
+                    <span>🔧</span>
+                    <span>Legacy Transcribe</span>
                   </>
                 )}
               </button>
               <p className="text-sm text-gray-500 mt-2">
                 {!audioData 
                   ? 'Upload audio file first' 
-                  : 'Generate transcript with speaker diarization'}
+                  : 'Use legacy transcription method (for comparison)'}
               </p>
             </div>
           </div>
@@ -758,7 +970,7 @@ export default function Annotation() {
           <div className="bg-gray-50 rounded-lg p-4">
             <h3 className="text-lg font-medium mb-2">🎵 {audioData.file.name}</h3>
             <div className="grid grid-cols-3 gap-4 text-sm">
-              <div>Duration: {formatDuration(audioData.buffer.duration)}</div>
+              <div>Duration: {formatDuration(audioData.buffer.duration * 1000)}</div>
               <div>Sample Rate: {(audioData.buffer.sampleRate / 1000).toFixed(1)} kHz</div>
               <div>Segments: {segments.length}</div>
             </div>
@@ -877,7 +1089,7 @@ export default function Annotation() {
                           {speakerLabel}
                         </span>
                         <span className="text-sm text-gray-600">
-                          {speakerSegments.length} segments • {formatDuration(totalDuration)}
+                          {speakerSegments.length} segments • {formatDuration(totalDuration * 1000)}
                         </span>
                       </div>
                       <div className="flex space-x-2">
@@ -912,11 +1124,24 @@ export default function Annotation() {
 
           {/* Embedding Analysis Section */}
           <div className="space-y-4">
-            <AnnotationEmbeddingAnalysis 
-              segments={segments}
-              audioFile={audioData?.file || null}
+            <EmbeddingPlot 
+              dataSource={{
+                type: 'combined',
+                segments: segments,
+                audioFile: audioData?.file || new File([], ''),
+                userId: user?.id,
+                expectedSpeakers: expectedSpeakers
+              }}
+              compact={true}
+              title="📊 Combined Analysis: Segments vs Enrolled Speakers"
+              autoAnalyze={false}
               onAnalysisComplete={(analysis) => {
-                console.log('Embedding analysis completed:', analysis)
+                console.log('Combined embedding analysis completed:', analysis)
+                
+                // Show smart suggestion if available
+                if (analysis.smart_suggestion) {
+                  console.log('Smart threshold suggestion:', analysis.smart_suggestion)
+                }
               }}
             />
           </div>
@@ -1015,6 +1240,20 @@ function SegmentEditor({
   onPlay,
   onStop
 }: SegmentEditorProps) {
+  const getConfidenceColor = (confidence?: number) => {
+    if (!confidence) return 'text-gray-400'
+    if (confidence >= 0.7) return 'text-green-600'
+    if (confidence >= 0.4) return 'text-yellow-600'
+    return 'text-red-600'
+  }
+
+  const getConfidenceLabel = (confidence?: number) => {
+    if (!confidence) return 'N/A'
+    if (confidence >= 0.7) return 'High'
+    if (confidence >= 0.4) return 'Med'
+    return 'Low'
+  }
+
   const getLabelIcon = (label: string) => {
     switch (label) {
       case 'CORRECT': return <CheckCircle className="h-4 w-4 text-green-500" />
@@ -1047,8 +1286,13 @@ function SegmentEditor({
             {segment.start.toFixed(2)}s - {segment.end.toFixed(2)}s
           </span>
           <span className="text-sm text-gray-500">
-            ({formatDuration(segment.duration)})
+            ({formatDuration(segment.duration * 1000)})
           </span>
+          {segment.confidence !== undefined && (
+            <span className={`text-xs px-2 py-1 rounded-full bg-gray-100 font-medium ${getConfidenceColor(segment.confidence)}`}>
+              {getConfidenceLabel(segment.confidence)} {(segment.confidence * 100).toFixed(0)}%
+            </span>
+          )}
         </div>
         
         <div className="flex space-x-2">
@@ -1175,7 +1419,9 @@ function SegmentEditor({
             </div>
             
             <div>
-              <label className="block text-sm font-medium mb-1">Confidence</label>
+              <label className="block text-sm font-medium mb-1">
+                Confidence {segment.confidence && `(${getConfidenceLabel(segment.confidence)})`}
+              </label>
               <input
                 type="number"
                 step="0.01"
@@ -1183,7 +1429,15 @@ function SegmentEditor({
                 max="1"
                 value={segment.confidence || ''}
                 onChange={(e) => onUpdate({ confidence: parseFloat(e.target.value) || undefined })}
-                className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                className={`w-full px-2 py-1 border rounded text-sm ${
+                  segment.confidence 
+                    ? segment.confidence >= 0.7 
+                      ? 'border-green-300 bg-green-50' 
+                      : segment.confidence >= 0.4 
+                        ? 'border-yellow-300 bg-yellow-50'
+                        : 'border-red-300 bg-red-50'
+                    : 'border-gray-300'
+                }`}
               />
             </div>
           </div>
