@@ -1,6 +1,7 @@
 """Audio processing backend using PyAnnote and SpeechBrain."""
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -9,6 +10,8 @@ import torch
 from pyannote.audio import Audio, Pipeline
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
 from pyannote.core import Segment
+
+logger = logging.getLogger(__name__)
 
 
 class AudioBackend:
@@ -19,8 +22,20 @@ class AudioBackend:
         self.diar = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1", use_auth_token=hf_token
         ).to(device)
+        
+        # Configure pipeline with proper segmentation parameters to reduce over-segmentation
+        # Note: embedding model is fixed in pre-trained pipeline and cannot be changed at instantiation
+        pipeline_params = {
+            'segmentation': {
+                'min_duration_off': 1.5  # Fill gaps shorter than 1.5 seconds
+            }
+            # embedding_exclude_overlap is also fixed in the pre-trained pipeline
+        }
+        self.diar.instantiate(pipeline_params)
+        
+        # Use the EXACT same embedding model that the diarization pipeline uses internally
         self.embedder = PretrainedSpeakerEmbedding(
-            "speechbrain/spkrec-ecapa-voxceleb", device=device
+            "pyannote/wespeaker-voxceleb-resnet34-LM", device=device
         )
         self.loader = Audio(sample_rate=16_000, mono="downmix")
 
@@ -35,10 +50,22 @@ class AudioBackend:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.embed, wave)
 
-    def diarize(self, path: Path) -> List[Dict]:
+    def diarize(self, path: Path, num_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
         """Perform speaker diarization on an audio file."""
         with torch.inference_mode():
-            diarization = self.diar(str(path))
+            # Pass speaker count parameters to pyannote
+            kwargs = {}
+            if num_speakers is not None:
+                kwargs['num_speakers'] = num_speakers
+            elif max_speakers is not None:
+                kwargs['max_speakers'] = max_speakers
+            
+            diarization = self.diar(str(path), **kwargs)
+            logger.info(f"Diarization: {diarization}")
+            
+            # Apply PyAnnote's built-in gap filling using support() method
+            # This fills gaps shorter than 2 seconds between segments from same speaker
+            diarization = diarization.support(collar=2.0)
         
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -51,10 +78,10 @@ class AudioBackend:
         
         return segments
 
-    async def async_diarize(self, path: Path) -> List[Dict]:
+    async def async_diarize(self, path: Path, num_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
         """Async wrapper for diarization."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.diarize, path)
+        return await loop.run_in_executor(None, self.diarize, path, num_speakers, max_speakers)
 
     def load_wave(self, path: Path, start: Optional[float] = None, end: Optional[float] = None) -> torch.Tensor:
         if start is not None and end is not None:

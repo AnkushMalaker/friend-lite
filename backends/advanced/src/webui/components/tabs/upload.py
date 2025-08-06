@@ -38,7 +38,7 @@ def show_upload_tab():
         uploaded_files = st.file_uploader(
             "Choose audio files",
             type=['wav', 'mp3'],
-            accept_multiple_files=False,
+            accept_multiple_files=True,
             help="Select one or more audio files to process. Supported formats: WAV, MP3, M4A, OGG, FLAC, AAC"
         )
 

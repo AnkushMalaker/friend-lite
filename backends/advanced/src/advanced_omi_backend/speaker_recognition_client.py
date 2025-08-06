@@ -34,6 +34,69 @@ class SpeakerRecognitionClient:
         else:
             logger.info("Speaker recognition client disabled (no service URL configured)")
     
+    async def diarize_and_identify(
+        self, 
+        audio_path: str, 
+        words: List[Dict] = None,
+        user_id: Optional[str] = None
+    ) -> Dict:
+        """
+        Perform diarization and speaker identification using the speaker recognition service.
+        
+        Args:
+            audio_path: Path to the audio file
+            words: Optional word-level data from transcription provider (for hints)
+            user_id: Optional user ID for speaker identification
+        
+        Returns:
+            Dictionary containing segments with speaker identification results
+        """
+        if not self.enabled:
+            return {}
+        
+        try:
+            logger.info(f"Diarizing and identifying speakers in {audio_path}")
+            
+            # Call the speaker recognition service
+            async with aiohttp.ClientSession() as session:
+                # Prepare the audio file for upload
+                with open(audio_path, 'rb') as audio_file:
+                    form_data = aiohttp.FormData()
+                    form_data.add_field(
+                        'file',
+                        audio_file,
+                        filename=Path(audio_path).name,
+                        content_type='audio/wav'
+                    )
+                    # Add parameters for the diarize-and-identify endpoint
+                    form_data.add_field('min_duration', '0.5')
+                    form_data.add_field('identify_only_enrolled', 'false')
+                    if user_id:
+                        form_data.add_field('user_id', str(user_id))
+                    
+                    # Make the request
+                    async with session.post(
+                        f"{self.service_url}/diarize-and-identify",
+                        data=form_data,
+                        timeout=aiohttp.ClientTimeout(total=120)
+                    ) as response:
+                        if response.status != 200:
+                            logger.warning(
+                                f"Speaker recognition service returned status {response.status}: {await response.text()}"
+                            )
+                            return {}
+                        
+                        result = await response.json()
+                        logger.info(f"Speaker service returned {len(result.get('segments', []))} segments")
+                        return result
+        
+        except aiohttp.ClientError as e:
+            logger.warning(f"Failed to connect to speaker recognition service: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"Error during speaker diarization and identification: {e}")
+            return {}
+
     async def identify_speakers(
         self, 
         audio_path: str, 

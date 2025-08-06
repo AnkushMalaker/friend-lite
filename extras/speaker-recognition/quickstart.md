@@ -1,229 +1,150 @@
-# Speaker Recognition Quick Start Guide
+# Speaker Recognition Quick Start
 
-This guide will help you quickly get started with the new speaker analysis and live inference features.
+Get the speaker recognition system running in 5 minutes and start processing audio files.
 
-## Prerequisites
+## What This System Does
 
-- Docker and Docker Compose installed
-- Microphone access for live inference
-- (Optional) Deepgram API key for live transcription
+- **Separates speakers** in audio files (who spoke when)
+- **Identifies known speakers** by name (if you've enrolled them)
+- **Transcribes audio** with speaker labels (using Deepgram)
+- **Provides a web UI** for easy interaction
 
-## Getting Started
+## Setup
 
-### 1. Start the Speaker Recognition Service
+### 1. Start the Services
 
 ```bash
 cd extras/speaker-recognition
 docker compose up --build -d
 ```
 
-This will start:
-- **Speaker Recognition API** on http://localhost:8001
-- **Web UI** on http://localhost:3000
+### 2. Access the Web UI
 
-### 2. Access the Web Interface
+Open https://localhost:5173 in your browser (accept the SSL certificate warning).
 
-Open http://localhost:3000 in your browser. You'll see the Speaker Recognition System interface with navigation for:
-
-- **Audio Viewer**: Upload and view audio files
-- **Annotation**: Annotate speaker segments
-- **Enrollment**: Enroll new speakers
-- **Speakers**: Manage speakers + **NEW: Embedding Analysis**
-- **Inference**: Process audio files
-- **Live Inference**: **NEW: Real-time transcription and speaker ID**
-
-## New Features
-
-### 🔬 Speaker Embedding Analysis
-
-**Location**: Speakers page → "Embedding Analysis" tab
-
-**What it does**: Visualizes how similar or different your enrolled speakers are by plotting their voice embeddings in 2D/3D space.
-
-**Quick Start**:
-1. Make sure you have at least 2-3 enrolled speakers
-2. Go to Speakers page → Embedding Analysis tab
-3. Click "Refresh Analysis" to generate the plot
-4. Explore the interactive visualization:
-   - **Points** = individual speakers
-   - **Colors** = clusters of similar speakers
-   - **Hover** = speaker details and confidence
-
-**Settings**:
-- **Reduction Method**: UMAP (recommended), t-SNE, or PCA
-- **Clustering Method**: DBSCAN (recommended) or K-means
-- **Similarity Threshold**: 0.8 (adjust to find more/fewer similar speakers)
-
-**What to look for**:
-- ✅ **Well-separated speakers**: Good speaker recognition quality
-- ⚠️ **Clustered speakers**: May indicate similar voices or enrollment issues
-- 📊 **Quality Metrics**: Shows separation quality and confidence scores
-
-### 🎙️ Live Inference
-
-**Location**: Live Inference page (new navigation item)
-
-**What it does**: Real-time transcription with speaker identification as you speak.
-
-**Quick Start**:
-1. **Get a Deepgram API Key**:
-   - Sign up at https://console.deepgram.com/
-   - Copy your API key from the dashboard
-
-2. **Configure Live Inference**:
-   - Go to Live Inference page
-   - Click Settings (⚙️ icon)
-   - Paste your Deepgram API key
-   - Enable "Speaker Identification" (uses your enrolled speakers)
-   - Adjust confidence threshold (0.15 = balanced, higher = stricter)
-
-3. **Start Live Session**:
-   - Click "Start Live Session"
-   - Allow microphone access when prompted
-   - Start speaking - you'll see real-time transcription
-   - Enrolled speakers will be identified automatically
-
-**Features**:
-- **Live transcription** with word-level timestamps
-- **Speaker diarization** (separates different speakers)
-- **Real-time speaker identification** using your enrolled speakers
-- **Session statistics** (words, speakers, confidence)
-- **Audio waveform visualization**
-
-## Troubleshooting
-
-### Speaker Analysis Issues
-
-**Problem**: "No speakers found" or empty analysis
-- **Solution**: Make sure you have enrolled speakers first (go to Enrollment page)
-
-**Problem**: Analysis shows all speakers clustered together
-- **Solution**: Check speaker enrollment quality - may need more diverse audio samples
-
-**Problem**: Plot doesn't load
-- **Solution**: Check browser console for errors, try refreshing the page
-
-### Live Inference Issues
-
-**Problem**: "Failed to start session" error
-- **Solution**: 
-  1. Check Deepgram API key is correct
-  2. Ensure you have internet connection
-  3. Verify microphone permissions in browser
-
-**Problem**: Transcription works but no speakers identified
-- **Solution**:
-  1. Check "Enable Speaker Identification" is turned on
-  2. Make sure you have enrolled speakers for the selected user
-  3. Lower the confidence threshold in settings
-
-**Problem**: Audio capture fails
-- **Solution**:
-  1. Allow microphone access in browser
-  2. Check if another application is using the microphone
-  3. Try refreshing the page and allowing permissions again
-
-### General Issues
-
-**Problem**: Services not starting
+**Need different ports?** Copy `.env.template` to `.env` and customize:
 ```bash
-# Check service status
-docker compose ps
-
-# View logs
-docker compose logs speaker-recognition
-docker compose logs webui
-
-# Rebuild if needed
-docker compose down
-docker compose up --build -d
+REACT_UI_PORT=3000           # Web UI port
+SPEAKER_SERVICE_PORT=8086    # API port
 ```
 
-**Problem**: API requests failing
-- **Solution**: Ensure speaker recognition service is running on port 8001
-- Check: http://localhost:8001/health should return {"status": "ok"}
+## First Steps
 
-## API Endpoints
+### 1. Upload Audio
+- Go to **Audio Viewer** page
+- Upload a WAV, MP3, or FLAC file (< 10 minutes recommended)
 
-### New Endpoints
+### 2. Try Processing Modes
 
-#### Speaker Analysis
+| What You Want | Mode | Requirements |
+|---------------|------|--------------|
+| See who spoke when | **Diarization Only** | Just audio |
+| Identify known speakers | **Speaker Identification** | Enrolled speakers |
+| Get transcription + speakers | **Deepgram Enhanced** | Deepgram API key |
+
+**Don't have enrolled speakers yet?** Go to **Enrollment** page and record/upload samples for each person.
+
+### 3. Process Your Audio
+- Go to **Inference** page
+- Select your processing mode
+- Upload audio file
+- Click process and wait for results
+
+## Processing Modes Explained
+
+### Diarization Only
+- **What**: Separates speakers → "Speaker A said this, Speaker B said that"
+- **When**: You just want to see speaker changes
+- **Output**: Generic speaker labels (Speaker A, Speaker B, etc.)
+
+### Speaker Identification  
+- **What**: Separates speakers + identifies them by name
+- **When**: You have enrolled speakers and want to know who said what
+- **Output**: Named speakers ("John said this, Mary said that")
+
+### Deepgram Enhanced
+- **What**: Full transcription + speaker names
+- **When**: You want both transcript and speaker identification
+- **Requires**: Deepgram API key + enrolled speakers
+- **Output**: "John: Hello there. Mary: How are you?"
+
+### Deepgram + Internal Speakers
+- **What**: Best quality transcription + most accurate speaker identification
+- **When**: Maximum accuracy is needed
+- **Requires**: Deepgram API key + enrolled speakers
+
+## Common Issues
+
+### "No speakers identified"
+1. Make sure you have enrolled speakers (go to **Enrollment** page)
+2. Lower confidence threshold (try 0.10-0.15)
+3. Try **Diarization Only** first to see if speakers are detected
+
+### "Processing failed" or timeouts
+1. Use shorter audio files (< 5 minutes)
+2. Check audio format (WAV works best)
+3. Check Docker logs: `docker compose logs speaker-recognition`
+
+### "404 errors" or "endpoint not found"
+1. Ensure services are running: `docker compose ps`
+2. Rebuild if needed: `docker compose up --build -d`
+
+### Port conflicts
+1. Check what's using the port: `netstat -tulpn | grep :5173`
+2. Customize ports in `.env` file
+3. Restart: `docker compose down && docker compose up -d`
+
+## API Usage
+
+Once services are running, you can use the REST API:
+
 ```bash
-# Get embedding analysis
-curl "http://localhost:8001/speakers/analysis?user_id=1&method=umap&cluster_method=dbscan"
+# Health check
+curl http://localhost:8085/health
+
+# Basic speaker separation
+curl -X POST http://localhost:8085/v1/diarize-only \
+  -F "file=@your-audio.wav"
+
+# Speaker identification (requires enrolled speakers)
+curl -X POST http://localhost:8085/diarize-and-identify \
+  -F "file=@your-audio.wav" \
+  -F "user_id=1"
+
+# Transcription + speaker ID (requires Deepgram API key)
+curl -X POST "http://localhost:8085/v1/listen?user_id=1" \
+  -H "Authorization: Token YOUR_DEEPGRAM_API_KEY" \
+  -F "file=@your-audio.wav"
 ```
 
-#### Health Check
+## Configuration Options
+
+Copy `.env.template` to `.env` to customize:
+
 ```bash
-# Check service status
-curl http://localhost:8001/health
-```
+# Ports
+SPEAKER_SERVICE_PORT=8085    # Backend API
+REACT_UI_PORT=5173          # Web UI
 
-## Development Notes
+# Settings  
+SIMILARITY_THRESHOLD=0.15    # Speaker ID confidence (0.1-0.3)
+REACT_UI_HTTPS=true         # Enable HTTPS (needed for microphone)
 
-### Backend Changes
-- Added `src/simple_speaker_recognition/utils/analysis.py` - analysis utilities
-- Added `/speakers/analysis` endpoint in API service
-- Added `umap-learn` dependency for dimensionality reduction
-
-### Frontend Changes
-- New `EmbeddingPlot` component for interactive visualizations
-- New `LiveAudioCapture` component for WebRTC audio
-- Extended Deepgram service with streaming support
-- New `InferLive` page for real-time inference
-- Updated navigation to include new features
-
-### Dependencies Added
-- **Python**: `umap-learn>=0.5.3`
-- **JavaScript**: Plotly.js (already included)
-
-## Advanced Usage
-
-### Custom Analysis Parameters
-
-You can customize the analysis via URL parameters:
-```bash
-# Use t-SNE with K-means clustering
-http://localhost:3000/speakers?analysis=true&method=tsne&cluster=kmeans
-
-# Adjust similarity threshold
-http://localhost:3000/speakers?analysis=true&similarity=0.7
-```
-
-### Programmatic Access
-
-```python
-import requests
-
-# Get speaker analysis
-response = requests.get(
-    "http://localhost:8001/speakers/analysis",
-    params={
-        "user_id": 1,
-        "method": "umap",
-        "cluster_method": "dbscan",
-        "similarity_threshold": 0.8
-    }
-)
-
-analysis = response.json()
-print(f"Found {analysis['clustering']['n_clusters']} clusters")
-print(f"Quality score: {analysis['quality_metrics']['separation_quality']:.3f}")
+# Optional APIs
+DEEPGRAM_API_KEY=your_key   # For transcription modes
+HF_TOKEN=your_token         # Required for first-time model download
 ```
 
 ## Next Steps
 
-1. **Enroll diverse speakers** to see better analysis results
-2. **Experiment with different analysis methods** (UMAP vs t-SNE vs PCA)
-3. **Try live inference** with different confidence thresholds
-4. **Monitor speaker quality** using the embedding analysis
-5. **Integrate with your application** using the REST API
+1. **Enroll speakers** - Go to Enrollment page and add voice samples
+2. **Try live inference** - Real-time transcription with speaker ID
+3. **Explore speaker analysis** - See how similar your enrolled speakers are
+4. **Integrate with your app** - Use the REST API endpoints
 
-## Support
+## Need Help?
 
-For issues or questions:
-1. Check the main project README
-2. Review Docker logs: `docker compose logs`
-3. Verify all services are healthy: `docker compose ps`
-
-The speaker recognition system is now ready for both analysis and real-time inference!
+- **Service not starting?** → `docker compose logs`
+- **Web UI not loading?** → Check https://localhost:5173 and accept SSL cert
+- **API not responding?** → Verify http://localhost:8085/health returns `{"status": "ok"}`
+- **Still stuck?** → Check the main README for detailed documentation
