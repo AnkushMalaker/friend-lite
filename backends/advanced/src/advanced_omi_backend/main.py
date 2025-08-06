@@ -18,6 +18,8 @@ import json
 import os
 import time
 import uuid
+
+import aiohttp
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
@@ -904,6 +906,48 @@ async def health_check():
             "critical": False,
         }
         overall_healthy = False
+
+    # Check Speaker Recognition service (non-critical - optional feature)
+    speaker_service_url = os.getenv("SPEAKER_SERVICE_URL")
+    if speaker_service_url:
+        try:
+            # Make a health check request to the speaker service
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{speaker_service_url}/health", 
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status == 200:
+                        health_status["services"]["speaker_recognition"] = {
+                            "status": "✅ Connected",
+                            "healthy": True,
+                            "url": speaker_service_url,
+                            "critical": False,
+                        }
+                    else:
+                        health_status["services"]["speaker_recognition"] = {
+                            "status": f"⚠️ Unhealthy: HTTP {response.status}",
+                            "healthy": False,
+                            "url": speaker_service_url,
+                            "critical": False,
+                        }
+                        overall_healthy = False
+        except asyncio.TimeoutError:
+            health_status["services"]["speaker_recognition"] = {
+                "status": "⚠️ Connection Timeout (5s)",
+                "healthy": False,
+                "url": speaker_service_url,
+                "critical": False,
+            }
+            overall_healthy = False
+        except Exception as e:
+            health_status["services"]["speaker_recognition"] = {
+                "status": f"⚠️ Connection Failed: {str(e)}",
+                "healthy": False,
+                "url": speaker_service_url,
+                "critical": False,
+            }
+            overall_healthy = False
 
     # Track health check results in debug tracker
     try:

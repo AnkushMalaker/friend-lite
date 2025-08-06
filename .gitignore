@@ -18,7 +18,7 @@ transcription_results.csv
 *.ckpt
 **/hub/*
 *.log
-**/speaker_data/**
+**/speaker_data*/**
 **/.venv/*
 **metrics_report**
 

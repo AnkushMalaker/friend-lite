@@ -3374,7 +3374,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "alembic" },
     { name = "deepgram-sdk" },
-    { name = "easy-audio-interfaces", extra = ["local-audio"] },
+    { name = "easy-audio-interfaces" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "librosa" },
@@ -3401,6 +3401,11 @@ dependencies = [
     { name = "yt-dlp" },
 ]
 
+[package.optional-dependencies]
+local-audio = [
+    { name = "easy-audio-interfaces", extra = ["local-audio"] },
+]
+
 [package.dev-dependencies]
 cpu = [
     { name = "faiss-cpu" },
@@ -3418,7 +3423,8 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "deepgram-sdk", specifier = ">=4.7.0" },
-    { name = "easy-audio-interfaces", extras = ["local-audio"], specifier = ">=0.7.1" },
+    { name = "easy-audio-interfaces", specifier = ">=0.7.1" },
+    { name = "easy-audio-interfaces", extras = ["local-audio"], marker = "extra == 'local-audio'", specifier = ">=0.7.1" },
     { name = "faiss-cpu", specifier = ">=1.8" },
     { name = "fastapi", specifier = ">=0.115.12" },
     { name = "librosa", specifier = ">=0.10.0" },
@@ -3443,6 +3449,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.34.2" },
     { name = "yt-dlp", specifier = ">=2025.7.21" },
 ]
+provides-extras = ["local-audio"]
 
 [package.metadata.requires-dev]
 cpu = [{ name = "faiss-cpu", specifier = ">=1.8" }]

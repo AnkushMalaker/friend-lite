@@ -24,7 +24,9 @@ export interface DeepgramTranscriptionOptions {
   enhanceSpeakers?: boolean
   userId?: number
   speakerConfidenceThreshold?: number
-  mode?: 'standard' | 'hybrid'
+  mode?: 'standard' | 'hybrid' | 'live'
+  minDuration?: number
+  enablePlainMode?: boolean
 }
 
 export interface DeepgramResponse {
@@ -107,7 +109,12 @@ export async function transcribeWithDeepgram(
   // Additional params for hybrid mode
   if (opts.mode === 'hybrid') {
     params.similarity_threshold = opts.speakerConfidenceThreshold
-    params.min_duration = 1.0
+    params.min_duration = opts.minDuration || 1.0
+  }
+  
+  // Plain mode parameter for internal processing
+  if (opts.enablePlainMode) {
+    params.enable_plain_mode = true
   }
   
   const response = await apiService.post(endpoint, formData, {
@@ -145,7 +152,7 @@ export function groupWordsBySpeaker(words: DeepgramResponse['results']['channels
         speaker,
         speakerId: word.identified_speaker_id || `speaker_${speaker}`,
         speakerName: word.identified_speaker_name || `Speaker ${speaker}`,
-        confidence: word.speaker_identification_confidence || 0,
+        confidence: word.speaker_identification_confidence || 0, // Use speaker identification confidence, not word confidence
         text: word.punctuated_word || word.word,
         identifiedSpeakerId: word.identified_speaker_id,
         identifiedSpeakerName: word.identified_speaker_name,

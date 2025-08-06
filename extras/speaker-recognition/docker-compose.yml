@@ -54,10 +54,11 @@ services:
       - ./webui/postcss.config.js:/app/postcss.config.js
       - ./webui/tsconfig.json:/app/tsconfig.json
     environment:
-      - VITE_API_URL=http://localhost:${SPEAKER_SERVICE_PORT:-8085}
+      - VITE_API_URL=http://speaker-service:${SPEAKER_SERVICE_PORT:-8085}
       - REACT_UI_HOST=${REACT_UI_HOST:-0.0.0.0}
       - REACT_UI_PORT=${REACT_UI_PORT:-5173}
       - REACT_UI_HTTPS=${REACT_UI_HTTPS:-false}
+      - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST:-speaker-service}
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
     depends_on:
       - speaker-service

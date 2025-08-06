@@ -5,9 +5,9 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     ffmpeg \
-    portaudio19-dev \
-    libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
+    # portaudio19-dev \
+    # libasound2-dev \
 
 WORKDIR /app
 
@@ -37,4 +37,4 @@ ENV PYTHONPATH=/app
 EXPOSE 8085
 
 # Run the service
-CMD ["uv", "run", "simple-speaker-service"] 
+CMD ["uv", "run", "--no-dev", "simple-speaker-service"] 

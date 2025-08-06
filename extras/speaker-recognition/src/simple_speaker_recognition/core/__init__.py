@@ -1,7 +1,7 @@
 """Core speaker recognition components."""
 
 from .audio_backend import AudioBackend
-from .speaker_db import SpeakerDB
+from .unified_speaker_db import UnifiedSpeakerDB
 from .models import *
 
-__all__ = ["AudioBackend", "SpeakerDB"]
+__all__ = ["AudioBackend", "UnifiedSpeakerDB"]

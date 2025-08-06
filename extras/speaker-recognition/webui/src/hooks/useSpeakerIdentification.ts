@@ -1,12 +1,21 @@
 /**
- * Custom hook for speaker identification functionality
+ * useSpeakerIdentification Hook - Enhanced speaker identification state management
+ * Centralizes speaker identification processing state and operations
+ * Supports all processing modes: diarization, deepgram, hybrid, plain
  */
 
-import { useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { useUser } from '../contexts/UserContext'
 import { apiService } from '../services/api'
 import { createWAVBlob } from '../utils/audioUtils'
 import { speakerLogger } from '../utils/logger'
+import { 
+  speakerIdentificationService, 
+  ProcessingMode, 
+  ProcessingOptions, 
+  ProcessingResult
+} from '../services/speakerIdentification'
+import { ProcessedAudio } from '../services/audioProcessing'
 
 export interface IdentifyResult {
   found: boolean
@@ -18,13 +27,63 @@ export interface IdentifyResult {
   duration: number
 }
 
-export interface UseSpeakerIdentificationReturn {
-  identifyUtteranceSpeaker: (audioBuffer: Float32Array, sampleRate: number) => Promise<IdentifyResult>
+export interface UseSpeakerIdentificationOptions {
+  defaultMode?: ProcessingMode
+  defaultConfidenceThreshold?: number
+  onProcessingComplete?: (result: ProcessingResult) => void
+  onError?: (error: string) => void
 }
 
-export function useSpeakerIdentification(): UseSpeakerIdentificationReturn {
-  const { user } = useUser()
+export interface UseSpeakerIdentificationReturn {
+  // Legacy method for backward compatibility
+  identifyUtteranceSpeaker: (audioBuffer: Float32Array, sampleRate: number) => Promise<IdentifyResult>
+  
+  // New enhanced functionality
+  isProcessing: boolean
+  currentMode: ProcessingMode
+  confidenceThreshold: number
+  results: ProcessingResult[]
+  selectedResult: ProcessingResult | null
+  processingProgress: string | null
+  
+  // Controls
+  setProcessingMode: (mode: ProcessingMode) => void
+  setConfidenceThreshold: (threshold: number) => void
+  processAudio: (audio: ProcessedAudio, mode?: ProcessingMode) => Promise<ProcessingResult | null>
+  selectResult: (result: ProcessingResult | null) => void
+  clearResults: () => void
+  exportResult: (result: ProcessingResult) => void
+  
+  // Available modes
+  availableModes: Array<{ mode: ProcessingMode; name: string; description: string }>
+}
 
+export function useSpeakerIdentification(
+  options: UseSpeakerIdentificationOptions = {}
+): UseSpeakerIdentificationReturn {
+  const { user } = useUser()
+  const {
+    defaultMode = 'speaker-identification',
+    defaultConfidenceThreshold = 0.15,
+    onProcessingComplete,
+    onError
+  } = options
+
+  // State
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [currentMode, setCurrentMode] = useState<ProcessingMode>(defaultMode)
+  const [confidenceThreshold, setConfidenceThreshold] = useState(defaultConfidenceThreshold)
+  const [results, setResults] = useState<ProcessingResult[]>([])
+  const [selectedResult, setSelectedResult] = useState<ProcessingResult | null>(null)
+  const [processingProgress, setProcessingProgress] = useState<string | null>(null)
+
+  // Refs for tracking operations
+  const processingAbortController = useRef<AbortController | null>(null)
+
+  // Get available processing modes
+  const availableModes = speakerIdentificationService.getAvailableModes()
+
+  // Legacy method for backward compatibility
   const identifyUtteranceSpeaker = useCallback(async (
     audioBuffer: Float32Array, 
     sampleRate: number
@@ -38,7 +97,7 @@ export function useSpeakerIdentification(): UseSpeakerIdentificationReturn {
       // Call the simple identify-utterance endpoint
       const formData = new FormData()
       formData.append('file', wavBlob, 'utterance.wav')
-      formData.append('similarity_threshold', '0.15')
+      formData.append('similarity_threshold', confidenceThreshold.toString())
       if (user?.id) {
         formData.append('user_id', user.id.toString())
       }
@@ -62,13 +121,176 @@ export function useSpeakerIdentification(): UseSpeakerIdentificationReturn {
         speaker_name: null, 
         confidence: 0, 
         status: 'error',
-        similarity_threshold: 0.15,
+        similarity_threshold: confidenceThreshold,
         duration: 0
       }
     }
-  }, [user])
+  }, [user, confidenceThreshold])
+
+  // New enhanced functionality
+  const setProcessingMode = useCallback((mode: ProcessingMode) => {
+    setCurrentMode(mode)
+  }, [])
+
+  const setThreshold = useCallback((threshold: number) => {
+    setConfidenceThreshold(Math.max(0, Math.min(1, threshold)))
+  }, [])
+
+  const processAudio = useCallback(async (
+    audio: ProcessedAudio,
+    mode?: ProcessingMode
+  ): Promise<ProcessingResult | null> => {
+    const processingMode = mode || currentMode
+
+    try {
+      setIsProcessing(true)
+      setProcessingProgress(`Starting ${processingMode} processing...`)
+
+      // Create abort controller for this operation
+      processingAbortController.current = new AbortController()
+
+      // Prepare processing options
+      const processingOptions: ProcessingOptions = {
+        mode: processingMode,
+        userId: user?.id,
+        confidenceThreshold,
+        minDuration: 1.0,
+        identifyOnlyEnrolled: false,
+        enhanceSpeakers: true
+      }
+
+      // Update progress based on mode
+      const progressMessages = {
+        diarization: 'Analyzing speakers...',
+        deepgram: 'Transcribing with Deepgram...',
+        hybrid: 'Processing hybrid mode...',
+        plain: 'Performing plain diarization...'
+      }
+      setProcessingProgress(progressMessages[processingMode])
+
+      // Ensure we have a valid file
+      if (!audio.file) {
+        throw new Error('ProcessedAudio object is missing the file property')
+      }
+
+      // Process audio
+      const result = await speakerIdentificationService.processAudio(
+        audio.file,
+        processingOptions
+      )
+
+      // Add to results
+      setResults(prev => [result, ...prev])
+      setSelectedResult(result)
+
+      // Call completion callback
+      onProcessingComplete?.(result)
+
+      setProcessingProgress(null)
+      return result
+
+    } catch (error: any) {
+      const errorMsg = `${processingMode} processing failed: ${error.message}`
+      setProcessingProgress(null)
+      onError?.(errorMsg)
+      
+      // Create failed result for tracking
+      const failedResult: ProcessingResult = {
+        id: Math.random().toString(36),
+        filename: audio.filename,
+        duration: audio.buffer.duration,
+        status: 'failed',
+        created_at: new Date().toISOString(),
+        mode: processingMode,
+        speakers: [],
+        confidence_summary: {
+          total_segments: 0,
+          high_confidence: 0,
+          medium_confidence: 0,
+          low_confidence: 0
+        },
+        error: error.message
+      }
+      
+      setResults(prev => [failedResult, ...prev])
+      return null
+
+    } finally {
+      setIsProcessing(false)
+      processingAbortController.current = null
+    }
+  }, [currentMode, confidenceThreshold, user?.id, onProcessingComplete, onError])
+
+  const selectResult = useCallback((result: ProcessingResult | null) => {
+    setSelectedResult(result)
+  }, [])
+
+  const clearResults = useCallback(() => {
+    setResults([])
+    setSelectedResult(null)
+  }, [])
+
+  const exportResult = useCallback((result: ProcessingResult) => {
+    try {
+      const exportData = {
+        filename: result.filename,
+        duration: result.duration,
+        mode: result.mode,
+        created_at: result.created_at,
+        processing_time: result.processing_time,
+        confidence_summary: result.confidence_summary,
+        speakers: result.speakers.map(segment => ({
+          start: segment.start,
+          end: segment.end,
+          duration: segment.end - segment.start,
+          speaker: segment.speaker_name,
+          speaker_id: segment.speaker_id,
+          confidence: segment.confidence,
+          text: segment.text,
+          identified_speaker_id: segment.identified_speaker_id,
+          identified_speaker_name: segment.identified_speaker_name,
+          speaker_identification_confidence: segment.speaker_identification_confidence,
+          speaker_status: segment.speaker_status
+        })),
+        deepgram_response: result.deepgram_response
+      }
+
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `speaker_${result.mode}_${result.filename.split('.')[0]}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+    } catch (error: any) {
+      onError?.(`Export failed: ${error.message}`)
+    }
+  }, [onError])
 
   return {
-    identifyUtteranceSpeaker
+    // Legacy method for backward compatibility
+    identifyUtteranceSpeaker,
+    
+    // New enhanced functionality
+    isProcessing,
+    currentMode,
+    confidenceThreshold,
+    results,
+    selectedResult,
+    processingProgress,
+    
+    // Controls
+    setProcessingMode,
+    setConfidenceThreshold: setThreshold,
+    processAudio,
+    selectResult,
+    clearResults,
+    exportResult,
+    
+    // Available modes
+    availableModes
   }
 }

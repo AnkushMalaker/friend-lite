@@ -27,10 +27,10 @@ log = logging.getLogger("speaker_service")
 
 
 # Import dependencies from parent service module
-def get_db():
+async def get_db():
     """Get speaker database dependency."""
     from .. import service
-    return service.get_db()
+    return await service.get_db()
 
 
 def get_audio_backend():
