@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     ffmpeg \
+    curl \
     && rm -rf /var/lib/apt/lists/*
     # portaudio19-dev \
     # libasound2-dev \

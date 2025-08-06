@@ -37,7 +37,7 @@ class SpeakerRecognitionClient:
     async def diarize_and_identify(
         self, 
         audio_path: str, 
-        words: List[Dict] = None,
+        words: None, # NOT IMPLEMENTED
         user_id: Optional[str] = None
     ) -> Dict:
         """
@@ -51,6 +51,9 @@ class SpeakerRecognitionClient:
         Returns:
             Dictionary containing segments with speaker identification results
         """
+        if words:
+            logger.warning("Words parameter is not implemented yet")
+        
         if not self.enabled:
             return {}
         

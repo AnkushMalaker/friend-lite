@@ -197,14 +197,8 @@ def _display_audio(convo, debug_mode, cache_buster):
 
         # Test audio accessibility
         try:
-            test_response = requests.head(audio_url, timeout=2)
-            if test_response.status_code == 200:
-                st.audio(audio_url, format="audio/wav")
-                logger.debug(f"🎵 Audio URL accessible: {audio_url}")
-            else:
-                st.error(f"❌ Audio file not accessible (HTTP {test_response.status_code})")
-                st.code(f"URL: {audio_url}")
-                logger.error(f"🎵 Audio URL not accessible: {audio_url} (HTTP {test_response.status_code})")
+            st.audio(audio_url, format="audio/wav")
+            logger.debug(f"🎵 Audio URL accessible: {audio_url}")
         except Exception as e:
             st.error(f"❌ Cannot reach audio file: {str(e)}")
             st.code(f"URL: {audio_url}")
