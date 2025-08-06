@@ -272,10 +272,37 @@ export function extractAudioSegment(
   endTime: number, 
   sampleRate: number
 ): Float32Array {
+  // Validate inputs
+  if (!(samples instanceof Float32Array)) {
+    throw new Error(`extractAudioSegment: Expected Float32Array, got ${(samples as any)?.constructor?.name || typeof samples}. Use extractAudioSamples() to convert AudioBuffer first.`)
+  }
+  if (!sampleRate || sampleRate <= 0 || !isFinite(sampleRate)) {
+    throw new Error(`extractAudioSegment: Invalid sampleRate: ${sampleRate}`)
+  }
+  if (!isFinite(startTime) || !isFinite(endTime) || startTime < 0 || endTime < 0) {
+    throw new Error(`extractAudioSegment: Invalid time values: startTime=${startTime}s, endTime=${endTime}s`)
+  }
+  if (startTime >= endTime) {
+    throw new Error(`extractAudioSegment: Invalid time range: startTime (${startTime}s) must be less than endTime (${endTime}s)`)
+  }
+  if (samples.length === 0) {
+    throw new Error(`extractAudioSegment: Empty samples array provided`)
+  }
+  
   const startSample = Math.floor(startTime * sampleRate)
   const endSample = Math.floor(endTime * sampleRate)
   
+  // Validate calculated sample indices
+  if (startSample >= samples.length) {
+    throw new Error(`extractAudioSegment: Start time ${startTime}s (sample ${startSample}) is beyond audio length ${samples.length / sampleRate}s (${samples.length} samples)`)
+  }
+  
   const segmentLength = Math.max(0, Math.min(endSample - startSample, samples.length - startSample))
+  
+  if (segmentLength === 0) {
+    console.warn(`extractAudioSegment: Calculated segment length is 0 for time range ${startTime}s-${endTime}s`)
+  }
+  
   const segment = new Float32Array(segmentLength)
   
   for (let i = 0; i < segmentLength; i++) {

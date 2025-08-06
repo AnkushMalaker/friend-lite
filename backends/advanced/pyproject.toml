@@ -5,7 +5,7 @@ description = "AI-powered wearable ecosystem for audio capture, transcription, a
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "easy-audio-interfaces[local-audio]>=0.7.1", # we need to add local-audio for scripts/local-audio.py | If we don't need that, we can remove this, and then remove portaudio19-dev from Dockerfile
+    "easy-audio-interfaces>=0.7.1", # we need to add local-audio for scripts/local-audio.py | If we don't need that, we can remove this, and then remove portaudio19-dev from Dockerfile
     "fastapi>=0.115.12",
     "mem0ai>=0.1.114",
     "langchain_neo4j",
@@ -26,6 +26,10 @@ deepgram = [
 ]
 webui = [
     "streamlit>=1.45.1",
+]
+
+local-audio = [
+    "easy-audio-interfaces[local-audio]>=0.7.1",
 ]
 
 [build-system]

@@ -171,7 +171,7 @@ def _display_audio(convo, debug_mode, cache_buster):
     """Display audio player for conversation"""
     audio_path = convo.get("audio_path")
     cropped_audio_path = convo.get("cropped_audio_path")
-    backend_public_url = st.session_state.get("backend_public_url", st.session_state.get("backend_api_url", "http://192.168.0.110:8000"))
+    backend_public_url = st.session_state.get("backend_public_url", st.session_state.get("backend_api_url"))
 
     if audio_path:
         # Determine which audio to show

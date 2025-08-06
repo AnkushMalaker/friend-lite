@@ -8,8 +8,8 @@ RUN apt-get update && \
     git \
     curl \
     ffmpeg \
-    portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
+    # portaudio19-dev \
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:0.6.10 /uv /uvx /bin/
@@ -24,10 +24,10 @@ RUN mkdir -p src/advanced_omi_backend
 COPY src/advanced_omi_backend/__init__.py src/advanced_omi_backend/
 
 # Install dependencies using uv with deepgram extra
-# RUN --mount=type=cache,target=/root/.cache/uv \
-#     uv sync --extra deepgram
-# Somehow the above is breaking consecutive builds.
-RUN uv sync --extra deepgram
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --extra deepgram
+# Somehow the above is breaking consecutive builds, but enable for speeeeeeeed.
+# RUN uv sync --extra deepgram
 
 # Copy all application code
 COPY . .

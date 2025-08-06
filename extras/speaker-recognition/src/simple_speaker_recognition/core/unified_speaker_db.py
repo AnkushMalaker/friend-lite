@@ -31,9 +31,8 @@ class UnifiedSpeakerDB:
         self.base_dir = base_dir
         self.index_path = base_dir / "faiss.index"
 
-        # FAISS index for fast similarity search
-        self.index: faiss.IndexHNSWFlat = faiss.IndexHNSWFlat(emb_dim, 32)
-        self.index.hnsw.efSearch = 128
+        # FAISS index for fast similarity search using cosine similarity (inner product)
+        self.index: faiss.IndexFlatIP = faiss.IndexFlatIP(emb_dim)
         
         # Mapping from FAISS index position to (user_id, speaker_id)
         self.faiss_to_speaker: Dict[int, Tuple[int, str]] = {}
@@ -46,12 +45,10 @@ class UnifiedSpeakerDB:
         if self.index_path.exists():
             try:
                 self.index = faiss.read_index(str(self.index_path))
-                self.index.hnsw.efSearch = 128
                 log.info("Loaded FAISS index from %s", self.index_path)
             except Exception as e:
                 log.warning("Could not load FAISS index, creating new: %s", e)
-                self.index = faiss.IndexHNSWFlat(self.emb_dim, 32)
-                self.index.hnsw.efSearch = 128
+                self.index = faiss.IndexFlatIP(self.emb_dim)
         
         # Rebuild mapping from SQLite
         self._rebuild_faiss_mapping()
@@ -67,9 +64,8 @@ class UnifiedSpeakerDB:
                 log.info("No speakers found in database")
                 return
             
-            # Recreate FAISS index
-            self.index = faiss.IndexHNSWFlat(self.emb_dim, 32)
-            self.index.hnsw.efSearch = 128
+            # Recreate FAISS index for inner product (cosine similarity)
+            self.index = faiss.IndexFlatIP(self.emb_dim)
             
             vectors = []
             for i, speaker in enumerate(speakers):
@@ -83,9 +79,10 @@ class UnifiedSpeakerDB:
                         log.warning("Invalid embedding data for speaker %s: %s", speaker.id, e)
             
             if vectors:
-                all_vectors = np.stack(vectors).astype(np.float32)
-                self.index.add(all_vectors)
-                log.info("Rebuilt FAISS index with %d speakers", len(vectors))
+                # Normalize all embeddings before adding to FAISS
+                normalized_vectors = np.stack([_normalize(v) for v in vectors]).astype(np.float32)
+                self.index.add(normalized_vectors)
+                log.info("Rebuilt FAISS index with %d speakers (normalized embeddings)", len(vectors))
             
         except Exception as e:
             log.error("Error rebuilding FAISS mapping: %s", e)
@@ -123,6 +120,11 @@ class UnifiedSpeakerDB:
                     existing_speaker.audio_sample_count = sample_count  # type: ignore[assignment]
                     existing_speaker.total_audio_duration = total_duration  # type: ignore[assignment]
                     log.info("Updated existing speaker: %s (user: %d) with %d samples", speaker_id, user_id, sample_count)
+                    
+                    # For updates, we need to rebuild since FAISS doesn't support updates
+                    db.commit()
+                    self._rebuild_faiss_mapping()
+                    self._save_faiss_index()
                 else:
                     # Create new speaker
                     new_speaker = Speaker(
@@ -134,13 +136,18 @@ class UnifiedSpeakerDB:
                         total_audio_duration=total_duration
                     )
                     db.add(new_speaker)
+                    db.commit()
                     log.info("Added new speaker: %s (user: %d) with %d samples", speaker_id, user_id, sample_count)
-                
-                db.commit()
-                
-                # Rebuild FAISS index to include changes
-                self._rebuild_faiss_mapping()
-                self._save_faiss_index()
+                    
+                    # For new speakers, add to FAISS index incrementally
+                    normalized_embedding = _normalize(embedding.astype(np.float32)).reshape(1, -1)
+                    self.index.add(normalized_embedding)
+                    
+                    # Update mapping (new index position is ntotal - 1)
+                    new_faiss_idx = self.index.ntotal - 1
+                    self.faiss_to_speaker[new_faiss_idx] = (user_id, speaker_id)
+                    
+                    self._save_faiss_index()
                 
                 return is_update
                 
@@ -202,44 +209,75 @@ class UnifiedSpeakerDB:
                 db.close()
 
     async def identify(self, embedding: np.ndarray, user_id: Optional[int] = None) -> Tuple[bool, Optional[Dict], float]:
-        """Identify speaker from embedding using cosine similarity."""
+        """Identify speaker from embedding using FAISS search."""
         if self.index.ntotal == 0:
             return False, None, 0.0
         
         # Normalize query embedding
         query_emb = _normalize(embedding.astype(np.float32))
         
+        # Use FAISS to find nearest neighbors
+        k = min(10, self.index.ntotal)  # Search top-k candidates
+        similarities, indices = self.index.search(query_emb.reshape(1, -1), k)
+        
         best_similarity = -1.0
         best_speaker = None
         
         db = get_db_session()
         try:
-            # Get all speakers (optionally filtered by user)
-            query = db.query(Speaker)
-            if user_id is not None:
-                query = query.filter(Speaker.user_id == user_id)
+            # Collect all candidates for detailed logging
+            all_candidates = []
             
-            speakers = query.all()
+            # Check each candidate from FAISS search
+            for idx, similarity in zip(indices[0], similarities[0]):
+                if idx == -1:  # FAISS returns -1 for invalid indices
+                    continue
+                    
+                # Map FAISS index to speaker
+                if idx not in self.faiss_to_speaker:
+                    continue
+                    
+                candidate_user_id, speaker_id = self.faiss_to_speaker[idx]
+                
+                # Apply user filter if specified
+                if user_id is not None and candidate_user_id != user_id:
+                    continue
+                
+                # FAISS IndexFlatIP returns inner product for normalized vectors (cosine similarity)
+                cosine_similarity = float(similarity)
+                
+                # Get speaker details from database
+                speaker = db.query(Speaker).filter(
+                    Speaker.id == speaker_id,
+                    Speaker.user_id == candidate_user_id
+                ).first()
+                
+                if speaker:
+                    candidate_info = {
+                        "id": speaker.id,
+                        "name": speaker.name,
+                        "user_id": speaker.user_id,
+                        "similarity": cosine_similarity,
+                        "distance": 1.0 - cosine_similarity  # Convert similarity to distance
+                    }
+                    all_candidates.append(candidate_info)
+                    
+                    if cosine_similarity > best_similarity:
+                        best_similarity = cosine_similarity
+                        best_speaker = {
+                            "id": speaker.id,
+                            "name": speaker.name,
+                            "user_id": speaker.user_id
+                        }
             
-            for speaker in speakers:
-                embedding_data = cast(Optional[str], speaker.embedding_data)
-                if embedding_data:
-                    try:
-                        stored_emb = np.array(json.loads(embedding_data), dtype=np.float32)
-                        stored_emb = _normalize(stored_emb)
-                        
-                        # Compute cosine similarity
-                        similarity = float(np.dot(query_emb.flatten(), stored_emb.flatten()))
-                        
-                        if similarity > best_similarity:
-                            best_similarity = similarity
-                            best_speaker = {
-                                "id": speaker.id,
-                                "name": speaker.name,
-                                "user_id": speaker.user_id
-                            }
-                    except (json.JSONDecodeError, ValueError) as e:
-                        log.warning("Invalid embedding for speaker %s: %s", speaker.id, e)
+            # Log all candidate speakers with their distances
+            if all_candidates:
+                log.info("Speaker identification candidates:")
+                for candidate in sorted(all_candidates, key=lambda x: x["similarity"], reverse=True):
+                    log.info(f"  {candidate['name']} ({candidate['id']}): similarity={candidate['similarity']:.4f}, distance={candidate['distance']:.4f}")
+                log.info(f"Threshold: {self.similarity_thr:.4f}")
+            else:
+                log.info("No valid candidates found for identification")
             
             # Check if best similarity meets threshold
             if best_similarity >= self.similarity_thr and best_speaker is not None:
