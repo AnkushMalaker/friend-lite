@@ -64,7 +64,7 @@ services:
       - speaker-service
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "sh", "-c", "if [ \"$REACT_UI_HTTPS\" = \"true\" ]; then wget --no-check-certificate --no-verbose --tries=1 --spider https://localhost:5173; else wget --no-verbose --tries=1 --spider http://localhost:5173; fi"]
+      test: ["CMD", "curl", "-f", "http://localhost:5173"]
       interval: 30s
       timeout: 10s
       retries: 3
