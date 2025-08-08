@@ -324,6 +324,9 @@ class TranscriptionManager:
             coordinator = get_transcript_coordinator()
             coordinator.signal_transcript_ready(self._current_audio_uuid)
 
+            # Queue memory processing now that transcription is complete
+            await self._queue_memory_processing()
+
             # Queue audio cropping if we have diarization segments and cropping is enabled
             if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "false").lower() == "true":
                 await self._queue_diarization_based_cropping(final_segments)
@@ -382,6 +385,45 @@ class TranscriptionManager:
     # Segments are now only created by the speaker service endpoint /v1/diarize-identify-match
     # which handles diarization, speaker identification, and word-to-speaker matching.
     # This keeps all the segment creation logic in one place (speaker service).
+
+    async def _queue_memory_processing(self):
+        """Queue memory processing now that transcription is complete.
+        
+        This is data-driven - no event coordination needed since we know transcript is ready.
+        """
+        try:
+            # Get current client for user info
+            current_client = self._get_current_client()
+            if not current_client:
+                logger.warning(f"No client state available for memory processing {self._current_audio_uuid}")
+                return
+                
+            # Check if we have required data
+            if not all([self._current_audio_uuid, current_client.user_id, current_client.user_email]):
+                logger.warning(f"Memory processing skipped - missing required data for {self._current_audio_uuid}")
+                logger.warning(f"    - audio_uuid: {bool(self._current_audio_uuid)}")
+                logger.warning(f"    - user_id: {bool(current_client.user_id) if current_client else False}")
+                logger.warning(f"    - user_email: {bool(current_client.user_email) if current_client else False}")
+                return
+                
+            logger.info(f"💭 Queuing memory processing for completed transcription {self._current_audio_uuid}")
+            
+            # Import here to avoid circular imports
+            from advanced_omi_backend.processors import MemoryProcessingItem, get_processor_manager
+            
+            # Queue memory processing - no event coordination needed
+            processor_manager = get_processor_manager()
+            await processor_manager.queue_memory(
+                MemoryProcessingItem(
+                    client_id=self._client_id,
+                    user_id=current_client.user_id,
+                    user_email=current_client.user_email,
+                    audio_uuid=self._current_audio_uuid,
+                )
+            )
+            
+        except Exception as e:
+            logger.error(f"Error queuing memory processing for {self._current_audio_uuid}: {e}")
 
     async def _queue_diarization_based_cropping(self, segments):
         """Queue audio cropping based on diarization segments."""

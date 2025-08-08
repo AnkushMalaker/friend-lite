@@ -27,6 +27,11 @@ export interface ProcessingModeSelectorProps {
   isProcessing: boolean
   confidenceThreshold: number
   onConfidenceThresholdChange: (threshold: number) => void
+  minSpeakers: number
+  onMinSpeakersChange: (min: number) => void
+  maxSpeakers: number
+  onMaxSpeakersChange: (max: number) => void
+  uploadedJson?: any
   showSettings?: boolean
   compact?: boolean
   className?: string
@@ -34,7 +39,7 @@ export interface ProcessingModeSelectorProps {
 
 const PROCESSING_MODES: ProcessingModeConfig[] = [
   {
-    mode: 'diarization',
+    mode: 'speaker-identification',
     name: 'Speaker Identification',
     description: 'Diarization + speaker recognition only',
     icon: '🎯',
@@ -42,7 +47,7 @@ const PROCESSING_MODES: ProcessingModeConfig[] = [
     features: ['Speaker diarization', 'Speaker identification', 'Confidence scoring']
   },
   {
-    mode: 'deepgram',
+    mode: 'deepgram-enhanced',
     name: 'Transcribe + Identify',
     description: 'Full transcription with enhanced speaker ID',
     icon: '🚀',
@@ -51,7 +56,7 @@ const PROCESSING_MODES: ProcessingModeConfig[] = [
     features: ['High-quality transcription', 'Speaker diarization', 'Enhanced speaker identification', 'Word-level timing']
   },
   {
-    mode: 'hybrid',
+    mode: 'deepgram-transcript-internal-speakers',
     name: 'Hybrid Mode',
     description: 'Deepgram transcription + internal diarization',
     icon: '🔄',
@@ -60,13 +65,13 @@ const PROCESSING_MODES: ProcessingModeConfig[] = [
     features: ['Best transcription quality', 'Accurate speaker segmentation', 'Enhanced identification', 'Optimal accuracy']
   },
   {
-    mode: 'plain',
-    name: 'Plain Diarize + Identify',
-    description: 'Diarization + identification without Deepgram',
-    icon: '⚡',
+    mode: 'diarize-identify-match',
+    name: 'Transcript + Diarize',
+    description: 'Match transcript to internal diarization + speaker ID',
+    icon: '🔗',
     color: 'bg-orange-600 hover:bg-orange-700',
-    features: ['No external dependencies', 'Fast processing', 'Speaker diarization', 'Speaker identification']
-  }
+    features: ['Uses existing transcript', 'Internal speaker diarization', 'Speaker identification', 'Word-to-segment matching']
+  },
 ]
 
 export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
@@ -77,6 +82,11 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
   isProcessing,
   confidenceThreshold,
   onConfidenceThresholdChange,
+  minSpeakers,
+  onMinSpeakersChange,
+  maxSpeakers,
+  onMaxSpeakersChange,
+  uploadedJson,
   showSettings = true,
   compact = false,
   className = ''
@@ -93,44 +103,122 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
       <div className={`space-y-3 ${className}`}>
         {/* Mode Selection Dropdown */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             Processing Mode
           </label>
           <select
             value={selectedMode}
-            onChange={(e) => onModeChange(e.target.value as ProcessingMode)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+            onChange={(e) => {
+              const newMode = e.target.value as ProcessingMode
+              // Prevent selecting diarize-identify-match without transcript
+              if (newMode === 'diarize-identify-match' && !uploadedJson) {
+                return // Don't change the mode
+              }
+              onModeChange(newMode)
+            }}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
             disabled={isProcessing}
           >
-            {PROCESSING_MODES.map((config) => (
-              <option key={config.mode} value={config.mode}>
-                {config.icon} {config.name}
-              </option>
-            ))}
+            {PROCESSING_MODES.map((config) => {
+              const isTranscriptMode = config.mode === 'diarize-identify-match'
+              const isDisabled = isTranscriptMode && !uploadedJson
+              const displayName = isTranscriptMode && !uploadedJson
+                ? `${config.icon} ${config.name} (upload transcript)`
+                : `${config.icon} ${config.name}`
+              
+              return (
+                <option 
+                  key={config.mode} 
+                  value={config.mode}
+                  disabled={isDisabled}
+                  style={isDisabled ? { color: '#9CA3AF' } : {}}
+                >
+                  {displayName}
+                </option>
+              )
+            })}
           </select>
         </div>
 
         {/* Confidence Threshold */}
         {showSettings && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Confidence Threshold: {confidenceThreshold.toFixed(2)}
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={confidenceThreshold}
-              onChange={(e) => onConfidenceThresholdChange(parseFloat(e.target.value))}
-              className="w-full"
-              disabled={isProcessing}
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>Less Strict</span>
-              <span>More Strict</span>
+          <>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Confidence Threshold: {confidenceThreshold.toFixed(2)}
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={confidenceThreshold}
+                onChange={(e) => onConfidenceThresholdChange(parseFloat(e.target.value))}
+                className="w-full"
+                disabled={isProcessing}
+              />
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>Less Strict</span>
+                <span>More Strict</span>
+              </div>
             </div>
-          </div>
+
+            {/* Min Speakers */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Min Speakers: {minSpeakers}
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value={minSpeakers}
+                onChange={(e) => {
+                  const newMin = parseInt(e.target.value)
+                  onMinSpeakersChange(newMin)
+                  // Ensure max is at least min
+                  if (maxSpeakers < newMin) {
+                    onMaxSpeakersChange(newMin)
+                  }
+                }}
+                className="w-full"
+                disabled={isProcessing}
+              />
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>1</span>
+                <span>8</span>
+              </div>
+            </div>
+
+            {/* Max Speakers */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Max Speakers: {maxSpeakers}
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value={maxSpeakers}
+                onChange={(e) => {
+                  const newMax = parseInt(e.target.value)
+                  onMaxSpeakersChange(newMax)
+                  // Ensure min is at most max
+                  if (minSpeakers > newMax) {
+                    onMinSpeakersChange(newMax)
+                  }
+                }}
+                className="w-full"
+                disabled={isProcessing}
+              />
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>1</span>
+                <span>8</span>
+              </div>
+            </div>
+          </>
         )}
 
         {/* Process Button */}
@@ -150,29 +238,87 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
     <div className={`space-y-6 ${className}`}>
       {/* Settings Panel */}
       {showSettings && (
-        <div className="bg-gray-50 border rounded-lg p-4">
+        <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
           <div className="flex items-center space-x-2 mb-3">
-            <Settings className="h-4 w-4 text-gray-600" />
-            <h4 className="font-medium text-gray-900">Processing Settings</h4>
+            <Settings className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">Processing Settings</h4>
           </div>
           
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Confidence Threshold: {confidenceThreshold.toFixed(2)}
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={confidenceThreshold}
-              onChange={(e) => onConfidenceThresholdChange(parseFloat(e.target.value))}
-              className="w-full"
-              disabled={isProcessing}
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>Less Strict</span>
-              <span>More Strict</span>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 dark:text-gray-300 mb-1">
+                Confidence Threshold: {confidenceThreshold.toFixed(2)}
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={confidenceThreshold}
+                onChange={(e) => onConfidenceThresholdChange(parseFloat(e.target.value))}
+                className="w-full"
+                disabled={isProcessing}
+              />
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>Less Strict</span>
+                <span>More Strict</span>
+              </div>
+            </div>
+
+            {/* Min Speakers */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Min Speakers: {minSpeakers}
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value={minSpeakers}
+                onChange={(e) => {
+                  const newMin = parseInt(e.target.value)
+                  onMinSpeakersChange(newMin)
+                  // Ensure max is at least min
+                  if (maxSpeakers < newMin) {
+                    onMaxSpeakersChange(newMin)
+                  }
+                }}
+                className="w-full"
+                disabled={isProcessing}
+              />
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>1</span>
+                <span>8</span>
+              </div>
+            </div>
+
+            {/* Max Speakers */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Max Speakers: {maxSpeakers}
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value={maxSpeakers}
+                onChange={(e) => {
+                  const newMax = parseInt(e.target.value)
+                  onMaxSpeakersChange(newMax)
+                  // Ensure min is at most max
+                  if (minSpeakers > newMax) {
+                    onMinSpeakersChange(newMax)
+                  }
+                }}
+                className="w-full"
+                disabled={isProcessing}
+              />
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>1</span>
+                <span>8</span>
+              </div>
             </div>
           </div>
         </div>
@@ -189,16 +335,16 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
               key={config.mode}
               className={`border rounded-lg p-4 cursor-pointer transition-colors ${
                 selectedMode === config.mode 
-                  ? 'border-blue-500 bg-blue-50' 
-                  : 'border-gray-200 hover:border-gray-300'
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-400' 
+                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
               }`}
               onClick={() => onModeChange(config.mode)}
             >
               <div className="flex items-start space-x-3">
                 <span className="text-2xl">{config.icon}</span>
                 <div className="flex-1">
-                  <h5 className="font-medium text-gray-900">{config.name}</h5>
-                  <p className="text-sm text-gray-600 mt-1">{config.description}</p>
+                  <h5 className="font-medium text-gray-900 dark:text-gray-100">{config.name}</h5>
+                  <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{config.description}</p>
                   
                   {/* Requirements */}
                   {config.requirements && (
@@ -213,7 +359,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                   <div className="mt-2">
                     <div className="flex flex-wrap gap-1">
                       {config.features.slice(0, 2).map((feature, index) => (
-                        <span key={index} className="text-xs text-gray-500">
+                        <span key={index} className="text-xs text-gray-500 dark:text-gray-400">
                           • {feature}
                         </span>
                       ))}
@@ -228,17 +374,17 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
         {/* Full-width mode for hybrid */}
         <div
           className={`border rounded-lg p-4 cursor-pointer transition-colors ${
-            selectedMode === 'hybrid' 
-              ? 'border-blue-500 bg-blue-50' 
-              : 'border-gray-200 hover:border-gray-300'
+            selectedMode === 'deepgram-transcript-internal-speakers' 
+              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-400' 
+              : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
           }`}
-          onClick={() => onModeChange('hybrid')}
+          onClick={() => onModeChange('deepgram-transcript-internal-speakers')}
         >
           <div className="flex items-start space-x-3">
             <span className="text-2xl">🔄</span>
             <div className="flex-1">
-              <h5 className="font-medium text-gray-900">Hybrid: Deepgram Transcription + Internal Diarization</h5>
-              <p className="text-sm text-gray-600 mt-1">Best of both: High-quality transcription with accurate speaker segmentation</p>
+              <h5 className="font-medium text-gray-900 dark:text-gray-100">Hybrid: Deepgram Transcription + Internal Diarization</h5>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">Best of both: High-quality transcription with accurate speaker segmentation</p>
               
               <div className="mt-2">
                 <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-800">
@@ -249,7 +395,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
               <div className="mt-2">
                 <div className="flex flex-wrap gap-1">
                   {PROCESSING_MODES[2].features.map((feature, index) => (
-                    <span key={index} className="text-xs text-gray-500">
+                    <span key={index} className="text-xs text-gray-500 dark:text-gray-400">
                       • {feature}
                     </span>
                   ))}
@@ -259,54 +405,21 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
           </div>
         </div>
 
-        {/* Plain mode */}
-        <div
-          className={`border rounded-lg p-4 cursor-pointer transition-colors ${
-            selectedMode === 'plain' 
-              ? 'border-blue-500 bg-blue-50' 
-              : 'border-gray-200 hover:border-gray-300'
-          }`}
-          onClick={() => onModeChange('plain')}
-        >
-          <div className="flex items-start space-x-3">
-            <span className="text-2xl">⚡</span>
-            <div className="flex-1">
-              <h5 className="font-medium text-gray-900">Plain Diarize + Identify</h5>
-              <p className="text-sm text-gray-600 mt-1">Diarization + identification without Deepgram dependency</p>
-              
-              <div className="mt-2">
-                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
-                  No external dependencies
-                </span>
-              </div>
-              
-              <div className="mt-2">
-                <div className="flex flex-wrap gap-1">
-                  {PROCESSING_MODES[3].features.map((feature, index) => (
-                    <span key={index} className="text-xs text-gray-500">
-                      • {feature}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Selected Mode Info */}
       {selectedConfig && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
           <div className="flex items-center space-x-2 mb-2">
-            <Info className="h-4 w-4 text-blue-600" />
-            <h5 className="font-medium text-blue-900">Selected: {selectedConfig.name}</h5>
+            <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            <h5 className="font-medium text-blue-900 dark:text-blue-100">Selected: {selectedConfig.name}</h5>
           </div>
-          <p className="text-sm text-blue-800 mb-3">{selectedConfig.description}</p>
+          <p className="text-sm text-blue-800 dark:text-blue-200 mb-3">{selectedConfig.description}</p>
           
           <div className="space-y-2">
             <div>
-              <span className="text-sm font-medium text-blue-900">Features:</span>
-              <ul className="text-sm text-blue-800 ml-4 mt-1">
+              <span className="text-sm font-medium text-blue-900 dark:text-blue-100">Features:</span>
+              <ul className="text-sm text-blue-800 dark:text-blue-200 ml-4 mt-1">
                 {selectedConfig.features.map((feature, index) => (
                   <li key={index}>• {feature}</li>
                 ))}
@@ -315,8 +428,8 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
             
             {selectedConfig.requirements && (
               <div>
-                <span className="text-sm font-medium text-blue-900">Requirements:</span>
-                <ul className="text-sm text-blue-800 ml-4 mt-1">
+                <span className="text-sm font-medium text-blue-900 dark:text-blue-100">Requirements:</span>
+                <ul className="text-sm text-blue-800 dark:text-blue-200 ml-4 mt-1">
                   {selectedConfig.requirements.map((req, index) => (
                     <li key={index}>• {req}</li>
                   ))}

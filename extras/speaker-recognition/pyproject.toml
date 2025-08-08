@@ -35,7 +35,7 @@ dependencies = [
     # Data processing
     "pandas>=2.2.0",
     "scikit-learn>=1.4.0", # For t-SNE/UMAP visualization
-    "umap-learn>=0.5.3", # For UMAP dimensionality reduction
+    "umap-learn>=0.5.3",
 ]
 
 [build-system]
@@ -62,6 +62,9 @@ dev = [
     "isort>=6.0.1",
 ]
 
+test = [
+    "pytest",
+]
 
 [tool.uv]
 # dev & cpu are installed automatically

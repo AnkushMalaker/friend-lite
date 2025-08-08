@@ -6,11 +6,9 @@ queuing, and audio cropping coordination.
 """
 
 import logging
-import os
 from typing import Optional
 
 from advanced_omi_backend.processors import (
-    MemoryProcessingItem,
     get_processor_manager,
 )
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
@@ -28,10 +26,6 @@ class ConversationManager:
     def __init__(self):
         self.coordinator = get_transcript_coordinator()
         audio_logger.info("ConversationManager initialized")
-
-    # REMOVED: Diarization segment retrieval methods are no longer needed
-    # Audio cropping is now handled at the processor level after transcription completes
-    # with diarization segments. See transcription.py _queue_diarization_based_cropping()
 
     async def close_conversation(
         self,
@@ -75,13 +69,9 @@ class ConversationManager:
             else:
                 audio_logger.info(f"✅ Transcription already completed, skipping close_client_audio for {client_id}")
 
-            # Step 2: Queue memory processing if we have required data
-            await self._queue_memory_processing(
-                client_id=client_id,
-                audio_uuid=audio_uuid,
-                user_id=user_id,
-                user_email=user_email,
-            )
+            # Step 2: Memory processing is now handled by transcription completion
+            # This eliminates race conditions and event coordination issues
+            audio_logger.info(f"💭 Memory processing will be triggered by transcription completion for {audio_uuid}")
 
             # Step 3: Audio cropping is now handled at processor level after transcription
             # This ensures cropping happens with diarization segments when available
@@ -93,42 +83,6 @@ class ConversationManager:
         except Exception as e:
             audio_logger.error(f"❌ Error closing conversation {audio_uuid}: {e}", exc_info=True)
             return False
-
-    async def _queue_memory_processing(
-        self,
-        client_id: str,
-        audio_uuid: str,
-        user_id: str,
-        user_email: Optional[str],
-    ):
-        """Queue memory processing for the conversation.
-
-        Uses event coordination to ensure transcript is ready before processing.
-        """
-        audio_logger.info(f"💭 Memory processing check for client {client_id}:")
-        audio_logger.info(f"    - audio_uuid: {audio_uuid}")
-        audio_logger.info(f"    - user_id: {user_id}")
-        audio_logger.info(f"    - user_email: {user_email}")
-
-        if not all([audio_uuid, user_id, user_email]):
-            audio_logger.warning(f"💭 Memory processing skipped - missing required data:")
-            audio_logger.warning(f"    - audio_uuid: {bool(audio_uuid)}")
-            audio_logger.warning(f"    - user_id: {bool(user_id)}")
-            audio_logger.warning(f"    - user_email: {bool(user_email)}")
-            return
-
-        audio_logger.info(f"💭 Queuing memory processing for conversation {audio_uuid}")
-
-        # Queue memory processing - the processor will handle event coordination
-        processor_manager = get_processor_manager()
-        await processor_manager.queue_memory(
-            MemoryProcessingItem(
-                client_id=client_id,
-                user_id=user_id,
-                user_email=user_email,
-                audio_uuid=audio_uuid,
-            )
-        )
 
 
 

@@ -182,7 +182,7 @@ export default function AudioViewer() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-500">Please select a user to continue.</p>
+        <p className="text-gray-500 dark:text-gray-400">Please select a user to continue.</p>
       </div>
     )
   }
@@ -190,7 +190,7 @@ export default function AudioViewer() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">🎵 Audio Viewer</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎵 Audio Viewer</h1>
         {audioData && (
           <div className="flex space-x-2">
             <button
@@ -211,7 +211,7 @@ export default function AudioViewer() {
         )}
       </div>
 
-      <p className="text-gray-600">
+      <p className="text-gray-600 dark:text-gray-300">
         Upload and explore audio files with interactive visualization and segment selection.
       </p>
 
@@ -226,7 +226,7 @@ export default function AudioViewer() {
         {isLoading && (
           <div className="text-center mt-4">
             <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-            <p className="mt-2 text-sm text-gray-600">Processing audio file...</p>
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Processing audio file...</p>
           </div>
         )}
       </div>
@@ -236,26 +236,26 @@ export default function AudioViewer() {
           {/* Audio Information */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500">Duration</div>
-              <div className="text-2xl font-bold text-gray-900">
+              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Duration</div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 {formatDuration(audioData.buffer.duration)}
               </div>
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500">Sample Rate</div>
-              <div className="text-2xl font-bold text-gray-900">
+              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Sample Rate</div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 {(audioData.buffer.sampleRate / 1000).toFixed(1)} kHz
               </div>
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500">Channels</div>
-              <div className="text-2xl font-bold text-gray-900">
+              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Channels</div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 {audioData.buffer.numberOfChannels}
               </div>
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500">SNR</div>
-              <div className="text-2xl font-bold text-gray-900">
+              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">SNR</div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 {audioData.snr.toFixed(1)} dB
               </div>
             </div>
@@ -264,7 +264,7 @@ export default function AudioViewer() {
           {/* Waveform Visualization */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium text-gray-900">Waveform</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Waveform</h3>
               <label className="flex items-center space-x-2">
                 <input
                   type="checkbox"
@@ -272,7 +272,7 @@ export default function AudioViewer() {
                   onChange={(e) => setShowSpectrogram(e.target.checked)}
                   className="rounded border-gray-300"
                 />
-                <span className="text-sm text-gray-700">Show Spectrogram</span>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Show Spectrogram</span>
               </label>
             </div>
             
