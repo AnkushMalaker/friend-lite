@@ -121,6 +121,9 @@ class ProcessorManager:
 
         # Direct state tracking for synchronous operations
         self.processing_state: dict[str, dict[str, Any]] = {}  # client_id -> {stage: state_info}
+        
+        # Track clients currently being closed to prevent duplicate close operations
+        self.closing_clients: set[str] = set()
 
     async def start(self):
         """Start all processors."""
@@ -204,7 +207,9 @@ class ProcessorManager:
 
         logger.info("All processors shut down")
 
-    def _new_local_file_sink(self, file_path: str, sample_rate: Optional[int] = None) -> LocalFileSink:
+    def _new_local_file_sink(
+        self, file_path: str, sample_rate: Optional[int] = None
+    ) -> LocalFileSink:
         """Create a properly configured LocalFileSink with dynamic sample rate."""
         effective_sample_rate = sample_rate or OMI_SAMPLE_RATE
         return LocalFileSink(
@@ -216,7 +221,14 @@ class ProcessorManager:
 
     async def queue_audio(self, item: AudioProcessingItem):
         """Queue audio for processing."""
+        audio_logger.info(
+            f"📥 queue_audio called for client {item.client_id}, audio chunk: {len(item.audio_chunk.audio)} bytes"
+        )
         await self.audio_queue.put(item)
+        queue_size = self.audio_queue.qsize()
+        audio_logger.info(
+            f"✅ Successfully queued audio for client {item.client_id}, queue size: {queue_size}"
+        )
 
     async def queue_transcription(self, item: TranscriptionItem):
         """Queue audio for transcription."""
@@ -230,7 +242,9 @@ class ProcessorManager:
 
     async def queue_memory(self, item: MemoryProcessingItem):
         """Queue conversation for memory processing."""
-        audio_logger.info(f"📥 queue_memory called for client {item.client_id}, audio_uuid: {item.audio_uuid}")
+        audio_logger.info(
+            f"📥 queue_memory called for client {item.client_id}, audio_uuid: {item.audio_uuid}"
+        )
         audio_logger.info(f"📥 Memory queue size before: {self.memory_queue.qsize()}")
         await self.memory_queue.put(item)
         audio_logger.info(f"📥 Memory queue size after: {self.memory_queue.qsize()}")
@@ -348,17 +362,17 @@ class ProcessorManager:
 
     async def mark_transcription_failed(self, client_id: str, error: str):
         """Mark transcription as failed and clean up transcription manager.
-        
+
         This method handles transcription failures without closing audio files,
         allowing long recordings to continue even if intermediate transcriptions fail.
-        
+
         Args:
             client_id: The client ID whose transcription failed
             error: The error message describing the failure
         """
         # Mark as failed in state tracking
         self.track_processing_stage(client_id, "transcription", "failed", {"error": error})
-        
+
         # Remove transcription manager to allow fresh retry
         if client_id in self.transcription_managers:
             try:
@@ -366,15 +380,27 @@ class ProcessorManager:
                 await manager.disconnect()
                 audio_logger.info(f"🧹 Removed failed transcription manager for {client_id}")
             except Exception as cleanup_error:
-                audio_logger.error(f"❌ Error cleaning up transcription manager for {client_id}: {cleanup_error}")
-        
+                audio_logger.error(
+                    f"❌ Error cleaning up transcription manager for {client_id}: {cleanup_error}"
+                )
+
         # Do NOT close audio files - client may still be streaming
         # Audio will be closed when client disconnects or sends audio-stop
-        audio_logger.warning(f"❌ Transcription failed for {client_id}: {error}, keeping audio session open")
+        audio_logger.warning(
+            f"❌ Transcription failed for {client_id}: {error}, keeping audio session open"
+        )
 
     async def close_client_audio(self, client_id: str):
         """Close audio file for a client when conversation ends."""
         audio_logger.info(f"🔚 close_client_audio called for client {client_id}")
+        
+        # Check if already closing to prevent duplicate operations
+        if client_id in self.closing_clients:
+            audio_logger.info(f"⏭️ Client {client_id} already being closed, skipping duplicate close")
+            return
+            
+        # Mark as being closed
+        self.closing_clients.add(client_id)
 
         # First, flush ASR to complete any pending transcription
         if client_id in self.transcription_managers:
@@ -407,7 +433,7 @@ class ProcessorManager:
                     f"📤 Calling flush_final_transcript for client {client_id} (manager: {manager})"
                 )
                 try:
-                    await manager.flush_final_transcript(audio_duration)
+                    await manager.process_collected_audio(audio_duration)
                     flush_duration = time.time() - flush_start_time
                     audio_logger.info(
                         f"✅ ASR flush completed for client {client_id} in {flush_duration:.2f}s"
@@ -454,6 +480,10 @@ class ProcessorManager:
                 audio_logger.info(f"Closed audio file for client {client_id}")
             except Exception as e:
                 audio_logger.error(f"Error closing audio file for client {client_id}: {e}")
+        
+        # Remove from closing set now that we're done
+        self.closing_clients.discard(client_id)
+        audio_logger.info(f"✅ Completed close_client_audio for client {client_id}")
 
     async def _audio_processor(self):
         """Process audio chunks and save to files."""
@@ -463,37 +493,59 @@ class ProcessorManager:
             while not self.shutdown_flag:
                 try:
                     # Get item with timeout to allow periodic health checks
+                    queue_size = self.audio_queue.qsize()
+                    if queue_size > 0:
+                        audio_logger.info(
+                            f"🔄 Audio processor waiting for items, queue size: {queue_size}"
+                        )
                     item = await asyncio.wait_for(self.audio_queue.get(), timeout=30.0)
+                    
+                    audio_logger.info(
+                        f"📦 Audio processor dequeued item for client {item.client_id if item else 'None'}"
+                    )
 
                     if item is None:  # Shutdown signal
+                        audio_logger.info("🛑 Audio processor received shutdown signal")
                         self.audio_queue.task_done()
                         break
 
                     try:
                         # Get or create file sink for this client
                         if item.client_id not in self.active_file_sinks:
+                            audio_logger.info(
+                                f"🆕 Creating new audio file sink for client {item.client_id}"
+                            )
                             # Get client state to access/store sample rate
                             client_state = self.client_manager.get_client(item.client_id)
-                            
+                            audio_logger.info(
+                                f"👤 Client state lookup for {item.client_id}: {client_state is not None}"
+                            )
+
                             # Store sample rate from first audio chunk
                             if client_state and client_state.sample_rate is None:
                                 client_state.sample_rate = item.audio_chunk.rate
-                                audio_logger.info(f"📊 Set sample rate to {client_state.sample_rate}Hz for client {item.client_id}")
-                            
+                                audio_logger.info(
+                                    f"📊 Set sample rate to {client_state.sample_rate}Hz for client {item.client_id}"
+                                )
+
                             # Get sample rate for file sink (use client state or fallback to chunk rate)
                             file_sample_rate = None
                             if client_state and client_state.sample_rate:
                                 file_sample_rate = client_state.sample_rate
                             else:
                                 file_sample_rate = item.audio_chunk.rate
-                                audio_logger.warning(f"Using chunk sample rate {file_sample_rate}Hz for {item.client_id} (no client state)")
+                                audio_logger.warning(
+                                    f"Using chunk sample rate {file_sample_rate}Hz for {item.client_id} (no client state)"
+                                )
 
                             # Create new file
                             audio_uuid = uuid.uuid4().hex
                             timestamp = item.timestamp or int(time.time())
                             wav_filename = f"{timestamp}_{item.client_id}_{audio_uuid}.wav"
 
-                            sink = self._new_local_file_sink(f"{self.chunk_dir}/{wav_filename}", file_sample_rate)
+                            sink = self._new_local_file_sink(
+                                f"{self.chunk_dir}/{wav_filename}", file_sample_rate
+                            )
                             await sink.open()
 
                             self.active_file_sinks[item.client_id] = sink
@@ -555,15 +607,19 @@ class ProcessorManager:
                         )
                     finally:
                         self.audio_queue.task_done()
+                        audio_logger.info(
+                            f"✅ Completed processing audio item for client {item.client_id if item else 'None'}"
+                        )
 
                 except asyncio.TimeoutError:
                     # Periodic health check
                     active_clients = len(self.active_file_sinks)
                     queue_size = self.audio_queue.qsize()
-                    audio_logger.debug(
-                        f"Audio processor health: {active_clients} active files, "
-                        f"{queue_size} items in queue"
-                    )
+                    if queue_size > 0 or active_clients > 0:
+                        audio_logger.info(
+                            f"⏰ Audio processor timeout (periodic health check): {active_clients} active files, "
+                            f"{queue_size} items in queue"
+                        )
 
         except Exception as e:
             audio_logger.error(f"Fatal error in audio processor: {e}", exc_info=True)
@@ -635,7 +691,10 @@ class ProcessorManager:
                             )
                             # Mark transcription as failed on timeout
                             self.track_processing_stage(
-                                item.client_id, "transcription", "failed", {"error": "Transcription timeout (5 minutes)"}
+                                item.client_id,
+                                "transcription",
+                                "failed",
+                                {"error": "Transcription timeout (5 minutes)"},
                             )
                         except Exception as e:
                             audio_logger.error(
@@ -763,7 +822,6 @@ class ProcessorManager:
             {"audio_uuid": item.audio_uuid, "started_at": start_time},
         )
 
-
         try:
             # Use ConversationRepository for clean data access with event coordination
             from advanced_omi_backend.conversation_repository import (
@@ -772,32 +830,9 @@ class ProcessorManager:
 
             conversation_repo = get_conversation_repository()
 
-            # First check if conversation already has transcript available
+            # Memory processing is now data-driven - transcript should be available
+            # since this is queued AFTER transcription completion
             full_conversation = await conversation_repo.get_full_conversation_text(item.audio_uuid)
-
-            if not full_conversation:
-                # If not available, wait for transcript completion using event coordination
-                from advanced_omi_backend.transcript_coordinator import (
-                    get_transcript_coordinator,
-                )
-
-                coordinator = get_transcript_coordinator()
-
-                audio_logger.info(f"Waiting for transcript completion event for {item.audio_uuid}")
-                transcript_ready = await coordinator.wait_for_transcript_completion(
-                    item.audio_uuid, timeout=30.0
-                )
-
-                if not transcript_ready:
-                    audio_logger.warning(
-                        f"Transcript completion event timeout for {item.audio_uuid}"
-                    )
-                    return None
-
-                # Try again after event coordination
-                full_conversation = await conversation_repo.get_full_conversation_text(
-                    item.audio_uuid
-                )
 
             if not full_conversation:
                 audio_logger.warning(
@@ -951,7 +986,6 @@ class ProcessorManager:
                     },
                 )
 
-
         except asyncio.TimeoutError:
             audio_logger.error(f"Memory processing timed out for {item.audio_uuid}")
 
@@ -999,7 +1033,6 @@ class ProcessorManager:
                     "processing_time": time.time() - start_time,
                 },
             )
-
 
         end_time = time.time()
         processing_time_ms = (end_time - start_time) * 1000

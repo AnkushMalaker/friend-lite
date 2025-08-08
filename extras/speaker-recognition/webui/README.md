@@ -97,13 +97,14 @@ src/
 - Append vs Replace enrollment options
 - Real-time sample count and duration tracking
 - Quality assessment with SNR scoring
+- **Live Inference Interface**: Real-time transcription and speaker identification
+- **Dynamic Audio Processing**: Browser sample rate detection and adaptive processing
+- **Extended Buffer Management**: 120-second audio retention for improved accuracy
 
 ### 🚧 Future Enhancements
 - Spectrogram visualization
-- Multi-language support
 - Batch processing interface
 - Advanced filtering and search
-- Real-time streaming inference
 
 ## API Integration
 

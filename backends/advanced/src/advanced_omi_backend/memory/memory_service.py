@@ -828,7 +828,6 @@ def _add_memory_to_store(
             memory_id = str(result) if result else "unknown"
             memory_text = str(result) if result else "unknown"
 
-
         memory_logger.info(
             f"Successfully processed memory for {audio_uuid}, created {len(created_memory_ids)} memories: {created_memory_ids}"
         )
@@ -837,7 +836,6 @@ def _add_memory_to_store(
     except Exception as e:
         processing_time_ms = (time.time() - start_time) * 1000
         memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
-
 
         return False, []
 

@@ -1,6 +1,7 @@
 """
 Conversation Management tab component for the Streamlit UI
 """
+
 import logging
 import time
 
@@ -10,6 +11,7 @@ import streamlit as st
 from ..utils import get_data, post_data, get_auth_headers
 
 logger = logging.getLogger("streamlit-ui")
+
 
 def show_conversation_management_tab():
     """Display the conversation management tab with full functionality"""
@@ -194,7 +196,9 @@ def show_conversation_management_tab():
 
             if params:
                 # Use requests.put for this endpoint
-                backend_api_url = st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
+                backend_api_url = st.session_state.get(
+                    "backend_api_url", "http://192.168.0.110:8000"
+                )
                 try:
                     response = requests.put(
                         f"{backend_api_url}/api/conversations/{update_audio_uuid.strip()}/transcript/{segment_index}",

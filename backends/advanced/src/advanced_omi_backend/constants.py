@@ -1,4 +1,3 @@
-
 OMI_SAMPLE_RATE = 16_000  # Hz
 OMI_CHANNELS = 1
 OMI_SAMPLE_WIDTH = 2  # bytes (16‑bit)

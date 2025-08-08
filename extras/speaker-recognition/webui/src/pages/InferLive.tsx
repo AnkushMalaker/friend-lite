@@ -161,7 +161,7 @@ export default function InferLive() {
     return (
       <div className="text-center py-12">
         <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 mb-2">User Required</h3>
+        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">User Required</h3>
         <p className="text-gray-500">Please select a user to access live inference.</p>
       </div>
     )
@@ -172,7 +172,7 @@ export default function InferLive() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">🎙️ Live Inference</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Live Inference</h1>
           <p className="text-gray-600">Real-time transcription and speaker identification</p>
         </div>
       </div>
@@ -199,15 +199,15 @@ export default function InferLive() {
             <div className="flex items-center space-x-6">
               <div className="flex items-center space-x-2">
                 <Clock className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900">{formatDuration(deepgram.stats.sessionDuration)}</span>
+                <span className="text-sm text-gray-900 dark:text-gray-100">{formatDuration(deepgram.stats.sessionDuration)}</span>
               </div>
               <div className="flex items-center space-x-2">
                 <Volume2 className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900">{deepgram.stats.totalWords} words</span>
+                <span className="text-sm text-gray-900 dark:text-gray-100">{deepgram.stats.totalWords} words</span>
               </div>
               <div className="flex items-center space-x-2">
                 <Users className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900">{deepgram.stats.identifiedSpeakers.size} speakers</span>
+                <span className="text-sm text-gray-900 dark:text-gray-100">{deepgram.stats.identifiedSpeakers.size} speakers</span>
               </div>
             </div>
           </div>
@@ -233,7 +233,7 @@ export default function InferLive() {
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2">
               <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
-              <span className="text-sm font-medium text-gray-900">Recording</span>
+              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Recording</span>
             </div>
             <div className="flex items-center space-x-2">
               <Mic className="h-4 w-4 text-gray-500" />

@@ -1,6 +1,7 @@
 """
 Conversations tab component for the Streamlit UI
 """
+
 import logging
 import random
 import time
@@ -12,6 +13,7 @@ import streamlit as st
 from ..utils import get_data
 
 logger = logging.getLogger("streamlit-ui")
+
 
 def show_conversations_tab():
     """Display the conversations tab with full functionality"""
@@ -93,7 +95,7 @@ def _display_conversation(convo, debug_mode, cache_buster):
         # Show client_id or Audio UUID
         client_id = convo.get("client_id")
         audio_uuid = convo.get("audio_uuid", "N/A")
-        
+
         if client_id and not client_id.startswith("client_"):
             st.write("**User ID:**")
             st.write(f"👤 `{client_id}`")
@@ -160,7 +162,7 @@ def _display_conversation(convo, debug_mode, cache_buster):
 
         # Audio display logic
         _display_audio(convo, debug_mode, cache_buster)
-        
+
         # Display memory information
         _display_memories(convo)
 
@@ -171,7 +173,9 @@ def _display_audio(convo, debug_mode, cache_buster):
     """Display audio player for conversation"""
     audio_path = convo.get("audio_path")
     cropped_audio_path = convo.get("cropped_audio_path")
-    backend_public_url = st.session_state.get("backend_public_url", st.session_state.get("backend_api_url"))
+    backend_public_url = st.session_state.get(
+        "backend_public_url", st.session_state.get("backend_api_url")
+    )
 
     if audio_path:
         # Determine which audio to show
@@ -195,10 +199,10 @@ def _display_audio(convo, debug_mode, cache_buster):
         st.write(audio_label)
         audio_url = f"{backend_public_url}/audio/{selected_audio_path}{cache_buster}"
 
-        # Test audio accessibility
+        # Serve audio directly to browser (no server-side accessibility check)
         try:
             st.audio(audio_url, format="audio/wav")
-            logger.debug(f"🎵 Audio URL accessible: {audio_url}")
+            logger.debug(f"🎵 Audio URL served: {audio_url}")
         except Exception as e:
             st.error(f"❌ Cannot reach audio file: {str(e)}")
             st.code(f"URL: {audio_url}")
@@ -217,12 +221,16 @@ def _display_memories(convo):
     if memories:
         st.write("**🧠 Memories Created:**")
         memory_count = len(memories)
-        st.write(f"📊 {memory_count} memory{'ies' if memory_count != 1 else ''} extracted from this conversation")
+        st.write(
+            f"📊 {memory_count} memory{'ies' if memory_count != 1 else ''} extracted from this conversation"
+        )
 
         # Show memory details in an expandable section
         with st.expander(f"📋 View Memory Details ({memory_count} items)", expanded=False):
             # Get memory content from API
-            user_memories_response = get_data("/api/memories/unfiltered?limit=500", require_auth=True)
+            user_memories_response = get_data(
+                "/api/memories/unfiltered?limit=500", require_auth=True
+            )
             memory_contents = {}
 
             if user_memories_response and "memories" in user_memories_response:
@@ -241,17 +249,25 @@ def _display_memories(convo):
                 st.write(f"**Memory {i+1}:**")
 
                 # Show memory content in a highlighted box
-                if memory_text and memory_text not in ["Memory content not found", "No content available"]:
+                if memory_text and memory_text not in [
+                    "Memory content not found",
+                    "No content available",
+                ]:
                     # Check if this is a transcript-based fallback memory
-                    if (str(memory_id).startswith("transcript_") or 
-                        memory_text.startswith("Conversation transcript:")):
+                    if str(memory_id).startswith("transcript_") or memory_text.startswith(
+                        "Conversation transcript:"
+                    ):
                         st.warning(f"📝 **Transcript-based memory:** {memory_text}")
-                        st.caption("💡 This memory was created from the full transcript when LLM extraction returned no results")
+                        st.caption(
+                            "💡 This memory was created from the full transcript when LLM extraction returned no results"
+                        )
                     else:
                         st.info(f"💭 {memory_text}")
                 else:
                     st.warning(f"🔍 ID: `{memory_id}`")
-                    st.caption("Memory content not available - this may be a transcript-based fallback")
+                    st.caption(
+                        "Memory content not available - this may be a transcript-based fallback"
+                    )
 
                 st.caption(f"📅 Created: {created_at}")
 

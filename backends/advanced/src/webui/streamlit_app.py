@@ -2,6 +2,7 @@
 Friend-Lite Streamlit Dashboard (Modular Version)
 Web interface for managing conversations, memories, users, and system monitoring.
 """
+
 import logging
 import os
 from pathlib import Path
@@ -94,7 +95,7 @@ show_auth_sidebar(BACKEND_API_URL)
 # Show system health in sidebar
 with st.sidebar:
     st.header("🔍 System Health")
-    
+
     # Health check with auto-refresh
     if st.button("🔄 Refresh Health", use_container_width=True):
         st.cache_data.clear()  # Clear health check cache
@@ -103,7 +104,7 @@ with st.sidebar:
     # Get system health data
     with st.spinner("Checking system health..."):
         health_data = get_system_health(BACKEND_API_URL)
-    
+
     if health_data:
         overall_status = health_data.get("status", "unknown")
         if overall_status == "healthy":
@@ -112,7 +113,7 @@ with st.sidebar:
             st.warning("⚠️ Some Issues")
         else:
             st.error("❌ System Issues")
-            
+
         # Show brief service status
         services = health_data.get("services", {})
         if services:
@@ -138,7 +139,7 @@ is_admin = False
 if is_authenticated:
     user_info = st.session_state.get("user_info", {})
     is_admin = user_info.get("is_superuser", False) if isinstance(user_info, dict) else False
-    user_name = user_info.get('name', 'Unknown') if user_info else 'Unknown'
+    user_name = user_info.get("name", "Unknown") if user_info else "Unknown"
     logger.info(f"👤 User authenticated: {user_name}, Admin: {is_admin}")
 
 # Show authentication token preview if available
@@ -147,28 +148,27 @@ if is_authenticated:
         user_info = st.session_state.get("user_info", {})
         st.info(f"**Welcome:** {user_info.get('name', 'User')}")
         st.info(f"**Auth Method:** {st.session_state.get('auth_method', 'unknown').title()}")
-        
+
         if st.session_state.get("auth_token"):
             token_preview = st.session_state.auth_token[:20] + "..."
             st.caption(f"Token: {token_preview}")
 
 # Create tabs based on admin status
 if is_admin:
-    tab_convos, tab_mem, tab_users, tab_manage, tab_upload, tab_debug = st.tabs([
-        "Conversations",
-        "Memories", 
-        "User Management",
-        "Conversation Management",
-        "📁 Upload Audio",
-        "🔧 System State",
-    ])
+    tab_convos, tab_mem, tab_users, tab_manage, tab_upload, tab_debug = st.tabs(
+        [
+            "Conversations",
+            "Memories",
+            "User Management",
+            "Conversation Management",
+            "📁 Upload Audio",
+            "🔧 System State",
+        ]
+    )
 else:
-    tab_convos, tab_mem, tab_users, tab_manage = st.tabs([
-        "Conversations",
-        "Memories",
-        "User Management", 
-        "Conversation Management"
-    ])
+    tab_convos, tab_mem, tab_users, tab_manage = st.tabs(
+        ["Conversations", "Memories", "User Management", "Conversation Management"]
+    )
     tab_upload = None
     tab_debug = None
 
@@ -200,6 +200,9 @@ if tab_debug is not None:
 # Footer
 st.divider()
 from datetime import datetime
-st.caption(f"🚀 Friend-Lite Dashboard | Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+st.caption(
+    f"🚀 Friend-Lite Dashboard | Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+)
 
 logger.info("✅ Streamlit dashboard loaded successfully")

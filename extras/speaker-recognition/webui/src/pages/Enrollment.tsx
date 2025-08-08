@@ -468,7 +468,7 @@ export default function Enrollment() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-500">Please select a user to continue.</p>
+        <p className="text-gray-500 dark:text-gray-400">Please select a user to continue.</p>
       </div>
     )
   }
@@ -476,7 +476,7 @@ export default function Enrollment() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">🎙️ Speaker Enrollment</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Speaker Enrollment</h1>
         {!currentSession && (
           <button
             onClick={() => {
@@ -498,7 +498,7 @@ export default function Enrollment() {
         </p>
       </div>
       
-      <p className="text-gray-600">
+      <p className="text-gray-600 dark:text-gray-300">
         Enroll new speakers by uploading audio files or recording directly in your browser.
       </p>
 
@@ -507,13 +507,13 @@ export default function Enrollment() {
         <div className="bg-white border rounded-lg p-6">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">{currentSession.speakerName}</h2>
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{currentSession.speakerName}</h2>
               <div className="flex items-center space-x-4 mt-2">
                 <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(currentSession.quality)}`}>
                   {getQualityIcon(currentSession.quality)}
                   <span>{currentSession.quality.charAt(0).toUpperCase() + currentSession.quality.slice(1)}</span>
                 </span>
-                <span className="text-sm text-gray-500">
+                <span className="text-sm text-gray-500 dark:text-gray-400">
                   {currentSession.audioFiles.length} samples • {formatDuration(currentSession.totalDuration)}
                 </span>
               </div>
@@ -521,7 +521,7 @@ export default function Enrollment() {
             <div className="flex space-x-2">
               <button
                 onClick={() => setCurrentSession(null)}
-                className="px-3 py-1 text-gray-600 hover:text-gray-800"
+                className="px-3 py-1 text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100"
               >
                 Cancel
               </button>
@@ -564,7 +564,7 @@ export default function Enrollment() {
                     </button>
                   </div>
                 )}
-                <div className="text-sm text-gray-500 space-y-1">
+                <div className="text-sm text-gray-500 dark:text-gray-400 space-y-1">
                   <p>Speak clearly for 10-30 seconds</p>
                   <p className="text-xs">
                     {location.protocol !== 'https:' && location.hostname !== 'localhost' 
@@ -599,12 +599,12 @@ export default function Enrollment() {
                 {currentSession.audioFiles.map((audio) => (
                   <div
                     key={audio.id}
-                    className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
+                    className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg"
                   >
                     <div className="flex items-center space-x-4">
                       <div>
-                        <p className="font-medium text-gray-900">{audio.name}</p>
-                        <div className="flex items-center space-x-3 text-sm text-gray-500">
+                        <p className="font-medium text-gray-900 dark:text-gray-100">{audio.name}</p>
+                        <div className="flex items-center space-x-3 text-sm text-gray-500 dark:text-gray-400">
                           <span>{formatDuration(audio.duration)}</span>
                           <span>SNR: {audio.snr.toFixed(1)} dB</span>
                           <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs ${getQualityColor(audio.quality)}`}>
@@ -658,7 +658,7 @@ export default function Enrollment() {
       {/* Previous Sessions */}
       {sessions.length > 0 && !currentSession && (
         <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-gray-900">Previous Enrollments</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Previous Enrollments</h2>
           <div className="space-y-3">
             {sessions.map((session) => (
               <div
@@ -666,8 +666,8 @@ export default function Enrollment() {
                 className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
               >
                 <div>
-                  <p className="font-medium text-gray-900">{session.speakerName}</p>
-                  <div className="flex items-center space-x-3 text-sm text-gray-500">
+                  <p className="font-medium text-gray-900 dark:text-gray-100">{session.speakerName}</p>
+                  <div className="flex items-center space-x-3 text-sm text-gray-500 dark:text-gray-400">
                     <span>{session.audioFiles.length} samples</span>
                     <span>{formatDuration(session.totalDuration)}</span>
                     <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs ${getQualityColor(session.quality)}`}>
@@ -701,8 +701,8 @@ export default function Enrollment() {
       {sessions.length === 0 && !currentSession && (
         <div className="text-center py-12">
           <Mic className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No Enrollments Yet</h3>
-          <p className="text-gray-500 mb-4">Start by creating a new speaker enrollment session.</p>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No Enrollments Yet</h3>
+          <p className="text-gray-500 dark:text-gray-400 mb-4">Start by creating a new speaker enrollment session.</p>
           <button
             onClick={() => {
               const name = prompt('Enter speaker name:')

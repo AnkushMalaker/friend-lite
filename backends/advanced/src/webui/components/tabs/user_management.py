@@ -1,6 +1,7 @@
 """
 User Management tab component for the Streamlit UI
 """
+
 import logging
 
 import streamlit as st
@@ -8,6 +9,7 @@ import streamlit as st
 from ..utils import get_data, post_data, delete_data
 
 logger = logging.getLogger("streamlit-ui")
+
 
 def show_user_management_tab():
     """Display the user management tab with full functionality"""

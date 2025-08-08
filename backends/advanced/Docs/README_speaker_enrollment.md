@@ -181,10 +181,10 @@ Edit `speaker_recognition/speaker_recognition.py` to adjust:
 
 ### Audio Settings
 
-The system is configured for:
-- Sample rate: 16kHz  
-- Channels: Mono
-- Format: WAV files
+The system supports:
+- Sample rate: Dynamic detection (commonly 16kHz, 44.1kHz, or 48kHz)
+- Channels: Mono (stereo converted to mono automatically)
+- Format: WAV files (recommended), WebM, MP4
 
 ## Troubleshooting
 

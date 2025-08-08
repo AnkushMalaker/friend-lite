@@ -19,6 +19,7 @@ import {
   convertToAnnotationSegments,
   DEFAULT_DEEPGRAM_OPTIONS 
 } from '../services/deepgram'
+import { speakerIdentificationService } from '../services/speakerIdentification'
 import FileUploader from '../components/FileUploader'
 import WaveformPlot from '../components/WaveformPlot'
 import EmbeddingPlot from '../components/EmbeddingPlot'
@@ -71,11 +72,11 @@ export default function Annotation() {
   const [playingSegmentId, setPlayingSegmentId] = useState<string | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [enrollingSpeaker, setEnrollingSpeaker] = useState<string | null>(null)
-  const [isTranscribing, setIsTranscribing] = useState(false)
   const [deepgramResponse, setDeepgramResponse] = useState<any>(null)
   const [showJsonOutput, setShowJsonOutput] = useState(false)
-  const [speakerThreshold, setSpeakerThreshold] = useState(0.3)
-  const [expectedSpeakers, setExpectedSpeakers] = useState(2)
+  const [minSpeakers, setMinSpeakers] = useState(1)
+  const [maxSpeakers, setMaxSpeakers] = useState(4)
+  const [uploadedJson, setUploadedJson] = useState<any>(null)
   
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null)
@@ -110,165 +111,6 @@ export default function Annotation() {
     loadEnrolledSpeakers()
   }, [user])
 
-  const handleDeepgramTranscribe = useCallback(async () => {
-    if (!audioData || !user) return
-
-    setIsTranscribing(true)
-    try {
-      // Use shared Deepgram service
-      const response = await transcribeWithDeepgram(audioData.file, {
-        enhanceSpeakers: true,
-        userId: user.id,
-        speakerConfidenceThreshold: speakerThreshold,
-        mode: 'standard'
-      })
-
-      // Store response for JSON debugging
-      setDeepgramResponse(response)
-
-      // Convert Deepgram response to annotation segments
-      const results = response.results || {}
-      const channels = results.channels || []
-      
-      if (!channels.length) {
-        alert('No transcription results found')
-        return
-      }
-
-      const words = channels[0]?.alternatives?.[0]?.words || []
-      
-      if (!words.length) {
-        alert('No words found in transcription')
-        return
-      }
-
-      // Debug: Log word count and speaker distribution
-      console.log(`Total words received: ${words.length}`)
-      const speakerCounts = {}
-      words.forEach(word => {
-        const speaker = word.speaker || 0
-        speakerCounts[speaker] = (speakerCounts[speaker] || 0) + 1
-      })
-      console.log('Speaker distribution in words:', speakerCounts)
-      
-      // Log first few words to check structure
-      if (words.length > 0) {
-        console.log('First word structure:', words[0])
-        console.log('Sample words:', words.slice(0, 3))
-      }
-
-      // Group words by speaker into segments (similar to existing Deepgram JSON import logic)
-      const newSegments: AnnotationSegment[] = []
-      let currentSpeaker = null
-      let currentSegmentStart = null
-      let currentWords: any[] = []
-
-      for (const word of words) {
-        if (word.speaker !== currentSpeaker) {
-          // Save previous segment
-          if (currentSpeaker !== null && currentWords.length > 0) {
-            const segmentEnd = currentWords[currentWords.length - 1].end
-            // FIX: Use the first word of the CURRENT segment, not the new word
-            const firstWordOfSegment = currentWords[0]
-            
-            // Only use identified speaker name if properly identified with sufficient confidence
-            const isProperlyIdentified = firstWordOfSegment.identified_speaker_name && 
-                                       firstWordOfSegment.speaker_status === 'IDENTIFIED' &&
-                                       (firstWordOfSegment.speaker_identification_confidence || 0) >= speakerThreshold
-            
-            // Debug logging
-            console.log(`Segment ${newSegments.length} first word:`, {
-              identified_speaker_name: firstWordOfSegment.identified_speaker_name,
-              speaker_status: firstWordOfSegment.speaker_status,
-              confidence: firstWordOfSegment.speaker_identification_confidence,
-              threshold: speakerThreshold,
-              isProperlyIdentified
-            })
-            
-            newSegments.push({
-              id: Math.random().toString(36),
-              start: currentSegmentStart,
-              end: segmentEnd,
-              duration: segmentEnd - currentSegmentStart,
-              speakerLabel: isProperlyIdentified ? firstWordOfSegment.identified_speaker_name : `Speaker ${currentSpeaker + 1}`,
-              deepgramSpeakerLabel: `speaker_${currentSpeaker}`,
-              label: 'UNCERTAIN' as const,
-              confidence: Math.min(...currentWords.map(w => w.confidence || 0)),
-              transcription: currentWords.map(w => w.punctuated_word || w.word).join(' ')
-            })
-            console.log(`Created segment for speaker ${currentSpeaker}: ${currentSegmentStart}s - ${segmentEnd}s`)
-          }
-
-          // Start new segment
-          currentSpeaker = word.speaker
-          currentSegmentStart = word.start
-          currentWords = [word]
-        } else {
-          currentWords.push(word)
-        }
-      }
-
-      // Add final segment
-      if (currentWords.length > 0) {
-        const segmentEnd = currentWords[currentWords.length - 1].end
-        // FIX: Use the first word of the CURRENT segment for speaker info
-        const firstWordOfSegment = currentWords[0]
-        
-        // Only use identified speaker name if properly identified with sufficient confidence
-        const isProperlyIdentified = firstWordOfSegment.identified_speaker_name && 
-                                   firstWordOfSegment.speaker_status === 'IDENTIFIED' &&
-                                   (firstWordOfSegment.speaker_identification_confidence || 0) >= speakerThreshold
-        
-        // Debug logging for final segment
-        console.log(`Final segment ${newSegments.length} first word:`, {
-          identified_speaker_name: firstWordOfSegment.identified_speaker_name,
-          speaker_status: firstWordOfSegment.speaker_status,
-          confidence: firstWordOfSegment.speaker_identification_confidence,
-          threshold: speakerThreshold,
-          isProperlyIdentified
-        })
-        
-        newSegments.push({
-          id: Math.random().toString(36),
-          start: currentSegmentStart,
-          end: segmentEnd,
-          duration: segmentEnd - currentSegmentStart,
-          speakerLabel: isProperlyIdentified ? firstWordOfSegment.identified_speaker_name : `Speaker ${currentSpeaker + 1}`,
-          deepgramSpeakerLabel: `speaker_${currentSpeaker}`,
-          label: 'UNCERTAIN' as const,
-          confidence: Math.min(...currentWords.map(w => w.confidence || 0)),
-          transcription: currentWords.map(w => w.punctuated_word || w.word).join(' ')
-        })
-        console.log(`Created final segment for speaker ${currentSpeaker}: ${currentSegmentStart}s - ${segmentEnd}s`)
-      }
-
-      console.log(`Total segments created: ${newSegments.length}`)
-
-      // Add unique speaker labels to available speakers
-      const uniqueSpeakerLabels = new Set(
-        newSegments
-          .map(s => s.speakerLabel)
-          .filter(label => label && !availableSpeakers.some(sp => sp.label === label))
-      )
-
-      if (uniqueSpeakerLabels.size > 0) {
-        setAvailableSpeakers(prev => [
-          ...prev,
-          ...Array.from(uniqueSpeakerLabels).map(label => ({ label }))
-        ])
-      }
-
-      setSegments(newSegments)
-      setHasUnsavedChanges(true)
-      alert(`Transcribed ${newSegments.length} segments from audio`)
-
-    } catch (error) {
-      console.error('Failed to transcribe audio:', error)
-      alert('Failed to transcribe audio. Please try again.')
-    } finally {
-      setIsTranscribing(false)
-    }
-  }, [audioData, user, availableSpeakers])
 
   // Handle processing with unified modes (diarization, deepgram, hybrid, plain)
   const handleProcessAudio = useCallback(async (mode: any) => {
@@ -288,8 +130,27 @@ export default function Annotation() {
         quality: null // Not needed for annotation processing
       }
 
-      // Process using the unified speaker identification service
-      const result = await speakerProcessing.processAudio(processedAudio, mode)
+      // Validate requirements for diarize-identify-match mode
+      if (mode === 'diarize-identify-match' && !uploadedJson) {
+        alert('Please upload a transcript JSON file first to use Transcript + Diarize mode')
+        return
+      }
+
+      // Process using the unified speaker identification service with additional options
+      const options: any = {
+        mode,
+        userId: user.id,
+        confidenceThreshold: speakerProcessing.confidenceThreshold,
+        minDuration: 0.5,
+        minSpeakers,
+        maxSpeakers,
+        identifyOnlyEnrolled: false,
+        enhanceSpeakers: true,
+        // Add transcript data when in diarize-identify-match mode
+        ...(mode === 'diarize-identify-match' && uploadedJson && { transcriptData: uploadedJson })
+      }
+
+      const result = await speakerIdentificationService.processAudio(audioData.file, options)
       
       if (result && result.speakers) {
         // Convert processing result to annotation segments
@@ -475,6 +336,9 @@ export default function Annotation() {
             transcription: currentWords.map(w => w.word).join(' ')
           })
         }
+        
+        // Store the JSON data for potential diarize-identify-match processing
+        setUploadedJson(deepgramData)
         
         setSegments(newSegments)
         setHasUnsavedChanges(true)
@@ -785,7 +649,32 @@ export default function Annotation() {
       
     } catch (error) {
       console.error('Failed to enroll speaker:', error)
-      alert(`❌ Failed to enroll speaker "${speakerLabel}". Please try again.`)
+      
+      // Handle specific error cases
+      let errorMessage = `❌ Failed to enroll speaker "${speakerLabel}".`
+      
+      // Check for axios error with response
+      if (error && typeof error === 'object' && 'response' in error) {
+        const axiosError = error as any
+        if (axiosError.response?.status === 400 && axiosError.response?.data?.detail) {
+          // Use the detailed error message from the backend
+          errorMessage = `❌ ${axiosError.response.data.detail}`
+        } else if (axiosError.response?.data?.detail) {
+          errorMessage += ` ${axiosError.response.data.detail}`
+        } else if (axiosError.message) {
+          errorMessage += ` ${axiosError.message}`
+        }
+      } else if (error instanceof Error) {
+        if (error.message.includes('already exists')) {
+          errorMessage = `❌ Speaker name "${speakerLabel}" already exists for this user. Please choose a different name.`
+        } else {
+          errorMessage += ` ${error.message}`
+        }
+      } else {
+        errorMessage += ' Please try again.'
+      }
+      
+      alert(errorMessage)
     } finally {
       setEnrollingSpeaker(null)
     }
@@ -794,7 +683,7 @@ export default function Annotation() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-500">Please select a user to continue.</p>
+        <p className="text-gray-500 dark:text-gray-400">Please select a user to continue.</p>
       </div>
     )
   }
@@ -802,7 +691,7 @@ export default function Annotation() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">📝 Annotation Tool</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">📝 Annotation Tool</h1>
         {hasUnsavedChanges && (
           <div className="flex items-center space-x-2 text-amber-600">
             <AlertCircle className="h-5 w-5" />
@@ -811,13 +700,13 @@ export default function Annotation() {
         )}
       </div>
 
-      <p className="text-gray-600">
+      <p className="text-gray-600 dark:text-gray-300">
         Upload audio files and create speaker annotations with timeline visualization.
       </p>
 
       {/* File Upload */}
       <div className="grid md:grid-cols-2 gap-6">
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+        <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6">
           <h3 className="text-lg font-medium mb-4">📁 Upload Audio File</h3>
           <FileUploader
             onUpload={handleFileUpload}
@@ -827,134 +716,57 @@ export default function Annotation() {
           />
         </div>
 
-        {/* Right column - Split vertically */}
-        <div className="space-y-4">
-          {/* Top half - Import JSON */}
-          <div className="border-2 border-dashed border-blue-300 rounded-lg p-4">
-            <h3 className="text-lg font-medium mb-3">📄 Import Deepgram JSON</h3>
-            <FileUploader
-              onUpload={handleDeepgramUpload}
-              accept=".json"
-              multiple={false}
-              disabled={!audioData}
-              title="Upload Transcript JSON"
-            />
-            {!audioData && (
-              <p className="text-sm text-gray-500 mt-2">Upload audio file first</p>
-            )}
-          </div>
-
-          {/* Processing Mode Selector */}
-          <div className="border-2 border-dashed border-green-300 rounded-lg p-4">
-            <h3 className="text-lg font-medium mb-3">🎯 Speaker Processing Modes</h3>
-            
-            {audioData ? (
-              <ProcessingModeSelector
-                selectedMode={speakerProcessing.currentMode}
-                onModeChange={speakerProcessing.setProcessingMode}
-                onProcessAudio={handleProcessAudio}
-                audioData={{
-                  filename: audioData.file.name,
-                  buffer: {
-                    samples: audioData.samples,
-                    sampleRate: audioData.buffer.sampleRate,
-                    channels: audioData.buffer.numberOfChannels,
-                    duration: audioData.buffer.duration
-                  },
-                  quality: null
-                }}
-                isProcessing={speakerProcessing.isProcessing}
-                confidenceThreshold={speakerProcessing.confidenceThreshold}
-                onConfidenceThresholdChange={speakerProcessing.setConfidenceThreshold}
-                showSettings={true}
-                compact={true}
-              />
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                <p>Upload audio file first to enable processing modes</p>
-              </div>
-            )}
-          </div>
-
-          {/* Legacy Deepgram Transcribe (keep as backup option) */}
-          <div className="border-2 border-dashed border-blue-300 rounded-lg p-4">
-            <h3 className="text-lg font-medium mb-3">🔧 Legacy Deepgram Transcribe</h3>
-            
-            {/* Speaker Settings */}
-            <div className="mb-4 space-y-4">
-              {/* Expected Speakers */}
-              <div className="p-3 bg-blue-50 rounded-md">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Expected Speakers: {expectedSpeakers}
-                </label>
-                <input 
-                  type="range" 
-                  min="1" 
-                  max="8" 
-                  step="1"
-                  value={expectedSpeakers}
-                  onChange={(e) => setExpectedSpeakers(parseInt(e.target.value))}
-                  className="w-full h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer"
-                />
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>1</span>
-                  <span>8</span>
-                </div>
-                <p className="text-xs text-gray-600 mt-1">
-                  How many distinct speakers do you expect in this audio? This helps with smart threshold suggestions.
-                </p>
-              </div>
-
-              {/* Speaker ID Threshold */}
-              <div className="p-3 bg-gray-50 rounded-md">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Speaker ID Threshold: {speakerThreshold.toFixed(2)}
-                </label>
-                <input 
-                  type="range" 
-                  min="0.1" 
-                  max="0.9" 
-                  step="0.05"
-                  value={speakerThreshold}
-                  onChange={(e) => setSpeakerThreshold(parseFloat(e.target.value))}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>0.1 (Permissive)</span>
-                  <span>0.9 (Strict)</span>
-                </div>
-                <p className="text-xs text-gray-600 mt-1">
-                  Higher values = more strict speaker identification. Use 0.3+ for better accuracy.
-                </p>
-              </div>
-            </div>
-            
-            <div className="text-center">
-              <button
-                onClick={handleDeepgramTranscribe}
-                disabled={!audioData || isTranscribing || isLoading}
-                className="w-full px-4 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
-              >
-                {isTranscribing ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    <span>Legacy Transcribing...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>🔧</span>
-                    <span>Legacy Transcribe</span>
-                  </>
-                )}
-              </button>
-              <p className="text-sm text-gray-500 mt-2">
-                {!audioData 
-                  ? 'Upload audio file first' 
-                  : 'Use legacy transcription method (for comparison)'}
-              </p>
-            </div>
-          </div>
+        {/* Import JSON */}
+        <div className="border-2 border-dashed border-blue-300 dark:border-blue-600 rounded-lg p-6">
+          <h3 className="text-lg font-medium mb-4">📄 Import Deepgram JSON</h3>
+          <FileUploader
+            onUpload={handleDeepgramUpload}
+            accept=".json"
+            multiple={false}
+            disabled={!audioData}
+            title="Upload Transcript JSON"
+          />
+          {!audioData && (
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Upload audio file first</p>
+          )}
         </div>
+      </div>
+
+      {/* Processing Mode Selector - Full Width Section */}
+      <div className="border-2 border-dashed border-green-300 dark:border-green-600 rounded-lg p-6">
+        <h3 className="text-xl font-medium mb-4 text-gray-900 dark:text-gray-100">🎯 Speaker Processing Modes</h3>
+        
+        {audioData ? (
+          <ProcessingModeSelector
+            selectedMode={speakerProcessing.currentMode}
+            onModeChange={speakerProcessing.setProcessingMode}
+            onProcessAudio={handleProcessAudio}
+            audioData={{
+              filename: audioData.file.name,
+              buffer: {
+                samples: audioData.samples,
+                sampleRate: audioData.buffer.sampleRate,
+                channels: audioData.buffer.numberOfChannels,
+                duration: audioData.buffer.duration
+              },
+              quality: undefined
+            }}
+            isProcessing={speakerProcessing.isProcessing}
+            confidenceThreshold={speakerProcessing.confidenceThreshold}
+            onConfidenceThresholdChange={speakerProcessing.setConfidenceThreshold}
+            minSpeakers={minSpeakers}
+            onMinSpeakersChange={setMinSpeakers}
+            maxSpeakers={maxSpeakers}
+            onMaxSpeakersChange={setMaxSpeakers}
+            uploadedJson={uploadedJson}
+            showSettings={true}
+            compact={true}
+          />
+        ) : (
+          <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+            <p className="text-lg">Upload audio file first to enable processing modes</p>
+          </div>
+        )}
       </div>
 
       {isLoading && (
@@ -967,7 +779,7 @@ export default function Annotation() {
       {audioData && (
         <>
           {/* Audio Information */}
-          <div className="bg-gray-50 rounded-lg p-4">
+          <div className="card-secondary p-4">
             <h3 className="text-lg font-medium mb-2">🎵 {audioData.file.name}</h3>
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>Duration: {formatDuration(audioData.buffer.duration * 1000)}</div>
@@ -1032,7 +844,7 @@ export default function Annotation() {
           </div>
 
           {/* Speaker Management */}
-          <div className="bg-gray-50 rounded-lg p-4">
+          <div className="card-secondary p-4">
             <h3 className="text-lg font-medium mb-4">👥 Manage Speakers</h3>
             <div className="flex space-x-2">
               <input
@@ -1070,7 +882,7 @@ export default function Annotation() {
 
           {/* Speaker Segments Summary */}
           {segments.length > 0 && (
-            <div className="bg-gray-50 rounded-lg p-4">
+            <div className="card-secondary p-4">
               <h3 className="text-lg font-medium mb-4">📊 Speaker Segments Summary</h3>
               <div className="space-y-2">
                 {Array.from(new Set(segments.map(s => s.speakerLabel).filter(Boolean))).map(speakerLabel => {
@@ -1079,7 +891,7 @@ export default function Annotation() {
                   const speaker = availableSpeakers.find(s => s.label === speakerLabel)
                   
                   return (
-                    <div key={speakerLabel} className="flex items-center justify-between p-2 bg-white rounded">
+                    <div key={speakerLabel} className="flex items-center justify-between p-2 card">
                       <div className="flex items-center space-x-2">
                         <span className={`px-2 py-1 rounded-full text-xs ${
                           speaker?.id 
@@ -1129,8 +941,7 @@ export default function Annotation() {
                 type: 'combined',
                 segments: segments,
                 audioFile: audioData?.file || new File([], ''),
-                userId: user?.id,
-                expectedSpeakers: expectedSpeakers
+                userId: user?.id
               }}
               compact={true}
               title="📊 Combined Analysis: Segments vs Enrolled Speakers"
@@ -1183,7 +994,7 @@ export default function Annotation() {
           {showJsonOutput && deepgramResponse && (
             <div className="mt-6">
               <div className="flex items-center justify-between mb-4">
-                <h4 className="font-medium text-gray-900">🔍 Debug Output</h4>
+                <h4 className="font-medium text-primary">🔍 Debug Output</h4>
                 <button
                   onClick={() => setShowJsonOutput(!showJsonOutput)}
                   className="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
@@ -1194,17 +1005,17 @@ export default function Annotation() {
               
               <div className="space-y-4">
                 {/* Deepgram Response */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h5 className="font-medium text-gray-900 mb-2">Deepgram API Response</h5>
-                  <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800 text-left">
+                <div className="card-secondary p-4">
+                  <h5 className="font-medium text-primary mb-2">Deepgram API Response</h5>
+                  <pre className="text-xs card p-3 overflow-auto max-h-64 text-primary text-left">
                     {JSON.stringify(deepgramResponse, null, 2)}
                   </pre>
                 </div>
                 
                 {/* Annotation Segments */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h5 className="font-medium text-gray-900 mb-2">Annotation Segments</h5>
-                  <pre className="text-xs bg-white p-3 rounded border overflow-auto max-h-64 text-gray-800 text-left">
+                <div className="card-secondary p-4">
+                  <h5 className="font-medium text-primary mb-2">Annotation Segments</h5>
+                  <pre className="text-xs card p-3 overflow-auto max-h-64 text-primary text-left">
                     {JSON.stringify(segments, null, 2)}
                   </pre>
                 </div>
@@ -1241,10 +1052,10 @@ function SegmentEditor({
   onStop
 }: SegmentEditorProps) {
   const getConfidenceColor = (confidence?: number) => {
-    if (!confidence) return 'text-gray-400'
-    if (confidence >= 0.7) return 'text-green-600'
-    if (confidence >= 0.4) return 'text-yellow-600'
-    return 'text-red-600'
+    if (!confidence) return 'text-gray-400 dark:text-gray-500'
+    if (confidence >= 0.7) return 'text-green-600 dark:text-green-400'
+    if (confidence >= 0.4) return 'text-yellow-600 dark:text-yellow-400'
+    return 'text-red-600 dark:text-red-400'
   }
 
   const getConfidenceLabel = (confidence?: number) => {
@@ -1264,9 +1075,9 @@ function SegmentEditor({
 
   const getLabelColor = (label: string) => {
     switch (label) {
-      case 'CORRECT': return 'border-green-200 bg-green-50'
-      case 'INCORRECT': return 'border-red-200 bg-red-50'
-      default: return 'border-yellow-200 bg-yellow-50'
+      case 'CORRECT': return 'border-green-200 dark:border-green-700 bg-green-50 dark:bg-green-900'
+      case 'INCORRECT': return 'border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900'
+      default: return 'border-yellow-200 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900'
     }
   }
 
@@ -1274,7 +1085,7 @@ function SegmentEditor({
     <div
       className={`border rounded-lg p-4 cursor-pointer transition-colors ${
         isSelected 
-          ? 'border-blue-500 bg-blue-50' 
+          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900' 
           : getLabelColor(segment.label)
       }`}
       onClick={onSelect}
@@ -1285,11 +1096,11 @@ function SegmentEditor({
           <span className="font-medium">
             {segment.start.toFixed(2)}s - {segment.end.toFixed(2)}s
           </span>
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-gray-500 dark:text-gray-400">
             ({formatDuration(segment.duration * 1000)})
           </span>
           {segment.confidence !== undefined && (
-            <span className={`text-xs px-2 py-1 rounded-full bg-gray-100 font-medium ${getConfidenceColor(segment.confidence)}`}>
+            <span className={`text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-700 font-medium ${getConfidenceColor(segment.confidence)}`}>
               {getConfidenceLabel(segment.confidence)} {(segment.confidence * 100).toFixed(0)}%
             </span>
           )}
@@ -1303,8 +1114,8 @@ function SegmentEditor({
             }}
             className={`p-1 rounded ${
               isPlaying 
-                ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800'
+                : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800'
             }`}
           >
             {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -1314,7 +1125,7 @@ function SegmentEditor({
               e.stopPropagation()
               onDelete()
             }}
-            className="p-1 bg-red-100 text-red-700 rounded hover:bg-red-200"
+            className="p-1 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-800"
           >
             <XCircle className="h-4 w-4" />
           </button>
@@ -1322,10 +1133,10 @@ function SegmentEditor({
       </div>
 
       {isSelected && (
-        <div className="space-y-3 border-t pt-3">
+        <div className="space-y-3 border-t border-gray-200 dark:border-gray-600 pt-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium mb-1">Speaker</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Speaker</label>
               <select
                 value={segment.speakerLabel || ''}
                 onChange={(e) => {
@@ -1336,11 +1147,11 @@ function SegmentEditor({
                     speakerId: selectedSpeaker?.id // Will be undefined for temporary labels
                   })
                 }}
-                className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded text-sm"
               >
                 <option value="">Select speaker...</option>
-                {availableSpeakers.map((speaker) => (
-                  <option key={speaker.label} value={speaker.label}>
+                {availableSpeakers.map((speaker, index) => (
+                  <option key={speaker.id ? `enrolled-${speaker.id}` : `temp-${index}-${speaker.label}`} value={speaker.label}>
                     {speaker.label} {speaker.id ? '✓' : ''}
                   </option>
                 ))}
@@ -1348,11 +1159,11 @@ function SegmentEditor({
             </div>
             
             <div>
-              <label className="block text-sm font-medium mb-1">Label</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Label</label>
               <select
                 value={segment.label}
                 onChange={(e) => onUpdate({ label: e.target.value as any })}
-                className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded text-sm"
               >
                 <option value="CORRECT">Correct</option>
                 <option value="INCORRECT">Incorrect</option>
@@ -1385,7 +1196,7 @@ function SegmentEditor({
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-medium mb-1">Start (s)</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start (s)</label>
               <input
                 type="number"
                 step="0.1"
@@ -1397,12 +1208,12 @@ function SegmentEditor({
                     duration: segment.end - start 
                   })
                 }}
-                className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded text-sm"
               />
             </div>
             
             <div>
-              <label className="block text-sm font-medium mb-1">End (s)</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End (s)</label>
               <input
                 type="number"
                 step="0.1"
@@ -1414,12 +1225,12 @@ function SegmentEditor({
                     duration: end - segment.start 
                   })
                 }}
-                className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded text-sm"
               />
             </div>
             
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Confidence {segment.confidence && `(${getConfidenceLabel(segment.confidence)})`}
               </label>
               <input

@@ -1,6 +1,6 @@
 """SQLAlchemy models for speaker recognition system."""
 
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from . import Base
@@ -36,6 +36,10 @@ class Speaker(Base):
     notes = Column(Text)  # Optional notes about the speaker
     audio_sample_count = Column(Integer, default=0)  # Number of audio segments used for enrollment
     total_audio_duration = Column(Float, default=0.0)  # Total duration of all audio segments in seconds
+    
+    __table_args__ = (
+        UniqueConstraint('user_id', 'name', name='unique_user_speaker_name'),
+    )
     
     # Relationships
     user = relationship("User", back_populates="speakers")

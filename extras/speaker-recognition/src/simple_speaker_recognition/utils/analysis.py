@@ -256,7 +256,8 @@ def create_speaker_analysis(
     embeddings_dict: Dict[str, np.ndarray],
     method: str = "umap",
     cluster_method: str = "dbscan",
-    similarity_threshold: float = 0.8
+    similarity_threshold: float = 0.8,
+    speaker_names: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """Create comprehensive analysis of speaker embeddings.
     
@@ -265,6 +266,7 @@ def create_speaker_analysis(
         method: Dimensionality reduction method
         cluster_method: Clustering method
         similarity_threshold: Threshold for finding similar speakers
+        speaker_names: Optional dictionary mapping speaker_id -> speaker_name
     
     Returns:
         Complete analysis results
@@ -318,8 +320,15 @@ def create_speaker_analysis(
         # Clustering
         cluster_labels, cluster_info = cluster_speakers(embeddings, method=cluster_method)
         
-        # Similar speakers
-        similar_pairs = find_similar_speakers(embeddings, speaker_ids, similarity_threshold)
+        # Similar speakers - use names if available
+        speaker_display_names = []
+        for spk_id in speaker_ids:
+            if speaker_names and spk_id in speaker_names:
+                speaker_display_names.append(speaker_names[spk_id])
+            else:
+                speaker_display_names.append(spk_id)
+        
+        similar_pairs = find_similar_speakers(embeddings, speaker_display_names, similarity_threshold)
         
         # Quality analysis
         quality_metrics = analyze_embedding_quality(embeddings)

@@ -146,7 +146,9 @@ async def get_processor_status():
         )
 
 
-async def process_audio_files(user: User, files: list[UploadFile], device_name: str, auto_generate_client: bool):
+async def process_audio_files(
+    user: User, files: list[UploadFile], device_name: str, auto_generate_client: bool
+):
     """Process uploaded audio files through the transcription pipeline."""
     # Need to import here because we import the routes into main, causing circular imports
     from advanced_omi_backend.main import cleanup_client_state, create_client_state
@@ -162,7 +164,7 @@ async def process_audio_files(user: User, files: list[UploadFile], device_name: 
         for file_index, file in enumerate(files):
             client_id = None
             client_state = None
-            
+
             try:
                 # Validate file type (only WAV for now)
                 if not file.filename or not file.filename.lower().endswith(".wav"):
@@ -400,7 +402,9 @@ async def process_audio_files(user: User, files: list[UploadFile], device_name: 
                         await cleanup_client_state(client_id)
                         audio_logger.info(f"🧹 Cleaned up client state for {client_id}")
                     except Exception as cleanup_error:
-                        audio_logger.error(f"❌ Error cleaning up client state for {client_id}: {cleanup_error}")
+                        audio_logger.error(
+                            f"❌ Error cleaning up client state for {client_id}: {cleanup_error}"
+                        )
 
         return {
             "message": f"Processed {len(files)} files",
@@ -428,7 +432,9 @@ def get_audio_duration(file_content: bytes) -> float:
         return 0.0
 
 
-async def process_audio_files_async(background_tasks: BackgroundTasks, user: User, files: list[UploadFile], device_name: str):
+async def process_audio_files_async(
+    background_tasks: BackgroundTasks, user: User, files: list[UploadFile], device_name: str
+):
     """Start async processing of uploaded audio files. Returns job ID immediately."""
     try:
         if not files:
@@ -454,9 +460,7 @@ async def process_audio_files_async(background_tasks: BackgroundTasks, user: Use
         job_id = await job_tracker.create_job(user.user_id, device_name, filenames)
 
         # Start background processing with file contents
-        background_tasks.add_task(
-            process_files_with_content, job_id, file_data, user, device_name
-        )
+        background_tasks.add_task(process_files_with_content, job_id, file_data, user, device_name)
 
         audio_logger.info(f"🚀 Started async processing job {job_id} with {len(files)} files")
 
@@ -505,12 +509,16 @@ async def list_processing_jobs():
         return JSONResponse(status_code=500, content={"error": f"Failed to list jobs: {str(e)}"})
 
 
-async def process_files_with_content(job_id: str, file_data: list[tuple[str, bytes]], user: User, device_name: str):
+async def process_files_with_content(
+    job_id: str, file_data: list[tuple[str, bytes]], user: User, device_name: str
+):
     """Background task to process uploaded files using pre-read content."""
-    # Import here to avoid circular imports  
+    # Import here to avoid circular imports
     from advanced_omi_backend.main import cleanup_client_state, create_client_state
-    
-    audio_logger.info(f"🚀 process_files_with_content called for job {job_id} with {len(file_data)} files")
+
+    audio_logger.info(
+        f"🚀 process_files_with_content called for job {job_id} with {len(file_data)} files"
+    )
     job_tracker = get_job_tracker()
 
     try:
@@ -520,7 +528,7 @@ async def process_files_with_content(job_id: str, file_data: list[tuple[str, byt
         for file_index, (filename, content) in enumerate(file_data):
             client_id = None
             client_state = None
-            
+
             try:
                 audio_logger.info(
                     f"🔧 [Job {job_id}] Processing file {file_index + 1}/{len(file_data)}: {filename}, content type: {type(content)}, size: {len(content)}"
@@ -673,7 +681,7 @@ async def process_files_with_content(job_id: str, file_data: list[tuple[str, byt
                                     memory_triggered = True
                                     # Continue to next iteration to check memory status
                                     continue
-                                
+
                                 # Check if memory processing is also complete
                                 if memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
                                     audio_logger.info(
@@ -712,9 +720,13 @@ async def process_files_with_content(job_id: str, file_data: list[tuple[str, byt
                 if client_id and client_state:
                     try:
                         await cleanup_client_state(client_id)
-                        audio_logger.info(f"🧹 [Job {job_id}] Cleaned up client state for {client_id}")
+                        audio_logger.info(
+                            f"🧹 [Job {job_id}] Cleaned up client state for {client_id}"
+                        )
                     except Exception as cleanup_error:
-                        audio_logger.error(f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}")
+                        audio_logger.error(
+                            f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}"
+                        )
 
         # Mark job as completed
         await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)

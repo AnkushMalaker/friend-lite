@@ -6,18 +6,12 @@ queuing, and audio cropping coordination.
 """
 
 import logging
-import os
 from typing import Optional
 
 from advanced_omi_backend.processors import (
-    AudioCroppingItem,
-    MemoryProcessingItem,
     get_processor_manager,
 )
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
-
-# Configuration
-AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "false").lower() == "true"
 
 audio_logger = logging.getLogger("audio")
 
@@ -64,26 +58,24 @@ class ConversationManager:
             # Get processor manager
             processor_manager = get_processor_manager()
 
-            # Step 1: Close audio file in processor
-            await processor_manager.close_client_audio(client_id)
+            # Step 1: Close audio file in processor (only if transcription not already completed)
+            # Check if transcription is already completed to avoid double-flushing
+            processing_status = processor_manager.get_processing_status(client_id)
+            transcription_completed = processing_status.get("stages", {}).get("transcription", {}).get("completed", False)
+            
+            if not transcription_completed:
+                audio_logger.info(f"🔄 Transcription not completed, calling close_client_audio for {client_id}")
+                await processor_manager.close_client_audio(client_id)
+            else:
+                audio_logger.info(f"✅ Transcription already completed, skipping close_client_audio for {client_id}")
 
-            # Step 2: Queue memory processing if we have required data
-            await self._queue_memory_processing(
-                client_id=client_id,
-                audio_uuid=audio_uuid,
-                user_id=user_id,
-                user_email=user_email,
-            )
+            # Step 2: Memory processing is now handled by transcription completion
+            # This eliminates race conditions and event coordination issues
+            audio_logger.info(f"💭 Memory processing will be triggered by transcription completion for {audio_uuid}")
 
-            # Step 3: Queue audio cropping if enabled and we have segments
-            await self._queue_audio_cropping(
-                client_id=client_id,
-                audio_uuid=audio_uuid,
-                user_id=user_id,
-                conversation_start_time=conversation_start_time,
-                speech_segments=speech_segments,
-                chunk_dir=chunk_dir,
-            )
+            # Step 3: Audio cropping is now handled at processor level after transcription
+            # This ensures cropping happens with diarization segments when available
+            # See transcription.py _queue_diarization_based_cropping() method
 
             audio_logger.info(f"✅ Successfully closed conversation {audio_uuid}")
             return True
@@ -92,86 +84,6 @@ class ConversationManager:
             audio_logger.error(f"❌ Error closing conversation {audio_uuid}: {e}", exc_info=True)
             return False
 
-    async def _queue_memory_processing(
-        self,
-        client_id: str,
-        audio_uuid: str,
-        user_id: str,
-        user_email: Optional[str],
-    ):
-        """Queue memory processing for the conversation.
-
-        Uses event coordination to ensure transcript is ready before processing.
-        """
-        audio_logger.info(f"💭 Memory processing check for client {client_id}:")
-        audio_logger.info(f"    - audio_uuid: {audio_uuid}")
-        audio_logger.info(f"    - user_id: {user_id}")
-        audio_logger.info(f"    - user_email: {user_email}")
-
-        if not all([audio_uuid, user_id, user_email]):
-            audio_logger.warning(f"💭 Memory processing skipped - missing required data:")
-            audio_logger.warning(f"    - audio_uuid: {bool(audio_uuid)}")
-            audio_logger.warning(f"    - user_id: {bool(user_id)}")
-            audio_logger.warning(f"    - user_email: {bool(user_email)}")
-            return
-
-        audio_logger.info(f"💭 Queuing memory processing for conversation {audio_uuid}")
-
-        # Queue memory processing - the processor will handle event coordination
-        processor_manager = get_processor_manager()
-        await processor_manager.queue_memory(
-            MemoryProcessingItem(
-                client_id=client_id,
-                user_id=user_id,
-                user_email=user_email,
-                audio_uuid=audio_uuid,
-            )
-        )
-
-    async def _queue_audio_cropping(
-        self,
-        client_id: str,
-        audio_uuid: str,
-        user_id: str,
-        conversation_start_time: float,
-        speech_segments: dict,
-        chunk_dir: str,
-    ):
-        """Queue audio cropping if enabled and speech segments are available."""
-        if not AUDIO_CROPPING_ENABLED:
-            audio_logger.debug(f"Audio cropping disabled for {audio_uuid}")
-            return
-
-        if audio_uuid not in speech_segments:
-            audio_logger.debug(f"No speech segments found for {audio_uuid}")
-            return
-
-        segments = speech_segments[audio_uuid]
-        if not segments:
-            audio_logger.debug(f"Empty speech segments for {audio_uuid}")
-            return
-
-        # Build audio file paths following processor naming convention
-        timestamp = int(conversation_start_time)
-        wav_filename = f"{timestamp}_{client_id}_{audio_uuid}.wav"
-        original_path = f"{str(chunk_dir)}/{wav_filename}"
-        cropped_path = str(original_path).replace(".wav", "_cropped.wav")
-
-        audio_logger.info(
-            f"✂️ Queuing audio cropping for {audio_uuid} " f"with {len(segments)} speech segments"
-        )
-
-        processor_manager = get_processor_manager()
-        await processor_manager.queue_cropping(
-            AudioCroppingItem(
-                client_id=client_id,
-                user_id=user_id,
-                audio_uuid=audio_uuid,
-                original_path=original_path,
-                speech_segments=segments,
-                output_path=cropped_path,
-            )
-        )
 
 
 # Global singleton instance

@@ -46,6 +46,7 @@ from advanced_omi_backend.auth import (
 )
 from advanced_omi_backend.client import ClientState
 from advanced_omi_backend.client_manager import generate_client_id
+from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.constants import (
     OMI_CHANNELS,
     OMI_SAMPLE_RATE,
@@ -170,6 +171,13 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
     # Read data from WebSocket
     message = await ws.receive()
 
+    # Handle WebSocket close frame
+    if "type" in message and message["type"] == "websocket.disconnect":
+        # This is a normal WebSocket close event
+        code = message.get("code", 1000)
+        reason = message.get("reason", "")
+        raise WebSocketDisconnect(code=code, reason=reason)
+    
     # Handle text message (JSON header)
     if "text" in message:
         header_text = message["text"]
@@ -261,6 +269,10 @@ async def cleanup_client_state(client_id: str):
         client_state = active_clients[client_id]
         await client_state.disconnect()
         del active_clients[client_id]
+
+    # Clean up any orphaned transcript events for this client
+    coordinator = get_transcript_coordinator()
+    coordinator.cleanup_transcript_events_for_client(client_id)
 
     # Unregister client-user mapping
     unregister_client_user_mapping(client_id)
@@ -389,7 +401,7 @@ async def ws_endpoint_omi(
     # Generate pending client_id to track connection even if auth fails
     pending_client_id = f"pending_{uuid.uuid4()}"
     pending_connections.add(pending_client_id)
-    
+
     client_id = None
     client_state = None
 
@@ -404,7 +416,7 @@ async def ws_endpoint_omi(
 
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
-        
+
         # Remove from pending now that we have real client_id
         pending_connections.discard(pending_client_id)
         application_logger.info(
@@ -434,15 +446,15 @@ async def ws_endpoint_omi(
                     f"🎙️ OMI audio session started for {client_id} (explicit start)"
                 )
 
-
             elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
                 total_bytes += len(payload)
 
                 # OMI devices stream continuously - always process audio chunks
-                application_logger.debug(
-                    f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes"
-                )
+                if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
+                    application_logger.info(
+                        f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes"
+                    )
 
                 # Decode Opus payload to PCM using OMI decoder
                 start_time = time.time()
@@ -451,9 +463,10 @@ async def ws_endpoint_omi(
                 decode_time = time.time() - start_time
 
                 if pcm_data:
-                    application_logger.debug(
-                        f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
-                    )
+                    if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
+                        application_logger.info(
+                            f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
+                        )
 
                     # Use timestamp from Wyoming header if provided, otherwise current time
                     audio_data = header.get("data", {})
@@ -468,6 +481,10 @@ async def ws_endpoint_omi(
                     )
 
                     # Queue to application-level processor
+                    if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
+                        application_logger.info(
+                            f"🚀 About to queue audio chunk #{packet_count} for client {client_id}"
+                        )
                     await processor_manager.queue_audio(
                         AudioProcessingItem(
                             client_id=client_id,
@@ -480,11 +497,16 @@ async def ws_endpoint_omi(
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
 
-
                     # Log every 1000th packet to avoid spam
                     if packet_count % 1000 == 0:
                         application_logger.info(
                             f"📊 Processed {packet_count} OMI packets ({total_bytes} bytes total) for client {client_id}"
+                        )
+                else:
+                    # Log decode failures for first 5 packets
+                    if packet_count <= 5:
+                        application_logger.warning(
+                            f"❌ Failed to decode OMI packet #{packet_count}: {len(payload)} bytes"
                         )
 
             elif header["type"] == "audio-stop":
@@ -523,7 +545,7 @@ async def ws_endpoint_omi(
     finally:
         # Clean up pending connection tracking
         pending_connections.discard(pending_client_id)
-        
+
         # Ensure cleanup happens even if client_id is None
         if client_id:
             try:
@@ -547,7 +569,7 @@ async def ws_endpoint_pcm(
     # Generate pending client_id to track connection even if auth fails
     pending_client_id = f"pending_{uuid.uuid4()}"
     pending_connections.add(pending_client_id)
-    
+
     client_id = None
     client_state = None
 
@@ -563,7 +585,7 @@ async def ws_endpoint_pcm(
 
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
-        
+
         # Remove from pending now that we have real client_id
         pending_connections.discard(pending_client_id)
         application_logger.info(
@@ -572,7 +594,6 @@ async def ws_endpoint_pcm(
 
         # Create client state
         client_state = await create_client_state(client_id, user, device_name)
-
 
         # Get processor manager
         processor_manager = get_processor_manager()
@@ -595,7 +616,6 @@ async def ws_endpoint_pcm(
                     f"{audio_format.get('width')}bytes, "
                     f"{audio_format.get('channels')}ch"
                 )
-
 
             elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
@@ -628,7 +648,6 @@ async def ws_endpoint_pcm(
 
                     # Update client state for tracking purposes
                     client_state.update_audio_received(chunk)
-
 
                     # Log every 1000th packet to avoid spam
                     if packet_count % 1000 == 0:
@@ -679,7 +698,6 @@ async def ws_endpoint_pcm(
     finally:
         # Clean up pending connection tracking
         pending_connections.discard(pending_client_id)
-        
 
         # Ensure cleanup happens even if client_id is None
         if client_id:
@@ -914,8 +932,7 @@ async def health_check():
             # Make a health check request to the speaker service
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{speaker_service_url}/health", 
-                    timeout=aiohttp.ClientTimeout(total=5)
+                    f"{speaker_service_url}/health", timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     if response.status == 200:
                         health_status["services"]["speaker_recognition"] = {

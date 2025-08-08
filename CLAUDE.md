@@ -307,6 +307,11 @@ websocket.send(JSON.stringify(audioStop) + '\n');
 ### Code Style
 - **Python**: Black formatter with 100-character line length, isort for imports
 - **TypeScript**: Standard React Native conventions
+- **Import Guidelines**: 
+  - NEVER import modules in the middle of functions or files
+  - ALL imports must be at the top of the file after the docstring
+  - Use lazy imports sparingly and only when absolutely necessary for circular import issues
+  - Group imports: standard library, third-party, local imports
 
 ### Health Monitoring
 The system includes comprehensive health checks:
@@ -405,6 +410,11 @@ Access via: `extras/speaker-recognition/webui` → Live Inference
 3. Adjust speaker identification settings (confidence threshold)
 4. Start live session to begin real-time transcription and speaker ID
 
+**Technical Details:**
+- **Audio Processing**: Uses browser's native sample rate (typically 44.1kHz or 48kHz, not hardcoded 16kHz)
+- **Buffer Retention**: 120 seconds of audio for improved utterance capture
+- **Real-time Updates**: Live transcription with speaker identification results
+
 #### Using Speaker Analysis
 1. Go to Speakers page → Embedding Analysis tab
 2. Select analysis method (UMAP, t-SNE, PCA)
@@ -417,6 +427,13 @@ Access via: `extras/speaker-recognition/webui` → Live Inference
 - Frontend dependencies (Plotly.js) already included
 - Live inference requires Deepgram API key for streaming transcription
 - Speaker identification uses existing enrolled speakers from database
+
+### Live Inference Troubleshooting
+- **"NaN:NaN" timestamps**: Fixed in recent updates, ensure you're using latest version
+- **Poor speaker identification**: Try adjusting confidence threshold or re-enrolling speakers
+- **Audio processing delays**: Check browser console for sample rate detection logs
+- **Buffer overflow issues**: Extended to 120-second retention for better performance
+- **"extraction_failed" errors**: Usually indicates audio buffer timing issues - check console logs for buffer availability
 
 ## Notes for Claude
 Check if the src/ is volume mounted. If not, do compose build so that code changes are reflected. Do not simply run `docker compose restart` as it will not rebuild the image.

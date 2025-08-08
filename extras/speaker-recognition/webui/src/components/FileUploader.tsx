@@ -114,27 +114,27 @@ export default function FileUploader({
         className={`
           relative border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors
           ${disabled 
-            ? 'border-gray-200 bg-gray-50 cursor-not-allowed' 
+            ? 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800 cursor-not-allowed' 
             : isDragOver 
-              ? 'border-blue-400 bg-blue-50' 
-              : 'border-gray-300 hover:border-gray-400'
+              ? 'border-blue-400 bg-blue-50 dark:border-blue-500 dark:bg-blue-900' 
+              : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
           }
         `}
       >
         <div className="space-y-3">
           <div className="mx-auto">
-            <Upload className={`h-12 w-12 mx-auto ${disabled ? 'text-gray-300' : 'text-gray-400'}`} />
+            <Upload className={`h-12 w-12 mx-auto ${disabled ? 'text-gray-300 dark:text-gray-600' : 'text-gray-400 dark:text-gray-500'}`} />
           </div>
           
           <div>
-            <p className={`text-lg font-medium ${disabled ? 'text-gray-400' : 'text-gray-900'}`}>
+            <p className={`text-lg font-medium ${disabled ? 'text-gray-400 dark:text-gray-500' : 'text-gray-900 dark:text-gray-100'}`}>
               {isDragOver ? 'Drop files here' : (title || 'Upload Audio Files')}
             </p>
-            <p className={`text-sm ${disabled ? 'text-gray-300' : 'text-gray-500'}`}>
+            <p className={`text-sm ${disabled ? 'text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}>
               Drag and drop or click to select files
             </p>
             {accept.includes('audio') && (
-              <p className="text-xs text-gray-400 mt-1">
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                 Supported: WAV, FLAC, MP3, M4A, OGG
               </p>
             )}
@@ -142,25 +142,25 @@ export default function FileUploader({
         </div>
         
         {disabled && (
-          <div className="absolute inset-0 bg-gray-50 bg-opacity-50 rounded-lg"></div>
+          <div className="absolute inset-0 bg-gray-50 dark:bg-gray-800 bg-opacity-50 rounded-lg"></div>
         )}
       </div>
 
       {/* Selected Files List */}
       {selectedFiles.length > 0 && (
         <div className="mt-4 space-y-2">
-          <h4 className="text-sm font-medium text-gray-900">Selected Files:</h4>
+          <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">Selected Files:</h4>
           <div className="space-y-2">
             {selectedFiles.map((file, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"
               >
                 <div className="flex items-center space-x-3">
                   <FileAudio className="h-5 w-5 text-blue-500" />
                   <div>
-                    <p className="text-sm font-medium text-gray-900">{file.name}</p>
-                    <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{file.name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{formatFileSize(file.size)}</p>
                   </div>
                 </div>
                 <button
@@ -168,7 +168,7 @@ export default function FileUploader({
                     e.stopPropagation()
                     removeFile(index)
                   }}
-                  className="p-1 text-gray-400 hover:text-gray-600"
+                  className="p-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <X className="h-4 w-4" />
                 </button>

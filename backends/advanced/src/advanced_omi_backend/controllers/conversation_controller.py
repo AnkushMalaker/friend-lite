@@ -70,9 +70,7 @@ async def close_current_conversation(client_id: str, user: User, client_manager:
         client_state.conversation_start_time = time.time()
         client_state.last_transcript_time = None
 
-        logger.info(
-            f"Manually closed conversation for client {client_id} by user {user.id}"
-        )
+        logger.info(f"Manually closed conversation for client {client_id} by user {user.id}")
 
         return JSONResponse(
             content={
@@ -113,12 +111,27 @@ async def get_conversations(user: User):
             if client_id not in conversations:
                 conversations[client_id] = []
 
+            # Get transcript data - prefer segments but fallback to raw transcript
+            transcript_segments = chunk.get("transcript", [])
+            if not transcript_segments and chunk.get("raw_transcript_data"):
+                # No segments but we have raw transcript data - create fallback representation
+                raw_data = chunk["raw_transcript_data"]
+                if raw_data.get("data", {}).get("text"):
+                    transcript_segments = [{
+                        "text": raw_data["data"]["text"],
+                        "start": 0.0,
+                        "end": 0.0,
+                        "speaker": "Unknown",
+                        "confidence": 0.0,
+                        "source": "raw_transcript"  # Indicator this is fallback data
+                    }]
+
             conversations[client_id].append(
                 {
                     "audio_uuid": chunk["audio_uuid"],
                     "audio_path": chunk["audio_path"],
                     "timestamp": chunk["timestamp"],
-                    "transcript": chunk.get("transcript", []),
+                    "transcript": transcript_segments,
                     "speakers_identified": chunk.get("speakers_identified", []),
                     "cropped_audio_path": chunk.get("cropped_audio_path"),
                     "speech_segments": chunk.get("speech_segments"),

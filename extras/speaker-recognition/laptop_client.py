@@ -491,8 +491,8 @@ def main():
     
     parser.add_argument(
         "--service-url",
-        default="http://localhost:8001",
-        help="Speaker recognition service URL (default: http://localhost:8001)"
+        default="http://localhost:8005",
+        help="Speaker recognition service URL (default: http://localhost:8005)"
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")

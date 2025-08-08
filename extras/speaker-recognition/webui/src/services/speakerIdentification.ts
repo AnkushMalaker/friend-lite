@@ -7,7 +7,7 @@
 import { apiService } from './api'
 import { transcribeWithDeepgram, processDeepgramResponse, calculateConfidenceSummary, DeepgramResponse } from './deepgram'
 
-export type ProcessingMode = 'diarization-only' | 'speaker-identification' | 'deepgram-enhanced' | 'deepgram-transcript-internal-speakers' | 'plain'
+export type ProcessingMode = 'diarization-only' | 'speaker-identification' | 'deepgram-enhanced' | 'deepgram-transcript-internal-speakers' | 'diarize-identify-match'
 
 export interface SpeakerSegment {
   start: number
@@ -27,8 +27,11 @@ export interface ProcessingOptions {
   userId?: number
   confidenceThreshold?: number
   minDuration?: number
+  minSpeakers?: number
+  maxSpeakers?: number
   identifyOnlyEnrolled?: boolean
   enhanceSpeakers?: boolean
+  transcriptData?: any  // For diarize-identify-match mode
 }
 
 export interface ProcessingResult {
@@ -92,8 +95,8 @@ export class SpeakerIdentificationService {
         case 'diarization-only':
           result = await this.processWithDiarizationOnly(audioFile, options)
           break
-        case 'plain':
-          result = await this.processWithPlainDiarization(audioFile, options)
+        case 'diarize-identify-match':
+          result = await this.processWithDiarizeIdentifyMatch(audioFile, options)
           break
         case 'speaker-identification':
         default:
@@ -276,6 +279,13 @@ export class SpeakerIdentificationService {
       const formData = new FormData()
       formData.append('file', audioFile)
       formData.append('min_duration', (options.minDuration || 0.5).toString())
+      
+      if (options.minSpeakers) {
+        formData.append('min_speakers', options.minSpeakers.toString())
+      }
+      if (options.maxSpeakers) {
+        formData.append('max_speakers', options.maxSpeakers.toString())
+      }
 
       // Use the diarize-only endpoint
       const response = await apiService.post('/v1/diarize-only', formData, {
@@ -334,7 +344,9 @@ export class SpeakerIdentificationService {
         similarity_threshold: (options.confidenceThreshold || 0.15).toString(),
         min_duration: (options.minDuration || 1.0).toString(),
         identify_only_enrolled: (options.identifyOnlyEnrolled || false).toString(),
-        ...(options.userId && { user_id: options.userId.toString() })
+        ...(options.userId && { user_id: options.userId.toString() }),
+        ...(options.minSpeakers && { min_speakers: options.minSpeakers.toString() }),
+        ...(options.maxSpeakers && { max_speakers: options.maxSpeakers.toString() })
       }
 
       // Ensure we have a valid file
@@ -386,42 +398,57 @@ export class SpeakerIdentificationService {
     }
   }
 
+
   /**
-   * Process with plain diarization + identification (no Deepgram)
+   * Process with diarize-identify-match (transcript + internal diarization + speaker ID)
    */
-  private async processWithPlainDiarization(
+  private async processWithDiarizeIdentifyMatch(
     audioFile: File | Blob,
     options: ProcessingOptions
   ): Promise<ProcessingResult> {
     try {
       const filename = audioFile instanceof File ? audioFile.name : 'Audio'
       
+      if (!options.transcriptData) {
+        throw new Error('Transcript data is required for diarize-identify-match mode')
+      }
+
       const formData = new FormData()
       formData.append('file', audioFile)
-      formData.append('similarity_threshold', (options.confidenceThreshold || 0.15).toString())
-      formData.append('min_duration', (options.minDuration || 1.0).toString())
-      formData.append('identify_only_enrolled', (options.identifyOnlyEnrolled || false).toString())
+      formData.append('transcript_data', JSON.stringify(options.transcriptData))
       
+      // Add speaker processing parameters
       if (options.userId) {
         formData.append('user_id', options.userId.toString())
       }
+      if (options.minDuration !== undefined) {
+        formData.append('min_duration', options.minDuration.toString())
+      }
+      if (options.confidenceThreshold !== undefined) {
+        formData.append('similarity_threshold', options.confidenceThreshold.toString())
+      }
+      if (options.minSpeakers !== undefined) {
+        formData.append('min_speakers', options.minSpeakers.toString())
+      }
+      if (options.maxSpeakers !== undefined) {
+        formData.append('max_speakers', options.maxSpeakers.toString())
+      }
 
-      // Use the plain-diarize-and-identify endpoint
-      const response = await apiService.post('/plain-diarize-and-identify', formData, {
+      const response = await apiService.post('/v1/diarize-identify-match', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 180000
       })
 
       const backendSegments = response.data.segments || []
 
-      // Convert backend format to frontend format  
+      // Convert backend format to frontend format
       const speakers: SpeakerSegment[] = backendSegments.map((segment: any) => ({
         start: segment.start,
         end: segment.end,
         speaker_id: segment.identified_id || segment.speaker,
         speaker_name: segment.identified_as || `Unknown (${segment.speaker})`,
-        confidence: segment.confidence || 0
-        // No text in plain diarization mode
+        confidence: segment.confidence || 0,
+        text: segment.text // This mode includes matched transcript text
       }))
 
       // Calculate confidence summary
@@ -435,7 +462,7 @@ export class SpeakerIdentificationService {
         duration: this.estimateDuration(speakers),
         status: 'completed',
         created_at: new Date().toISOString(),
-        mode: 'plain',
+        mode: 'diarize-identify-match',
         speakers,
         confidence_summary: {
           total_segments: speakers.length,
@@ -445,7 +472,7 @@ export class SpeakerIdentificationService {
         }
       }
     } catch (error) {
-      throw new Error(`Plain diarization processing failed: ${error.message}`)
+      throw new Error(`Diarize-identify-match processing failed: ${error.message}`)
     }
   }
 
@@ -475,9 +502,9 @@ export class SpeakerIdentificationService {
         description: 'Deepgram transcription + internal diarization + speaker identification'
       },
       {
-        mode: 'plain',
-        name: 'Plain Diarize + Identify',
-        description: 'Legacy: Diarization + identification without Deepgram (same as Speaker Identification)'
+        mode: 'diarize-identify-match',
+        name: 'Transcript + Diarize Match',
+        description: 'Match existing transcript to internal diarization + speaker identification'
       }
     ]
   }

@@ -12,6 +12,7 @@ pip install websockets sounddevice numpy silero-vad moonshine-onnx
 
 import argparse
 import asyncio
+import csv
 import logging
 import time
 from asyncio import Queue
@@ -99,21 +100,54 @@ class StreamingTranscriptionHandler(AsyncEventHandler):
         self._speech_buf: Queue[AudioChunk] = Queue(maxsize=100000)
         self._recording = False
         self._transcriber_task_handle = asyncio.create_task(self._transcriber_task())
-        self._recording_debug_handle = None
         self._speech_samples = np.empty(0, np.float32)
         self._last_refresh_t = 0
-        if True:
-        # if "debug_dir" in kwargs:
-            self._debug_dir = Path("debug")
-            self._debug_dir.mkdir(parents=True, exist_ok=True)
-        
 
-        self._DEBUG_LENGTH = 30 # seconds
+        # Debug directory setup
+        self._debug_dir = Path("debug")
+        self._debug_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Results directory for CSV logging
+        self._results_dir = Path("results")
+        self._results_dir.mkdir(parents=True, exist_ok=True)
+
+        # CSV file for logging transcriptions
+        self._csv_file = self._results_dir / "transcription_results.csv"
+        self._csv_lock = asyncio.Lock()
+        self._init_csv_file()
+
+        # Debug file handling
+        self._recording_debug_handle = None
+        self._current_debug_file_path = None
+        self._DEBUG_LENGTH = 30  # seconds
         self._cur_seg_duration = 0
 
         # VAD sample buffering - ensure exactly 512 samples per VAD call
         self._vad_sample_buffer = np.array([], dtype=np.float32)
         self._vad_buffer_size = CHUNK_SAMPLES
+
+    def _init_csv_file(self) -> None:
+        """Initialize CSV file with headers if it doesn't exist."""
+        if not self._csv_file.exists():
+            with open(self._csv_file, "w", newline="", encoding="utf-8") as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(
+                    ["timestamp", "audio_path", "transcription", "ground_truth"]
+                )
+                logger.info(f"Created CSV file: {self._csv_file}")
+
+    async def _log_to_csv(self, audio_path: str, transcription: str) -> None:
+        """Log transcription result to CSV file."""
+        async with self._csv_lock:
+            try:
+                with open(self._csv_file, "a", newline="", encoding="utf-8") as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(
+                        [time.time(), audio_path, transcription, ""]
+                    )  # Empty ground_truth
+                    logger.info(f"Logged to CSV: {audio_path} -> '{transcription}'")
+            except Exception as e:
+                logger.error(f"Error writing to CSV: {e}")
 
     def soft_reset(self) -> None:
         """Reset only the iterator's state, not the underlying model."""
@@ -183,7 +217,9 @@ class StreamingTranscriptionHandler(AsyncEventHandler):
             vad_event = self._vad_iterator(samples)
             logger.debug(f"VAD event: {vad_event}")
         except Exception as e:
-            logger.error(f"Error during VAD: {e}")
+            logger.error(f"Error during VAD processing: {e}")
+            # Reset VAD state on error to prevent cascading failures
+            self.soft_reset()
             return
 
         if vad_event:
@@ -201,11 +237,24 @@ class StreamingTranscriptionHandler(AsyncEventHandler):
                 self._recording = False
                 await self.write_event(VoiceStopped().event())
                 text = self._transcriber(self._speech_samples)
-                transcript = StreamingTranscript(text=text, final=True)
-                await self.write_event(transcript.event())
+                
+                if text and text.strip():  # Only send non-empty transcriptions
+                    transcript = StreamingTranscript(text=text, final=True)
+                    await self.write_event(transcript.event())
+                    
+                    # Log to CSV if we have a current debug file path
+                    if self._current_debug_file_path:
+                        await self._log_to_csv(str(self._current_debug_file_path), text)
+                    else:
+                        # Log with timestamp as fallback
+                        await self._log_to_csv(f"vad_segment_{time.time()}", text)
+                    
+                    logger.info(f"VAD end detected. Transcribed: {text}")
+                else:
+                    logger.warning("VAD end detected but transcription resulted in empty text.")
+                
                 self._speech_samples = np.empty(0, np.float32)
                 self.soft_reset()
-                logger.info(f"VAD end detected. Transcribed: {text}")
 
         # If we are inside speech, push incremental refreshes
         if self._recording:
@@ -215,8 +264,10 @@ class StreamingTranscriptionHandler(AsyncEventHandler):
             if (speech_len_sec > MAX_SPEECH_SECS or 
                 now - self._last_refresh_t > MIN_REFRESH_SECS):
                 text = self._transcriber(self._speech_samples)
-                transcript = StreamingTranscript(text=text, final=False)
-                await self.write_event(transcript.event())
+                if text and text.strip():  # Only send non-empty transcriptions
+                    transcript = StreamingTranscript(text=text, final=False)
+                    await self.write_event(transcript.event())
+                    logger.debug(f"Incremental transcript: {text}")
                 self._last_refresh_t = now
 
     async def _flush_vad_buffer(self) -> None:
@@ -239,27 +290,49 @@ class StreamingTranscriptionHandler(AsyncEventHandler):
             self._vad_sample_buffer = np.array([], dtype=np.float32)
 
     async def _write_debug_file(self, event: AudioChunk) -> None:
-        """Logic to create debug files"""
-        if self._recording_debug_handle is None:
-            self._cur_seg_duration = 0
-            self._recording_debug_handle = LocalFileSink(
-                file_path=self._debug_dir / f"{time.time()}.wav",
-                sample_rate=event.rate,
-                channels=event.channels,
-                sample_width=event.width,
-            )
-            await self._recording_debug_handle.open()
-        await self._recording_debug_handle.write(event)
-        logger.debug(f"Wrote debug file: {self._recording_debug_handle._file_path}")
-        self._cur_seg_duration += event.samples / event.rate
-        logger.debug(f"Current segment duration: {self._cur_seg_duration} seconds")
-        if self._cur_seg_duration > self._DEBUG_LENGTH:
-            await self._recording_debug_handle.close()
-            self._recording_debug_handle = None
+        """Logic to create debug files with proper error handling"""
+        try:
+            if self._recording_debug_handle is None:
+                self._cur_seg_duration = 0
+                self._current_debug_file_path = self._debug_dir / f"{time.time()}.wav"
+                logger.info(f"Writing debug file: {self._current_debug_file_path}\n\
+                            with rate: {event.rate}\n\
+                            channels: {event.channels}\n\
+                            width: {event.width}\n\
+                            samples: {event.samples}\n\
+                            seconds: {event.seconds}\n\
+                            ")
+                self._recording_debug_handle = LocalFileSink(
+                    file_path=self._current_debug_file_path,
+                    sample_rate=event.rate,
+                    channels=event.channels,
+                    sample_width=event.width,
+                )
+                await self._recording_debug_handle.open()
+            
+            await self._recording_debug_handle.write(event)
+            logger.debug(f"Wrote debug file: {self._recording_debug_handle._file_path}")
+            self._cur_seg_duration += event.samples / event.rate
+            logger.debug(f"Current segment duration: {self._cur_seg_duration} seconds")
+            
+            if self._cur_seg_duration > self._DEBUG_LENGTH:
+                await self._recording_debug_handle.close()
+                self._recording_debug_handle = None
+                self._current_debug_file_path = None
+        except Exception as e:
+            logger.error(f"Error writing to debug file: {e}")
+            # Close and reset on error
+            if self._recording_debug_handle:
+                try:
+                    await self._recording_debug_handle.close()
+                except:
+                    pass
+                self._recording_debug_handle = None
+                self._current_debug_file_path = None
 
     async def _handle_audio_chunk(self, event: AudioChunk) -> None:
         await self._write_debug_file(event)
-        self._speech_buf.put_nowait(event)
+        await self._speech_buf.put(event)
 
     async def handle_event(self, event: Event) -> bool:
         """Handle Wyoming protocol events"""
@@ -288,9 +361,25 @@ class StreamingTranscriptionHandler(AsyncEventHandler):
             
             # If we have speech samples, process the final transcript
             if len(self._speech_samples) > 0:
+                speech_len_sec = len(self._speech_samples) / SAMPLING_RATE
+                logger.info(f"Audio stream ended. Processing remaining speech (duration: {speech_len_sec:.2f}s)")
+                
                 text = self._transcriber(self._speech_samples)
-                transcript = StreamingTranscript(text=text, final=True)
-                await self.write_event(transcript.event())
+                if text and text.strip():  # Only send non-empty transcriptions
+                    transcript = StreamingTranscript(text=text, final=True)
+                    await self.write_event(transcript.event())
+                    
+                    # Log to CSV if we have a current debug file path
+                    if self._current_debug_file_path:
+                        await self._log_to_csv(str(self._current_debug_file_path), text)
+                    else:
+                        # Log with timestamp as fallback
+                        await self._log_to_csv(f"stream_end_{time.time()}", text)
+                    
+                    logger.info(f"Stream end transcription: {text}")
+                else:
+                    logger.warning("Stream ended but transcription resulted in empty text.")
+                
                 self._speech_samples = np.empty(0, np.float32)
             
             self._recording = False

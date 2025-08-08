@@ -109,13 +109,15 @@ async def get_speakers_analysis(
                 }
             }
         
-        # Extract embeddings for analysis
+        # Extract embeddings for analysis and create a mapping of ID to name
         embeddings_dict = {}
+        speaker_id_to_name = {}
         for speaker in query_speakers:
             if speaker.embedding_data:
                 try:
                     embedding = np.array(json.loads(speaker.embedding_data), dtype=np.float32)
                     embeddings_dict[speaker.id] = embedding
+                    speaker_id_to_name[speaker.id] = speaker.name
                 except (json.JSONDecodeError, ValueError) as e:
                     log.warning(f"Invalid embedding data for speaker {speaker.id}: {e}")
                     continue
@@ -146,8 +148,13 @@ async def get_speakers_analysis(
             embeddings_dict=embeddings_dict,
             method=method,
             cluster_method=cluster_method,
-            similarity_threshold=similarity_threshold
+            similarity_threshold=similarity_threshold,
+            speaker_names=speaker_id_to_name
         )
+        
+        # Add speaker names to the result for frontend use
+        if "visualization" in analysis_result:
+            analysis_result["visualization"]["speaker_names"] = speaker_id_to_name
         
         return analysis_result
         
