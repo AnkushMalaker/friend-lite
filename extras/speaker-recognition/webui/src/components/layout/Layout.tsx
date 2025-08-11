@@ -1,6 +1,6 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Mic, Music, FileText, Users, Brain, User, Radio, Sun, Moon } from 'lucide-react'
+import { Mic, Music, FileText, Users, Brain, User, Radio, Wifi, Sun, Moon } from 'lucide-react'
 import UserSelector from '../UserSelector'
 import { useTheme } from '../../contexts/ThemeContext'
 
@@ -19,6 +19,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: '/speakers', label: 'Speakers', icon: Users },
     { path: '/inference', label: 'Inference', icon: Brain },
     { path: '/infer-live', label: 'Live Inference', icon: Radio },
+    { path: '/infer-live-simple', label: 'Live Inference (Simple)', icon: Wifi },
   ]
 
   return (

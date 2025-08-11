@@ -42,3 +42,9 @@ extras/speaker-omni-experimental/cache/*
 
 # AI Stuff
 .claude
+
+# SSL
+extras/speaker-recognition/ssl/*
+
+# nginx
+extras/speaker-recognition/nginx.conf

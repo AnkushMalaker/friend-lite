@@ -22,6 +22,7 @@ dependencies = [
     "deepgram-sdk>=4.7.0",
     "pydub>=0.25.1",
     "yt-dlp>=2025.7.21",
+    "websockets>=12.0",
     # Web UI dependencies
     "streamlit>=1.31.0",
     "streamlit-webrtc>=0.47.0",

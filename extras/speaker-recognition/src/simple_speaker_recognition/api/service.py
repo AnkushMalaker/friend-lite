@@ -9,6 +9,7 @@ from typing import cast
 import torch
 import uvicorn
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     max_file_seconds: int = Field(default=180, description="Maximum file duration in seconds")
     deepgram_api_key: str | None = Field(default=None, description="Deepgram API key for wrapper service")
     deepgram_base_url: str = Field(default="https://api.deepgram.com", description="Deepgram API base URL")
+    hf_token: str | None = Field(default=None, description="Hugging Face token for Pyannote models")
 
     class Config:
         case_sensitive = True
@@ -49,6 +51,9 @@ auth = Settings()  # Load other settings from env vars or .env file
 # Override Deepgram API key from environment if available
 if os.getenv("DEEPGRAM_API_KEY"):
     auth.deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
+
+# Set HF token in auth settings for consistency
+auth.hf_token = hf_token
 
 # Global variables for storing initialized resources
 audio_backend: AudioBackend
@@ -91,6 +96,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Simple Speaker Recognition Service", version="0.2.0", lifespan=lifespan)
 
+# Add CORS middleware for direct WebSocket connections from HTTPS frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://100.83.66.30", "https://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Import and include all routers
 from .routers import (
@@ -98,7 +111,8 @@ from .routers import (
     speakers_router,
     enrollment_router,
     identification_router,
-    deepgram_router
+    deepgram_router,
+    websocket_router
 )
 
 # Include routers with appropriate tags and prefixes
@@ -107,6 +121,7 @@ app.include_router(speakers_router, tags=["speakers"])
 app.include_router(enrollment_router, tags=["enrollment"])
 app.include_router(identification_router, tags=["identification"])
 app.include_router(deepgram_router, tags=["deepgram"])
+app.include_router(websocket_router, tags=["websocket"])
 
 
 async def get_db() -> UnifiedSpeakerDB:

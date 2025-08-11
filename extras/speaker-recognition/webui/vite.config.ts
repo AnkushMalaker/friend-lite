@@ -9,14 +9,6 @@ export default defineConfig({
     host: process.env.REACT_UI_HOST || '0.0.0.0',
     port: parseInt(process.env.REACT_UI_PORT || '5173'),
     https: process.env.REACT_UI_HTTPS === 'true' ? true : false,
-    proxy: {
-      '/api': {
-        target: `http://${process.env.SPEAKER_SERVICE_HOST || 'speaker-service'}:${process.env.SPEAKER_SERVICE_PORT || '8085'}`,
-        changeOrigin: true,
-        secure: false, // Allow self-signed certificates for internal use
-        rewrite: (path) => path.replace(/^\/api/, '')
-      }
-    }
   },
   define: {
     global: 'globalThis',

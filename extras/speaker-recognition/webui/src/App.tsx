@@ -8,6 +8,7 @@ import Enrollment from './pages/Enrollment'
 import Speakers from './pages/Speakers'
 import Inference from './pages/Inference'
 import InferLive from './pages/InferLive'
+import InferLiveSimplified from './pages/InferLiveSimplified'
 import './App.css'
 
 function App() {
@@ -24,6 +25,7 @@ function App() {
               <Route path="/speakers" element={<Speakers />} />
               <Route path="/inference" element={<Inference />} />
               <Route path="/infer-live" element={<InferLive />} />
+              <Route path="/infer-live-simple" element={<InferLiveSimplified />} />
             </Routes>
           </Layout>
         </Router>
