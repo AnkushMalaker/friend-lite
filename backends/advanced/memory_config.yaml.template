@@ -1,0 +1,185 @@
+# Memory Extraction Configuration
+# This file controls how memories and facts are extracted from conversations
+#
+# REQUIRED ENVIRONMENT VARIABLES:
+# - LLM_PROVIDER: Set to "openai" or "ollama" 
+# - For OpenAI: OPENAI_API_KEY (required), OPENAI_MODEL (optional, defaults to config)
+# - For Ollama: OPENAI_BASE_URL or OLLAMA_BASE_URL (required), OPENAI_MODEL (optional, defaults to config)
+# - QDRANT_BASE_URL: Qdrant service URL (e.g., "qdrant" for Docker)
+#
+# OPTIONAL ENVIRONMENT VARIABLES:
+# - MEM0_ORGANIZATION_ID: Organization ID for mem0 (default: "friend-lite-org")
+# - MEM0_PROJECT_ID: Project ID for mem0 (default: "audio-conversations") 
+# - MEM0_APP_ID: Application ID for mem0 (default: "omi-backend")
+# - OPENAI_EMBEDDER_MODEL: OpenAI embedder model (default: "text-embedding-3-small")
+# - OLLAMA_EMBEDDER_MODEL: Ollama embedder model (default: "nomic-embed-text:latest")
+# - NEO4J_HOST, NEO4J_USER, NEO4J_PASSWORD: For graph storage (optional)
+
+# General memory extraction settings
+memory_extraction:
+  # Whether to extract general memories (conversation summaries, topics, etc.)
+  enabled: true
+  
+  # Main prompt for memory extraction - MODIFIED to be more aggressive
+  prompt: "Extract key information from this conversation."
+  
+  # LLM parameters for memory extraction
+  # Provider is controlled by LLM_PROVIDER environment variable (ollama/openai)
+  llm_settings:
+    temperature: 0.3  # Lower temperature for more consistent extraction
+    max_tokens: 2000
+    # Model selection based on provider:
+    # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
+    # - OpenAI: "gpt-4o" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    # 
+    # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
+    # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
+    # model: "gemma3n:e4b"
+    model: "gpt-4o"
+
+# Fact extraction settings (structured information)
+fact_extraction:
+  # Whether to extract structured facts separately from general memories
+  # ENABLED: Using proper fact extraction prompt format
+  enabled: true
+  
+  # Prompt for extracting structured facts
+  prompt: |
+    Extract important information from this conversation, including facts, events this conversation. Focus on:
+    - Names of people and their roles/titles. Ensure to extract the names all all existing participants in the conversation, even if they're only mentioned once.
+    - Company names and organizations
+    - Dates and specific times
+    - Locations and addresses
+    - Numbers, quantities, and measurements
+    - Contact information (emails, phone numbers)
+    - Project names and code names
+    - Technical specifications or requirements
+    - Contributions by each participant to the conversation or to the task
+    
+    Return the facts in JSON format as an array of strings. If no specific facts are mentioned, return an empty JSON array [].
+    Make sure to not wrap the JSON in ```json or ``` or any other markdown formatting. Only return the JSON array, that's all.
+    
+    Examples of JSON output:
+    ["John Smith works as Software Engineer at Acme Corp",
+    "Project deadline is December 15th, 2024",
+    "Meeting scheduled for 2 PM EST on Monday",
+    "Budget approved for $50,000",
+    "The participants in the conversation were John and Rose.",
+    "Discussion is about DnD",
+    "There is a tense conversation about the upcoming demo"]
+  
+  # LLM parameters for fact extraction
+  llm_settings:
+    temperature: 0.3  # Very low temperature for factual accuracy
+    max_tokens: 1500
+    # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
+    # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-4o"
+
+
+# Memory categorization settings
+categorization:
+  # Whether to automatically categorize memories
+  enabled: true
+  
+  # Predefined categories
+  categories:
+    - personal
+    - work
+    - meeting
+    - project
+    - learning
+    - social
+    - health
+    - finance
+    - travel
+    - other
+  
+  # Prompt for categorizing memories
+  prompt: |
+    Categorize this conversation into one or more of these categories:
+    personal, work, meeting, project, learning, social, health, finance, travel, other
+    
+    Return only the category names, comma-separated.
+    Examples: "work, meeting" or "personal, health" or "project"
+  
+  # LLM parameters for categorization
+  llm_settings:
+    temperature: 0.2
+    max_tokens: 100
+    # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-4o"  # Model based on LLM_PROVIDER (ollama/openai)
+
+# Quality control settings
+quality_control:
+  # Minimum conversation length (in characters) to process
+  # MODIFIED: Reduced from 50 to 1 to process almost all transcripts
+  min_conversation_length: 1
+  
+  # Maximum conversation length (in characters) to process
+  max_conversation_length: 50000
+  
+  # Whether to skip conversations that are mostly silence/filler
+  # MODIFIED: Disabled to ensure all transcripts are processed
+  skip_low_content: false
+  
+  # Minimum meaningful content ratio (0.0-1.0)
+  # MODIFIED: Reduced to 0.0 to process all content
+  min_content_ratio: 0.0
+  
+  # Skip conversations with these patterns
+  # MODIFIED: Removed most patterns to ensure all transcripts are processed
+  skip_patterns:
+    # Only skip completely empty patterns - removed test patterns to ensure all content is processed
+    []
+
+# Processing settings
+processing:
+  # Whether to process memories in parallel
+  parallel_processing: true
+  
+  # Maximum number of concurrent processing tasks - reduced to avoid overwhelming Ollama
+  max_concurrent_tasks: 1
+  
+  # Timeout for memory processing (seconds) - generous timeout for Ollama processing
+  processing_timeout: 600
+  
+  # Whether to retry failed extractions
+  retry_failed: true
+  
+  # Maximum number of retries
+  max_retries: 2
+  
+  # Delay between retries (seconds)
+  retry_delay: 5
+
+# Storage settings
+storage:
+  # Whether to store detailed extraction metadata
+  store_metadata: true
+  
+  # Whether to store the original prompts used
+  store_prompts: true
+  
+  # Whether to store LLM responses
+  store_llm_responses: true
+  
+  # Whether to store processing timing information
+  store_timing: true
+
+# Debug settings
+debug:
+  # Whether to enable debug tracking
+  enabled: true
+  
+  # Debug database path
+  db_path: "/app/data/debug_dir/memory_debug.db"
+  
+  # Log level for memory processing
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  
+  # Whether to log full conversations (privacy consideration)
+  log_full_conversations: false
+  
+  # Whether to log extracted memories
+  log_extracted_memories: true

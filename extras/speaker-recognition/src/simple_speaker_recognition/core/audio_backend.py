@@ -50,14 +50,14 @@ class AudioBackend:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.embed, wave)
 
-    def diarize(self, path: Path, num_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
+    def diarize(self, path: Path, min_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
         """Perform speaker diarization on an audio file."""
         with torch.inference_mode():
             # Pass speaker count parameters to pyannote
             kwargs = {}
-            if num_speakers is not None:
-                kwargs['num_speakers'] = num_speakers
-            elif max_speakers is not None:
+            if min_speakers is not None:
+                kwargs['min_speakers'] = min_speakers
+            if max_speakers is not None:
                 kwargs['max_speakers'] = max_speakers
             
             diarization = self.diar(str(path), **kwargs)
@@ -78,10 +78,10 @@ class AudioBackend:
         
         return segments
 
-    async def async_diarize(self, path: Path, num_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
+    async def async_diarize(self, path: Path, min_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
         """Async wrapper for diarization."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.diarize, path, num_speakers, max_speakers)
+        return await loop.run_in_executor(None, self.diarize, path, min_speakers, max_speakers)
 
     def load_wave(self, path: Path, start: Optional[float] = None, end: Optional[float] = None) -> torch.Tensor:
         if start is not None and end is not None:

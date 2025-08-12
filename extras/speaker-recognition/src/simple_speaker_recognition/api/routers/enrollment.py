@@ -45,6 +45,34 @@ def get_auth():
     return service.auth
 
 
+def check_duplicate_speaker_name(user_id: int, speaker_name: str, exclude_speaker_id: str = None) -> bool:
+    """Check if a speaker name already exists for the given user.
+    
+    Args:
+        user_id: User ID to check within
+        speaker_name: Speaker name to check
+        exclude_speaker_id: Speaker ID to exclude from check (for updates)
+        
+    Returns:
+        True if duplicate found, False otherwise
+    """
+    db_session = get_db_session()
+    try:
+        query = db_session.query(Speaker).filter(
+            Speaker.user_id == user_id,
+            Speaker.name == speaker_name
+        )
+        
+        if exclude_speaker_id:
+            query = query.filter(Speaker.id != exclude_speaker_id)
+            
+        existing_speaker = query.first()
+        return existing_speaker is not None
+        
+    finally:
+        db_session.close()
+
+
 def save_enrollment_audio(user_id: int, speaker_id: str, audio_data: bytes, filename: str, enrollment_type: str = "upload") -> Path:
     """Save enrollment audio file to disk.
     
@@ -137,6 +165,10 @@ async def enroll_upload(
     user_id = extract_user_id_from_speaker_id(speaker_id)
     log.info(f"Enrolling speaker: {speaker_name} (ID: {speaker_id}, User: {user_id})")
     
+    # Check for duplicate speaker name (allow updates to existing speaker with same ID)
+    if check_duplicate_speaker_name(user_id, speaker_name, exclude_speaker_id=speaker_id):
+        raise HTTPException(400, f"Speaker name '{speaker_name}' already exists for this user. Please choose a different name.")
+    
     # Read file content
     file_content = await file.read()
     
@@ -214,6 +246,10 @@ async def enroll_batch(
     # Extract user_id from speaker_id
     user_id = extract_user_id_from_speaker_id(speaker_id)
     log.info(f"Batch enrolling speaker: {speaker_name} (ID: {speaker_id}, User: {user_id}) with {len(files)} files")
+    
+    # Check for duplicate speaker name (allow updates to existing speaker with same ID)
+    if check_duplicate_speaker_name(user_id, speaker_name, exclude_speaker_id=speaker_id):
+        raise HTTPException(400, f"Speaker name '{speaker_name}' already exists for this user. Please choose a different name.")
     
     embeddings = []
     temp_paths = []

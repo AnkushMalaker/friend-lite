@@ -1,0 +1,364 @@
+/**
+ * InferLive Page - Simplified version using Speaker WebSocket
+ * Real-time transcription with speaker change detection
+ * Much simpler than the original - server handles all complexity
+ */
+
+import React, { useEffect, useRef, useState } from 'react'
+import { Mic, Users, Clock, Volume2, Wifi, WifiOff } from 'lucide-react'
+import { useUser } from '../contexts/UserContext'
+import { useSpeakerWebSocket } from '../hooks/useSpeakerWebSocket'
+import { useDeepgramSession } from '../hooks/useDeepgramSession'
+import SettingsPanel from '../components/SettingsPanel'
+
+export default function InferLiveSimplified() {
+  const { user } = useUser()
+  
+  // Audio processing refs
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const processorRef = useRef<ScriptProcessorNode | null>(null)
+
+  // Use Deepgram session for API key management
+  const deepgramSession = useDeepgramSession()
+
+  // WebSocket settings
+  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.15)
+  const [enableSpeakerIdentification, setEnableSpeakerIdentification] = useState<boolean>(true)
+
+  // Use our simplified WebSocket hook
+  const speakerWS = useSpeakerWebSocket({
+    userId: user?.id,
+    confidenceThreshold,
+    deepgramApiKey: deepgramSession.deepgramApiKey || undefined,
+  })
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopAudioCapture()
+      speakerWS.disconnect()
+    }
+  }, [])
+
+  // Update WebSocket settings when they change
+  useEffect(() => {
+    speakerWS.updateSettings({
+      userId: user?.id,
+      confidenceThreshold,
+      deepgramApiKey: deepgramSession.deepgramApiKey || undefined,
+    })
+  }, [user?.id, confidenceThreshold, deepgramSession.deepgramApiKey])
+
+  const startAudioCapture = async () => {
+    try {
+      // Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      })
+
+      mediaStreamRef.current = stream
+
+      // Create audio context for processing
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000
+      })
+
+      const actualSampleRate = audioContextRef.current.sampleRate
+      console.log(`🎵 [AUDIO] Requested: 16kHz, Actual: ${actualSampleRate}Hz`)
+
+      const source = audioContextRef.current.createMediaStreamSource(stream)
+      const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1)
+
+      processor.onaudioprocess = (event) => {
+        if (speakerWS.isConnected && speakerWS.isStreaming) {
+          const inputBuffer = event.inputBuffer
+          const inputData = inputBuffer.getChannelData(0)
+
+          // Convert Float32Array to Int16 (linear16 format)
+          const int16Buffer = new Int16Array(inputData.length)
+          for (let i = 0; i < inputData.length; i++) {
+            const sample = Math.max(-1, Math.min(1, inputData[i]))
+            int16Buffer[i] = sample * 0x7FFF
+          }
+
+          // Send audio to WebSocket
+          speakerWS.sendAudio(int16Buffer.buffer)
+        }
+      }
+
+      source.connect(processor)
+      processor.connect(audioContextRef.current.destination)
+      processorRef.current = processor
+
+      console.log(`Audio capture started successfully at ${actualSampleRate}Hz`)
+
+    } catch (error) {
+      console.error('Failed to start audio capture:', error)
+      
+      let errorMessage = 'Failed to access microphone. '
+      if (error.name === 'NotAllowedError') {
+        errorMessage += 'Please allow microphone access and try again.'
+      } else if (error.name === 'NotFoundError') {
+        errorMessage += 'No microphone found. Please check your device.'
+      } else {
+        errorMessage += 'Please check permissions and try again.'
+      }
+      
+      alert(errorMessage)
+    }
+  }
+
+  const stopAudioCapture = () => {
+    // Stop audio processing
+    if (processorRef.current) {
+      processorRef.current.disconnect()
+      processorRef.current = null
+    }
+
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+
+    // Stop media stream
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop())
+      mediaStreamRef.current = null
+    }
+
+    console.log('Audio capture stopped')
+  }
+
+  const handleToggleSession = async () => {
+    if (speakerWS.isStreaming) {
+      speakerWS.stopStreaming()
+      stopAudioCapture()
+    } else {
+      try {
+        // Connect to WebSocket if not connected
+        if (!speakerWS.isConnected) {
+          await speakerWS.connect()
+        }
+        
+        // Start streaming and audio capture
+        speakerWS.startStreaming()
+        await startAudioCapture()
+      } catch (error) {
+        console.error('Failed to start session:', error)
+        alert('Failed to start session. Please check your settings and try again.')
+      }
+    }
+  }
+
+  const formatDuration = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000)
+    const minutes = Math.floor(seconds / 60)
+    const hours = Math.floor(minutes / 60)
+    
+    if (hours > 0) {
+      return `${hours}:${(minutes % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+    }
+    return `${minutes}:${(seconds % 60).toString().padStart(2, '0')}`
+  }
+
+  const getConnectionStatusIcon = () => {
+    switch (speakerWS.connectionStatus) {
+      case 'connected':
+        return <Wifi className="h-4 w-4 text-green-600" />
+      case 'connecting':
+        return <Wifi className="h-4 w-4 text-yellow-600 animate-pulse" />
+      case 'error':
+        return <WifiOff className="h-4 w-4 text-red-600" />
+      default:
+        return <WifiOff className="h-4 w-4 text-gray-400" />
+    }
+  }
+
+  const getConnectionStatusText = () => {
+    switch (speakerWS.connectionStatus) {
+      case 'connected':
+        return '✅ Connected'
+      case 'connecting':
+        return '🔄 Connecting...'
+      case 'error':
+        return '❌ Error'
+      default:
+        return '⚪ Disconnected'
+    }
+  }
+
+  if (!user) {
+    return (
+      <div className="text-center py-12">
+        <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">User Required</h3>
+        <p className="text-gray-500">Please select a user to access live inference.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Live Inference (Simplified)</h1>
+          <p className="text-gray-600">Real-time transcription with speaker change detection</p>
+          <p className="text-sm text-blue-600">Uses server-side VAD processing - much simpler!</p>
+        </div>
+      </div>
+
+      {/* Settings Panel */}
+      <SettingsPanel
+        confidenceThreshold={confidenceThreshold}
+        onConfidenceThresholdChange={setConfidenceThreshold}
+        deepgramApiKey={deepgramSession.deepgramApiKey}
+        onDeepgramApiKeyChange={deepgramSession.setDeepgramApiKey}
+        deepgramApiKeySource={deepgramSession.apiKeySource}
+        enableSpeakerIdentification={enableSpeakerIdentification}
+        onEnableSpeakerIdentificationChange={setEnableSpeakerIdentification}
+        showApiKeySection={true}
+        showProcessingOptions={true}
+        collapsible={true}
+        defaultExpanded={false}
+      />
+
+      {/* Connection Status */}
+      <div className="bg-white border rounded-lg p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2">
+              {getConnectionStatusIcon()}
+              <span className="text-sm text-gray-900 dark:text-gray-100">
+                Status: {getConnectionStatusText()}
+              </span>
+            </div>
+            {speakerWS.isStreaming && (
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
+                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Recording</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Session Stats */}
+      {speakerWS.isStreaming && (
+        <div className="bg-white border rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-6">
+              <div className="flex items-center space-x-2">
+                <Clock className="h-4 w-4 text-gray-500" />
+                <span className="text-sm text-gray-900 dark:text-gray-100">
+                  {formatDuration(speakerWS.stats.sessionDuration)}
+                </span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Volume2 className="h-4 w-4 text-gray-500" />
+                <span className="text-sm text-gray-900 dark:text-gray-100">
+                  {speakerWS.stats.totalSegments} segments
+                </span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Users className="h-4 w-4 text-gray-500" />
+                <span className="text-sm text-gray-900 dark:text-gray-100">
+                  {speakerWS.stats.identifiedSpeakers.size} speakers
+                </span>
+              </div>
+              {speakerWS.stats.averageConfidence > 0 && (
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm text-gray-500">Avg Confidence:</span>
+                  <span className="text-sm text-gray-900 dark:text-gray-100">
+                    {(speakerWS.stats.averageConfidence * 100).toFixed(1)}%
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Control Button */}
+      <div className="flex justify-center">
+        <button
+          onClick={handleToggleSession}
+          disabled={!deepgramSession.deepgramApiKey || speakerWS.connectionStatus === 'connecting'}
+          className={`flex items-center space-x-2 px-8 py-4 rounded-lg font-medium text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+            speakerWS.isStreaming
+              ? 'bg-red-600 text-white hover:bg-red-700'
+              : 'bg-blue-600 text-white hover:bg-blue-700'
+          }`}
+        >
+          <Mic className="h-6 w-6" />
+          <span>
+            {!deepgramSession.deepgramApiKey ? '⚠️ API Key Required' :
+             speakerWS.connectionStatus === 'connecting' ? '🔄 Connecting...' : 
+             speakerWS.isStreaming ? 'Stop Transcribe & Identify' :
+             'Start Transcribe & Identify'}
+          </span>
+        </button>
+      </div>
+
+      {/* Live Results */}
+      <div className="bg-white border rounded-lg">
+        <div className="p-4 border-b">
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Live Transcription</h3>
+          <p className="text-sm text-gray-500">Speaker boundaries detected server-side using Pyannote VAD</p>
+        </div>
+        <div className="p-4 space-y-4 max-h-96 overflow-y-auto">
+          {speakerWS.transcriptSegments.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              {speakerWS.isStreaming ? 'Listening for speech...' : 'Start streaming to see transcription results'}
+            </div>
+          ) : (
+            speakerWS.transcriptSegments.map((segment) => (
+              <div key={segment.id} className="border-l-4 border-blue-500 pl-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2 text-sm text-gray-500 mb-1">
+                      <span>
+                        {segment.speaker_name || 'Unknown Speaker'}
+                      </span>
+                      {segment.status === 'identified' && segment.confidence > 0 && (
+                        <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                          {(segment.confidence * 100).toFixed(1)}%
+                        </span>
+                      )}
+                      <span className="text-xs text-gray-400">
+                        {segment.duration.toFixed(1)}s
+                      </span>
+                    </div>
+                    <p className="text-gray-900 dark:text-gray-100">{segment.text}</p>
+                  </div>
+                  <div className="text-xs text-gray-400 ml-4">
+                    {new Date(segment.timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Clear Results Button */}
+      {speakerWS.transcriptSegments.length > 0 && (
+        <div className="flex justify-center">
+          <button
+            onClick={speakerWS.clearTranscripts}
+            className="px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+          >
+            Clear Transcripts
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}

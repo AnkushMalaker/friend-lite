@@ -241,7 +241,7 @@ Wyoming is a peer-to-peer protocol for voice assistants that combines JSONL (JSO
 - **Wyoming Protocol + Opus Decoding**: Combines Wyoming session management with OMI Opus decoding
 - **Continuous Streaming**: OMI devices stream continuously, audio-start/stop events are optional
 - **Timestamp Preservation**: Uses timestamps from Wyoming headers when provided
-- **OMI-Optimized**: Hardcoded 16kHz mono format for OMI device compatibility
+- **Dynamic Sample Rate**: Automatically detects and adapts to client sample rate (typically 16kHz for OMI devices, but supports other rates)
 
 **Simple Backend (`/ws`)**:
 - **Minimal Wyoming Support**: Parses audio-chunk events, silently ignores control events
@@ -317,6 +317,24 @@ client_state = ClientState(
 - **Connection Tracking**: Real-time monitoring of active clients
 - **State Management**: Simplified client state for conversation tracking only
 - **Centralized Processing**: Application-level processors handle all background tasks
+- **Dynamic Sample Rate**: Client state tracks actual sample rate from audio chunks
+- **Audio Buffer Management**: Sophisticated buffer system with timing and collection management
+
+### Audio Buffer Management
+
+The system implements advanced audio buffer management for reliable processing:
+
+**Buffer Collection**:
+- **Retention**: Configurable buffer retention (default 120 seconds for speaker identification)
+- **Timeout**: 1.5 minute collection timeout to prevent indefinite buffering
+- **Isolation**: Each client maintains isolated buffer state
+- **Dynamic Sizing**: Adapts to actual sample rate and chunk sizes
+
+**Buffer State Tracking**:
+- Sample rate detection from incoming audio chunks
+- Automatic fallback to default rates when not specified
+- Buffer timing synchronization for accurate segment extraction
+- Memory-efficient circular buffer implementation
 
 ### Application-Level Processing Architecture
 
@@ -784,6 +802,45 @@ flowchart TB
 4. **Permission Tracking**: Dictionary-based client-user relationship management
 5. **Authorization**: Per-endpoint permission checking with simplified ownership validation
 6. **Data Isolation**: User-scoped data access via client ID mapping and ownership validation
+
+## Speaker Recognition Integration
+
+The advanced backend integrates with an external speaker recognition service for real-time speaker identification during conversations.
+
+### Integration Architecture
+
+**Service Communication**:
+- **HTTP API**: RESTful endpoints for speaker enrollment and management
+- **Real-time Processing**: Speaker identification during live transcription
+- **Asynchronous Pipeline**: Non-blocking speaker identification parallel to transcription
+
+**Key Features**:
+- **Dynamic Enrollment**: Add speakers through audio samples
+- **Live Identification**: Real-time speaker recognition during conversations
+- **Confidence Scoring**: Adjustable thresholds for identification accuracy
+- **Multi-speaker Support**: Handles conversations with multiple participants
+
+### Speaker Recognition Flow
+
+1. **Audio Collection**: Capture audio chunks with proper buffering
+2. **Feature Extraction**: Generate speaker embeddings from audio segments
+3. **Identity Matching**: Compare against enrolled speaker database
+4. **Result Integration**: Enhance transcripts with speaker identification
+
+### Configuration
+
+```yaml
+# Environment variables for speaker recognition
+SPEAKER_SERVICE_URL: "http://speaker-recognition:8001"
+SPEAKER_CONFIDENCE_THRESHOLD: 0.15  # Adjustable confidence level
+```
+
+### API Endpoints
+
+- `POST /api/speaker/enroll` - Enroll new speaker with audio samples
+- `GET /api/speaker/list` - List enrolled speakers
+- `POST /api/speaker/identify` - Identify speaker from audio segment
+- `DELETE /api/speaker/{speaker_id}` - Remove enrolled speaker
 
 ## Security Architecture
 

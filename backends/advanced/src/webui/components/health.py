@@ -1,6 +1,7 @@
 """
 Health check functions for the Streamlit UI
 """
+
 import logging
 import time
 import requests
@@ -12,8 +13,10 @@ logger = logging.getLogger("streamlit-ui")
 @st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too many requests
 def get_system_health(backend_url: str = None):
     """Get comprehensive system health from backend."""
-    backend_api_url = backend_url or st.session_state.get("backend_api_url", "http://192.168.0.110:8000")
-    
+    backend_api_url = backend_url or st.session_state.get(
+        "backend_api_url", "http://192.168.0.110:8000"
+    )
+
     logger.info("🏥 Performing system health check")
     start_time = time.time()
 

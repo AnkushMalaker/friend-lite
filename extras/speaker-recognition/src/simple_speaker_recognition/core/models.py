@@ -48,12 +48,15 @@ class VerifyRequest(BaseModel):
 class DiarizeRequest(BaseModel):
     """Request model for speaker diarization."""
     min_duration: Optional[float] = Field(default=None, description="Minimum duration for speaker segments (seconds)")
+    min_speakers: Optional[int] = Field(default=None, description="Minimum number of speakers to detect")
     max_speakers: Optional[int] = Field(default=None, description="Maximum number of speakers to detect")
 
 
 class DiarizeAndIdentifyRequest(BaseModel):
     """Request model for combined diarization and identification."""
     min_duration: Optional[float] = Field(default=0.5, description="Minimum duration for speaker segments (seconds)")
+    min_speakers: Optional[int] = Field(default=None, description="Minimum number of speakers to detect")
+    max_speakers: Optional[int] = Field(default=None, description="Maximum number of speakers to detect")
     similarity_threshold: Optional[float] = Field(default=None, description="Override default similarity threshold for identification")
     identify_only_enrolled: bool = Field(default=False, description="Only return segments for enrolled speakers")
     user_id: Optional[int] = Field(default=None, description="User ID to scope speaker identification to user's enrolled speakers")

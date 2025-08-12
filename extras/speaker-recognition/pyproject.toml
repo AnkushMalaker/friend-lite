@@ -22,6 +22,7 @@ dependencies = [
     "deepgram-sdk>=4.7.0",
     "pydub>=0.25.1",
     "yt-dlp>=2025.7.21",
+    "websockets>=12.0",
     # Web UI dependencies
     "streamlit>=1.31.0",
     "streamlit-webrtc>=0.47.0",
@@ -35,7 +36,7 @@ dependencies = [
     # Data processing
     "pandas>=2.2.0",
     "scikit-learn>=1.4.0", # For t-SNE/UMAP visualization
-    "umap-learn>=0.5.3", # For UMAP dimensionality reduction
+    "umap-learn>=0.5.3",
 ]
 
 [build-system]
@@ -62,6 +63,9 @@ dev = [
     "isort>=6.0.1",
 ]
 
+test = [
+    "pytest",
+]
 
 [tool.uv]
 # dev & cpu are installed automatically

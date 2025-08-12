@@ -29,7 +29,9 @@ async def close_current_conversation(
     client_manager: ClientManager = Depends(get_client_manager_dependency),
 ):
     """Close the current conversation for a specific client. Users can only close their own conversations."""
-    return await conversation_controller.close_current_conversation(client_id, current_user, client_manager)
+    return await conversation_controller.close_current_conversation(
+        client_id, current_user, client_manager
+    )
 
 
 @router.get("")
@@ -60,7 +62,9 @@ async def add_speaker_to_conversation(
     audio_uuid: str, speaker_id: str, current_user: User = Depends(current_active_user)
 ):
     """Add a speaker to the speakers_identified list for a conversation. Users can only modify their own conversations."""
-    return await conversation_controller.add_speaker_to_conversation(audio_uuid, speaker_id, current_user)
+    return await conversation_controller.add_speaker_to_conversation(
+        audio_uuid, speaker_id, current_user
+    )
 
 
 @router.put("/{audio_uuid}/transcript/{segment_index}")

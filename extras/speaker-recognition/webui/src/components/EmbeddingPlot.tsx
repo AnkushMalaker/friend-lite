@@ -16,6 +16,7 @@ interface AnalysisData {
     embeddings_3d: number[][]
     cluster_labels: number[]
     colors: string[]
+    speaker_names?: { [key: string]: string }
   }
   clustering: {
     method: string
@@ -265,7 +266,11 @@ export default function EmbeddingPlot({
           mode: 'markers+text',
           type: view3D ? 'scatter3d' : 'scatter',
           name: 'Annotation Segments',
-          text: segmentIndices.map(i => visualization.speakers[i].split('_').pop() || visualization.speakers[i]),
+          text: segmentIndices.map(i => 
+            visualization.speaker_names?.[visualization.speakers[i]] || 
+            visualization.speakers[i].split('_').pop() || 
+            visualization.speakers[i]
+          ),
           textposition: 'top center',
           textfont: { size: 10 },
           marker: {
@@ -294,7 +299,11 @@ export default function EmbeddingPlot({
           mode: 'markers+text',
           type: view3D ? 'scatter3d' : 'scatter',
           name: 'Enrolled Speakers',
-          text: enrolledIndices.map(i => visualization.speakers[i].split('_').pop() || visualization.speakers[i]),
+          text: enrolledIndices.map(i => 
+            visualization.speaker_names?.[visualization.speakers[i]] || 
+            visualization.speakers[i].split('_').pop() || 
+            visualization.speakers[i]
+          ),
           textposition: 'top center',
           textfont: { size: 10 },
           marker: {
@@ -331,7 +340,9 @@ export default function EmbeddingPlot({
         z: view3D ? embeddings.map(point => point[2]) : undefined,
         mode: 'markers+text',
         type: view3D ? 'scatter3d' : 'scatter',
-        text: visualization.speakers.map(speaker => speaker.split('_').pop() || speaker),
+        text: visualization.speakers.map(speaker => 
+          visualization.speaker_names?.[speaker] || speaker.split('_').pop() || speaker
+        ),
         textposition: 'top center',
         textfont: { size: 10 },
         marker: {

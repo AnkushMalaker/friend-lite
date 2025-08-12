@@ -54,10 +54,9 @@ services:
       - ./webui/postcss.config.js:/app/postcss.config.js
       - ./webui/tsconfig.json:/app/tsconfig.json
     environment:
-      - VITE_API_URL=http://speaker-service:${SPEAKER_SERVICE_PORT:-8085}
       - REACT_UI_HOST=${REACT_UI_HOST:-0.0.0.0}
       - REACT_UI_PORT=${REACT_UI_PORT:-5173}
-      - REACT_UI_HTTPS=${REACT_UI_HTTPS:-false}
+      - REACT_UI_HTTPS=${REACT_UI_HTTPS:-true}
       - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST:-speaker-service}
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
     depends_on:
@@ -65,6 +64,25 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx reverse proxy for unified HTTPS endpoint
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "443:443"
+      - "80:80"  
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - speaker-service
+      - web-ui
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3

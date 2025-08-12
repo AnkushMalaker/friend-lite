@@ -1,5 +1,6 @@
 """Speaker identification and diarization endpoints."""
 
+import json
 import logging
 import shutil
 import tempfile
@@ -79,7 +80,7 @@ async def diarize_and_identify(
     similarity_threshold: Optional[float] = Query(default=None, description="Override default similarity threshold for identification"),
     identify_only_enrolled: bool = Query(default=False, description="Only return segments for enrolled speakers"),
     user_id: Optional[int] = Query(default=None, description="User ID to scope speaker identification to user's enrolled speakers"),
-    num_speakers: Optional[int] = Query(default=None, description="Expected number of speakers (for better diarization accuracy)"),
+    min_speakers: Optional[int] = Query(default=None, description="Minimum number of speakers to detect"),
     max_speakers: Optional[int] = Query(default=None, description="Maximum number of speakers to detect"),
     db: UnifiedSpeakerDB = Depends(get_db),
 ):
@@ -92,7 +93,7 @@ async def diarize_and_identify(
     3. Returns segments with both diarization labels and identified speaker names
     """
     log.info("Processing diarize-and-identify request")
-    log.info(f"Parameters - min_duration: {min_duration}, similarity_threshold: {similarity_threshold}, identify_only_enrolled: {identify_only_enrolled}, user_id: {user_id}, num_speakers: {num_speakers}, max_speakers: {max_speakers}")
+    log.info(f"Parameters - min_duration: {min_duration}, similarity_threshold: {similarity_threshold}, identify_only_enrolled: {identify_only_enrolled}, user_id: {user_id}, min_speakers: {min_speakers}, max_speakers: {max_speakers}")
     log.info(f"File - name: {file.filename}, content_type: {file.content_type}, size: {file.size if hasattr(file, 'size') else 'unknown'}")
     
     # Read audio data once
@@ -116,13 +117,11 @@ async def diarize_and_identify(
     try:
         # Step 1: Perform diarization
         log.info(f"Step 1: Performing speaker diarization on {tmp_path}")
-        if num_speakers:
-            log.info(f"Using specified number of speakers: {num_speakers}")
-        elif max_speakers:
-            log.info(f"Using max speakers constraint: {max_speakers}")
+        if min_speakers or max_speakers:
+            log.info(f"Using speaker constraints: min={min_speakers}, max={max_speakers}")
         
         audio_backend = get_audio_backend()
-        segments = await audio_backend.async_diarize(tmp_path, num_speakers=num_speakers, max_speakers=max_speakers)
+        segments = await audio_backend.async_diarize(tmp_path, min_speakers=min_speakers, max_speakers=max_speakers)
         
         # Log what PyAnnote produced
         log.info(f"PyAnnote produced {len(segments)} segments")
@@ -264,6 +263,155 @@ async def diarize_and_identify(
         tmp_path.unlink(missing_ok=True)
 
 
+@router.post("/v1/diarize-identify-match")
+async def diarize_identify_match(
+    file: UploadFile = File(..., description="Audio file for diarization and word matching"),
+    transcript_data: str = Form(..., description="JSON string with transcript words and text"),
+    user_id: Optional[int] = Form(default=None, description="User ID for speaker identification"),
+    min_duration: float = Form(default=0.5, description="Minimum segment duration in seconds"),
+    similarity_threshold: float = Form(default=0.15, description="Speaker similarity threshold"),
+    min_speakers: Optional[int] = Form(default=None, description="Minimum number of speakers to detect"),
+    max_speakers: Optional[int] = Form(default=None, description="Maximum number of speakers to detect"),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """
+    Diarize audio, identify speakers, and match transcript words to speaker segments.
+    
+    This endpoint:
+    1. Uses internal pyannote for speaker diarization
+    2. Identifies enrolled speakers for each segment
+    3. Matches transcript words to diarization segments by time overlap
+    4. Returns complete segments with text and speaker identification
+    
+    The transcript_data should be a JSON string containing:
+    {
+        "words": [{"word": "hello", "start": 1.23, "end": 1.45}, ...],
+        "text": "full transcript text"
+    }
+    """
+    log.info(f"Processing diarize-identify-match request: {file.filename}")
+    log.info(f"Parameters - user_id: {user_id}, min_duration: {min_duration}, similarity_threshold: {similarity_threshold}, min_speakers: {min_speakers}, max_speakers: {max_speakers}")
+    log.info(f"Transcript data length: {len(transcript_data) if transcript_data else 0}")
+    
+    # Parse transcript data
+    try:
+        transcript = json.loads(transcript_data)
+        words = transcript.get("words", [])
+        full_text = transcript.get("text", "")
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"Invalid transcript_data JSON: {str(e)}")
+    
+    if not words:
+        raise HTTPException(400, "No words found in transcript_data")
+    
+    # Create temporary file
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+        tmp_file.write(await file.read())
+        tmp_path = Path(tmp_file.name)
+    
+    try:
+        # Step 1: Perform diarization
+        log.info(f"Performing speaker diarization on {tmp_path}")
+        if min_speakers or max_speakers:
+            log.info(f"Using speaker constraints: min={min_speakers}, max={max_speakers}")
+        
+        audio_backend = get_audio_backend()
+        diarization_segments = await audio_backend.async_diarize(tmp_path, min_speakers=min_speakers, max_speakers=max_speakers)
+        
+        # Apply minimum duration filter
+        if min_duration > 0:
+            original_count = len(diarization_segments)
+            diarization_segments = [s for s in diarization_segments if s["duration"] >= min_duration]
+            if len(diarization_segments) < original_count:
+                log.info(f"Filtered out {original_count - len(diarization_segments)} segments shorter than {min_duration}s")
+        
+        # Step 2: Identify speakers for each segment
+        enhanced_segments = []
+        for segment in diarization_segments:
+            speaker_label = segment["speaker"]
+            start_time = segment["start"]
+            end_time = segment["end"]
+            
+            # Extract audio for this segment
+            segment_audio = await audio_backend.extract_segment(tmp_path, start_time, end_time)
+            
+            # Check if we can identify this speaker
+            speaker_info = None
+            confidence = 0.0
+            if user_id:
+                found, speaker_info, confidence = await audio_backend.identify_speaker(
+                    segment_audio, user_id=user_id, threshold=similarity_threshold
+                )
+            
+            # Step 3: Match transcript words to this segment
+            segment_words = []
+            for word in words:
+                word_start = word.get("start", 0.0)
+                word_end = word.get("end", 0.0)
+                word_mid = (word_start + word_end) / 2
+                
+                # Word belongs to this segment if its midpoint is within range
+                if start_time <= word_mid <= end_time:
+                    segment_words.append(word.get("word", ""))
+            
+            # Create segment with matched text
+            segment_text = " ".join(segment_words).strip()
+            
+            if speaker_info and confidence >= similarity_threshold:
+                # Identified speaker
+                enhanced_segments.append({
+                    "text": segment_text,
+                    "start": round(start_time, 3),
+                    "end": round(end_time, 3),
+                    "speaker": speaker_label,
+                    "identified_as": speaker_info["name"],
+                    "speaker_id": speaker_info["id"],
+                    "confidence": round(float(confidence), 3),
+                    "status": "identified"
+                })
+            else:
+                # Unknown speaker
+                enhanced_segments.append({
+                    "text": segment_text,
+                    "start": round(start_time, 3),
+                    "end": round(end_time, 3),
+                    "speaker": speaker_label,
+                    "identified_as": None,
+                    "speaker_id": None,
+                    "confidence": round(float(confidence), 3) if confidence else 0.0,
+                    "status": "unknown"
+                })
+        
+        # Create summary
+        identified_speakers = list(set(
+            s["identified_as"] for s in enhanced_segments 
+            if s["identified_as"]
+        ))
+        unknown_speakers = list(set(
+            s["speaker"] for s in enhanced_segments 
+            if not s["identified_as"]
+        ))
+        
+        response = {
+            "segments": enhanced_segments,
+            "summary": {
+                "total_segments": len(enhanced_segments),
+                "identified_speakers": identified_speakers,
+                "unknown_speakers": unknown_speakers,
+                "similarity_threshold": similarity_threshold,
+                "processing_mode": "diarize_identify_match"
+            }
+        }
+        
+        log.info(f"Diarize-identify-match complete: {len(enhanced_segments)} segments, "
+                f"{len(identified_speakers)} identified speakers")
+        return response
+        
+    finally:
+        # Clean up temporary file
+        tmp_path.unlink(missing_ok=True)
+
+
 @router.post("/plain-diarize-and-identify")
 async def plain_diarize_and_identify(
     file: UploadFile = File(..., description="Audio file for plain diarization and speaker identification"),
@@ -271,7 +419,7 @@ async def plain_diarize_and_identify(
     similarity_threshold: Optional[float] = Form(default=None, description="Override default similarity threshold for identification"),
     identify_only_enrolled: bool = Form(default=False, description="Only return segments for enrolled speakers"),
     user_id: Optional[int] = Form(default=None, description="User ID to scope speaker identification to user's enrolled speakers"),
-    num_speakers: Optional[int] = Form(default=None, description="Expected number of speakers (for better diarization accuracy)"),
+    min_speakers: Optional[int] = Form(default=None, description="Minimum number of speakers to detect"),
     max_speakers: Optional[int] = Form(default=None, description="Maximum number of speakers to detect"),
     db: UnifiedSpeakerDB = Depends(get_db),
 ):
@@ -284,7 +432,7 @@ async def plain_diarize_and_identify(
     log.info("Processing plain-diarize-and-identify request (redirecting to standard diarize-and-identify)")
     
     # Simply call the existing diarize_and_identify function with the same parameters
-    return await diarize_and_identify(file, min_duration, similarity_threshold, identify_only_enrolled, user_id, num_speakers, max_speakers, db)
+    return await diarize_and_identify(file, min_duration, similarity_threshold, identify_only_enrolled, user_id, min_speakers, max_speakers, db)
 
 
 @router.post("/identify", response_model=IdentifyResponse)

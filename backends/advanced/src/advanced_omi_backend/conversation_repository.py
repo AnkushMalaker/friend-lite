@@ -107,26 +107,36 @@ class ConversationRepository:
         """Get the complete conversation as a single text string.
 
         This method is optimized for memory processing and provides a clean
-        interface for getting conversation content.
+        interface for getting conversation content. Falls back to raw transcript
+        data if segments are not available.
         """
         try:
             segments = await self.get_transcript_segments(audio_uuid)
-            if not segments:
-                return None
+            if segments:
+                # Build conversation text from segments (preferred method)
+                transcript_texts = [
+                    segment.get("text", "") for segment in segments if segment.get("text", "").strip()
+                ]
 
-            # Build conversation text from segments
-            transcript_texts = [
-                segment.get("text", "") for segment in segments if segment.get("text", "").strip()
-            ]
+                if transcript_texts:
+                    full_text = " ".join(transcript_texts).strip()
+                    logger.debug(
+                        f"Retrieved full conversation text from segments for {audio_uuid}: {len(full_text)} chars"
+                    )
+                    return full_text if full_text else None
 
-            if not transcript_texts:
-                return None
+            # Fallback: Check raw transcript data if no segments or empty segments
+            document = await self.col.find_one({"audio_uuid": audio_uuid}, {"raw_transcript_data": 1})
+            if document and document.get("raw_transcript_data"):
+                raw_data = document["raw_transcript_data"]
+                raw_text = raw_data.get("data", {}).get("text", "")
+                if raw_text and raw_text.strip():
+                    logger.debug(
+                        f"Retrieved full conversation text from raw transcript for {audio_uuid}: {len(raw_text)} chars"
+                    )
+                    return raw_text.strip()
 
-            full_text = " ".join(transcript_texts).strip()
-            logger.debug(
-                f"Retrieved full conversation text for {audio_uuid}: {len(full_text)} chars"
-            )
-            return full_text if full_text else None
+            return None
 
         except Exception as e:
             logger.error(
