@@ -11,21 +11,39 @@ Get the speaker recognition system running in 5 minutes and start processing aud
 
 ## Setup
 
-### 1. Start the Services
+### 1. Initialize with Tailscale IP
+
+First, run the initialization script with your Tailscale IP address:
 
 ```bash
 cd extras/speaker-recognition
+./init.sh <your-tailscale-ip>
+```
+
+Example:
+```bash
+./init.sh 100.83.66.30
+```
+
+This creates the nginx configuration file needed for the proxy setup.
+
+### 2. Start the Services
+
+```bash
 docker compose up --build -d
 ```
 
-### 2. Access the Web UI
+### 3. Access the Web UI
 
-Open https://localhost:5173 in your browser (accept the SSL certificate warning).
+Open https://localhost/ in your browser (accept the SSL certificate warning).
 
-**Need different ports?** Copy `.env.template` to `.env` and customize:
+You can also access via your Tailscale IP: https://your-tailscale-ip/
+
+**Need to customize other settings?** Copy `.env.template` to `.env` and modify:
 ```bash
-REACT_UI_PORT=3000           # Web UI port
-SPEAKER_SERVICE_PORT=8086    # API port
+HF_TOKEN=your_token          # Required for first-time model download
+SIMILARITY_THRESHOLD=0.15    # Speaker ID confidence (0.1-0.3)
+DEEPGRAM_API_KEY=your_key   # For transcription modes
 ```
 
 ## First Steps
@@ -89,51 +107,62 @@ SPEAKER_SERVICE_PORT=8086    # API port
 1. Ensure services are running: `docker compose ps`
 2. Rebuild if needed: `docker compose up --build -d`
 
-### Port conflicts
-1. Check what's using the port: `netstat -tulpn | grep :5173`
-2. Customize ports in `.env` file
+### Port conflicts  
+1. Check what's using ports 80/443: `netstat -tulpn | grep -E ':(80|443)'`
+2. If needed, customize backend/UI ports in `.env` file
 3. Restart: `docker compose down && docker compose up -d`
+
+### "nginx.conf not found" error
+1. Make sure you ran `./init.sh <tailscale-ip>` first
+2. Verify nginx.conf.template exists in the directory
+3. Re-run init script if needed
 
 ## API Usage
 
-Once services are running, you can use the REST API:
+Once services are running, you can use the REST API via the nginx proxy:
 
 ```bash
 # Health check
-curl http://localhost:8085/health
+curl -k https://localhost/api/health
 
 # Basic speaker separation
-curl -X POST http://localhost:8085/v1/diarize-only \
+curl -k -X POST https://localhost/api/v1/diarize-only \
   -F "file=@your-audio.wav"
 
 # Speaker identification (requires enrolled speakers)
-curl -X POST http://localhost:8085/diarize-and-identify \
+curl -k -X POST https://localhost/api/diarize-and-identify \
   -F "file=@your-audio.wav" \
   -F "user_id=1"
 
 # Transcription + speaker ID (requires Deepgram API key)
-curl -X POST "http://localhost:8085/v1/listen?user_id=1" \
+curl -k -X POST "https://localhost/api/v1/listen?user_id=1" \
   -H "Authorization: Token YOUR_DEEPGRAM_API_KEY" \
   -F "file=@your-audio.wav"
 ```
+
+**Note:** The `-k` flag is used to ignore SSL certificate warnings for the self-signed certificate.
 
 ## Configuration Options
 
 Copy `.env.template` to `.env` to customize:
 
 ```bash
-# Ports
-SPEAKER_SERVICE_PORT=8085    # Backend API
-REACT_UI_PORT=5173          # Web UI
+# Required for first-time setup
+HF_TOKEN=your_token         # Required for Hugging Face model download
+
+# Backend service (internal docker network)
+SPEAKER_SERVICE_PORT=8085   # Backend API port
+REACT_UI_PORT=5173         # Web UI port (internal)
 
 # Settings  
-SIMILARITY_THRESHOLD=0.15    # Speaker ID confidence (0.1-0.3)
-REACT_UI_HTTPS=true         # Enable HTTPS (needed for microphone)
+SIMILARITY_THRESHOLD=0.15   # Speaker ID confidence (0.1-0.3)
+REACT_UI_HTTPS=true        # Enable HTTPS (needed for microphone)
 
 # Optional APIs
-DEEPGRAM_API_KEY=your_key   # For transcription modes
-HF_TOKEN=your_token         # Required for first-time model download
+DEEPGRAM_API_KEY=your_key  # For transcription modes
 ```
+
+**Note:** Access is unified through nginx proxy at https://localhost/ (port 443) regardless of internal service ports.
 
 ## Next Steps
 
@@ -145,6 +174,7 @@ HF_TOKEN=your_token         # Required for first-time model download
 ## Need Help?
 
 - **Service not starting?** → `docker compose logs`
-- **Web UI not loading?** → Check https://localhost:5173 and accept SSL cert
-- **API not responding?** → Verify http://localhost:8085/health returns `{"status": "ok"}`
+- **Web UI not loading?** → Check https://localhost/ and accept SSL cert
+- **API not responding?** → Verify `curl -k https://localhost/api/health` returns `{"status": "ok"}`
+- **nginx.conf missing?** → Run `./init.sh <tailscale-ip>` first
 - **Still stuck?** → Check the main README for detailed documentation

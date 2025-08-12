@@ -58,7 +58,7 @@ class DeepgramProvider(OnlineTranscriptionProvider):
                 "language": "multi",
                 "smart_format": "true",
                 "punctuate": "true",
-                "diarize": "true",
+                "diarize": "false",
                 "encoding": "linear16",
                 "sample_rate": str(sample_rate),
                 "channels": "1",
@@ -77,7 +77,9 @@ class DeepgramProvider(OnlineTranscriptionProvider):
             timeout_config = httpx.Timeout(
                 connect=30.0,
                 read=processing_timeout,
-                write=max(180.0, int(len(audio_data) / (sample_rate * 2))),  # bytes per second for 16-bit PCM
+                write=max(
+                    180.0, int(len(audio_data) / (sample_rate * 2))
+                ),  # bytes per second for 16-bit PCM
                 pool=10.0,
             )
 
@@ -192,7 +194,6 @@ class DeepgramProvider(OnlineTranscriptionProvider):
             return {"text": "", "words": [], "segments": []}
 
 
-
 class MistralProvider(OnlineTranscriptionProvider):
     """Mistral transcription provider using Voxtral models."""
 
@@ -230,7 +231,9 @@ class MistralProvider(OnlineTranscriptionProvider):
             timeout_config = httpx.Timeout(
                 connect=30.0,
                 read=processing_timeout,
-                write=max(180.0, int(len(wav_data) / (sample_rate * 2))),  # bytes per second for 16-bit PCM
+                write=max(
+                    180.0, int(len(wav_data) / (sample_rate * 2))
+                ),  # bytes per second for 16-bit PCM
                 pool=10.0,
             )
 
