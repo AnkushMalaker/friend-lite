@@ -268,8 +268,10 @@ class IntegrationTestRunner:
                 # In CI, use simpler build process
                 logger.info("🤖 CI environment detected, using optimized build...")
                 if self.rebuild:
-                    # Force rebuild in CI when rebuild flag is set
-                    build_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "build"], capture_output=True, text=True)
+                    # Force rebuild in CI when rebuild flag is set with BuildKit disabled
+                    env = os.environ.copy()
+                    env['DOCKER_BUILDKIT'] = '0'
+                    build_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "build"], capture_output=True, text=True, env=env)
                     if build_result.returncode != 0:
                         logger.error(f"Build failed: {build_result.stderr}")
                         raise RuntimeError("Docker compose build failed")
@@ -283,8 +285,10 @@ class IntegrationTestRunner:
                     cmd = ["docker", "compose", "-f", "docker-compose-test.yml", "up", "-d"]
                     logger.info("🚀 Local start: using existing container images")
             
-            # Start test services
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Start test services with BuildKit disabled to avoid bake issues
+            env = os.environ.copy()
+            env['DOCKER_BUILDKIT'] = '0'
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env)
             
             if result.returncode != 0:
                 logger.error(f"Failed to start services: {result.stderr}")

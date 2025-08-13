@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from advanced_omi_backend.auth import (
     ADMIN_EMAIL,
     get_user_db,
-    get_user_manager,
+    UserManager,
 )
 from advanced_omi_backend.client_manager import get_user_clients_all
 from advanced_omi_backend.database import chunks_col, db, users_col
@@ -38,16 +38,22 @@ async def get_users():
 async def create_user(user_data: UserCreate):
     """Create a new user."""
     try:
-        user_db = get_user_db()
-        user_manager = get_user_manager()
+        # Get user database and create user manager
+        user_db_gen = get_user_db()
+        user_db = await anext(user_db_gen)
+        user_manager = UserManager(user_db)
 
         # Check if user already exists
-        existing_user = await user_manager.get_by_email(user_data.email)
-        if existing_user is not None:
+        try:
+            existing_user = await user_manager.get_by_email(user_data.email)
+            # If we get here, user exists
             return JSONResponse(
                 status_code=409,
                 content={"message": f"User with email {user_data.email} already exists"},
             )
+        except Exception:
+            # User doesn't exist, continue with creation
+            pass
 
         # Create the user through the user manager
         user = await user_manager.create(user_data)
@@ -62,10 +68,79 @@ async def create_user(user_data: UserCreate):
         )
 
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         logger.error(f"Error creating user: {e}")
+        logger.error(f"Full traceback: {error_details}")
         return JSONResponse(
             status_code=500,
             content={"message": f"Error creating user: {str(e)}"},
+        )
+
+
+async def update_user(user_id: str, user_data: UserCreate):
+    """Update an existing user."""
+    try:
+        # Validate ObjectId format
+        try:
+            object_id = ObjectId(user_id)
+        except Exception as e:
+            logger.error(f"Invalid ObjectId format for user_id {user_id}: {e}")
+            return JSONResponse(
+                status_code=400,
+                content={"message": f"Invalid user_id format: {user_id}. Must be a valid ObjectId."},
+            )
+
+        # Check if user exists
+        existing_user = await users_col.find_one({"_id": object_id})
+        if not existing_user:
+            return JSONResponse(
+                status_code=404, 
+                content={"message": f"User {user_id} not found"}
+            )
+
+        # Get user database and create user manager
+        user_db_gen = get_user_db()
+        user_db = await anext(user_db_gen)
+        user_manager = UserManager(user_db)
+
+        # Convert to User object for the manager
+        user_obj = User(**existing_user)
+        
+        # Prepare update data - only include non-None fields
+        update_data = {}
+        if user_data.email:
+            update_data["email"] = user_data.email
+        if user_data.display_name is not None:
+            update_data["display_name"] = user_data.display_name
+        if hasattr(user_data, 'is_superuser'):
+            update_data["is_superuser"] = user_data.is_superuser
+        if hasattr(user_data, 'is_active'):
+            update_data["is_active"] = user_data.is_active
+        if user_data.password:
+            # Hash the password if provided
+            update_data["hashed_password"] = user_manager.password_helper.hash(user_data.password)
+
+        # Update the user
+        updated_user = await user_manager.update(user_obj, update_data)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": f"User {updated_user.email} updated successfully",
+                "user_id": str(updated_user.id),
+                "user_email": updated_user.email,
+            },
+        )
+
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error updating user: {e}")
+        logger.error(f"Full traceback: {error_details}")
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Error updating user: {str(e)}"},
         )
 
 

@@ -31,6 +31,7 @@ services:
       - NEO4J_HOST=${NEO4J_HOST}
       - NEO4J_USER=${NEO4J_USER}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - CORS_ORIGINS=${CORS_ORIGINS}
     depends_on:
       qdrant:
         condition: service_started
@@ -46,24 +47,36 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  streamlit:
+  webui:
     build:
-      context: .
-      dockerfile: Dockerfile.webui
+      context: ./webui
+      dockerfile: Dockerfile
+      args:
+        - VITE_BACKEND_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000}
     ports:
-      - "${STREAMLIT_PORT:-8501}:8501"
-    environment:
-      - BACKEND_API_URL=http://friend-backend:8000
-      - BACKEND_PUBLIC_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000} # Your BROWSER must be able to access the backend API on this URL for audio playback
-      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - "${WEBUI_PORT:-3000}:80"
     depends_on:
       friend-backend:
         condition: service_healthy
-      mongo:
-        condition: service_started
-      qdrant:
-        condition: service_started
     restart: unless-stopped
+
+  # Development webui service (use with docker-compose --profile dev up)
+  webui-dev:
+    build:
+      context: ./webui
+      dockerfile: Dockerfile.dev
+    ports:
+      - "${WEBUI_DEV_PORT:-5173}:5173"
+    environment:
+      - VITE_BACKEND_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000}
+    volumes:
+      - ./webui/src:/app/src
+      - ./webui/public:/app/public
+    depends_on:
+      friend-backend:
+        condition: service_healthy
+    profiles:
+      - dev
 
   qdrant:
     image: qdrant/qdrant:latest

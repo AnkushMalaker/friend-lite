@@ -15,11 +15,11 @@ dependencies = [
     { name = "easy-audio-interfaces" },
     { name = "fastapi" },
     { name = "fastapi-users", extra = ["beanie"] },
+    { name = "friend-lite-sdk" },
     { name = "langchain-neo4j" },
     { name = "mem0ai" },
     { name = "motor" },
     { name = "ollama" },
-    { name = "omi-sdk" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "uvicorn" },
@@ -57,11 +57,11 @@ requires-dist = [
     { name = "easy-audio-interfaces", extras = ["local-audio"], marker = "extra == 'local-audio'", specifier = ">=0.7.1" },
     { name = "fastapi", specifier = ">=0.115.12" },
     { name = "fastapi-users", extras = ["beanie"], specifier = ">=14.0.1" },
+    { name = "friend-lite-sdk" },
     { name = "langchain-neo4j" },
-    { name = "mem0ai", specifier = ">=0.1.114" },
+    { name = "mem0ai", git = "https://github.com/mem0ai/mem0.git?rev=main" },
     { name = "motor", specifier = ">=3.7.1" },
     { name = "ollama", specifier = ">=0.4.8" },
-    { name = "omi-sdk", specifier = ">=0.1.5" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "streamlit", marker = "extra == 'webui'", specifier = ">=1.45.1" },
@@ -731,6 +731,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/94/ed/3b9a10605163f48517931083aee8364d4d6d3bb1aa9b75eb0a4a5e9fbfc1/fire-0.5.0.tar.gz", hash = "sha256:a6b0d49e98c8963910021f92bba66f65ab440da2982b78eb1bbf95a0a34aacc6", size = 88282, upload_time = "2022-12-12T20:36:31.024Z" }
 
 [[package]]
+name = "friend-lite-sdk"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "bleak" },
+    { name = "httpx" },
+    { name = "numpy" },
+    { name = "opuslib" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4d/25/f4c5c6c210663927ce9b017be9c43a917bdd1dac6ce9ff8ec0ab8e8c3d3d/friend_lite_sdk-0.1.0.tar.gz", hash = "sha256:85a39039cebe278a91ee911eee8a9171bbadb471a834e098485d4072ab8fd366", size = 6970, upload_time = "2025-08-12T18:15:42.04Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/44/80a26aec9119284ecc19b45059a592da5b28fb0dfa6201e2cf161d1cf639/friend_lite_sdk-0.1.0-py3-none-any.whl", hash = "sha256:6f19a572f1b0a31b8fa050e3c4b563e1d59123ad876260ea3cd4e33d772f67a6", size = 6530, upload_time = "2025-08-12T18:15:40.67Z" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1285,8 +1302,8 @@ wheels = [
 
 [[package]]
 name = "mem0ai"
-version = "0.1.114"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.115"
+source = { git = "https://github.com/mem0ai/mem0.git?rev=main#d65a39c1259b13adf22c744efcd9dba9c5337432" }
 dependencies = [
     { name = "openai" },
     { name = "posthog" },
@@ -1294,10 +1311,6 @@ dependencies = [
     { name = "pytz" },
     { name = "qdrant-client" },
     { name = "sqlalchemy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/87/47/81f43e173940d000694eb20a70c0a92149c53edd2095e34b618afa41ca7d/mem0ai-0.1.114.tar.gz", hash = "sha256:b27886132eaec78544e8b8b54f0b14a36728f3c99da54cb7cb417150e2fad7e1", size = 113652, upload_time = "2025-07-04T23:31:28.537Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/b7/50d1d1d0600e9e5a861e733644513816011504b9a3d0ba870eadb32a481f/mem0ai-0.1.114-py3-none-any.whl", hash = "sha256:dfb7f0079ee282f5d9782e220f6f09707bcf5e107925d1901dbca30d8dd83f9b", size = 174843, upload_time = "2025-07-04T23:31:26.912Z" },
 ]
 
 [[package]]
@@ -1483,23 +1496,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8d/96/c7fe0d2d1b3053be614822a7b722c7465161b3672ce90df71515137580a0/ollama-0.5.1.tar.gz", hash = "sha256:5a799e4dc4e7af638b11e3ae588ab17623ee019e496caaf4323efbaa8feeff93", size = 41112, upload_time = "2025-05-30T21:32:48.679Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d6/76/3f96c8cdbf3955d7a73ee94ce3e0db0755d6de1e0098a70275940d1aff2f/ollama-0.5.1-py3-none-any.whl", hash = "sha256:4c8839f35bc173c7057b1eb2cbe7f498c1a7e134eafc9192824c8aecb3617506", size = 13369, upload_time = "2025-05-30T21:32:47.429Z" },
-]
-
-[[package]]
-name = "omi-sdk"
-version = "0.1.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "bleak" },
-    { name = "httpx" },
-    { name = "numpy" },
-    { name = "opuslib" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/53/cafc625b5748b75a73f4e6a47f4f258c9b49da550db2ba0351cce7e0e353/omi_sdk-0.1.5.tar.gz", hash = "sha256:4a85106b7b9fedc1707a52ae53f08d1cd7d4e8807b5a7c2ca7ba0300ae21dda4", size = 6961, upload_time = "2025-05-10T07:46:05.214Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/64/5abc80e96eae6c2926e3fa8f5837c5d29704cc05872c478d2983eb76b23e/omi_sdk-0.1.5-py3-none-any.whl", hash = "sha256:fb9102901a24f49be997f0e8dbc9188f526173cdf0d24ff3b5a56737cd08d326", size = 6344, upload_time = "2025-05-10T07:46:03.898Z" },
 ]
 
 [[package]]
