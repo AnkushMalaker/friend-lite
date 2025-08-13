@@ -14,11 +14,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from mem0 import Memory
+from mem0 import AsyncMemory
 
 # Import config loader
 from advanced_omi_backend.memory_config_loader import get_config_loader
 from advanced_omi_backend.users import User
+
+# Using synchronous Memory from mem0 main branch
+# The fixed main.py file is replaced during Docker build
 
 # Configure Mem0 telemetry based on environment variable
 # Set default to False for privacy unless explicitly enabled
@@ -848,37 +851,34 @@ class MemoryService:
         self._initialized = False
 
     async def initialize(self):
-        """Initialize the memory service with timeout protection."""
+        """Initialize the memory service using synchronous Memory (non-blocking lazy init)."""
         if self._initialized:
             return
 
         try:
-            # Log Qdrant and LLM URLs
-            llm_url = MEM0_CONFIG["llm"]["config"].get(
-                "ollama_base_url", MEM0_CONFIG["llm"]["config"].get("api_key", "OpenAI")
-            )
-            memory_logger.info(
-                f"Initializing MemoryService with Qdrant URL: {MEM0_CONFIG['vector_store']['config']['host']} and LLM: {llm_url}"
-            )
+            # Check LLM provider configuration for better error messages
+            llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
+            
+            if llm_provider == "openai":
+                openai_api_key = os.getenv("OPENAI_API_KEY")
+                if not openai_api_key:
+                    raise ValueError("OPENAI_API_KEY environment variable is required when using OpenAI provider")
+                memory_logger.info("Initializing Memory with OpenAI provider")
+            elif llm_provider == "ollama":
+                ollama_base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OLLAMA_BASE_URL")
+                if not ollama_base_url:
+                    raise ValueError("OPENAI_BASE_URL or OLLAMA_BASE_URL environment variable is required when using Ollama provider")
+                memory_logger.info(f"Initializing Memory with Ollama provider at {ollama_base_url}")
+            else:
+                raise ValueError(f"Unsupported LLM provider: {llm_provider}")
 
-            # Initialize main memory instance with timeout protection
-            loop = asyncio.get_running_loop()
-            # Build fresh config to ensure we get latest YAML settings
-            config = _build_mem0_config()
-            self.memory = await asyncio.wait_for(
-                loop.run_in_executor(_MEMORY_EXECUTOR, Memory.from_config, config),
-                timeout=MEMORY_INIT_TIMEOUT_SECONDS,
-            )
+            # Initialize AsyncMemory - auto-detects configuration from environment variables
+            self.memory = AsyncMemory()
             self._initialized = True
-            memory_logger.info("Memory service initialized successfully")
+            memory_logger.info("AsyncMemory initialized successfully (non-blocking)")
 
-        except asyncio.TimeoutError:
-            memory_logger.error(
-                f"Memory service initialization timed out after {MEMORY_INIT_TIMEOUT_SECONDS}s"
-            )
-            raise Exception("Memory service initialization timeout")
         except Exception as e:
-            memory_logger.error(f"Failed to initialize memory service: {e}")
+            memory_logger.error(f"Failed to initialize AsyncMemory: {e}")
             raise
 
     async def add_memory(
@@ -910,12 +910,9 @@ class MemoryService:
                 return False, []
 
         try:
-            # Run the blocking operation in executor with timeout
-            loop = asyncio.get_running_loop()
+            # Use async memory operations directly (no thread executor needed)
             success, created_memory_ids = await asyncio.wait_for(
-                loop.run_in_executor(
-                    _MEMORY_EXECUTOR,
-                    _add_memory_to_store,
+                self._add_memory_async(
                     transcript,
                     client_id,
                     audio_uuid,
@@ -958,34 +955,171 @@ class MemoryService:
             memory_logger.error(f"Error adding memory for {audio_uuid}: {e}")
             return False, []
 
-    def get_all_memories(self, user_id: str, limit: int = 100) -> list:
-        """Get all memories for a user, filtering and prioritizing semantic memories over fallback transcript memories."""
-        if not self._initialized:
-            # This is a sync method, so we need to handle initialization differently
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're in an async context, we can't call initialize() directly
-                    # This should be handled by the caller
-                    raise Exception(
-                        "Memory service not initialized - call await initialize() first"
+    async def _add_memory_async(
+        self,
+        transcript: str,
+        client_id: str,
+        audio_uuid: str,
+        user_id: str,
+        user_email: str,
+        allow_update: bool = False,
+    ) -> tuple[bool, list[str]]:
+        """
+        Memory addition using synchronous Memory in background task.
+        Converts the synchronous _add_memory_to_store logic to use async operations.
+        """
+        start_time = time.time()
+        created_memory_ids = []
+
+        try:
+            # Get configuration
+            config_loader = get_config_loader()
+
+            # Check if transcript is empty or too short to be meaningful
+            if not transcript or len(transcript.strip()) < 10:
+                memory_logger.info(
+                    f"Skipping memory processing for {audio_uuid} - transcript completely empty: {len(transcript.strip()) if transcript else 0} chars"
+                )
+                return True, []  # Not an error, just skipped
+
+            # Check if conversation should be skipped
+            if config_loader.should_skip_conversation(transcript):
+                if len(transcript.strip()) < 10:
+                    memory_logger.info(
+                        f"Overriding quality control skip for short transcript {audio_uuid} - ensuring all transcripts are stored"
                     )
                 else:
-                    # We're in a sync context, run the async initialize
-                    loop.run_until_complete(self.initialize())
-            except RuntimeError:
-                # No event loop in thread pool executor
-                # The service should already be initialized before being used in executor
-                if not self._initialized:
-                    raise Exception(
-                        "Memory service not initialized - must be initialized before use in thread pool"
+                    memory_logger.info(
+                        f"Skipping memory processing for {audio_uuid} due to quality control"
                     )
+                    return True, []  # Not an error, just skipped
+
+            # Get memory extraction configuration
+            memory_config = config_loader.get_memory_extraction_config()
+            if not memory_config.get("enabled", True):
+                memory_logger.info(f"Memory extraction disabled for {audio_uuid}")
+                return True, []
+
+            # Prepare metadata
+            metadata = {
+                "source": "offline_streaming",
+                "client_id": client_id,
+                "audio_uuid": audio_uuid,
+                "user_email": user_email,
+                "timestamp": int(time.time()),
+            }
+
+            # Use configured prompt or default
+            fact_config = config_loader.get_fact_extraction_config()
+            prompt = fact_config.get("custom_prompt") or "Extract important facts and insights from this conversation."
+
+            memory_logger.info(f"🧪 Adding memory for {audio_uuid} using synchronous Memory")
+            memory_logger.info(f"🔍   - transcript: {transcript[:100]}...")
+            memory_logger.info(f"🔍   - metadata: {json.dumps(metadata, indent=2)}")
+            memory_logger.info(f"🔍   - prompt: {prompt}")
+
+            # Try async memory addition with retry logic for JSON errors
+            try:
+                result = await self.memory.add(
+                    transcript,
+                    user_id=user_id,
+                    metadata=metadata,
+                    prompt=prompt,
+                )
+            except Exception as json_error:
+                memory_logger.warning(
+                    f"Error on first attempt for {audio_uuid}: {json_error}"
+                )
+                memory_logger.info(f"🔄 Retrying Memory.add() once for {audio_uuid}")
+                try:
+                    # Retry once with same parameters
+                    result = await self.memory.add(
+                        transcript,
+                        user_id=user_id,
+                        metadata=metadata,
+                        prompt=prompt,
+                    )
+                except Exception as retry_error:
+                    memory_logger.error(
+                        f"Error on retry for {audio_uuid}: {retry_error}"
+                    )
+                    memory_logger.info(f"🔄 Falling back to infer=False for {audio_uuid}")
+                    # Fallback to raw storage without LLM processing
+                    result = await self.memory.add(
+                        transcript,
+                        user_id=user_id,
+                        metadata={
+                            **metadata,
+                            "storage_reason": "error_fallback",
+                        },
+                        infer=False,
+                    )
+
+            # Parse the result
+            try:
+                parsed_memories = _parse_mem0_response(result, "add")
+                if parsed_memories:
+                    created_memory_ids = _extract_memory_ids(parsed_memories, audio_uuid)
+                    processing_time = time.time() - start_time
+                    memory_logger.info(
+                        f"✅ SUCCESS: Created {len(created_memory_ids)} memories for {audio_uuid} in {processing_time:.2f}s"
+                    )
+                    return True, created_memory_ids
+                else:
+                    memory_logger.warning(
+                        f"Memory returned empty results for {audio_uuid} - LLM determined no memorable content"
+                    )
+                    
+                    # Store using direct API without LLM processing
+                    try:
+                        direct_result = await self.memory.add(
+                            transcript,
+                            user_id=user_id,
+                            metadata={
+                                "source": "offline_streaming",
+                                "client_id": client_id,
+                                "audio_uuid": audio_uuid,
+                                "user_email": user_email,
+                                "timestamp": int(time.time()),
+                                "storage_reason": "llm_no_memorable_content",
+                            },
+                            infer=False,
+                        )
+                        
+                        direct_parsed = _parse_mem0_response(direct_result, "add")
+                        if direct_parsed:
+                            created_memory_ids = _extract_memory_ids(direct_parsed, audio_uuid)
+                            processing_time = time.time() - start_time
+                            memory_logger.info(
+                                f"✅ FALLBACK SUCCESS: Stored {len(created_memory_ids)} raw memories for {audio_uuid} in {processing_time:.2f}s"
+                            )
+                            return True, created_memory_ids
+                        else:
+                            memory_logger.error(f"Failed to store even raw memory for {audio_uuid}")
+                            return False, []
+                    except Exception as direct_error:
+                        memory_logger.error(f"Direct storage failed for {audio_uuid}: {direct_error}")
+                        return False, []
+                        
+            except (ValueError, RuntimeError, TypeError) as parse_error:
+                memory_logger.error(f"Failed to parse memory result for {audio_uuid}: {parse_error}")
+                return False, []
+
+        except Exception as error:
+            error_type = type(error).__name__
+            memory_logger.error(f"Error while adding memory for {audio_uuid}: {error}")
+            return False, []
+
+    async def get_all_memories(self, user_id: str, limit: int = 100) -> list:
+        """Get all memories for a user, filtering and prioritizing semantic memories over fallback transcript memories."""
+        if not self._initialized:
+            await self.initialize()
 
         assert self.memory is not None, "Memory service not initialized"
         try:
             # Get more memories than requested to account for filtering
             fetch_limit = min(limit * 3, 500)  # Get up to 3x requested amount for filtering
-            memories_response = self.memory.get_all(user_id=user_id, limit=fetch_limit)
+            memories_response = await self.memory.get_all(user_id=user_id, limit=fetch_limit)
 
             # Parse response using standardized parser
             try:
@@ -1034,22 +1168,14 @@ class MemoryService:
             memory_logger.error(f"Error fetching memories for user {user_id}: {e}")
             raise
 
-    def get_all_memories_unfiltered(self, user_id: str, limit: int = 100) -> list:
+    async def get_all_memories_unfiltered(self, user_id: str, limit: int = 100) -> list:
         """Get all memories for a user without filtering fallback memories (for debugging)."""
         if not self._initialized:
-            # This is a sync method, so we need to handle initialization differently
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, we can't call initialize() directly
-                # This should be handled by the caller
-                raise Exception("Memory service not initialized - call await initialize() first")
-            else:
-                # We're in a sync context, run the async initialize
-                loop.run_until_complete(self.initialize())
+            await self.initialize()
 
         assert self.memory is not None, "Memory service not initialized"
         try:
-            memories_response = self.memory.get_all(user_id=user_id, limit=limit)
+            memories_response = await self.memory.get_all(user_id=user_id, limit=limit)
 
             # Parse response using standardized parser
             try:
@@ -1064,24 +1190,16 @@ class MemoryService:
             memory_logger.error(f"Error fetching unfiltered memories for user {user_id}: {e}")
             raise
 
-    def search_memories(self, query: str, user_id: str, limit: int = 10) -> list:
+    async def search_memories(self, query: str, user_id: str, limit: int = 10) -> list:
         """Search memories using semantic similarity, prioritizing semantic memories over fallback."""
         if not self._initialized:
-            # This is a sync method, so we need to handle initialization differently
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, we can't call initialize() directly
-                # This should be handled by the caller
-                raise Exception("Memory service not initialized - call await initialize() first")
-            else:
-                # We're in a sync context, run the async initialize
-                loop.run_until_complete(self.initialize())
+            await self.initialize()
 
         assert self.memory is not None, "Memory service not initialized"
         try:
             # Get more results than requested to account for filtering
             search_limit = min(limit * 3, 100)
-            memories_response = self.memory.search(query=query, user_id=user_id, limit=search_limit)
+            memories_response = await self.memory.search(query=query, user_id=user_id, limit=search_limit)
 
             # Parse response using standardized parser
             try:
@@ -1131,22 +1249,14 @@ class MemoryService:
             memory_logger.error(f"Error searching memories for user {user_id}: {e}")
             raise
 
-    def delete_memory(self, memory_id: str) -> bool:
+    async def delete_memory(self, memory_id: str) -> bool:
         """Delete a specific memory by ID."""
         if not self._initialized:
-            # This is a sync method, so we need to handle initialization differently
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, we can't call initialize() directly
-                # This should be handled by the caller
-                raise Exception("Memory service not initialized - call await initialize() first")
-            else:
-                # We're in a sync context, run the async initialize
-                loop.run_until_complete(self.initialize())
+            await self.initialize()
 
         assert self.memory is not None, "Memory service not initialized"
         try:
-            self.memory.delete(memory_id=memory_id)
+            await self.memory.delete(memory_id=memory_id)
             memory_logger.info(f"Deleted memory {memory_id}")
             return True
         except Exception as e:
@@ -1170,7 +1280,7 @@ class MemoryService:
                 user_id = str(user.id)
                 try:
                     # Use the proper memory service method for each user
-                    user_memories = self.get_all_memories(user_id)
+                    user_memories = await self.get_all_memories(user_id)
 
                     # Add user metadata to each memory for admin debugging
                     for memory in user_memories:
@@ -1209,23 +1319,15 @@ class MemoryService:
             # Re-raise to surface real errors instead of hiding them
             raise
 
-    def delete_all_user_memories(self, user_id: str) -> int:
+    async def delete_all_user_memories(self, user_id: str) -> int:
         """Delete all memories for a user and return count of deleted memories."""
         if not self._initialized:
-            # This is a sync method, so we need to handle initialization differently
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, we can't call initialize() directly
-                # This should be handled by the caller
-                raise Exception("Memory service not initialized - call await initialize() first")
-            else:
-                # We're in a sync context, run the async initialize
-                loop.run_until_complete(self.initialize())
+            await self.initialize()
 
         try:
             assert self.memory is not None, "Memory service not initialized"
             # Get all memories first to count them
-            user_memories_response = self.memory.get_all(user_id=user_id)
+            user_memories_response = await self.memory.get_all(user_id=user_id)
 
             # Parse response using standardized parser to count memories
             try:
@@ -1240,7 +1342,7 @@ class MemoryService:
 
             # Delete all memories for this user
             if memory_count > 0:
-                self.memory.delete_all(user_id=user_id)
+                await self.memory.delete_all(user_id=user_id)
                 memory_logger.info(f"Deleted {memory_count} memories for user {user_id}")
 
             return memory_count
@@ -1277,8 +1379,8 @@ class MemoryService:
         assert self.memory is not None, "Memory service not initialized"
 
         try:
-            # Get all memories for the user (this is sync)
-            memories = self.get_all_memories(user_id, limit)
+            # Get all memories for the user
+            memories = await self.get_all_memories(user_id, limit)
 
             # Import Motor connection here to avoid circular imports
             from advanced_omi_backend.database import chunks_col

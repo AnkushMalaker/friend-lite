@@ -6,8 +6,8 @@ from typing import Optional
 
 from beanie import Document, PydanticObjectId
 from fastapi_users.db import BeanieBaseUser, BeanieUserDatabase
-from fastapi_users.schemas import BaseUserCreate
-from pydantic import Field
+from fastapi_users.schemas import BaseUser, BaseUserCreate, BaseUserUpdate
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,19 @@ logger = logging.getLogger(__name__)
 class UserCreate(BaseUserCreate):
     """Schema for creating new users."""
 
+    display_name: Optional[str] = None
+
+
+class UserRead(BaseUser[PydanticObjectId]):
+    """Schema for reading user data."""
+    
+    display_name: Optional[str] = None
+    registered_clients: dict[str, dict] = Field(default_factory=dict)
+
+
+class UserUpdate(BaseUserUpdate):
+    """Schema for updating user data."""
+    
     display_name: Optional[str] = None
 
 

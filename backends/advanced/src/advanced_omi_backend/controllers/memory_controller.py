@@ -25,10 +25,8 @@ async def get_memories(user: User, limit: int, user_id: Optional[str] = None):
         if user.is_superuser and user_id:
             target_user_id = user_id
 
-        # Execute memory retrieval in thread pool to avoid blocking
-        memories = await asyncio.get_running_loop().run_in_executor(
-            None, memory_service.get_all_memories, target_user_id, limit
-        )
+        # Execute memory retrieval directly (now async)
+        memories = await memory_service.get_all_memories(target_user_id, limit)
 
         return {"memories": memories, "count": len(memories), "user_id": target_user_id}
 
@@ -78,10 +76,8 @@ async def search_memories(query: str, user: User, limit: int, user_id: Optional[
         if user.is_superuser and user_id:
             target_user_id = user_id
 
-        # Execute search in thread pool to avoid blocking
-        search_results = await asyncio.get_running_loop().run_in_executor(
-            None, memory_service.search_memories, query, target_user_id, limit
-        )
+        # Execute search directly (now async)
+        search_results = await memory_service.search_memories(query, target_user_id, limit)
 
         return {
             "query": query,
@@ -105,18 +101,14 @@ async def delete_memory(memory_id: str, user: User):
         # For non-admin users, verify memory ownership before deletion
         if not user.is_superuser:
             # Check if memory belongs to current user
-            user_memories = await asyncio.get_running_loop().run_in_executor(
-                None, memory_service.get_all_memories, user.user_id, 1000
-            )
+            user_memories = await memory_service.get_all_memories(user.user_id, 1000)
 
             memory_ids = [str(mem.get("id", mem.get("memory_id", ""))) for mem in user_memories]
             if memory_id not in memory_ids:
                 return JSONResponse(status_code=404, content={"message": "Memory not found"})
 
         # Delete the memory
-        success = await asyncio.get_running_loop().run_in_executor(
-            None, memory_service.delete_memory, memory_id
-        )
+        success = await memory_service.delete_memory(memory_id)
 
         if success:
             return JSONResponse(content={"message": f"Memory {memory_id} deleted successfully"})
@@ -140,10 +132,8 @@ async def get_memories_unfiltered(user: User, limit: int, user_id: Optional[str]
         if user.is_superuser and user_id:
             target_user_id = user_id
 
-        # Execute memory retrieval in thread pool to avoid blocking
-        memories = await asyncio.get_running_loop().run_in_executor(
-            None, memory_service.get_all_memories_unfiltered, target_user_id, limit
-        )
+        # Execute memory retrieval directly (now async)
+        memories = await memory_service.get_all_memories_unfiltered(target_user_id, limit)
 
         return {
             "memories": memories,

@@ -48,3 +48,10 @@ extras/speaker-recognition/ssl/*
 
 # nginx
 extras/speaker-recognition/nginx.conf
+
+# Cache
+extras/speaker-recognition/cache/*
+extras/speaker-recognition/outputs/*
+
+# my backup
+backends/advanced/src/_webui_original/*

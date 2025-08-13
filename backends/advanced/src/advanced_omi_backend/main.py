@@ -29,10 +29,11 @@ from typing import Optional
 from beanie import init_beanie
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
-from omi.decoder import OmiOpusDecoder
+from friend_lite.decoder import OmiOpusDecoder
 from wyoming.audio import AudioChunk
 from wyoming.client import AsyncTcpClient
 
@@ -44,6 +45,7 @@ from advanced_omi_backend.auth import (
     fastapi_users,
     websocket_auth,
 )
+from advanced_omi_backend.users import UserRead, UserUpdate
 from advanced_omi_backend.client import ClientState
 from advanced_omi_backend.client_manager import generate_client_id
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
@@ -317,21 +319,9 @@ async def lifespan(app: FastAPI):
     await processor_manager.start()
     application_logger.info("Application-level processors started")
 
-    # Pre-initialize memory service to avoid blocking during first use
-    try:
-        application_logger.info("Pre-initializing memory service...")
-        await asyncio.wait_for(
-            memory_service.initialize(), timeout=120
-        )  # 2 minute timeout for startup
-        application_logger.info("Memory service pre-initialized successfully")
-    except asyncio.TimeoutError:
-        application_logger.warning(
-            "Memory service pre-initialization timed out - will initialize on first use"
-        )
-    except Exception as e:
-        application_logger.warning(
-            f"Memory service pre-initialization failed: {e} - will initialize on first use"
-        )
+    # Skip memory service pre-initialization to avoid blocking FastAPI startup
+    # Memory service will be lazily initialized when first used
+    application_logger.info("Memory service will be initialized on first use (lazy loading)")
 
     # SystemTracker is used for monitoring and debugging
     application_logger.info("Using SystemTracker for monitoring and debugging")
@@ -370,6 +360,27 @@ async def lifespan(app: FastAPI):
 
 # FastAPI Application
 app = FastAPI(lifespan=lifespan)
+
+# Configure CORS with configurable origins (includes Tailscale support by default)
+default_origins = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000"
+cors_origins = os.getenv("CORS_ORIGINS", default_origins)
+allowed_origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+
+# Support Tailscale IP range (100.x.x.x) via regex pattern
+tailscale_regex = r"http://100\.\d{1,3}\.\d{1,3}\.\d{1,3}:3000"
+
+logger.info(f"🌐 CORS configured with origins: {allowed_origins}")
+logger.info(f"🌐 CORS also allows Tailscale IPs via regex: {tailscale_regex}")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_origin_regex=tailscale_regex,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 
 # Add authentication routers
@@ -384,6 +395,12 @@ app.include_router(
     tags=["auth"],
 )
 
+# Add users router for /users/me and other user endpoints
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"],
+)
 
 # API endpoints
 from advanced_omi_backend.routers.api_router import router as api_router

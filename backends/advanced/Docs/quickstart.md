@@ -325,6 +325,65 @@ uv sync --group (whatever group you want to sync)
 - Ensure WebSocket connections include authentication token
 - Check firewall/port settings for remote connections
 
+## Distributed Deployment
+
+### Single Machine vs Distributed Setup
+
+**Single Machine (Default):**
+```bash
+# Everything on one machine
+docker compose up --build -d
+```
+
+**Distributed Setup (GPU + Backend separation):**
+
+#### GPU Machine Setup
+```bash
+# Start GPU-accelerated services
+cd extras/asr-services
+docker compose up moonshine -d
+
+cd extras/speaker-recognition  
+docker compose up --build -d
+
+# Ollama with GPU support
+docker run -d --gpus=all -p 11434:11434 \
+  -v ollama:/root/.ollama \
+  ollama/ollama:latest
+```
+
+#### Backend Machine Configuration
+```bash
+# .env configuration for distributed services
+OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434
+SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8001
+OFFLINE_ASR_TCP_URI=tcp://[gpu-machine-tailscale-ip]:8765
+
+# Start lightweight backend services
+docker compose up --build -d
+```
+
+#### Tailscale Networking
+```bash
+# Install on each machine
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# Find machine IPs
+tailscale ip -4
+```
+
+**Benefits of Distributed Setup:**
+- GPU services on dedicated hardware
+- Lightweight backend on VPS/Raspberry Pi
+- Automatic Tailscale IP support (100.x.x.x) - no CORS configuration needed
+- Encrypted inter-service communication
+
+**Service Examples:**
+- GPU machine: LLM inference, ASR, speaker recognition
+- Backend machine: FastAPI, WebUI, databases
+- Database machine: MongoDB, Qdrant (optional separation)
+
 ## Data Architecture
 
 The friend-lite backend uses a **user-centric data architecture**:
