@@ -9,6 +9,10 @@ On top of that - it is being designed to support other services, that can help a
 
 This supports a comprehensive web dashboard for management.
 
+**⚠️ Active Development Notice**: This project is under active development. Do not create migration scripts or assume stable APIs. Only offer suggestions and improvements when requested.
+
+**❌ No Backward Compatibility**: Do NOT add backward compatibility code unless explicitly requested. This includes fallback logic, legacy field support, or compatibility layers. Always ask before adding backward compatibility - in most cases the answer is no during active development.
+
 ## Development Commands
 
 ### Backend Development (Advanced Backend - Primary)
@@ -72,9 +76,10 @@ docker compose -f docker-compose-test.yml down -v
 4. **Test API endpoints manually** while containers are running:
    ```bash
    curl -X GET http://localhost:8001/health
+   # Note: Use actual ADMIN_EMAIL and ADMIN_PASSWORD from .env file
    curl -X POST http://localhost:8001/auth/jwt/login \
      -H "Content-Type: application/x-www-form-urlencoded" \
-     -d "username=test-admin@example.com&password=test-admin-password-123"
+     -d "username=admin@example.com&password=your-admin-password"
    ```
 5. **Exec into containers** for detailed debugging:
    ```bash
@@ -122,7 +127,7 @@ docker compose up --build
   - `src/main.py`: Central FastAPI application with WebSocket audio streaming
   - `src/auth.py`: Email-based authentication with JWT tokens
   - `src/memory/`: LLM-powered conversation memory system using mem0
-  - `webui/streamlit_app.py`: Web dashboard for conversation and user management
+  - `webui/`: React-based web dashboard for conversation and user management
 
 ### Key Components
 - **Audio Pipeline**: Real-time Opus/PCM → Application-level processing → Deepgram transcription → memory extraction
@@ -313,6 +318,12 @@ websocket.send(JSON.stringify(audioStop) + '\n');
   - Use lazy imports sparingly and only when absolutely necessary for circular import issues
   - Group imports: standard library, third-party, local imports
 
+### Docker Build Cache Management
+- **Default Behavior**: Docker automatically detects file changes in Dockerfile COPY/ADD instructions and invalidates cache as needed
+- **No --no-cache by Default**: Only use `--no-cache` when explicitly needed (e.g., package updates, dependency issues)
+- **Smart Caching**: Docker checks file modification times and content hashes to determine when rebuilds are necessary
+- **Development Efficiency**: Trust Docker's cache system - it handles most development scenarios correctly
+
 ### Health Monitoring
 The system includes comprehensive health checks:
 - `/readiness`: Service dependency validation
@@ -356,9 +367,22 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 - **POST /api/process-audio-files**: Upload and process audio files (Admin only)
   - Note: Processes files sequentially, may timeout for large files
   - Client timeout: 5 minutes, Server processing: up to 3x audio duration + 60s
+  - Example usage:
+    ```bash
+    # Get admin credentials from .env file first
+    curl -X POST \
+      -H "Authorization: Bearer $(curl -s -X POST \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "username=ADMIN_EMAIL&password=ADMIN_PASSWORD" \
+        http://localhost:8000/auth/jwt/login | jq -r '.access_token')" \
+      -F "files=@/path/to/audio.wav" \
+      -F "device_name=test-upload" \
+      http://localhost:8000/api/process-audio-files
+    ```
 
 ### Authentication
 - **POST /auth/jwt/login**: Email-based login (returns JWT token)
+- **GET /users/me**: Get current authenticated user
 - **GET /api/auth/config**: Authentication configuration
 
 ## Speaker Recognition Service Features
@@ -435,8 +459,191 @@ Access via: `extras/speaker-recognition/webui` → Live Inference
 - **Buffer overflow issues**: Extended to 120-second retention for better performance
 - **"extraction_failed" errors**: Usually indicates audio buffer timing issues - check console logs for buffer availability
 
+## Distributed Self-Hosting Architecture
+
+Friend-Lite supports distributed deployment across multiple machines, allowing you to separate GPU-intensive services from lightweight backend components. This is ideal for scenarios where you have a dedicated GPU machine and want to run the main backend on a VPS or Raspberry Pi.
+
+### Architecture Patterns
+
+#### Single Machine (Default)
+All services run on one machine using Docker Compose - ideal for development and simple deployments.
+
+#### Distributed GPU Setup
+**GPU Machine (High-performance):**
+- LLM services (Ollama with GPU acceleration)
+- ASR services (Whisper, Moonshine, Parakeet with GPU)
+- Speaker recognition service
+- Deepgram fallback can remain on backend machine
+
+**Backend Machine (Lightweight - VPS/RPi):**
+- Friend-Lite backend (FastAPI)
+- React WebUI
+- MongoDB
+- Qdrant vector database
+
+### Networking with Tailscale
+
+Tailscale VPN provides secure, encrypted networking between distributed services:
+
+**Benefits:**
+- **Zero configuration networking**: Services discover each other automatically
+- **Encrypted communication**: All inter-service traffic is encrypted
+- **Firewall friendly**: Works behind NATs and firewalls
+- **Access control**: Granular permissions for service access
+- **CORS support**: Built-in support for Tailscale IP ranges (100.x.x.x)
+
+**Installation:**
+```bash
+# On each machine
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+### Distributed Service Configuration
+
+#### GPU Machine Services
+```bash
+# .env on GPU machine
+OLLAMA_BASE_URL=http://0.0.0.0:11434  # Expose to Tailscale network
+SPEAKER_SERVICE_URL=http://0.0.0.0:8001
+
+# Enable GPU acceleration for Ollama
+docker run -d --gpus=all -p 11434:11434 ollama/ollama:latest
+```
+
+#### Backend Machine Configuration
+```bash
+# .env on backend machine  
+OLLAMA_BASE_URL=http://100.x.x.x:11434  # GPU machine Tailscale IP
+SPEAKER_SERVICE_URL=http://100.x.x.x:8001  # GPU machine Tailscale IP
+
+# ASR services can also be distributed
+OFFLINE_ASR_TCP_URI=tcp://100.x.x.x:8765
+
+# CORS automatically supports Tailscale IPs (no configuration needed)
+```
+
+#### Service URL Examples
+
+**Common remote service configurations:**
+```bash
+# LLM Processing (GPU machine)
+OLLAMA_BASE_URL=http://100.64.1.100:11434
+OPENAI_BASE_URL=http://100.64.1.100:8080  # For vLLM/OpenAI-compatible APIs
+
+# Speech Recognition (GPU machine) 
+OFFLINE_ASR_TCP_URI=tcp://100.64.1.100:8765
+SPEAKER_SERVICE_URL=http://100.64.1.100:8001
+
+# Database services (can be on separate machine)
+MONGODB_URI=mongodb://100.64.1.200:27017
+QDRANT_BASE_URL=http://100.64.1.200:6333
+```
+
+### Deployment Steps
+
+#### 1. Set up Tailscale on all machines
+```bash
+# Install and connect each machine to your Tailscale network
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+#### 2. Deploy GPU services
+```bash
+# On GPU machine - start GPU-accelerated services
+cd extras/asr-services && docker compose up moonshine -d
+cd extras/speaker-recognition && docker compose up --build -d
+
+# Start Ollama with GPU support
+docker run -d --gpus=all -p 11434:11434 \
+  -v ollama:/root/.ollama \
+  ollama/ollama:latest
+```
+
+#### 3. Configure backend machine
+```bash
+# Update .env with Tailscale IPs of GPU machine
+OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434
+SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8001
+
+# Start lightweight backend services
+docker compose up --build -d
+```
+
+#### 4. Verify connectivity
+```bash
+# Test service connectivity from backend machine
+curl http://[gpu-machine-ip]:11434/api/tags  # Ollama
+curl http://[gpu-machine-ip]:8001/health     # Speaker recognition
+```
+
+### Performance Considerations
+
+**Network Latency:**
+- Tailscale adds minimal latency (typically <5ms between nodes)
+- LLM inference: Network time negligible compared to GPU processing
+- ASR streaming: Use local fallback for latency-sensitive applications
+
+**Bandwidth Usage:**
+- Audio streaming: ~128kbps for Opus, ~512kbps for PCM
+- LLM requests: Typically <1MB per conversation
+- Memory embeddings: ~3KB per memory vector
+
+### Security Best Practices
+
+**Tailscale Access Control:**
+```json
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["tag:backend"],
+      "dst": ["tag:gpu:11434", "tag:gpu:8001", "tag:gpu:8765"]
+    }
+  ],
+  "tagOwners": {
+    "tag:backend": ["your-email@example.com"],
+    "tag:gpu": ["your-email@example.com"]
+  }
+}
+```
+
+**Service Isolation:**
+- Run GPU services in containers with limited network access
+- Use Tailscale subnet routing for additional security
+- Monitor service access logs for unauthorized requests
+
+### Troubleshooting Distributed Setup
+
+**Common Issues:**
+- **CORS errors**: Tailscale IPs are automatically supported, but verify CORS_ORIGINS if using custom IPs
+- **Service discovery**: Use `tailscale ip` to find machine IPs
+- **Port conflicts**: Ensure services use different ports on shared machines
+- **Authentication**: Services must be accessible without authentication for inter-service communication
+
+**Debugging Commands:**
+```bash
+# Check Tailscale connectivity
+tailscale ping [machine-name]
+tailscale status
+
+# Test service endpoints
+curl http://[tailscale-ip]:11434/api/tags
+curl http://[tailscale-ip]:8001/health
+
+# Check Docker networks
+docker network ls
+docker ps --format "table {{.Names}}\t{{.Ports}}"
+```
+
 ## Notes for Claude
 Check if the src/ is volume mounted. If not, do compose build so that code changes are reflected. Do not simply run `docker compose restart` as it will not rebuild the image.
 Check backend/advanced-backend/Docs for up to date information on advanced backend.
 All docker projects have .dockerignore following the exclude pattern. That means files need to be included for them to be visible to docker.
 The uv package manager is used for all python projects. Wherever you'd call `python3 main.py` you'd call `uv run python main.py`
+
+**Docker Build Guidelines:**
+- Use `docker compose build` without `--no-cache` by default for faster builds
+- Only use `--no-cache` when explicitly needed (e.g., if cached layers are causing issues or when troubleshooting build problems)
+- Docker's build cache is efficient and saves significant time during development

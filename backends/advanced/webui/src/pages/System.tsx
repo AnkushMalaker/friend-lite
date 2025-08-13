@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, RefreshCw, CheckCircle, XCircle, AlertCircle, Activity, Users, Database, Server } from 'lucide-react'
+import { Settings, RefreshCw, CheckCircle, XCircle, AlertCircle, Activity, Users, Database, Server, Volume2 } from 'lucide-react'
 import { systemApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -34,6 +34,15 @@ interface ActiveClient {
   last_activity: string
 }
 
+interface DiarizationSettings {
+  similarity_threshold: number
+  min_duration: number
+  collar: number
+  min_duration_off: number
+  min_speakers: number
+  max_speakers: number
+}
+
 export default function System() {
   const [healthData, setHealthData] = useState<HealthData | null>(null)
   const [readinessData, setReadinessData] = useState<any>(null)
@@ -43,6 +52,15 @@ export default function System() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [diarizationSettings, setDiarizationSettings] = useState<DiarizationSettings>({
+    similarity_threshold: 0.15,
+    min_duration: 0.5,
+    collar: 2.0,
+    min_duration_off: 1.5,
+    min_speakers: 2,
+    max_speakers: 6
+  })
+  const [diarizationLoading, setDiarizationLoading] = useState(false)
 
   const { isAdmin } = useAuth()
 
@@ -85,8 +103,39 @@ export default function System() {
     }
   }
 
+  const loadDiarizationSettings = async () => {
+    try {
+      setDiarizationLoading(true)
+      const response = await systemApi.getDiarizationSettings()
+      if (response.data.status === 'success') {
+        setDiarizationSettings(response.data.settings)
+      }
+    } catch (err: any) {
+      console.error('Failed to load diarization settings:', err)
+    } finally {
+      setDiarizationLoading(false)
+    }
+  }
+
+  const saveDiarizationSettings = async () => {
+    try {
+      setDiarizationLoading(true)
+      const response = await systemApi.saveDiarizationSettings(diarizationSettings)
+      if (response.data.status === 'success') {
+        alert('✅ Diarization settings saved successfully!')
+      } else {
+        alert(`❌ Failed to save settings: ${response.data.error || 'Unknown error'}`)
+      }
+    } catch (err: any) {
+      alert(`❌ Error saving settings: ${err.message}`)
+    } finally {
+      setDiarizationLoading(false)
+    }
+  }
+
   useEffect(() => {
     loadSystemData()
+    loadDiarizationSettings()
   }, [isAdmin])
 
   const getStatusIcon = (healthy: boolean) => {
@@ -240,6 +289,153 @@ export default function System() {
             </div>
           </div>
         )}
+
+        {/* Diarization Settings */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+            <Volume2 className="h-5 w-5 mr-2 text-blue-600" />
+            Diarization Settings
+          </h3>
+          
+          <div className="space-y-4">
+            {/* Similarity Threshold */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Similarity Threshold: {diarizationSettings.similarity_threshold}
+              </label>
+              <input
+                type="range"
+                min="0.05"
+                max="0.5"
+                step="0.01"
+                value={diarizationSettings.similarity_threshold}
+                onChange={(e) => setDiarizationSettings(prev => ({
+                  ...prev,
+                  similarity_threshold: parseFloat(e.target.value)
+                }))}
+                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Lower values = more sensitive speaker detection
+              </div>
+            </div>
+
+            {/* Min Duration */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Min Duration: {diarizationSettings.min_duration}s
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="2.0"
+                step="0.1"
+                value={diarizationSettings.min_duration}
+                onChange={(e) => setDiarizationSettings(prev => ({
+                  ...prev,
+                  min_duration: parseFloat(e.target.value)
+                }))}
+                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Minimum speech segment duration
+              </div>
+            </div>
+
+            {/* Collar */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Collar: {diarizationSettings.collar}s
+              </label>
+              <input
+                type="range"
+                min="0.5"
+                max="5.0"
+                step="0.1"
+                value={diarizationSettings.collar}
+                onChange={(e) => setDiarizationSettings(prev => ({
+                  ...prev,
+                  collar: parseFloat(e.target.value)
+                }))}
+                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Buffer around speaker segments
+              </div>
+            </div>
+
+            {/* Min Duration Off */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Min Duration Off: {diarizationSettings.min_duration_off}s
+              </label>
+              <input
+                type="range"
+                min="0.5"
+                max="3.0"
+                step="0.1"
+                value={diarizationSettings.min_duration_off}
+                onChange={(e) => setDiarizationSettings(prev => ({
+                  ...prev,
+                  min_duration_off: parseFloat(e.target.value)
+                }))}
+                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Minimum silence between speakers
+              </div>
+            </div>
+
+            {/* Speaker Count Range */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Min Speakers: {diarizationSettings.min_speakers}
+                </label>
+                <input
+                  type="range"
+                  min="1"
+                  max="6"
+                  step="1"
+                  value={diarizationSettings.min_speakers}
+                  onChange={(e) => setDiarizationSettings(prev => ({
+                    ...prev,
+                    min_speakers: parseInt(e.target.value)
+                  }))}
+                  className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Max Speakers: {diarizationSettings.max_speakers}
+                </label>
+                <input
+                  type="range"
+                  min="2"
+                  max="10"
+                  step="1"
+                  value={diarizationSettings.max_speakers}
+                  onChange={(e) => setDiarizationSettings(prev => ({
+                    ...prev,
+                    max_speakers: parseInt(e.target.value)
+                  }))}
+                  className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+            </div>
+
+            {/* Save Button */}
+            <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
+              <button
+                onClick={saveDiarizationSettings}
+                disabled={diarizationLoading}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {diarizationLoading ? 'Saving...' : 'Save Diarization Settings'}
+              </button>
+            </div>
+          </div>
+        </div>
 
         {/* Active Clients */}
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">

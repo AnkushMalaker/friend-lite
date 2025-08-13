@@ -200,12 +200,59 @@ Both backends and ASR services use the **Wyoming protocol** for standardized com
 2. Set up ASR services from `extras/asr-services/`
 3. Configure Home Assistant Wyoming integration
 
+## For Distributed/Self-Hosting Users
+1. Use **Advanced Backend** for full feature set
+2. **Separate GPU services**: Run LLM/ASR on dedicated GPU machine
+3. **Lightweight backend**: Deploy FastAPI/WebUI on VPS or Raspberry Pi
+4. **Tailscale networking**: Secure VPN connection between services (automatic CORS support)
+5. **Service examples**: Ollama on GPU machine, backend on lightweight server
+
 # Getting Started
 
+## Deployment Scenarios
+
+### Single Machine (Recommended for beginners)
 1. **Clone the repository**
-2. **Choose your backend** based on the recommendations above
-3. **Follow the README** in your chosen backend directory
+2. **Use Advanced Backend**: `cd backends/advanced-backend`
+3. **Configure .env**: Copy `.env.template` to `.env` and set required values
+4. **Start services**: `docker compose up --build -d`
+5. **Access WebUI**: `http://localhost:3000` (React) or `http://localhost:8501` (Streamlit)
+
+### Distributed Setup (Advanced users with multiple machines)
+1. **GPU Machine**: Deploy LLM services (Ollama, ASR, Speaker Recognition)
+   ```bash
+   # Ollama with GPU
+   docker run -d --gpus=all -p 11434:11434 ollama/ollama:latest
+   
+   # ASR services
+   cd extras/asr-services && docker compose up moonshine -d
+   
+   # Speaker recognition
+   cd extras/speaker-recognition && docker compose up --build -d
+   ```
+
+2. **Backend Machine**: Deploy lightweight services
+   ```bash
+   cd backends/advanced-backend
+   
+   # Configure distributed services in .env
+   OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434
+   SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8001
+   
+   docker compose up --build -d
+   ```
+
+3. **Tailscale Networking**: Connect machines securely
+   ```bash
+   # On each machine
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+
+### Mobile App Connection
 4. **Configure the mobile app** to connect to your backend
 5. **Start streaming audio** from your OMI device
 
 Each backend directory contains detailed setup instructions and docker-compose files for easy deployment.
+
+**Need help choosing?** See the feature comparison table above and start with **Advanced Backend** for the complete experience.

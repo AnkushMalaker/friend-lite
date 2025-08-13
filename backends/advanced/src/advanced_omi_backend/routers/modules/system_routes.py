@@ -86,3 +86,18 @@ async def get_processing_job_status(job_id: str, current_user: User = Depends(cu
 async def list_processing_jobs(current_user: User = Depends(current_superuser)):
     """List all active processing jobs. Admin only."""
     return await system_controller.list_processing_jobs()
+
+
+@router.get("/diarization-settings")
+async def get_diarization_settings(current_user: User = Depends(current_superuser)):
+    """Get current diarization settings. Admin only."""
+    return await system_controller.get_diarization_settings()
+
+
+@router.post("/diarization-settings")
+async def save_diarization_settings(
+    settings: dict,
+    current_user: User = Depends(current_superuser)
+):
+    """Save diarization settings. Admin only."""
+    return await system_controller.save_diarization_settings(settings)

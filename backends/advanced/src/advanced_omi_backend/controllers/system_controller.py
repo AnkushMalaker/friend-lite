@@ -736,3 +736,73 @@ async def process_files_with_content(
         error_msg = f"Job processing failed: {str(e)}"
         audio_logger.error(f"💥 [Job {job_id}] {error_msg}")
         await job_tracker.update_job_status(job_id, JobStatus.FAILED, error_msg)
+
+
+# Global diarization settings storage (in production, this would be in a database)
+_diarization_settings = {
+    "similarity_threshold": 0.15,
+    "min_duration": 0.5,
+    "collar": 2.0,
+    "min_duration_off": 1.5,
+    "min_speakers": 2,
+    "max_speakers": 6
+}
+
+
+async def get_diarization_settings():
+    """Get current diarization settings."""
+    try:
+        return {
+            "settings": _diarization_settings,
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Error getting diarization settings: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get settings: {str(e)}"}
+        )
+
+
+async def save_diarization_settings(settings: dict):
+    """Save diarization settings."""
+    try:
+        # Validate settings
+        valid_keys = {
+            "similarity_threshold", "min_duration", "collar", 
+            "min_duration_off", "min_speakers", "max_speakers"
+        }
+        
+        for key, value in settings.items():
+            if key not in valid_keys:
+                return JSONResponse(
+                    status_code=400, content={"error": f"Invalid setting key: {key}"}
+                )
+            
+            # Type validation
+            if key in ["min_speakers", "max_speakers"]:
+                if not isinstance(value, int) or value < 1 or value > 20:
+                    return JSONResponse(
+                        status_code=400, content={"error": f"Invalid value for {key}: must be integer 1-20"}
+                    )
+            else:
+                if not isinstance(value, (int, float)) or value < 0:
+                    return JSONResponse(
+                        status_code=400, content={"error": f"Invalid value for {key}: must be positive number"}
+                    )
+        
+        # Update settings
+        _diarization_settings.update(settings)
+        
+        logger.info(f"Updated diarization settings: {settings}")
+        
+        return {
+            "message": "Diarization settings saved successfully",
+            "settings": _diarization_settings,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error saving diarization settings: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to save settings: {str(e)}"}
+        )

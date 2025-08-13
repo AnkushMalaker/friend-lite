@@ -35,7 +35,7 @@ memory_extraction:
     # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
     # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
     # model: "gemma3n:e4b"
-    model: "gpt-4o"
+    model: "gpt-5"
 
 # Fact extraction settings (structured information)
 fact_extraction:
@@ -74,7 +74,7 @@ fact_extraction:
     max_tokens: 1500
     # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-4o"
+    model: "gpt-5"
 
 
 # Memory categorization settings
@@ -108,7 +108,7 @@ categorization:
     temperature: 0.2
     max_tokens: 100
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-4o"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-5"  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Quality control settings
 quality_control:
