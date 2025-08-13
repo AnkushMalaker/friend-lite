@@ -24,10 +24,11 @@ RUN mkdir -p src/advanced_omi_backend
 COPY src/advanced_omi_backend/__init__.py src/advanced_omi_backend/
 
 # Install dependencies using uv with deepgram extra
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --extra deepgram
-# Somehow the above is breaking consecutive builds, but enable for speeeeeeeed.
-# RUN uv sync --extra deepgram
+# Use cache mount for BuildKit, fallback for legacy builds
+# RUN --mount=type=cache,target=/root/.cache/uv \
+#     uv sync --extra deepgram
+# Fallback for legacy Docker builds (CI compatibility)
+RUN uv sync --extra deepgram
 
 # Copy all application code
 COPY . .
