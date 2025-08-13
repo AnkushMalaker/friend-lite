@@ -23,10 +23,16 @@ async def get_users(current_user: User = Depends(current_superuser)):
     return await user_controller.get_users()
 
 
-@router.post("/create")
+@router.post("")
 async def create_user(user_data: UserCreate, current_user: User = Depends(current_superuser)):
     """Create a new user. Admin only."""
     return await user_controller.create_user(user_data)
+
+
+@router.put("/{user_id}")
+async def update_user(user_id: str, user_data: UserCreate, current_user: User = Depends(current_superuser)):
+    """Update a user. Admin only."""
+    return await user_controller.update_user(user_id, user_data)
 
 
 @router.delete("/{user_id}")

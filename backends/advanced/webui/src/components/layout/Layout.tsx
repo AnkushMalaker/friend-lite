@@ -1,14 +1,9 @@
-import React from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, Outlet } from 'react-router-dom'
 import { Music, MessageSquare, Brain, Users, Upload, Settings, LogOut, Sun, Moon, Shield } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 
-interface LayoutProps {
-  children: React.ReactNode
-}
-
-export default function Layout({ children }: LayoutProps) {
+export default function Layout() {
   const location = useLocation()
   const { user, logout, isAdmin } = useAuth()
   const { isDark, toggleTheme } = useTheme()
@@ -93,7 +88,7 @@ export default function Layout({ children }: LayoutProps) {
           {/* Main Content */}
           <main className="flex-1 min-w-0">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-              {children}
+              <Outlet />
             </div>
           </main>
         </div>

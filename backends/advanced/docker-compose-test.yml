@@ -36,16 +36,14 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  streamlit-test:
+  webui-test:
     build:
-      context: .
-      dockerfile: Dockerfile.webui
+      context: ./webui
+      dockerfile: Dockerfile
+      args:
+        - VITE_BACKEND_URL=http://localhost:8001
     ports:
-      - "8502:8501"  # Avoid conflict with dev on 8501
-    environment:
-      - BACKEND_API_URL=http://friend-backend-test:8000
-      - BACKEND_PUBLIC_URL=http://localhost:8001  # For local test browser access
-      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - "3001:80"  # Avoid conflict with dev on 3000
     depends_on:
       friend-backend-test:
         condition: service_healthy

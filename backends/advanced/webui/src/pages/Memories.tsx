@@ -1,42 +1,64 @@
-import React, { useState, useEffect } from 'react'
-import { Brain, Search, RefreshCw, Trash2, Calendar, User, Tag } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Brain, Search, RefreshCw, Trash2, Calendar, Tag } from 'lucide-react'
 import { memoriesApi } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 
 interface Memory {
   id: string
-  text: string
-  category: string
+  memory: string
+  category?: string
   created_at: string
   updated_at: string
   user_id: string
   score?: number
   metadata?: any
+  hash?: string
+  role?: string
 }
 
 export default function Memories() {
   const [memories, setMemories] = useState<Memory[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [userId, setUserId] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [showUnfiltered, setShowUnfiltered] = useState(false)
+  
+  const { user } = useAuth()
 
   const loadMemories = async () => {
-    if (!userId.trim()) return
+    if (!user?.id) return
 
     try {
       setLoading(true)
       const response = showUnfiltered 
-        ? await memoriesApi.getUnfiltered(userId)
-        : await memoriesApi.getAll(userId)
-      setMemories(response.data)
+        ? await memoriesApi.getUnfiltered(user.id)
+        : await memoriesApi.getAll(user.id)
+      
+      console.log('🧠 Memories API response:', response.data)
+      
+      // Handle the API response structure
+      const memoriesData = response.data.memories || response.data || []
+      console.log('🧠 Processed memories data:', memoriesData)
+      
+      // Log first few memories to inspect structure
+      if (memoriesData.length > 0) {
+        console.log('🧠 First memory object:', memoriesData[0])
+        console.log('🧠 Memory fields:', Object.keys(memoriesData[0]))
+      }
+      
+      setMemories(Array.isArray(memoriesData) ? memoriesData : [])
       setError(null)
     } catch (err: any) {
+      console.error('❌ Memory loading error:', err)
       setError(err.message || 'Failed to load memories')
     } finally {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    loadMemories()
+  }, [user?.id, showUnfiltered])
 
   const handleDeleteMemory = async (memoryId: string) => {
     if (!confirm('Are you sure you want to delete this memory?')) return
@@ -50,8 +72,8 @@ export default function Memories() {
   }
 
   const filteredMemories = memories.filter(memory =>
-    memory.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    memory.category?.toLowerCase().includes(searchQuery.toLowerCase())
+    memory.memory.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (memory.category?.toLowerCase() || '').includes(searchQuery.toLowerCase())
   )
 
   const formatDate = (dateString: string) => {
@@ -82,20 +104,8 @@ export default function Memories() {
 
       {/* Controls */}
       <div className="space-y-4 mb-6">
-        <div className="flex flex-col sm:flex-row gap-4">
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Enter username to view memories:
-            </label>
-            <input
-              type="text"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              placeholder="e.g., john_doe, alice123"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div className="flex items-end space-x-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
             <label className="flex items-center space-x-2 text-sm">
               <input
                 type="checkbox"
@@ -105,15 +115,15 @@ export default function Memories() {
               />
               <span className="text-gray-700 dark:text-gray-300">Show unfiltered</span>
             </label>
-            <button
-              onClick={loadMemories}
-              disabled={!userId.trim() || loading}
-              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              <span>Load Data</span>
-            </button>
           </div>
+          <button
+            onClick={loadMemories}
+            disabled={loading || !user}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </button>
         </div>
 
         {/* Search */}
@@ -132,11 +142,11 @@ export default function Memories() {
       </div>
 
       {/* Status Messages */}
-      {userId.trim() && (
+      {user && memories.length > 0 && (
         <div className="mb-4">
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-4">
             <p className="text-sm text-blue-700 dark:text-blue-300">
-              Showing {showUnfiltered ? 'unfiltered' : 'filtered'} data for user: <strong>{userId}</strong>
+              Showing {showUnfiltered ? 'unfiltered' : 'filtered'} memories ({memories.length} found)
             </p>
           </div>
         </div>
@@ -207,7 +217,7 @@ export default function Memories() {
                 {/* Memory Content */}
                 <div className="prose prose-sm max-w-none">
                   <p className="text-gray-900 dark:text-gray-100 leading-relaxed">
-                    {memory.text}
+                    {memory.memory}
                   </p>
                 </div>
 
@@ -231,20 +241,20 @@ export default function Memories() {
       )}
 
       {/* Empty States */}
-      {!loading && !userId.trim() && (
+      {!loading && !user && (
         <div className="text-center text-gray-500 dark:text-gray-400 py-12">
           <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>Enter a username above to view their memories</p>
+          <p>Please log in to view your memories</p>
         </div>
       )}
 
-      {!loading && userId.trim() && filteredMemories.length === 0 && !error && (
+      {!loading && user && filteredMemories.length === 0 && !error && (
         <div className="text-center text-gray-500 dark:text-gray-400 py-12">
           <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
           <p>
             {searchQuery 
               ? `No memories found matching "${searchQuery}"`
-              : `No memories found for user "${userId}"`
+              : `No memories found`
             }
           </p>
         </div>

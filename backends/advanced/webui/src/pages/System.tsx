@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Settings, RefreshCw, CheckCircle, XCircle, AlertCircle, Activity, Users, Database, Server } from 'lucide-react'
 import { systemApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'

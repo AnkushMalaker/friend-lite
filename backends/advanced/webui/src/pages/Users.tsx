@@ -4,16 +4,15 @@ import { usersApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 interface User {
-  id: string
-  name: string
+  _id: string
+  display_name: string | null
   email: string
   is_superuser: boolean
   is_active: boolean
-  created_at: string
 }
 
 interface UserFormData {
-  name: string
+  display_name: string
   email: string
   password: string
   is_superuser: boolean
@@ -30,7 +29,7 @@ export default function Users() {
   const { isAdmin } = useAuth()
 
   const [formData, setFormData] = useState<UserFormData>({
-    name: '',
+    display_name: '',
     email: '',
     password: '',
     is_superuser: false,
@@ -56,7 +55,7 @@ export default function Users() {
 
   const resetForm = () => {
     setFormData({
-      name: '',
+      display_name: '',
       email: '',
       password: '',
       is_superuser: false,
@@ -86,7 +85,7 @@ export default function Users() {
       if (!updateData.password) {
         delete (updateData as any).password
       }
-      await usersApi.update(editingUser.id, updateData)
+      await usersApi.update(editingUser._id, updateData)
       await loadUsers()
       resetForm()
     } catch (err: any) {
@@ -95,10 +94,10 @@ export default function Users() {
   }
 
   const handleDeleteUser = async (user: User) => {
-    if (!confirm(`Are you sure you want to delete user "${user.name}"?`)) return
+    if (!confirm(`Are you sure you want to delete user "${user.display_name || user.email}"?`)) return
 
     try {
-      await usersApi.delete(user.id)
+      await usersApi.delete(user._id)
       await loadUsers()
     } catch (err: any) {
       setError(err.message || 'Failed to delete user')
@@ -107,7 +106,7 @@ export default function Users() {
 
   const handleEditUser = (user: User) => {
     setFormData({
-      name: user.name,
+      display_name: user.display_name || '',
       email: user.email,
       password: '',
       is_superuser: user.is_superuser,
@@ -117,9 +116,6 @@ export default function Users() {
     setShowCreateForm(true)
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString()
-  }
 
   if (!isAdmin) {
     return (
@@ -191,8 +187,8 @@ export default function Users() {
                 <input
                   type="text"
                   required
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  value={formData.display_name}
+                  onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -286,9 +282,6 @@ export default function Users() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Status
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Created
-                </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Actions
                 </th>
@@ -296,13 +289,13 @@ export default function Users() {
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
               {users.map((user) => (
-                <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                <tr key={user._id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
                       <User className="h-8 w-8 text-gray-400" />
                       <div className="ml-4">
                         <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                          {user.name}
+                          {user.display_name || 'No name set'}
                         </div>
                       </div>
                     </div>
@@ -333,9 +326,6 @@ export default function Users() {
                     }`}>
                       {user.is_active ? 'Active' : 'Inactive'}
                     </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                    {formatDate(user.created_at)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <div className="flex justify-end space-x-2">

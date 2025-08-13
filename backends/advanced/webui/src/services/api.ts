@@ -2,6 +2,10 @@ import axios from 'axios'
 
 // Get backend URL from environment or default to localhost
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+console.log('🌐 API: Backend URL configured as:', BACKEND_URL)
+
+// Export BACKEND_URL for use in other components
+export { BACKEND_URL }
 
 export const api = axios.create({
   baseURL: BACKEND_URL,
@@ -38,7 +42,7 @@ export const authApi = {
     formData.append('password', password)
     return api.post('/auth/jwt/login', formData)
   },
-  getMe: () => api.get('/auth/me'),
+  getMe: () => api.get('/users/me'),
 }
 
 export const conversationsApi = {

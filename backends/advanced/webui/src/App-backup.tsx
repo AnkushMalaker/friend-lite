@@ -12,8 +12,6 @@ import ProtectedRoute from './components/auth/ProtectedRoute'
 import { ErrorBoundary, PageErrorBoundary } from './components/ErrorBoundary'
 
 function App() {
-  console.log('🚀 Full App restored with working login!')
-  
   return (
     <ErrorBoundary>
       <ThemeProvider>

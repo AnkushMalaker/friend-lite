@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { api, authApi } from '../services/api'
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { authApi } from '../services/api'
 
 interface User {
   id: string
@@ -29,20 +29,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const initAuth = async () => {
+      console.log('🔐 AuthContext: Initializing authentication...')
       const savedToken = localStorage.getItem('token')
+      console.log('🔐 AuthContext: Saved token exists:', !!savedToken)
+      
       if (savedToken) {
         try {
+          console.log('🔐 AuthContext: Verifying token with API call...')
           // Verify token is still valid by making a request
           const response = await authApi.getMe()
+          console.log('🔐 AuthContext: API call successful, user data:', response.data)
           setUser(response.data)
           setToken(savedToken)
         } catch (error) {
+          console.error('❌ AuthContext: Token verification failed:', error)
           // Token is invalid, clear it
           localStorage.removeItem('token')
           setToken(null)
           setUser(null)
         }
+      } else {
+        console.log('🔐 AuthContext: No saved token found')
       }
+      console.log('🔐 AuthContext: Initialization complete, setting isLoading to false')
       setIsLoading(false)
     }
 
