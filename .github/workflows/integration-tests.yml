@@ -82,11 +82,14 @@ jobs:
         docker compose -f docker-compose-test.yml down -v || true
         
     - name: Run integration tests
+      env:
+        DOCKER_BUILDKIT: 0
       run: |
         cd backends/advanced
         # Keep CACHED_MODE=False for proper CI testing with fresh environment
         # With the fixed fact extraction prompt, fresh mode should work correctly
         echo "Using fresh mode (CACHED_MODE=False) for clean CI testing"
+        echo "Disabling BuildKit for integration tests (DOCKER_BUILDKIT=0)"
         # Run the integration test with extended timeout (mem0 needs time for comprehensive extraction)
         timeout 900 uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s --tb=short
         
