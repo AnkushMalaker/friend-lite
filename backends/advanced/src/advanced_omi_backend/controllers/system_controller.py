@@ -4,9 +4,12 @@ System controller for handling system-related business logic.
 
 import asyncio
 import io
+import json
 import logging
+import shutil
 import time
 import wave
+from pathlib import Path
 
 import numpy as np
 from fastapi import BackgroundTasks, File, Query, UploadFile
@@ -738,8 +741,8 @@ async def process_files_with_content(
         await job_tracker.update_job_status(job_id, JobStatus.FAILED, error_msg)
 
 
-# Global diarization settings storage (in production, this would be in a database)
-_diarization_settings = {
+# Default diarization settings
+DEFAULT_DIARIZATION_SETTINGS = {
     "similarity_threshold": 0.15,
     "min_duration": 0.5,
     "collar": 2.0,
@@ -748,12 +751,101 @@ _diarization_settings = {
     "max_speakers": 6
 }
 
+# Global cache for diarization settings
+_diarization_settings = None
+
+
+def get_diarization_config_path():
+    """Get the path to the diarization config file."""
+    # Try different locations in order of preference
+    # 1. Data directory (for persistence across container restarts)
+    data_path = Path("/app/data/diarization_config.json")
+    if data_path.parent.exists():
+        return data_path
+    
+    # 2. App root directory
+    app_path = Path("/app/diarization_config.json")
+    if app_path.parent.exists():
+        return app_path
+    
+    # 3. Local development path
+    local_path = Path("diarization_config.json")
+    return local_path
+
+
+def load_diarization_settings_from_file():
+    """Load diarization settings from file or create from template."""
+    global _diarization_settings
+    
+    config_path = get_diarization_config_path()
+    template_path = Path("/app/diarization_config.json.template")
+    
+    # If no template, try local development path
+    if not template_path.exists():
+        template_path = Path("diarization_config.json.template")
+    
+    # If config doesn't exist, try to copy from template
+    if not config_path.exists():
+        if template_path.exists():
+            try:
+                # Ensure parent directory exists
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(template_path, config_path)
+                logger.info(f"Created diarization config from template at {config_path}")
+            except Exception as e:
+                logger.warning(f"Could not copy template to {config_path}: {e}")
+    
+    # Load from file if it exists
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                _diarization_settings = json.load(f)
+                logger.info(f"Loaded diarization settings from {config_path}")
+                return _diarization_settings
+        except Exception as e:
+            logger.error(f"Error loading diarization settings from {config_path}: {e}")
+    
+    # Fall back to defaults
+    _diarization_settings = DEFAULT_DIARIZATION_SETTINGS.copy()
+    logger.info("Using default diarization settings")
+    return _diarization_settings
+
+
+def save_diarization_settings_to_file(settings):
+    """Save diarization settings to file."""
+    global _diarization_settings
+    
+    config_path = get_diarization_config_path()
+    
+    try:
+        # Ensure parent directory exists
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write settings to file
+        with open(config_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+        
+        # Update cache
+        _diarization_settings = settings
+        
+        logger.info(f"Saved diarization settings to {config_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving diarization settings to {config_path}: {e}")
+        return False
+
+
+# Initialize settings on module load
+_diarization_settings = load_diarization_settings_from_file()
+
 
 async def get_diarization_settings():
     """Get current diarization settings."""
     try:
+        # Reload from file to get latest settings
+        settings = load_diarization_settings_from_file()
         return {
-            "settings": _diarization_settings,
+            "settings": settings,
             "status": "success"
         }
     except Exception as e:
@@ -790,16 +882,30 @@ async def save_diarization_settings(settings: dict):
                         status_code=400, content={"error": f"Invalid value for {key}: must be positive number"}
                     )
         
-        # Update settings
+        # Update global settings with new values
+        global _diarization_settings
+        if _diarization_settings is None:
+            _diarization_settings = DEFAULT_DIARIZATION_SETTINGS.copy()
+        
         _diarization_settings.update(settings)
         
-        logger.info(f"Updated diarization settings: {settings}")
-        
-        return {
-            "message": "Diarization settings saved successfully",
-            "settings": _diarization_settings,
-            "status": "success"
-        }
+        # Save to file
+        if save_diarization_settings_to_file(_diarization_settings):
+            logger.info(f"Updated and saved diarization settings: {settings}")
+            
+            return {
+                "message": "Diarization settings saved successfully",
+                "settings": _diarization_settings,
+                "status": "success"
+            }
+        else:
+            # Even if file save fails, we've updated the in-memory settings
+            logger.warning("Settings updated in memory but file save failed")
+            return {
+                "message": "Settings updated (file save failed)",
+                "settings": _diarization_settings,
+                "status": "partial"
+            }
         
     except Exception as e:
         logger.error(f"Error saving diarization settings: {e}")

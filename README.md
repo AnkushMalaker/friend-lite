@@ -65,51 +65,37 @@ Choose one based on your needs:
 - ✅ Minimal dependencies
 - ✅ Quick setup
 
-**Pros:**
-- Easiest to understand and modify
-- Minimal resource requirements
-- No external services needed
-- Good for prototyping
+**Requirements:**
+- Minimal resource usage
+- No external services
 
-**Cons:**
-- No transcription built-in
+**Limitations:**
+- No transcription
 - No memory/conversation management
 - No speaker recognition
-- Manual file management required
+- Manual file management
 
 ---
 
-#### **Advanced Backend** (`backends/advanced-backend/`) ⭐ **RECOMMENDED**
-**Best for:** Production use, full feature set, comprehensive AI features
+#### **Advanced Backend** (`backends/advanced-backend/`) **RECOMMENDED**
+**Best for:** Production use, full feature set
 
 **Features:**
-- ✅ Full audio processing pipeline
-- ✅ **Memory system** (mem0 + Qdrant vector storage)
-- ✅ **Speaker recognition & enrollment**
-- ✅ **Action items extraction** from conversations
-- ✅ **Audio cropping** (removes silence, keeps speech)
-- ✅ **Conversation management** with timeouts
-- ✅ **Web UI** for management and monitoring
-- ✅ **Multiple ASR options** (Deepgram API + offline ASR)
-- ✅ **MongoDB** for structured data storage
-- ✅ **RESTful API** for all operations
-- ✅ **Real-time processing** with WebSocket support
+- Audio processing pipeline with real-time WebSocket support
+- Memory system using mem0 + Qdrant vector storage
+- Speaker recognition and enrollment
+- Action items extraction from conversations
+- Audio cropping (removes silence, keeps speech)
+- Conversation management with session timeouts
+- Web UI for management and monitoring
+- Multiple ASR options (Deepgram API + offline ASR)
+- MongoDB for structured data storage
+- RESTful API for all operations
 
-**Pros:**
-- Complete AI-powered solution
-- Scalable architecture
-- Rich feature set
-- Web interface included
-- Speaker identification
-- Memory and action item extraction
-- Audio optimization
-
-**Cons:**
-- More complex setup
-- Requires multiple services (MongoDB, Qdrant, Ollama)
-- Higher resource requirements
-- Steeper learning curve
-- Authentication setup required
+**Requirements:**
+- Multiple services (MongoDB, Qdrant, Ollama)
+- Higher resource usage
+- Authentication configuration
 
 ---
 
@@ -122,14 +108,11 @@ Choose one based on your needs:
 - ✅ Audio file storage
 - ✅ ngrok integration for public endpoints
 
-**Pros:**
-- Easy migration from official OMI
-- Works with existing OMI mobile app
-- Simple webhook-based architecture
+**Requirements:**
+- ngrok for public access
 
-**Cons:**
+**Limitations:**
 - Limited features compared to advanced backend
-- Depends on ngrok for public access
 - No built-in AI features
 
 ---
@@ -143,13 +126,10 @@ Choose one based on your needs:
 - ✅ Bluetooth OMI device discovery
 - ✅ Integration with Home Assistant/Wyoming ecosystem
 
-**Pros:**
-- Integrates with existing Wyoming setups
-- Good for distributed architectures
-- Home Assistant compatible
+**Requirements:**
+- Separate Wyoming ASR server
 
-**Cons:**
-- Requires separate Wyoming ASR server
+**Limitations:**
 - Limited standalone functionality
 
 ### 🔧 Additional Services (`extras/`)
