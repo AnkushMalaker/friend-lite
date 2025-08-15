@@ -325,6 +325,97 @@ class TranscriptProcessor:
             })
         
         return json.dumps(formatted_segments)
+    
+    @staticmethod
+    def extract_words_from_deepgram(response: Any) -> List[Dict[str, Any]]:
+        """
+        Extract word-level timestamps from Deepgram response for diarize-identify-match.
+        
+        Args:
+            response: Deepgram API response object or dictionary
+            
+        Returns:
+            List of word dictionaries with word, start, end fields
+        """
+        words = []
+        
+        try:
+            # Convert response to dict if needed
+            if hasattr(response, 'to_dict'):
+                response_dict = response.to_dict()
+            elif hasattr(response, '__dict__'):
+                response_dict = response.__dict__
+            else:
+                response_dict = dict(response) if response else {}
+            
+            # Navigate to words array: results.channels[0].alternatives[0].words
+            if 'results' in response_dict and 'channels' in response_dict['results']:
+                channels = response_dict['results']['channels']
+                if channels and len(channels) > 0:
+                    alternatives = channels[0].get('alternatives', [])
+                    if alternatives and len(alternatives) > 0:
+                        deepgram_words = alternatives[0].get('words', [])
+                        
+                        for word_data in deepgram_words:
+                            # Extract required fields and handle different possible structures
+                            word = word_data.get('word', word_data.get('punctuated_word', ''))
+                            start = float(word_data.get('start', 0.0))
+                            end = float(word_data.get('end', 0.0))
+                            
+                            if word:  # Only add if word is not empty
+                                words.append({
+                                    'word': word,
+                                    'start': start,
+                                    'end': end
+                                })
+        
+        except Exception as e:
+            raise ValueError(f"Error extracting words from Deepgram response: {str(e)}")
+        
+        return words
+    
+    @staticmethod
+    def format_for_diarize_match_api(response: Any) -> str:
+        """
+        Format Deepgram response for the diarize-identify-match API endpoint.
+        
+        Args:
+            response: Deepgram API response object or dictionary
+            
+        Returns:
+            JSON string formatted for diarize-identify-match API
+        """
+        try:
+            # Convert response to dict if needed
+            if hasattr(response, 'to_dict'):
+                response_dict = response.to_dict()
+            elif hasattr(response, '__dict__'):
+                response_dict = response.__dict__
+            else:
+                response_dict = dict(response) if response else {}
+            
+            # Extract words
+            words = TranscriptProcessor.extract_words_from_deepgram(response)
+            
+            # Extract full transcript text
+            full_text = ""
+            if 'results' in response_dict and 'channels' in response_dict['results']:
+                channels = response_dict['results']['channels']
+                if channels and len(channels) > 0:
+                    alternatives = channels[0].get('alternatives', [])
+                    if alternatives and len(alternatives) > 0:
+                        full_text = alternatives[0].get('transcript', '')
+            
+            # Format for API
+            formatted_data = {
+                'words': words,
+                'text': full_text
+            }
+            
+            return json.dumps(formatted_data)
+        
+        except Exception as e:
+            raise ValueError(f"Error formatting Deepgram response for diarize-match API: {str(e)}")
 
 
 # Convenience functions for common operations

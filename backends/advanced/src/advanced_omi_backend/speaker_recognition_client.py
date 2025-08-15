@@ -65,11 +65,22 @@ class SpeakerRecognitionClient:
                     )
                     # Add transcript data as JSON string
                     form_data.add_field("transcript_data", json.dumps(transcript_data))
-                    # Add parameters
-                    form_data.add_field("min_duration", "0.5")
-                    form_data.add_field("similarity_threshold", "0.15")
-                    if user_id:
-                        form_data.add_field("user_id", str(user_id))
+                    # Get current diarization settings
+                    from advanced_omi_backend.controllers.system_controller import _diarization_settings
+                    
+                    # Add configurable parameters
+                    form_data.add_field("min_duration", str(_diarization_settings["min_duration"]))
+                    form_data.add_field("similarity_threshold", str(_diarization_settings["similarity_threshold"]))
+                    form_data.add_field("collar", str(_diarization_settings["collar"]))
+                    form_data.add_field("min_duration_off", str(_diarization_settings["min_duration_off"]))
+                    if _diarization_settings.get("min_speakers"):
+                        form_data.add_field("min_speakers", str(_diarization_settings["min_speakers"]))
+                    if _diarization_settings.get("max_speakers"):
+                        form_data.add_field("max_speakers", str(_diarization_settings["max_speakers"]))
+                    
+                    # TODO: Implement proper user mapping between MongoDB ObjectIds and speaker service integer IDs
+                    # For now, hardcode to admin user (ID=1) since speaker service expects integer user_id
+                    form_data.add_field("user_id", "1")
 
                     # Make the request
                     async with session.post(
@@ -127,11 +138,22 @@ class SpeakerRecognitionClient:
                     form_data.add_field(
                         "file", audio_file, filename=Path(audio_path).name, content_type="audio/wav"
                     )
-                    # Add parameters for the diarize-and-identify endpoint
-                    form_data.add_field("min_duration", "0.5")
+                    # Get current diarization settings
+                    from advanced_omi_backend.controllers.system_controller import _diarization_settings
+                    
+                    # Add all diarization parameters for the diarize-and-identify endpoint
+                    form_data.add_field("min_duration", str(_diarization_settings["min_duration"]))
+                    form_data.add_field("similarity_threshold", str(_diarization_settings.get("similarity_threshold", 0.15)))
+                    form_data.add_field("collar", str(_diarization_settings.get("collar", 2.0)))
+                    form_data.add_field("min_duration_off", str(_diarization_settings.get("min_duration_off", 1.5)))
+                    if _diarization_settings.get("min_speakers"):
+                        form_data.add_field("min_speakers", str(_diarization_settings["min_speakers"]))
+                    if _diarization_settings.get("max_speakers"):
+                        form_data.add_field("max_speakers", str(_diarization_settings["max_speakers"]))
                     form_data.add_field("identify_only_enrolled", "false")
-                    if user_id:
-                        form_data.add_field("user_id", str(user_id))
+                    # TODO: Implement proper user mapping between MongoDB ObjectIds and speaker service integer IDs
+                    # For now, hardcode to admin user (ID=1) since speaker service expects integer user_id
+                    form_data.add_field("user_id", "1")
 
                     # Make the request
                     async with session.post(
@@ -190,8 +212,18 @@ class SpeakerRecognitionClient:
                     form_data.add_field(
                         "file", audio_file, filename=Path(audio_path).name, content_type="audio/wav"
                     )
-                    # Add parameters for the diarize-and-identify endpoint
-                    form_data.add_field("min_duration", "0.5")
+                    # Get current diarization settings
+                    from advanced_omi_backend.controllers.system_controller import _diarization_settings
+                    
+                    # Add all diarization parameters for the diarize-and-identify endpoint
+                    form_data.add_field("min_duration", str(_diarization_settings.get("min_duration", 0.5)))
+                    form_data.add_field("similarity_threshold", str(_diarization_settings.get("similarity_threshold", 0.15)))
+                    form_data.add_field("collar", str(_diarization_settings.get("collar", 2.0)))
+                    form_data.add_field("min_duration_off", str(_diarization_settings.get("min_duration_off", 1.5)))
+                    if _diarization_settings.get("min_speakers"):
+                        form_data.add_field("min_speakers", str(_diarization_settings["min_speakers"]))
+                    if _diarization_settings.get("max_speakers"):
+                        form_data.add_field("max_speakers", str(_diarization_settings["max_speakers"]))
                     form_data.add_field("identify_only_enrolled", "false")
 
                     # Make the request

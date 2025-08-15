@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from mem0 import AsyncMemory
+from mem0.configs.base import MemoryConfig
 
 # Import config loader
 from advanced_omi_backend.memory_config_loader import get_config_loader
@@ -333,23 +334,24 @@ def _build_mem0_config() -> dict:
     if neo4j_config:
         mem0_config["graph_store"] = neo4j_config
 
-    # Configure fact extraction based on YAML config
-    fact_enabled = config_loader.is_fact_extraction_enabled()
-    memory_logger.info(f"YAML fact extraction enabled: {fact_enabled}")
+    # Configure memory extraction based on YAML config
+    fact_enabled = config_loader.is_memory_extraction_enabled()
+    memory_logger.info(f"YAML memory extraction enabled: {fact_enabled}")
 
     # IMPORTANT: mem0 appears to require fact extraction to be enabled for memory creation to work
     # When fact extraction is disabled, mem0 skips memory creation entirely
     # This is a limitation of the mem0 library architecture
     if fact_enabled:
-        # Use fact extraction prompt from configuration file
-        fact_prompt = config_loader.get_fact_prompt()
-        mem0_config["custom_fact_extraction_prompt"] = fact_prompt
-        memory_logger.info(f"✅ Fact extraction enabled with config prompt")
-        memory_logger.info(f"🔍 FULL FACT EXTRACTION PROMPT:")
+        # Use memory extraction prompt for mem0's custom_fact_extraction_prompt
+        # This is the main prompt that determines what gets extracted as memories
+        memory_prompt = config_loader.get_memory_prompt()
+        mem0_config["custom_fact_extraction_prompt"] = memory_prompt
+        memory_logger.info(f"✅ Memory extraction enabled with custom prompt")
+        memory_logger.info(f"🔍 FULL MEMORY EXTRACTION PROMPT:")
         memory_logger.info(f"=== PROMPT START ===")
-        memory_logger.info(fact_prompt)
+        memory_logger.info(memory_prompt)
         memory_logger.info(f"=== PROMPT END ===")
-        memory_logger.info(f"Prompt length: {len(fact_prompt)} characters")
+        memory_logger.info(f"Prompt length: {len(memory_prompt)} characters")
     else:
         memory_logger.warning(
             f"⚠️ Fact extraction disabled - this may prevent mem0 from creating memories due to library limitations"
@@ -872,10 +874,12 @@ class MemoryService:
             else:
                 raise ValueError(f"Unsupported LLM provider: {llm_provider}")
 
-            # Initialize AsyncMemory - auto-detects configuration from environment variables
-            self.memory = AsyncMemory()
+            # Initialize AsyncMemory with our custom configuration
+            config_obj = MemoryConfig(**MEM0_CONFIG)
+            memory_logger.info(f"🔧 Initializing AsyncMemory with config: custom_fact_extraction_prompt present: {'custom_fact_extraction_prompt' in MEM0_CONFIG}")
+            self.memory = AsyncMemory(config_obj)
             self._initialized = True
-            memory_logger.info("AsyncMemory initialized successfully (non-blocking)")
+            memory_logger.info("✅ AsyncMemory initialized successfully with custom configuration")
 
         except Exception as e:
             memory_logger.error(f"Failed to initialize AsyncMemory: {e}")
@@ -1010,8 +1014,7 @@ class MemoryService:
             }
 
             # Use configured prompt or default
-            fact_config = config_loader.get_fact_extraction_config()
-            prompt = fact_config.get("custom_prompt") or "Extract important facts and insights from this conversation."
+            prompt = config_loader.get_memory_prompt()
 
             memory_logger.info(f"🧪 Adding memory for {audio_uuid} using synchronous Memory")
             memory_logger.info(f"🔍   - transcript: {transcript[:100]}...")

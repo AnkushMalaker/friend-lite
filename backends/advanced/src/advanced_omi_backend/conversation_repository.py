@@ -113,15 +113,33 @@ class ConversationRepository:
         try:
             segments = await self.get_transcript_segments(audio_uuid)
             if segments:
-                # Build conversation text from segments (preferred method)
-                transcript_texts = [
-                    segment.get("text", "") for segment in segments if segment.get("text", "").strip()
-                ]
+                # Build conversation text from segments with speaker information (preferred method)
+                dialogue_lines = []
+                for segment in segments:
+                    text = segment.get("text", "").strip()
+                    if text:
+                        # Check for speaker information in multiple possible fields
+                        speaker = None
+                        
+                        # Look for speaker in different possible fields from speaker recognition
+                        if "speaker_parts" in segment and segment["speaker_parts"]:
+                            # Speaker recognition format with identified speaker names
+                            speaker = segment["speaker_parts"][0].get("speaker", "Unknown")
+                        elif "speaker" in segment:
+                            # Generic speaker label (e.g., "Speaker 0" or actual name)
+                            speaker = segment["speaker"]
+                        
+                        # Format as dialogue line
+                        if speaker and speaker != "Unknown" and speaker != "N/A":
+                            dialogue_lines.append(f"{speaker}: {text}")
+                        else:
+                            # No speaker info available, just use the text
+                            dialogue_lines.append(text)
 
-                if transcript_texts:
-                    full_text = " ".join(transcript_texts).strip()
+                if dialogue_lines:
+                    full_text = "\n\n".join(dialogue_lines).strip()
                     logger.debug(
-                        f"Retrieved full conversation text from segments for {audio_uuid}: {len(full_text)} chars"
+                        f"Retrieved dialogue conversation text from segments for {audio_uuid}: {len(full_text)} chars, {len(dialogue_lines)} dialogue lines"
                     )
                     return full_text if full_text else None
 

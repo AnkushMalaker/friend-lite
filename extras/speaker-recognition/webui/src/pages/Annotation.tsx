@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { Play, Pause, Save, Download, CheckCircle, XCircle, AlertCircle, UserPlus } from 'lucide-react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { Play, Pause, Save, Download, CheckCircle, XCircle, AlertCircle, UserPlus, Filter, ChevronDown, X } from 'lucide-react'
 import { useUser } from '../contexts/UserContext'
 import { calculateFileHash, isAudioFile } from '../utils/fileHash'
 import { 
@@ -76,10 +76,28 @@ export default function Annotation() {
   const [showJsonOutput, setShowJsonOutput] = useState(false)
   const [minSpeakers, setMinSpeakers] = useState(1)
   const [maxSpeakers, setMaxSpeakers] = useState(4)
+  const [collar, setCollar] = useState(2.0)
+  const [minDurationOff, setMinDurationOff] = useState(1.5)
   const [uploadedJson, setUploadedJson] = useState<any>(null)
+  
+  // Filter states
+  const [selectedSpeakers, setSelectedSpeakers] = useState<Set<string>>(new Set())
+  const [showSpeakerFilter, setShowSpeakerFilter] = useState(false)
+  const [minDuration, setMinDuration] = useState(0)
+  const [maxDuration, setMaxDuration] = useState(100)
   
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null)
+
+  // Update max duration when segments change
+  useEffect(() => {
+    if (segments.length > 0) {
+      const max = Math.max(...segments.map(s => s.duration))
+      setMaxDuration(Math.ceil(max * 10) / 10) // Round to 1 decimal place
+    } else {
+      setMaxDuration(100)
+    }
+  }, [segments])
 
   // Load enrolled speakers on mount
   useEffect(() => {
@@ -110,6 +128,67 @@ export default function Annotation() {
     
     loadEnrolledSpeakers()
   }, [user])
+
+  // Calculate filtered segments based on speaker and duration filters
+  const filteredSegments = useMemo(() => {
+    return segments.filter(segment => {
+      // Speaker filter
+      if (selectedSpeakers.size > 0 && !selectedSpeakers.has(segment.speakerLabel || '')) {
+        return false
+      }
+      
+      // Duration filter
+      if (segment.duration < minDuration || segment.duration > maxDuration) {
+        return false
+      }
+      
+      return true
+    })
+  }, [segments, selectedSpeakers, minDuration, maxDuration])
+
+  // Get unique speakers and their counts
+  const uniqueSpeakers = useMemo(() => {
+    const speakerMap = new Map<string, number>()
+    segments.forEach(segment => {
+      const speaker = segment.speakerLabel || 'Unknown'
+      speakerMap.set(speaker, (speakerMap.get(speaker) || 0) + 1)
+    })
+    return Array.from(speakerMap.entries()).map(([speaker, count]) => ({ speaker, count }))
+  }, [segments])
+
+  // Filter control functions
+  const selectAllSpeakers = () => {
+    setSelectedSpeakers(new Set(uniqueSpeakers.map(s => s.speaker)))
+  }
+
+  const clearAllSpeakers = () => {
+    setSelectedSpeakers(new Set())
+  }
+
+  const clearAllFilters = () => {
+    setSelectedSpeakers(new Set())
+    setMinDuration(0)
+    if (segments.length > 0) {
+      const max = Math.max(...segments.map(s => s.duration))
+      setMaxDuration(Math.ceil(max * 10) / 10)
+    }
+  }
+
+  const hasActiveFilters = selectedSpeakers.size > 0 || minDuration > 0 || 
+    (segments.length > 0 && maxDuration < Math.max(...segments.map(s => s.duration)))
+
+  // Close speaker filter dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element
+      if (showSpeakerFilter && !target.closest('.speaker-filter-dropdown')) {
+        setShowSpeakerFilter(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showSpeakerFilter])
 
 
   // Handle processing with unified modes (diarization, deepgram, hybrid, plain)
@@ -144,6 +223,8 @@ export default function Annotation() {
         minDuration: 0.5,
         minSpeakers,
         maxSpeakers,
+        collar,
+        minDurationOff,
         identifyOnlyEnrolled: false,
         enhanceSpeakers: true,
         // Add transcript data when in diarize-identify-match mode
@@ -758,6 +839,10 @@ export default function Annotation() {
             onMinSpeakersChange={setMinSpeakers}
             maxSpeakers={maxSpeakers}
             onMaxSpeakersChange={setMaxSpeakers}
+            collar={collar}
+            onCollarChange={setCollar}
+            minDurationOff={minDurationOff}
+            onMinDurationOffChange={setMinDurationOff}
             uploadedJson={uploadedJson}
             showSettings={true}
             compact={true}
@@ -825,8 +910,177 @@ export default function Annotation() {
           <div className="space-y-4">
             <h3 className="text-lg font-medium">🗣️ Speaker Segments</h3>
             
+            {/* Filter Controls */}
+            {segments.length > 0 && (
+              <div className="flex flex-wrap items-center gap-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border">
+                {/* Speaker Filter */}
+                <div className="relative speaker-filter-dropdown">
+                  <button
+                    onClick={() => setShowSpeakerFilter(!showSpeakerFilter)}
+                    className="flex items-center space-x-2 px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                  >
+                    <Filter className="h-4 w-4" />
+                    <span className="text-sm">Filter Speakers</span>
+                    {selectedSpeakers.size > 0 && (
+                      <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+                        {selectedSpeakers.size}
+                      </span>
+                    )}
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
+                  
+                  {showSpeakerFilter && (
+                    <div 
+                      className="absolute z-10 mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 min-w-48 shadow-lg"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {uniqueSpeakers.map(({ speaker, count }) => (
+                          <label 
+                            key={speaker} 
+                            className="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 p-1 rounded"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedSpeakers.has(speaker)}
+                              onChange={(e) => {
+                                e.stopPropagation()
+                                const newSet = new Set(selectedSpeakers)
+                                if (e.target.checked) {
+                                  newSet.add(speaker)
+                                } else {
+                                  newSet.delete(speaker)
+                                }
+                                setSelectedSpeakers(newSet)
+                              }}
+                              className="rounded"
+                            />
+                            <span className="text-sm">{speaker}</span>
+                            <span className="text-xs text-gray-500">({count})</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="flex gap-2 mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            selectAllSpeakers()
+                          }}
+                          className="flex-1 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            clearAllSpeakers()
+                          }}
+                          className="flex-1 px-2 py-1 text-xs bg-gray-100 text-gray-800 rounded hover:bg-gray-200"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Duration Range Filter */}
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium">Duration:</label>
+                  <input
+                    type="number"
+                    value={minDuration.toFixed(1)}
+                    onChange={(e) => setMinDuration(Math.max(0, parseFloat(e.target.value) || 0))}
+                    className="w-16 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 h-8"
+                    placeholder="Min"
+                    step="0.1"
+                    min="0"
+                  />
+                  <div className="relative w-32 h-8 flex items-center">
+                    {/* Background track */}
+                    <div className="absolute w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg"></div>
+                    
+                    {/* Active range */}
+                    <div 
+                      className="absolute h-2 bg-blue-500 rounded-lg"
+                      style={{
+                        left: `${(minDuration / (segments.length > 0 ? Math.max(...segments.map(s => s.duration)) : 100)) * 100}%`,
+                        width: `${((maxDuration - minDuration) / (segments.length > 0 ? Math.max(...segments.map(s => s.duration)) : 100)) * 100}%`
+                      }}
+                    ></div>
+                    
+                    {/* Min handle */}
+                    <input
+                      type="range"
+                      min="0"
+                      max={segments.length > 0 ? Math.max(...segments.map(s => s.duration)) : 100}
+                      step="0.1"
+                      value={minDuration}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value)
+                        if (value <= maxDuration) {
+                          setMinDuration(value)
+                        }
+                      }}
+                      className="absolute w-full h-2 bg-transparent rounded-lg appearance-none cursor-pointer range-slider-min"
+                      style={{ 
+                        zIndex: minDuration > maxDuration - 1 ? 5 : 3
+                      }}
+                    />
+                    
+                    {/* Max handle */}
+                    <input
+                      type="range"
+                      min="0"
+                      max={segments.length > 0 ? Math.max(...segments.map(s => s.duration)) : 100}
+                      step="0.1"
+                      value={maxDuration}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value)
+                        if (value >= minDuration) {
+                          setMaxDuration(value)
+                        }
+                      }}
+                      className="absolute w-full h-2 bg-transparent rounded-lg appearance-none cursor-pointer range-slider-max"
+                      style={{ 
+                        zIndex: maxDuration < minDuration + 1 ? 5 : 4
+                      }}
+                    />
+                  </div>
+                  <input
+                    type="number"
+                    value={maxDuration.toFixed(1)}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value) || 0
+                      const maxPossible = segments.length > 0 ? Math.max(...segments.map(s => s.duration)) : 100
+                      setMaxDuration(Math.min(maxPossible, Math.max(minDuration, value)))
+                    }}
+                    className="w-16 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 h-8"
+                    placeholder="Max"
+                    step="0.1"
+                    min={minDuration}
+                  />
+                  <span className="text-sm text-gray-500">
+                    ({filteredSegments.length} segments)
+                  </span>
+                </div>
+
+                {/* Clear Filters */}
+                {hasActiveFilters && (
+                  <button
+                    onClick={clearAllFilters}
+                    className="flex items-center space-x-1 px-2 py-1 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                    <span>Clear Filters</span>
+                  </button>
+                )}
+              </div>
+            )}
+            
             <div className="space-y-3 max-h-96 overflow-y-auto">
-              {segments.map((segment) => (
+              {filteredSegments.map((segment) => (
                 <SegmentEditor
                   key={segment.id}
                   segment={segment}
@@ -1081,6 +1335,15 @@ function SegmentEditor({
     }
   }
 
+  const getTextColor = (isSelected: boolean, label: string) => {
+    if (isSelected) return 'text-blue-800 dark:text-blue-200'
+    switch (label) {
+      case 'CORRECT': return 'text-green-800 dark:text-green-200'
+      case 'INCORRECT': return 'text-red-800 dark:text-red-200'
+      default: return 'text-yellow-800 dark:text-yellow-200' // UNCERTAIN
+    }
+  }
+
   return (
     <div
       className={`border rounded-lg p-4 cursor-pointer transition-colors ${
@@ -1093,10 +1356,10 @@ function SegmentEditor({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center space-x-2">
           {getLabelIcon(segment.label)}
-          <span className="font-medium">
+          <span className={`font-medium ${getTextColor(isSelected, segment.label)}`}>
             {segment.start.toFixed(2)}s - {segment.end.toFixed(2)}s
           </span>
-          <span className="text-sm text-gray-500 dark:text-gray-400">
+          <span className={`text-sm ${getTextColor(isSelected, segment.label)}`}>
             ({formatDuration(segment.duration * 1000)})
           </span>
           {segment.confidence !== undefined && (

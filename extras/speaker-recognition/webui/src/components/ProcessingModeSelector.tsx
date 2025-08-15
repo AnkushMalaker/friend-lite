@@ -31,6 +31,10 @@ export interface ProcessingModeSelectorProps {
   onMinSpeakersChange: (min: number) => void
   maxSpeakers: number
   onMaxSpeakersChange: (max: number) => void
+  collar?: number
+  onCollarChange?: (collar: number) => void
+  minDurationOff?: number
+  onMinDurationOffChange?: (minDurationOff: number) => void
   uploadedJson?: any
   showSettings?: boolean
   compact?: boolean
@@ -86,6 +90,10 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
   onMinSpeakersChange,
   maxSpeakers,
   onMaxSpeakersChange,
+  collar = 2.0,
+  onCollarChange,
+  minDurationOff = 1.5,
+  onMinDurationOffChange,
   uploadedJson,
   showSettings = true,
   compact = false,
@@ -218,6 +226,58 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 <span>8</span>
               </div>
             </div>
+
+            {/* Collar Parameter */}
+            {onCollarChange && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Segment Collar: {collar.toFixed(1)}s
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="5"
+                  step="0.5"
+                  value={collar}
+                  onChange={(e) => onCollarChange(parseFloat(e.target.value))}
+                  className="w-full"
+                  disabled={isProcessing}
+                />
+                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  <span>0s</span>
+                  <span>5s</span>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Merges segments separated by gaps shorter than this value
+                </p>
+              </div>
+            )}
+
+            {/* Min Duration Off Parameter */}
+            {onMinDurationOffChange && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Min Silence Duration: {minDurationOff.toFixed(1)}s
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="3"
+                  step="0.1"
+                  value={minDurationOff}
+                  onChange={(e) => onMinDurationOffChange(parseFloat(e.target.value))}
+                  className="w-full"
+                  disabled={isProcessing}
+                />
+                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  <span>0s</span>
+                  <span>3s</span>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Minimum silence before treating as segment boundary
+                </p>
+              </div>
+            )}
           </>
         )}
 
@@ -320,6 +380,58 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 <span>8</span>
               </div>
             </div>
+
+            {/* Collar Parameter */}
+            {onCollarChange && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 dark:text-gray-300 mb-1">
+                  Segment Collar: {collar.toFixed(1)}s
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="5"
+                  step="0.5"
+                  value={collar}
+                  onChange={(e) => onCollarChange(parseFloat(e.target.value))}
+                  className="w-full"
+                  disabled={isProcessing}
+                />
+                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  <span>0s</span>
+                  <span>5s</span>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Merges segments separated by gaps shorter than this value
+                </p>
+              </div>
+            )}
+
+            {/* Min Duration Off Parameter */}
+            {onMinDurationOffChange && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Min Silence Duration: {minDurationOff.toFixed(1)}s
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="3"
+                  step="0.1"
+                  value={minDurationOff}
+                  onChange={(e) => onMinDurationOffChange(parseFloat(e.target.value))}
+                  className="w-full"
+                  disabled={isProcessing}
+                />
+                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  <span>0s</span>
+                  <span>3s</span>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Minimum silence before treating as segment boundary
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { MessageSquare, RefreshCw, Calendar, User, Clock } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { MessageSquare, RefreshCw, Calendar, User, Play, Pause } from 'lucide-react'
 import { conversationsApi, BACKEND_URL } from '../services/api'
 
 interface Conversation {
@@ -21,11 +21,30 @@ interface Conversation {
   memory_processing_status?: string
 }
 
+// Speaker color palette for consistent colors across conversations
+const SPEAKER_COLOR_PALETTE = [
+  'text-blue-600 dark:text-blue-400',
+  'text-green-600 dark:text-green-400',
+  'text-purple-600 dark:text-purple-400',
+  'text-orange-600 dark:text-orange-400',
+  'text-pink-600 dark:text-pink-400',
+  'text-indigo-600 dark:text-indigo-400',
+  'text-red-600 dark:text-red-400',
+  'text-yellow-600 dark:text-yellow-400',
+  'text-teal-600 dark:text-teal-400',
+  'text-cyan-600 dark:text-cyan-400',
+];
+
 export default function Conversations() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [debugMode, setDebugMode] = useState(false)
+  
+  // Audio playback state
+  const [playingSegment, setPlayingSegment] = useState<string | null>(null) // Format: "audioUuid-segmentIndex"
+  const audioRefs = useRef<{ [key: string]: HTMLAudioElement }>({})
+  const segmentTimerRef = useRef<number | null>(null)
 
   const loadConversations = async () => {
     try {
@@ -59,6 +78,79 @@ export default function Conversations() {
     const seconds = Math.floor(duration % 60)
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
+
+  const handleSegmentPlayPause = (audioUuid: string, segmentIndex: number, segment: any, audioPath: string) => {
+    const segmentId = `${audioUuid}-${segmentIndex}`;
+    
+    // If this segment is already playing, pause it
+    if (playingSegment === segmentId) {
+      const audio = audioRefs.current[audioUuid];
+      if (audio) {
+        audio.pause();
+      }
+      if (segmentTimerRef.current) {
+        window.clearTimeout(segmentTimerRef.current);
+        segmentTimerRef.current = null;
+      }
+      setPlayingSegment(null);
+      return;
+    }
+    
+    // Stop any currently playing segment
+    if (playingSegment) {
+      const [currentAudioUuid] = playingSegment.split('-');
+      const currentAudio = audioRefs.current[currentAudioUuid];
+      if (currentAudio) {
+        currentAudio.pause();
+      }
+      if (segmentTimerRef.current) {
+        window.clearTimeout(segmentTimerRef.current);
+        segmentTimerRef.current = null;
+      }
+    }
+    
+    // Get or create audio element for this conversation
+    let audio = audioRefs.current[audioUuid];
+    if (!audio) {
+      audio = new Audio(`${BACKEND_URL}/audio/${audioPath}`);
+      audioRefs.current[audioUuid] = audio;
+      
+      // Add event listener to handle when audio ends naturally
+      audio.addEventListener('ended', () => {
+        setPlayingSegment(null);
+      });
+    }
+    
+    // Set the start time and play
+    audio.currentTime = segment.start;
+    audio.play().then(() => {
+      setPlayingSegment(segmentId);
+      
+      // Set a timer to stop at the segment end time
+      const duration = (segment.end - segment.start) * 1000; // Convert to milliseconds
+      segmentTimerRef.current = window.setTimeout(() => {
+        audio.pause();
+        setPlayingSegment(null);
+        segmentTimerRef.current = null;
+      }, duration);
+    }).catch(err => {
+      console.error('Error playing audio segment:', err);
+      setPlayingSegment(null);
+    });
+  }
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      // Stop all audio and clear timers
+      Object.values(audioRefs.current).forEach(audio => {
+        audio.pause();
+      });
+      if (segmentTimerRef.current) {
+        window.clearTimeout(segmentTimerRef.current);
+      }
+    };
+  }, [])
 
 
   if (loading) {
@@ -182,28 +274,76 @@ export default function Conversations() {
               <div className="space-y-2">
                 <h3 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Transcript:</h3>
                 {conversation.transcript && conversation.transcript.length > 0 ? (
-                  <div className="space-y-2">
-                    {conversation.transcript.map((segment, index) => (
-                      <div
-                        key={index}
-                        className="flex items-start space-x-3 p-3 bg-white dark:bg-gray-800 rounded border"
-                      >
-                        <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400 flex items-center space-x-1">
-                          <Clock className="h-3 w-3" />
-                          <span>{formatDuration(segment.start, segment.end)}</span>
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2 mb-1">
-                            <span className="font-medium text-sm text-blue-600 dark:text-blue-400">
-                              {segment.speaker || 'Unknown'}
-                            </span>
-                          </div>
-                          <p className="text-sm text-gray-900 dark:text-gray-100">
-                            {segment.text}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
+                    <div className="space-y-1">
+                      {(() => {
+                        // Build a speaker-to-color map for this conversation
+                        const speakerColorMap: { [key: string]: string } = {};
+                        let colorIndex = 0;
+                        
+                        // First pass: assign colors to unique speakers
+                        conversation.transcript.forEach(segment => {
+                          const speaker = segment.speaker || 'Unknown';
+                          if (!speakerColorMap[speaker]) {
+                            speakerColorMap[speaker] = SPEAKER_COLOR_PALETTE[colorIndex % SPEAKER_COLOR_PALETTE.length];
+                            colorIndex++;
+                          }
+                        });
+                        
+                        // Render the transcript
+                        return conversation.transcript.map((segment, index) => {
+                          const speaker = segment.speaker || 'Unknown';
+                          const speakerColor = speakerColorMap[speaker];
+                          const segmentId = `${conversation.audio_uuid}-${index}`;
+                          const isPlaying = playingSegment === segmentId;
+                          const audioPath = debugMode 
+                            ? conversation.audio_path 
+                            : conversation.cropped_audio_path || conversation.audio_path;
+                          
+                          return (
+                            <div 
+                              key={index} 
+                              className={`text-sm leading-relaxed flex items-start space-x-2 py-1 px-2 rounded transition-colors ${
+                                isPlaying ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+                              }`}
+                            >
+                              {/* Play/Pause Button */}
+                              {audioPath && (
+                                <button
+                                  onClick={() => handleSegmentPlayPause(conversation.audio_uuid, index, segment, audioPath)}
+                                  className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors mt-0.5 ${
+                                    isPlaying 
+                                      ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                                      : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                  }`}
+                                  title={isPlaying ? 'Pause segment' : 'Play segment'}
+                                >
+                                  {isPlaying ? (
+                                    <Pause className="w-2.5 h-2.5" />
+                                  ) : (
+                                    <Play className="w-2.5 h-2.5 ml-0.5" />
+                                  )}
+                                </button>
+                              )}
+                              
+                              <div className="flex-1 min-w-0">
+                                {debugMode && (
+                                  <span className="text-xs text-gray-400 mr-2" title={`${segment.start.toFixed(1)}s - ${segment.end.toFixed(1)}s`}>
+                                    [{formatDuration(segment.start, segment.end)}]
+                                  </span>
+                                )}
+                                <span className={`font-medium ${speakerColor}`}>
+                                  {speaker}:
+                                </span>
+                                <span className="text-gray-900 dark:text-gray-100 ml-1">
+                                  {segment.text}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
                   </div>
                 ) : (
                   <div className="text-sm text-gray-500 dark:text-gray-400 italic">

@@ -51,9 +51,11 @@ class OpenAILLMClient(LLMClient):
         temperature: float = 0.1,
     ):
         super().__init__(model, temperature)
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "dummy")
-        self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
+        self.model = model or os.getenv("OPENAI_MODEL")
+        if not self.api_key or not self.base_url or not self.model:
+            raise ValueError("OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL must be set")
 
         # Initialize OpenAI client
         try:
@@ -127,9 +129,9 @@ class LLMClientFactory:
 
         if provider in ["openai", "ollama"]:
             return OpenAILLMClient(
-                api_key=os.getenv("OPENAI_API_KEY", "dummy"),
+                api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL"),
-                model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+                model=os.getenv("OPENAI_MODEL"),
             )
         elif provider == "anthropic":
             # Future implementation for Anthropic

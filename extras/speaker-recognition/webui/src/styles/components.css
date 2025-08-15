@@ -5,51 +5,51 @@
 @layer components {
   /* Card/Container styles */
   .card {
-    @apply bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg;
+    @apply bg-white border border-gray-200 rounded-lg;
   }
   
   .card-secondary {
-    @apply bg-gray-50 dark:bg-gray-800 rounded-lg;
+    @apply bg-gray-50 rounded-lg;
   }
   
   /* Text styles */
   .text-primary {
-    @apply text-gray-900 dark:text-gray-100;
+    @apply text-gray-900;
   }
   
   .text-secondary {
-    @apply text-gray-600 dark:text-gray-300;
+    @apply text-gray-600;
   }
   
   .text-muted {
-    @apply text-gray-500 dark:text-gray-400;
+    @apply text-gray-500;
   }
   
   /* Heading styles */
   .heading-lg {
-    @apply text-2xl font-bold text-gray-900 dark:text-gray-100;
+    @apply text-2xl font-bold text-gray-900;
   }
   
   .heading-md {
-    @apply text-xl font-semibold text-gray-900 dark:text-gray-100;
+    @apply text-xl font-semibold text-gray-900;
   }
   
   .heading-sm {
-    @apply text-lg font-medium text-gray-900 dark:text-gray-100;
+    @apply text-lg font-medium text-gray-900;
   }
   
   /* Form elements */
   .input-label {
-    @apply block text-sm font-medium text-gray-700 dark:text-gray-300;
+    @apply block text-sm font-medium text-gray-700;
   }
   
   /* Interactive elements */
   .hover-bg {
-    @apply hover:bg-gray-100 dark:hover:bg-gray-700;
+    @apply hover:bg-gray-100;
   }
   
   /* Table headers */
   .table-header {
-    @apply text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider;
+    @apply text-xs font-medium text-gray-500 uppercase tracking-wider;
   }
 }

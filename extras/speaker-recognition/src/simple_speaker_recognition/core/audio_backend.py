@@ -50,8 +50,26 @@ class AudioBackend:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.embed, wave)
 
-    def diarize(self, path: Path, min_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
-        """Perform speaker diarization on an audio file."""
+    def diarize(self, path: Path, min_speakers: Optional[int] = None, max_speakers: Optional[int] = None, 
+                collar: float = 2.0, min_duration_off: float = 1.5) -> List[Dict]:
+        """Perform speaker diarization on an audio file.
+        
+        Args:
+            path: Path to the audio file
+            min_speakers: Minimum number of speakers to detect
+            max_speakers: Maximum number of speakers to detect
+            collar: Gap duration (seconds) to merge between speaker segments
+            min_duration_off: Minimum silence duration (seconds) before treating as segment boundary
+        """
+        # Dynamically update pipeline parameters if min_duration_off is different from default
+        if min_duration_off != 1.5:
+            pipeline_params = {
+                'segmentation': {
+                    'min_duration_off': min_duration_off
+                }
+            }
+            self.diar.instantiate(pipeline_params)
+        
         with torch.inference_mode():
             # Pass speaker count parameters to pyannote
             kwargs = {}
@@ -63,9 +81,9 @@ class AudioBackend:
             diarization = self.diar(str(path), **kwargs)
             logger.info(f"Diarization: {diarization}")
             
-            # Apply PyAnnote's built-in gap filling using support() method
-            # This fills gaps shorter than 2 seconds between segments from same speaker
-            diarization = diarization.support(collar=2.0)
+            # Apply PyAnnote's built-in gap filling using support() method with configurable collar
+            # This fills gaps shorter than collar seconds between segments from same speaker
+            diarization = diarization.support(collar=collar)
         
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -78,10 +96,19 @@ class AudioBackend:
         
         return segments
 
-    async def async_diarize(self, path: Path, min_speakers: Optional[int] = None, max_speakers: Optional[int] = None) -> List[Dict]:
-        """Async wrapper for diarization."""
+    async def async_diarize(self, path: Path, min_speakers: Optional[int] = None, max_speakers: Optional[int] = None,
+                           collar: float = 2.0, min_duration_off: float = 1.5) -> List[Dict]:
+        """Async wrapper for diarization.
+        
+        Args:
+            path: Path to the audio file
+            min_speakers: Minimum number of speakers to detect
+            max_speakers: Maximum number of speakers to detect
+            collar: Gap duration (seconds) to merge between speaker segments
+            min_duration_off: Minimum silence duration (seconds) before treating as segment boundary
+        """
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.diarize, path, min_speakers, max_speakers)
+        return await loop.run_in_executor(None, self.diarize, path, min_speakers, max_speakers, collar, min_duration_off)
 
     def load_wave(self, path: Path, start: Optional[float] = None, end: Optional[float] = None) -> torch.Tensor:
         if start is not None and end is not None:

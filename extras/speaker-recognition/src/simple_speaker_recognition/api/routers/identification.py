@@ -82,6 +82,8 @@ async def diarize_and_identify(
     user_id: Optional[int] = Query(default=None, description="User ID to scope speaker identification to user's enrolled speakers"),
     min_speakers: Optional[int] = Query(default=None, description="Minimum number of speakers to detect"),
     max_speakers: Optional[int] = Query(default=None, description="Maximum number of speakers to detect"),
+    collar: Optional[float] = Query(default=2.0, description="Collar duration (seconds) around speaker boundaries to merge segments"),
+    min_duration_off: Optional[float] = Query(default=1.5, description="Minimum silence duration (seconds) before treating it as a segment boundary"),
     db: UnifiedSpeakerDB = Depends(get_db),
 ):
     """
@@ -93,7 +95,7 @@ async def diarize_and_identify(
     3. Returns segments with both diarization labels and identified speaker names
     """
     log.info("Processing diarize-and-identify request")
-    log.info(f"Parameters - min_duration: {min_duration}, similarity_threshold: {similarity_threshold}, identify_only_enrolled: {identify_only_enrolled}, user_id: {user_id}, min_speakers: {min_speakers}, max_speakers: {max_speakers}")
+    log.info(f"Parameters - min_duration: {min_duration}, similarity_threshold: {similarity_threshold}, identify_only_enrolled: {identify_only_enrolled}, user_id: {user_id}, min_speakers: {min_speakers}, max_speakers: {max_speakers}, collar: {collar}, min_duration_off: {min_duration_off}")
     log.info(f"File - name: {file.filename}, content_type: {file.content_type}, size: {file.size if hasattr(file, 'size') else 'unknown'}")
     
     # Read audio data once
@@ -121,7 +123,8 @@ async def diarize_and_identify(
             log.info(f"Using speaker constraints: min={min_speakers}, max={max_speakers}")
         
         audio_backend = get_audio_backend()
-        segments = await audio_backend.async_diarize(tmp_path, min_speakers=min_speakers, max_speakers=max_speakers)
+        segments = await audio_backend.async_diarize(tmp_path, min_speakers=min_speakers, max_speakers=max_speakers, 
+                                                     collar=collar, min_duration_off=min_duration_off)
         
         # Log what PyAnnote produced
         log.info(f"PyAnnote produced {len(segments)} segments")
@@ -272,6 +275,8 @@ async def diarize_identify_match(
     similarity_threshold: float = Form(default=0.15, description="Speaker similarity threshold"),
     min_speakers: Optional[int] = Form(default=None, description="Minimum number of speakers to detect"),
     max_speakers: Optional[int] = Form(default=None, description="Maximum number of speakers to detect"),
+    collar: float = Form(default=2.0, description="Collar duration (seconds) around speaker boundaries to merge segments"),
+    min_duration_off: float = Form(default=1.5, description="Minimum silence duration (seconds) before treating it as a segment boundary"),
     db: UnifiedSpeakerDB = Depends(get_db),
 ):
     """
@@ -290,7 +295,7 @@ async def diarize_identify_match(
     }
     """
     log.info(f"Processing diarize-identify-match request: {file.filename}")
-    log.info(f"Parameters - user_id: {user_id}, min_duration: {min_duration}, similarity_threshold: {similarity_threshold}, min_speakers: {min_speakers}, max_speakers: {max_speakers}")
+    log.info(f"Parameters - user_id: {user_id}, min_duration: {min_duration}, similarity_threshold: {similarity_threshold}, min_speakers: {min_speakers}, max_speakers: {max_speakers}, collar: {collar}, min_duration_off: {min_duration_off}")
     log.info(f"Transcript data length: {len(transcript_data) if transcript_data else 0}")
     
     # Parse transcript data
@@ -316,7 +321,8 @@ async def diarize_identify_match(
             log.info(f"Using speaker constraints: min={min_speakers}, max={max_speakers}")
         
         audio_backend = get_audio_backend()
-        diarization_segments = await audio_backend.async_diarize(tmp_path, min_speakers=min_speakers, max_speakers=max_speakers)
+        diarization_segments = await audio_backend.async_diarize(tmp_path, min_speakers=min_speakers, max_speakers=max_speakers,
+                                                                 collar=collar, min_duration_off=min_duration_off)
         
         # Apply minimum duration filter
         if min_duration > 0:
@@ -332,16 +338,19 @@ async def diarize_identify_match(
             start_time = segment["start"]
             end_time = segment["end"]
             
-            # Extract audio for this segment
-            segment_audio = await audio_backend.extract_segment(tmp_path, start_time, end_time)
+            # Extract audio for this segment using correct method
+            segment_audio = audio_backend.load_wave(tmp_path, start_time, end_time)
             
             # Check if we can identify this speaker
             speaker_info = None
             confidence = 0.0
+            found = False
             if user_id:
-                found, speaker_info, confidence = await audio_backend.identify_speaker(
-                    segment_audio, user_id=user_id, threshold=similarity_threshold
-                )
+                # Generate embedding for this segment
+                emb = await audio_backend.async_embed(segment_audio)
+                
+                # Identify speaker using the database
+                found, speaker_info, confidence = await db.identify(emb, user_id=user_id)
             
             # Step 3: Match transcript words to this segment
             segment_words = []
@@ -421,6 +430,8 @@ async def plain_diarize_and_identify(
     user_id: Optional[int] = Form(default=None, description="User ID to scope speaker identification to user's enrolled speakers"),
     min_speakers: Optional[int] = Form(default=None, description="Minimum number of speakers to detect"),
     max_speakers: Optional[int] = Form(default=None, description="Maximum number of speakers to detect"),
+    collar: Optional[float] = Form(default=2.0, description="Collar duration (seconds) around speaker boundaries to merge segments"),
+    min_duration_off: Optional[float] = Form(default=1.5, description="Minimum silence duration (seconds) before treating it as a segment boundary"),
     db: UnifiedSpeakerDB = Depends(get_db),
 ):
     """
@@ -432,7 +443,7 @@ async def plain_diarize_and_identify(
     log.info("Processing plain-diarize-and-identify request (redirecting to standard diarize-and-identify)")
     
     # Simply call the existing diarize_and_identify function with the same parameters
-    return await diarize_and_identify(file, min_duration, similarity_threshold, identify_only_enrolled, user_id, min_speakers, max_speakers, db)
+    return await diarize_and_identify(file, min_duration, similarity_threshold, identify_only_enrolled, user_id, min_speakers, max_speakers, collar, min_duration_off, db)
 
 
 @router.post("/identify", response_model=IdentifyResponse)

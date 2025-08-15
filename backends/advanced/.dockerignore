@@ -8,5 +8,7 @@
 !src
 !.env
 !memory_config.yaml
+!diarization_config.json.template
+!diarization_config.json
 !uv.lock
 !webui

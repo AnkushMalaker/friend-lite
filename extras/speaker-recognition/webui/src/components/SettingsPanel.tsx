@@ -28,6 +28,12 @@ export interface SettingsPanelProps {
   sampleRate?: number
   onSampleRateChange?: (rate: number) => void
   
+  // Timing settings
+  utteranceEndMs?: number
+  onUtteranceEndMsChange?: (ms: number) => void
+  endpointingMs?: number
+  onEndpointingMsChange?: (ms: number) => void
+  
   // Display options
   compact?: boolean
   collapsible?: boolean
@@ -52,6 +58,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onEnableTranscriptionChange,
   sampleRate = 16000,
   onSampleRateChange,
+  utteranceEndMs = 1000,
+  onUtteranceEndMsChange,
+  endpointingMs = 300,
+  onEndpointingMsChange,
   compact = false,
   collapsible = false,
   defaultExpanded = true,
@@ -236,6 +246,106 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Timing Settings */}
+      {(onUtteranceEndMsChange || onEndpointingMsChange) && (
+        <div className="space-y-3">
+          <h5 className="text-sm font-medium text-gray-700">Completion Timing</h5>
+          
+          {/* Utterance End Timeout */}
+          {onUtteranceEndMsChange && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Utterance End Timeout: {utteranceEndMs}ms
+              </label>
+              <input
+                type="range"
+                min="500"
+                max="5000"
+                step="100"
+                value={utteranceEndMs}
+                onChange={(e) => onUtteranceEndMsChange(parseInt(e.target.value))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>0.5s</span>
+                <span>2.5s</span>
+                <span>5.0s</span>
+              </div>
+              <p className="text-xs text-gray-600 mt-1">
+                How long to wait after silence before completing an utterance
+              </p>
+            </div>
+          )}
+
+          {/* Endpointing Timeout */}
+          {onEndpointingMsChange && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Endpointing Timeout: {endpointingMs}ms
+              </label>
+              <input
+                type="range"
+                min="100"
+                max="1000"
+                step="50"
+                value={endpointingMs}
+                onChange={(e) => onEndpointingMsChange(parseInt(e.target.value))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>0.1s</span>
+                <span>0.5s</span>
+                <span>1.0s</span>
+              </div>
+              <p className="text-xs text-gray-600 mt-1">
+                Silence detection for interim results
+              </p>
+            </div>
+          )}
+
+          {/* Preset Buttons */}
+          {onUtteranceEndMsChange && onEndpointingMsChange && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Quick Presets
+              </label>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => {
+                    onUtteranceEndMsChange(500)
+                    onEndpointingMsChange(150)
+                  }}
+                  className="px-3 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200 transition-colors"
+                >
+                  Fast
+                </button>
+                <button
+                  onClick={() => {
+                    onUtteranceEndMsChange(1000)
+                    onEndpointingMsChange(300)
+                  }}
+                  className="px-3 py-1 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200 transition-colors"
+                >
+                  Normal
+                </button>
+                <button
+                  onClick={() => {
+                    onUtteranceEndMsChange(2000)
+                    onEndpointingMsChange(500)
+                  }}
+                  className="px-3 py-1 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200 transition-colors"
+                >
+                  Patient
+                </button>
+              </div>
+              <p className="text-xs text-gray-600 mt-1">
+                Fast: Quick responses, may cut off speech | Patient: Waits longer, better for slow speakers
+              </p>
             </div>
           )}
         </div>

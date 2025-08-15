@@ -30,6 +30,7 @@ transcription_results.csv
 
 untracked/*
 backends/advanced/data/*
+backends/advanced/diarization_config.json
 extras/havpe-relay/firmware/secrets.yaml
 extras/test-audios/*
 
