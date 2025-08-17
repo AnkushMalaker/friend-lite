@@ -414,7 +414,7 @@ The system supports **multiple LLM providers** - configure via environment varia
 
 ```bash
 # In your .env file
-LLM_PROVIDER=openai          # RECOMMENDED: Use "openai" for best results
+TRANSCRIPTION_PROVIDER=deepgram          # Options: "deepgram", "mistral", "huggingface". Recommended: "deepgram" for best results
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4o          # RECOMMENDED: "gpt-4o" for better memory extraction
 

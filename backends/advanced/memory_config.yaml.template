@@ -2,9 +2,10 @@
 # This file controls how memories and facts are extracted from conversations
 #
 # REQUIRED ENVIRONMENT VARIABLES:
-# - LLM_PROVIDER: Set to "openai" or "ollama" 
+# - LLM_PROVIDER: Set to "openai", "ollama", or "gemini"
 # - For OpenAI: OPENAI_API_KEY (required), OPENAI_MODEL (optional, defaults to config)
 # - For Ollama: OPENAI_BASE_URL or OLLAMA_BASE_URL (required), OPENAI_MODEL (optional, defaults to config)
+# - For Gemini: GEMINI_API_KEY (required), GEMINI_MODEL (optional, defaults to config)
 # - QDRANT_BASE_URL: Qdrant service URL (e.g., "qdrant" for Docker)
 #
 # OPTIONAL ENVIRONMENT VARIABLES:
@@ -24,18 +25,22 @@ memory_extraction:
   prompt: "Extract key information from this conversation."
   
   # LLM parameters for memory extraction
-  # Provider is controlled by LLM_PROVIDER environment variable (ollama/openai)
+  # Provider is controlled by LLM_PROVIDER environment variable (ollama/openai/gemini)
   llm_settings:
     temperature: 0.3  # Lower temperature for more consistent extraction
     max_tokens: 2000
     # Model selection based on provider:
     # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
     # - OpenAI: "gpt-4o" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    # - Gemini: 
+    #   - model: "gemini-2.0-flash-001", "gemini-2.0-flash-lite-001"
+    #   - embedder_model: "text-embedding-004"
     # 
     # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
     # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
     # model: "gemma3n:e4b"
     model: "gpt-4o"
+    embedder_model: "text-embedding-004" # Specific to Gemini provider
 
 # Fact extraction settings (structured information)
 fact_extraction:

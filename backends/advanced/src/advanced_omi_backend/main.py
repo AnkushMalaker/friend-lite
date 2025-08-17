@@ -10,6 +10,7 @@
 """
 import logging
 
+
 logging.basicConfig(level=logging.INFO)
 
 import asyncio
@@ -123,10 +124,11 @@ CHUNK_DIR.mkdir(parents=True, exist_ok=True)
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")
 OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://localhost:8765")
 
 # Determine which transcription service to use
-USE_ONLINE_TRANSCRIPTION = bool(TRANSCRIPTION_PROVIDER and (DEEPGRAM_API_KEY or MISTRAL_API_KEY))
+USE_ONLINE_TRANSCRIPTION = bool(TRANSCRIPTION_PROVIDER and (DEEPGRAM_API_KEY or MISTRAL_API_KEY or HF_API_KEY))
 USE_OFFLINE_ASR = not USE_ONLINE_TRANSCRIPTION and bool(OFFLINE_ASR_TCP_URI)
 
 
@@ -877,6 +879,14 @@ async def health_check():
                     "healthy": True,
                     "type": "REST API",
                     "provider": "Mistral",
+                    "critical": False,
+                }
+            elif provider_name == "Hugging Face" and HF_API_KEY:
+                health_status["services"]["speech_to_text"] = {
+                    "status": "✅ API Key Configured",
+                    "healthy": True,
+                    "type": "REST API",
+                    "provider": "Hugging Face",
                     "critical": False,
                 }
             else:

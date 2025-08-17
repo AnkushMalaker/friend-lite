@@ -176,11 +176,21 @@ class MemoryConfigLoader:
         return prompt
 
     def get_fact_prompt(self) -> str:
-        """Get the fact extraction prompt."""
-        # Fact extraction is optional, so we can provide a default
-        return self.get_fact_extraction_config().get(
-            "prompt", "Extract specific facts from this conversation."
-        )
+        """Get the fact extraction prompt, prioritizing provider-specific prompts."""
+        fact_config = self.get_fact_extraction_config()
+        llm_provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+
+        # Prioritize provider-specific prompt (e.g., 'gemini_prompt'), then fall back to default.
+        if llm_provider == "gemini":
+            prompt = fact_config.get("gemini_prompt")
+            if prompt:
+                config_logger.info("Using 'gemini_prompt' from config for fact extraction.")
+                return prompt
+        
+        # Fallback to the default prompt if no provider-specific prompt is found or for other providers
+        default_prompt = fact_config.get("prompt", "Extract specific facts from this conversation.")
+        config_logger.info(f"Using default 'prompt' for {llm_provider} fact extraction.")
+        return default_prompt
 
     def get_categorization_prompt(self) -> str:
         """Get the categorization prompt."""

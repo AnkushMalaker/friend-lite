@@ -2,7 +2,7 @@
 # This file controls how memories and facts are extracted from conversations
 #
 # REQUIRED ENVIRONMENT VARIABLES:
-# - LLM_PROVIDER: Set to "openai" or "ollama" 
+# - LLM_PROVIDER: Set to "openai", "ollama", or "gemini" 
 # - For OpenAI: OPENAI_API_KEY (required), OPENAI_MODEL (optional, defaults to config)
 # - For Ollama: OPENAI_BASE_URL or OLLAMA_BASE_URL (required), OPENAI_MODEL (optional, defaults to config)
 # - QDRANT_BASE_URL: Qdrant service URL (e.g., "qdrant" for Docker)
@@ -35,7 +35,7 @@ memory_extraction:
     # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
     # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
     # model: "gemma3n:e4b"
-    model: "gpt-4o"
+    # model: "gpt-4o"
 
 # Fact extraction settings (structured information)
 fact_extraction:
@@ -67,6 +67,31 @@ fact_extraction:
     "The participants in the conversation were John and Rose.",
     "Discussion is about DnD",
     "There is a tense conversation about the upcoming demo"]
+
+  # Gemini prompt for extracting structured facts
+  gemini_prompt: |
+    Extract important information from this conversation, including facts, events this conversation. Focus on:
+    - Names of people and their roles/titles. Ensure to extract the names all all existing participants in the conversation, even if they're only mentioned once.
+    - Company names and organizations
+    - Dates and specific times
+    - Locations and addresses
+    - Numbers, quantities, and measurements
+    - Contact information (emails, phone numbers)
+    - Project names and code names
+    - Technical specifications or requirements
+    - Contributions by each participant to the conversation or to the task
+
+    Important:
+    - The extracted facts MUST be in the same language as the original conversation (e.g., Russian, English, etc.). Do not translate anything.
+    - Return ONLY a JSON object with a single key "facts". The value of "facts" MUST be a JSON array of strings.
+    - Do NOT wrap the JSON in ```json, ``` or any other markdown.
+    - If no facts are found, you MUST return a JSON object with an empty array: {"facts": []}.
+
+    Examples of correct JSON output:
+    {"facts": ["John Smith works as a Software Engineer at Acme Corp", "Project deadline is December 15th, 2024", "Meeting scheduled for 2 PM EST on Monday", "Budget approved for $50,000", "The participants in the conversation were John and Rose.", "Discussion is about DnD", "There is a tense conversation about the upcoming demo"]}
+    
+    Example of correct output when no facts are found:
+    {"facts": []}
   
   # LLM parameters for fact extraction
   llm_settings:
@@ -74,7 +99,6 @@ fact_extraction:
     max_tokens: 1500
     # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-4o"
 
 
 # Memory categorization settings
@@ -107,8 +131,7 @@ categorization:
   llm_settings:
     temperature: 0.2
     max_tokens: 100
-    # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-4o"  # Model based on LLM_PROVIDER (ollama/openai)
+    # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Quality control settings
 quality_control:

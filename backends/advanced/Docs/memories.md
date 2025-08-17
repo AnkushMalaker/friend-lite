@@ -199,6 +199,29 @@ fact_extraction:
     max_tokens: 1500
 ```
 
+#### Switch to Gemini
+
+For a powerful open-source alternative, you can use Google's Gemini models.
+
+```bash
+# In your .env file
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.0-flash-001
+GEMINI_EMBEDDER_MODEL=text-embedding-004
+```
+
+Or configure via `memory_config.yaml`:
+
+```yaml
+memory_extraction:
+  llm_settings:
+    model: "gemini-2.0-flash-001"
+    embedder_model: "text-embedding-004"
+    temperature: 0.2
+    max_tokens: 2048
+```
+
 #### Adjust LLM Parameters
 
 ```python

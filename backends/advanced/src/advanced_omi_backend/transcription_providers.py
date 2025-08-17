@@ -68,23 +68,14 @@ class DeepgramProvider(OnlineTranscriptionProvider):
 
             logger.info(f"Sending {len(audio_data)} bytes to Deepgram API")
 
-            # Calculate dynamic timeout based on audio file size
-            estimated_duration = len(audio_data) / (sample_rate * 2 * 1)  # 16-bit mono
-            processing_timeout = max(
-                120, int(estimated_duration * 3)
-            )  # Min 2 minutes, 3x audio duration
+            estimated_duration = len(audio_data) / (sample_rate * 2 * 1)
+            processing_timeout = max(120, int(estimated_duration * 3))
 
             timeout_config = httpx.Timeout(
                 connect=30.0,
                 read=processing_timeout,
-                write=max(
-                    180.0, int(len(audio_data) / (sample_rate * 2))
-                ),  # bytes per second for 16-bit PCM
+                write=max(180.0, int(len(audio_data) / (sample_rate * 2))),
                 pool=10.0,
-            )
-
-            logger.info(
-                f"Estimated audio duration: {estimated_duration:.1f}s, timeout: {processing_timeout}s"
             )
 
             async with httpx.AsyncClient(timeout=timeout_config) as client:
@@ -94,101 +85,21 @@ class DeepgramProvider(OnlineTranscriptionProvider):
 
                 if response.status_code == 200:
                     result = response.json()
-                    logger.debug(f"Deepgram response: {result}")
-
-                    # Extract transcript from response
                     if result.get("results", {}).get("channels", []) and result["results"][
                         "channels"
                     ][0].get("alternatives", []):
-
                         alternative = result["results"]["channels"][0]["alternatives"][0]
-
-                        # Use diarized transcript if available
-                        if "paragraphs" in alternative and alternative["paragraphs"].get(
-                            "transcript"
-                        ):
-                            transcript = alternative["paragraphs"]["transcript"].strip()
-                            logger.info(
-                                f"Deepgram diarized transcription successful: {len(transcript)} characters"
-                            )
-                        else:
-                            transcript = alternative.get("transcript", "").strip()
-                            logger.info(
-                                f"Deepgram basic transcription successful: {len(transcript)} characters"
-                            )
-
+                        transcript = alternative.get("transcript", "").strip()
                         if transcript:
-                            # Extract speech timing information for logging
-                            words = alternative.get("words", [])
-                            if words:
-                                first_word_start = words[0].get("start", 0)
-                                last_word_end = words[-1].get("end", 0)
-                                speech_duration = last_word_end - first_word_start
-
-                                # Calculate audio duration from data size
-                                audio_duration = len(audio_data) / (
-                                    sample_rate * 2 * 1
-                                )  # 16-bit mono
-                                speech_percentage = (
-                                    (speech_duration / audio_duration) * 100
-                                    if audio_duration > 0
-                                    else 0
-                                )
-
-                                logger.info(
-                                    f"Deepgram speech analysis: {speech_duration:.1f}s speech detected in {audio_duration:.1f}s audio ({speech_percentage:.1f}%)"
-                                )
-
-                                # Check confidence levels
-                                confidences = [
-                                    w.get("confidence", 0) for w in words if "confidence" in w
-                                ]
-                                if confidences:
-                                    avg_confidence = sum(confidences) / len(confidences)
-                                    low_confidence_count = sum(1 for c in confidences if c < 0.5)
-                                    logger.info(
-                                        f"Deepgram confidence: avg={avg_confidence:.2f}, {low_confidence_count}/{len(words)} words <0.5 confidence"
-                                    )
-
-                                # Keep raw transcript and word data without formatting
-                                logger.info(
-                                    f"Keeping raw transcript with word-level data: {len(transcript)} characters"
-                                )
-                                return {
-                                    "text": transcript,
-                                    "words": words,
-                                    "segments": [],
-                                }
-                            else:
-                                # No word-level data, return basic transcript
-                                logger.info(
-                                    "No word-level data available, returning basic transcript"
-                                )
-                                return {"text": transcript, "words": [], "segments": []}
-                        else:
-                            logger.warning("Deepgram returned empty transcript")
-                            return {"text": "", "words": [], "segments": []}
-                    else:
-                        logger.warning("Deepgram response missing expected transcript structure")
-                        return {"text": "", "words": [], "segments": []}
+                            return {
+                                "text": transcript,
+                                "words": alternative.get("words", []),
+                                "segments": [],
+                            }
+                    return {"text": "", "words": [], "segments": []}
                 else:
                     logger.error(f"Deepgram API error: {response.status_code} - {response.text}")
                     return {"text": "", "words": [], "segments": []}
-
-        except httpx.TimeoutException as e:
-            timeout_type = "unknown"
-            if "connect" in str(e).lower():
-                timeout_type = "connection"
-            elif "read" in str(e).lower():
-                timeout_type = "read"
-            elif "write" in str(e).lower():
-                timeout_type = "write (upload)"
-            elif "pool" in str(e).lower():
-                timeout_type = "connection pool"
-            logger.error(
-                f"HTTP {timeout_type} timeout during Deepgram API call for {len(audio_data)} bytes: {e}"
-            )
-            return {"text": "", "words": [], "segments": []}
         except Exception as e:
             logger.error(f"Error calling Deepgram API: {e}")
             return {"text": "", "words": [], "segments": []}
@@ -209,62 +120,25 @@ class MistralProvider(OnlineTranscriptionProvider):
     async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
         """Transcribe audio using Mistral's REST API."""
         try:
-            # Mistral expects audio files, so we need to send it as a file upload
-            # Convert raw PCM to WAV format by adding WAV header
             wav_data = self._create_wav_header(audio_data, sample_rate) + audio_data
-
-            headers = {
-                "x-api-key": self.api_key,
-            }
-
-            # Prepare multipart form data
+            headers = {"x-api-key": self.api_key}
             files = {"file": ("audio.wav", wav_data, "audio/wav")}
-
             data = {"model": self.model}
-
-            logger.info(f"Sending {len(wav_data)} bytes to Mistral API with model {self.model}")
-
-            # Calculate timeout based on audio duration
-            estimated_duration = len(audio_data) / (sample_rate * 2 * 1)  # 16-bit mono
+            
+            estimated_duration = len(audio_data) / (sample_rate * 2 * 1)
             processing_timeout = max(120, int(estimated_duration * 3))
-
-            timeout_config = httpx.Timeout(
-                connect=30.0,
-                read=processing_timeout,
-                write=max(
-                    180.0, int(len(wav_data) / (sample_rate * 2))
-                ),  # bytes per second for 16-bit PCM
-                pool=10.0,
-            )
-
-            logger.info(
-                f"Estimated audio duration: {estimated_duration:.1f}s, timeout: {processing_timeout}s"
-            )
+            timeout_config = httpx.Timeout(connect=30.0, read=processing_timeout)
 
             async with httpx.AsyncClient(timeout=timeout_config) as client:
                 response = await client.post(self.url, headers=headers, files=files, data=data)
 
                 if response.status_code == 200:
                     result = response.json()
-
-                    # Extract transcript from response
                     transcript = result.get("text", "").strip()
-
-                    if transcript:
-                        logger.info(
-                            f"Mistral transcription successful: {len(transcript)} characters"
-                        )
-                        return {"text": transcript, "words": [], "segments": []}
-                    else:
-                        logger.warning("Mistral returned empty transcript")
-                        return {"text": "", "words": [], "segments": []}
+                    return {"text": transcript, "words": [], "segments": []}
                 else:
                     logger.error(f"Mistral API error: {response.status_code} - {response.text}")
                     return {"text": "", "words": [], "segments": []}
-
-        except httpx.TimeoutException as e:
-            logger.error(f"HTTP timeout during Mistral API call for {len(audio_data)} bytes: {e}")
-            return {"text": "", "words": [], "segments": []}
         except Exception as e:
             logger.error(f"Error calling Mistral API: {e}")
             return {"text": "", "words": [], "segments": []}
@@ -272,57 +146,92 @@ class MistralProvider(OnlineTranscriptionProvider):
     def _create_wav_header(self, audio_data: bytes, sample_rate: int) -> bytes:
         """Create a WAV header for raw PCM data."""
         import struct
-
-        # WAV header parameters
         channels = 1
         bits_per_sample = 16
         byte_rate = sample_rate * channels * bits_per_sample // 8
         block_align = channels * bits_per_sample // 8
         data_size = len(audio_data)
-        file_size = data_size + 36  # 36 = header size - 8
-
-        # Build WAV header
+        file_size = data_size + 36
         header = struct.pack(
             "<4sI4s4sIHHIIHH4sI",
-            b"RIFF",  # ChunkID
-            file_size,  # ChunkSize
-            b"WAVE",  # Format
-            b"fmt ",  # Subchunk1ID
-            16,  # Subchunk1Size (16 for PCM)
-            1,  # AudioFormat (1 for PCM)
-            channels,  # NumChannels
-            sample_rate,  # SampleRate
-            byte_rate,  # ByteRate
-            block_align,  # BlockAlign
-            bits_per_sample,  # BitsPerSample
-            b"data",  # Subchunk2ID
-            data_size,  # Subchunk2Size
+            b"RIFF", file_size, b"WAVE", b"fmt ", 16, 1,
+            channels, sample_rate, byte_rate, block_align,
+            bits_per_sample, b"data", data_size,
         )
+        return header
 
+
+class HuggingFaceProvider(OnlineTranscriptionProvider):
+    """Hugging Face transcription provider using Inference API."""
+
+    def __init__(self, api_key: str, model: str):
+        self.api_key = api_key
+        self.model = model
+        self.url = f"https://api-inference.huggingface.co/models/{model}"
+
+    @property
+    def name(self) -> str:
+        return "Hugging Face"
+
+    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+        """Transcribe audio using Hugging Face's Inference API."""
+        try:
+            # HF API works best with WAV files.
+            wav_data = self._create_wav_header(audio_data, sample_rate) + audio_data
+
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "audio/wav",
+            }
+            logger.info(f"Sending {len(wav_data)} bytes to Hugging Face API with model {self.model}")
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(self.url, headers=headers, content=wav_data)
+
+                if response.status_code == 200:
+                    result = response.json()
+                    if "error" in result:
+                        logger.error(f"Hugging Face API returned error: {result['error']}")
+                        return {"text": "", "words": [], "segments": []}
+
+                    transcript = result.get("text", "").strip()
+                    return {"text": transcript, "words": [], "segments": []}
+                else:
+                    logger.error(f"Hugging Face API error: {response.status_code} - {response.text}")
+                    return {"text": "", "words": [], "segments": []}
+        except Exception as e:
+            logger.error(f"Error calling Hugging Face API: {e}", exc_info=True)
+            return {"text": "", "words": [], "segments": []}
+
+    def _create_wav_header(self, audio_data: bytes, sample_rate: int) -> bytes:
+        """Create a WAV header for raw PCM data."""
+        import struct
+        channels = 1
+        bits_per_sample = 16
+        byte_rate = sample_rate * channels * bits_per_sample // 8
+        block_align = channels * bits_per_sample // 8
+        data_size = len(audio_data)
+        file_size = data_size + 36
+        header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", file_size, b"WAVE", b"fmt ", 16, 1,
+            channels, sample_rate, byte_rate, block_align,
+            bits_per_sample, b"data", data_size,
+        )
         return header
 
 
 def get_transcription_provider(
     provider_name: Optional[str] = None,
-) -> OnlineTranscriptionProvider:
-    """
-    Factory function to get the appropriate transcription provider.
-
-    Args:
-        provider_name: Name of the provider ('deepgram', 'mistral').
-                      If None, will check environment for available keys.
-
-    Returns:
-        An instance of OnlineTranscriptionProvider.
-
-    Raises:
-        RuntimeError: If no transcription provider is configured or requested provider is unavailable.
-    """
+) -> Optional[OnlineTranscriptionProvider]:
+    """Factory function to get the appropriate transcription provider."""
     import os
 
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
     mistral_key = os.getenv("MISTRAL_API_KEY")
-    mistral_model = os.getenv("MISTRAL_MODEL", "voxtral-mini-2507")  # Default to voxtral-mini
+    mistral_model = os.getenv("MISTRAL_MODEL", "voxtral-mini-2507")
+    hf_key = os.getenv("HF_API_KEY")
+    hf_model = os.getenv("HF_TRANSCRIPTION_MODEL", "openai/whisper-large-v3")
 
     if provider_name:
         provider_name = provider_name.lower()
@@ -330,32 +239,21 @@ def get_transcription_provider(
     if provider_name == "deepgram" and deepgram_key:
         return DeepgramProvider(deepgram_key)
     elif provider_name == "mistral" and mistral_key:
-        logger.info(f"Using Mistral transcription provider with model: {mistral_model}")
         return MistralProvider(mistral_key, mistral_model)
+    elif provider_name == "huggingface" and hf_key:
+        return HuggingFaceProvider(hf_key, hf_model)
     elif provider_name is None:
-        # Auto-select based on available keys (Deepgram preferred)
         if deepgram_key:
-            logger.info("Using Deepgram transcription provider")
             return DeepgramProvider(deepgram_key)
         elif mistral_key:
-            logger.info(f"Using Mistral transcription provider with model: {mistral_model}")
             return MistralProvider(mistral_key, mistral_model)
+        elif hf_key:
+            return HuggingFaceProvider(hf_key, hf_model)
 
-    # No provider available or configured
     if provider_name:
-        if provider_name == "deepgram":
-            raise RuntimeError(
-                f"Deepgram transcription provider requested but DEEPGRAM_API_KEY not configured"
-            )
-        elif provider_name == "mistral":
-            raise RuntimeError(
-                f"Mistral transcription provider requested but MISTRAL_API_KEY not configured"
-            )
-        else:
-            raise RuntimeError(
-                f"Unknown transcription provider '{provider_name}'. Supported: 'deepgram', 'mistral'"
-            )
-    else:
         raise RuntimeError(
-            "No transcription provider configured. Please set DEEPGRAM_API_KEY or MISTRAL_API_KEY environment variable"
+            f"Requested transcription provider '{provider_name}' is not configured "
+            f"(check your API keys in .env)"
         )
+    
+    return None

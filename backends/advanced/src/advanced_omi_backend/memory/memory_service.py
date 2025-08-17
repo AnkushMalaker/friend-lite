@@ -1,3 +1,4 @@
+
 """Memory service implementation for Omi-audio service.
 
 This module provides:
@@ -5,6 +6,7 @@ This module provides:
 - Memory operations (add, get, search, delete)
 - Debug tracking and configurable extraction
 """
+
 
 import asyncio
 import json
@@ -289,8 +291,51 @@ def _build_mem0_config() -> dict:
             },
         }
         embedding_dims = 768
+    elif llm_provider == "gemini":
+        # Get Gemini API key - required for Gemini provider
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError(
+                "GEMINI_API_KEY environment variable is required when using Gemini provider"
+            )
+
+        llm_model = llm_settings.get("model") or os.getenv("GEMINI_MODEL")
+        if not llm_model:
+            raise ValueError(
+                "Model must be specified either in memory_config.yaml or GEMINI_MODEL environment variable"
+            )
+        
+        memory_logger.info(f"Using Gemini provider with model: {llm_model}")
+
+        llm_config = {
+            "provider": "gemini",
+            "config": {
+                "model": llm_model,
+                "api_key": gemini_api_key,
+                "temperature": llm_settings.get("temperature", 0.1),
+                "max_tokens": llm_settings.get("max_tokens", 2000),
+            },
+        }
+
+        # Get Embedder model from YAML config or environment variable
+        embedder_model = llm_settings.get("embedder_model") or os.getenv("GEMINI_EMBEDDER_MODEL")
+        if not embedder_model:
+            embedder_model = "text-embedding-004" # Default value
+        
+        embedder_config = {
+            "provider": "gemini",
+            "config": {
+                "model": embedder_model,
+                "api_key": gemini_api_key,
+            },
+        }
+
+        if embedder_model == "text-embedding-004":
+            embedding_dims = 768
+        else:
+            embedding_dims = 768 # Fallback
     else:
-        raise ValueError(f"Unsupported LLM provider: {llm_provider}")
+        raise ValueError(f"Unsupported LLM provider: {llm_provider}. Supported providers are: openai, ollama, gemini")
 
     # Build Neo4j graph store configuration
     neo4j_config = None
@@ -851,6 +896,7 @@ class MemoryService:
         self._initialized = False
 
     async def initialize(self):
+        memory_logger.info("Initializing MemoryService...")
         """Initialize the memory service using synchronous Memory (non-blocking lazy init)."""
         if self._initialized:
             return
@@ -869,13 +915,19 @@ class MemoryService:
                 if not ollama_base_url:
                     raise ValueError("OPENAI_BASE_URL or OLLAMA_BASE_URL environment variable is required when using Ollama provider")
                 memory_logger.info(f"Initializing Memory with Ollama provider at {ollama_base_url}")
+            elif llm_provider == "gemini":
+                gemini_api_key = os.getenv("GEMINI_API_KEY")
+                if not gemini_api_key:
+                    raise ValueError("GEMINI_API_KEY environment variable is required when using Gemini provider")
+                memory_logger.info("Initializing Memory with Gemini provider")
             else:
                 raise ValueError(f"Unsupported LLM provider: {llm_provider}")
 
-            # Initialize AsyncMemory - auto-detects configuration from environment variables
-            self.memory = AsyncMemory()
+            # Initialize AsyncMemory with the explicit configuration
+            config = _build_mem0_config()
+            self.memory = await AsyncMemory.from_config(config)
             self._initialized = True
-            memory_logger.info("AsyncMemory initialized successfully (non-blocking)")
+            memory_logger.info("✅ AsyncMemory initialized successfully with explicit config")
 
         except Exception as e:
             memory_logger.error(f"Failed to initialize AsyncMemory: {e}")
@@ -968,6 +1020,41 @@ class MemoryService:
         Memory addition using synchronous Memory in background task.
         Converts the synchronous _add_memory_to_store logic to use async operations.
         """
+        # JIT Monkey-Patch for Gemini response logging
+        try:
+            import google.generativeai as genai
+            
+            if not hasattr(genai.GenerativeModel, '_original_generate_content_async'):
+                patch_logger = logging.getLogger("gemini_patch")
+                patch_logger.setLevel(logging.INFO)
+                if not patch_logger.handlers:
+                    handler = logging.StreamHandler()
+                    formatter = logging.Formatter('\n%(asctime)s - GMN-PATCH - %(levelname)s - %(message)s')
+                    handler.setFormatter(formatter)
+                    patch_logger.addHandler(handler)
+                
+                genai.GenerativeModel._original_generate_content_async = genai.GenerativeModel.generate_content_async
+                
+                async def patched_generate_content_async(*args, **kwargs):
+                    response = await genai.GenerativeModel._original_generate_content_async(*args, **kwargs)
+                    patch_logger.info("="*50)
+                    patch_logger.info("RAW ASYNC GEMINI RESPONSE:")
+                    try:
+                        patch_logger.info(f"Response Text: {response.text}")
+                    except Exception as e:
+                        patch_logger.error(f"Could not extract .text from response: {e}")
+                        patch_logger.info(f"Full Response Object: {response}")
+                    patch_logger.info("="*50)
+                    return response
+                
+                genai.GenerativeModel.generate_content_async = patched_generate_content_async
+                patch_logger.info("Gemini API has been JIT patched to log async responses.")
+
+        except ImportError:
+            logging.getLogger("gemini_patch").warning("Could not import google.generativeai to apply patch.")
+        except Exception as e:
+            logging.getLogger("gemini_patch").error(f"Failed to apply JIT patch: {e}")
+
         start_time = time.time()
         created_memory_ids = []
 
@@ -1010,8 +1097,16 @@ class MemoryService:
             }
 
             # Use configured prompt or default
+                        # Select prompt based on LLM provider
             fact_config = config_loader.get_fact_extraction_config()
-            prompt = fact_config.get("custom_prompt") or "Extract important facts and insights from this conversation."
+            llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
+
+            if llm_provider == "gemini" and fact_config.get("gemini_prompt"):
+                prompt = fact_config.get("gemini_prompt")
+                memory_logger.info("Using Gemini-specific fact extraction prompt.")
+            else:
+                prompt = fact_config.get("prompt") or "Extract important facts and insights from this conversation."
+                memory_logger.info("Using default fact extraction prompt.")
 
             memory_logger.info(f"🧪 Adding memory for {audio_uuid} using synchronous Memory")
             memory_logger.info(f"🔍   - transcript: {transcript[:100]}...")
@@ -1054,6 +1149,8 @@ class MemoryService:
                         },
                         infer=False,
                     )
+
+            memory_logger.info(f"Raw response from mem0/Gemini for {audio_uuid}: {result}")
 
             # Parse the result
             try:

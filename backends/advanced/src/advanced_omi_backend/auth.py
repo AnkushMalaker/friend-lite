@@ -135,6 +135,7 @@ def get_accessible_user_ids(user: User) -> list[str] | None:
 
 async def create_admin_user_if_needed():
     """Create admin user during startup if it doesn't exist and credentials are provided."""
+    logger.info(f"DEBUG: Checking admin credentials from environment. ADMIN_EMAIL='{ADMIN_EMAIL}', ADMIN_PASSWORD='{ADMIN_PASSWORD}'")
     if not ADMIN_PASSWORD:
         logger.warning("Skipping admin user creation - ADMIN_PASSWORD not set")
         return
@@ -151,6 +152,12 @@ async def create_admin_user_if_needed():
             logger.info(
                 f"✅ Admin user already exists: {existing_admin.user_id} ({existing_admin.email})"
             )
+            # Force-update the admin password to match the environment variable
+            user_manager_gen = get_user_manager(user_db)
+            user_manager = await user_manager_gen.__anext__()
+            existing_admin.hashed_password = user_manager.password_helper.hash(ADMIN_PASSWORD)
+            await existing_admin.save()
+            logger.info(f"🔑 Admin password has been synchronized with ADMIN_PASSWORD environment variable.")
             return
 
         # Create admin user
