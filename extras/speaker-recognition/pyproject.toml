@@ -59,7 +59,7 @@ cpu = [
     "torchaudio>=2.0.0",
 ]
 gpu = [
-    "faiss-gpu>=1.7",
+    "faiss-cpu>=1.8",  # Use CPU FAISS for compatibility, GPU PyTorch for performance
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
 ]
