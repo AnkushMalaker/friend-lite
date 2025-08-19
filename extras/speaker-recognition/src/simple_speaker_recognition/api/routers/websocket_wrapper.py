@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import os
+import wave
 from collections import deque
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -268,10 +270,11 @@ class SpeakerChangeDetector:
 class DeepgramWebSocketProxy:
     """Proxies audio to Deepgram and handles transcription."""
     
-    def __init__(self, api_key: str, on_transcript_callback=None):
+    def __init__(self, api_key: str, on_transcript_callback=None, on_raw_deepgram_callback=None):
         self.api_key = api_key
         self.ws_connection = None
         self.on_transcript = on_transcript_callback
+        self.on_raw_deepgram = on_raw_deepgram_callback
         self.is_connected = False
         
     async def connect(self):
@@ -322,7 +325,11 @@ class DeepgramWebSocketProxy:
                 try:
                     data = json.loads(message)
                     
-                    # Extract transcript
+                    # Forward ALL Deepgram messages raw
+                    if self.on_raw_deepgram:
+                        await self.on_raw_deepgram(data)
+                    
+                    # Extract transcript for our VAD processing (keep existing logic)
                     if "channel" in data:
                         alternatives = data.get("channel", {}).get("alternatives", [])
                         if alternatives and alternatives[0].get("transcript"):
@@ -367,6 +374,9 @@ async def websocket_streaming_with_scd(
     websocket: WebSocket,
     user_id: Optional[int] = Query(default=None, description="User ID for speaker identification"),
     confidence_threshold: float = Query(default=0.15, description="Speaker identification confidence threshold"),
+    utterance_end_ms: int = Query(default=1000, description="How long to wait after silence before completing an utterance (ms)"),
+    endpointing_ms: int = Query(default=300, description="Silence detection timeout for interim results (ms)"),
+    interim_results: bool = Query(default=True, description="Enable interim transcription results"),
     db: UnifiedSpeakerDB = Depends(get_db),
 ):
     """
@@ -391,10 +401,13 @@ async def websocket_streaming_with_scd(
     api_key = None
     if hasattr(websocket, 'scope') and 'subprotocols' in websocket.scope:
         subprotocols = websocket.scope['subprotocols']
+        log.info(f"DEBUG: Received subprotocols: {subprotocols}")
         # Look for 'token' protocol followed by API key
         if len(subprotocols) >= 2 and subprotocols[0] == 'token':
             api_key = subprotocols[1]
             log.info("Extracted Deepgram API key from WebSocket subprotocols")
+    else:
+        log.info("DEBUG: No subprotocols in WebSocket scope")
     
     # Fallback to server default API key
     api_key = api_key or auth.deepgram_api_key
@@ -441,7 +454,18 @@ async def websocket_streaming_with_scd(
             current_transcript.append(data["transcript"])
             log.debug(f"Final transcript: {data['transcript']}")
     
-    deepgram_proxy = DeepgramWebSocketProxy(api_key, on_deepgram_transcript)
+    async def on_raw_deepgram(data: Dict[str, Any]):
+        """Forward all raw Deepgram messages to client."""
+        try:
+            await websocket.send_json({
+                "type": "raw_deepgram",
+                "data": data,
+                "timestamp": asyncio.get_event_loop().time()
+            })
+        except Exception as e:
+            log.warning(f"Failed to send raw Deepgram event: {e}")
+    
+    deepgram_proxy = DeepgramWebSocketProxy(api_key, on_deepgram_transcript, on_raw_deepgram)
     
     # Connect to Deepgram before accepting WebSocket
     try:
@@ -458,27 +482,51 @@ async def websocket_streaming_with_scd(
         return
     
     # NOW accept the WebSocket - everything is ready!
-    await websocket.accept()
+    log.info(f"DEBUG: About to accept WebSocket for user_id: {user_id}")
+    # Accept with subprotocol negotiation (required for browser compatibility)
+    await websocket.accept(subprotocol='token')
     log.info(f"✅ WebSocket connection accepted for user_id: {user_id} - all components ready")
     
     # Track stream start time
     stream_start_time = asyncio.get_event_loop().time()
     
+    # Create debug WAV file
+    debug_dir = "/app/debug"
+    os.makedirs(debug_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    wav_filename = f"{debug_dir}/debug_session_{timestamp}_user{user_id}.wav"
+    
+    # Initialize WAV file (16-bit PCM, 16kHz, mono)
+    wav_file = wave.open(wav_filename, 'wb')
+    wav_file.setnchannels(1)  # mono
+    wav_file.setsampwidth(2)  # 16-bit
+    wav_file.setframerate(16000)  # 16kHz
+    log.info(f"🎙️ Created debug WAV file: {wav_filename}")
+    
     try:
         # Send initial ready event (components already initialized and connected)
-        await websocket.send_json({
-            "type": "ready",
-            "message": "WebSocket ready for audio streaming"
-        })
+        log.info("DEBUG: Sending ready message to client...")
+        try:
+            await websocket.send_json({
+                "type": "ready",
+                "message": "WebSocket ready for audio streaming"
+            })
+            log.info("DEBUG: Ready message sent successfully")
+        except Exception as e:
+            log.error(f"DEBUG: Failed to send ready message: {e}")
+            raise
         
         # Main processing loop
         log.info("Starting main WebSocket processing loop")
         while True:
             try:
-                log.debug("Waiting for audio data from client...")
+                log.info("DEBUG: Waiting for audio data from client...")
                 # Receive audio data from client
                 data = await websocket.receive_bytes()
-                log.debug(f"Received {len(data)} bytes of audio data")
+                log.info(f"DEBUG: Received {len(data)} bytes of audio data")
+                
+                # Write audio data to debug WAV file
+                wav_file.writeframes(data)
                 
                 # Get current time
                 current_time = asyncio.get_event_loop().time() - stream_start_time
@@ -560,8 +608,8 @@ async def websocket_streaming_with_scd(
                     # Send event to client
                     await websocket.send_json(event)
                 
-            except WebSocketDisconnect:
-                log.info("Client disconnected")
+            except WebSocketDisconnect as e:
+                log.info(f"Client disconnected: code={e.code}, reason={e.reason}")
                 break
             except Exception as e:
                 log.error(f"Error processing audio: {e}")
@@ -588,6 +636,14 @@ async def websocket_streaming_with_scd(
     finally:
         # Cleanup
         await deepgram_proxy.disconnect()
+        
+        # Close and finalize debug WAV file
+        try:
+            wav_file.close()
+            log.info(f"🎙️ Closed debug WAV file: {wav_filename}")
+        except Exception as wav_error:
+            log.warning(f"Failed to close WAV file: {wav_error}")
+        
         try:
             if websocket.client_state.name != 'DISCONNECTED':
                 await websocket.close()

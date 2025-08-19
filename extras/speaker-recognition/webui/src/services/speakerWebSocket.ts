@@ -22,9 +22,10 @@ export interface UtteranceBoundaryEvent {
 }
 
 export interface SpeakerWebSocketEvent {
-  type: 'ready' | 'utterance_boundary' | 'error'
+  type: 'ready' | 'utterance_boundary' | 'error' | 'raw_deepgram'
   message?: string
   timestamp?: number
+  data?: any  // For raw_deepgram events
   audio_segment?: {
     start: number
     end: number
@@ -48,6 +49,7 @@ export interface SpeakerWebSocketOptions {
   onReady?: () => void
   onError?: (error: string) => void
   onConnectionStatusChange?: (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void
+  onRawDeepgram?: (data: any) => void
 }
 
 export class SpeakerWebSocketService {
@@ -67,6 +69,7 @@ export class SpeakerWebSocketService {
   }
 
   private setConnectionStatus(status: 'connecting' | 'connected' | 'disconnected' | 'error') {
+    console.log(`🔄 [WS Service] Setting connection status: ${this.connectionStatus} → ${status}`)
     this.connectionStatus = status
     this.options.onConnectionStatusChange?.(status)
   }
@@ -179,6 +182,11 @@ export class SpeakerWebSocketService {
       case 'error':
         console.error('❌ Server error:', data.message)
         this.options.onError?.(data.message || 'Unknown server error')
+        break
+
+      case 'raw_deepgram':
+        console.log('🎤 Raw Deepgram event:', data.data?.type || 'unknown')
+        this.options.onRawDeepgram?.(data.data)
         break
 
       default:

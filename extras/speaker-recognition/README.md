@@ -591,6 +591,95 @@ DELETE /speakers/{speaker_id}
 }
 ```
 
+## WebSocket Streaming API
+
+### Real-time Transcription with Speaker Change Detection
+
+The `/ws/streaming-with-scd` endpoint provides real-time audio processing with comprehensive event forwarding:
+
+**WebSocket URL**: `wss://your-domain/ws/streaming-with-scd?user_id=1&confidence_threshold=0.15`
+
+#### Authentication
+API key passed via WebSocket subprotocols:
+```javascript
+const protocols = ['token', 'your_deepgram_api_key']
+const ws = new WebSocket(url, protocols)
+```
+
+#### Event Types
+
+**Client → Server**:
+- Binary audio data (16-bit PCM, 16kHz, mono)
+
+**Server → Client**:
+
+##### `ready`
+```json
+{
+  "type": "ready",
+  "message": "WebSocket ready for audio streaming"
+}
+```
+
+##### `utterance_boundary` 
+Server-side VAD detected speech segment with speaker identification:
+```json
+{
+  "type": "utterance_boundary",
+  "timestamp": 1234567890,
+  "audio_segment": {
+    "start": 1.2,
+    "end": 3.8,
+    "duration": 2.6
+  },
+  "transcript": "Hello world",
+  "speaker_identification": {
+    "speaker_id": "john_doe",
+    "speaker_name": "John Doe", 
+    "confidence": 0.892,
+    "status": "identified"
+  }
+}
+```
+
+##### `raw_deepgram`
+All Deepgram API responses forwarded transparently:
+```json
+{
+  "type": "raw_deepgram",
+  "data": {
+    // Complete Deepgram WebSocket response
+    "channel": { ... },
+    "is_final": true,
+    "type": "Results"
+  },
+  "timestamp": 1234567890
+}
+```
+
+##### `error`
+```json
+{
+  "type": "error", 
+  "message": "Error description"
+}
+```
+
+#### Features
+
+- **Speaker Change Detection**: Server-side VAD using Pyannote
+- **Real-time Speaker ID**: Identify enrolled speakers automatically  
+- **Complete Deepgram Access**: All Deepgram events forwarded via `raw_deepgram`
+- **Debug Recording**: Server creates WAV files for troubleshooting
+- **HTTPS/WSS Support**: Full browser microphone compatibility
+
+#### Live Inference Modes
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **Live Inference** | WebSocket wrapper with server-side processing | Quick setup, production use |
+| **Live Inference (Complex)** | Direct Deepgram streaming, client-side coordination | Advanced features, maximum control |
+
 ## Integration with Advanced Backend
 
 The advanced backend communicates with this service through the `client.py` module, which provides both async and sync interfaces for backward compatibility.

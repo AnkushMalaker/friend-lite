@@ -53,6 +53,9 @@ export interface UseSpeakerWebSocketReturn {
     sessionDuration: number
     averageConfidence: number
   }
+  
+  // Raw Deepgram access
+  setRawDeepgramCallback: (callback: (data: any) => void) => void
 }
 
 export const useSpeakerWebSocket = (
@@ -152,8 +155,11 @@ export const useSpeakerWebSocket = (
         console.error('❌ Speaker WebSocket error:', error)
       },
       onConnectionStatusChange: (status) => {
+        console.log(`🔄 [WS] Connection status changed: ${status}`)
         setConnectionStatus(status)
-        setIsConnected(status === 'connected')
+        const newConnected = status === 'connected'
+        console.log(`🔄 [WS] Setting isConnected: ${newConnected}`)
+        setIsConnected(newConnected)
       }
     })
   }, [initialOptions, handleUtteranceBoundary])
@@ -185,13 +191,18 @@ export const useSpeakerWebSocket = (
 
   // Start streaming
   const startStreaming = useCallback(() => {
-    if (!isConnected) {
-      console.warn('Cannot start streaming: not connected')
+    const serviceConnected = wsServiceRef.current?.connectionStatus === 'connected'
+    console.log(`🎙️ [WS] Attempting to start streaming - React isConnected: ${isConnected}, Service connected: ${serviceConnected}`)
+    
+    // Check WebSocket service state directly to avoid React state timing issues
+    if (!wsServiceRef.current || !serviceConnected) {
+      console.warn('Cannot start streaming: WebSocket service not connected')
       return
     }
     
     sessionStartRef.current = Date.now()
     setIsStreaming(true)
+    console.log(`🎙️ [WS] Set isStreaming to true`)
     setTranscriptSegments([])
     setStats({
       totalSegments: 0,
@@ -210,12 +221,15 @@ export const useSpeakerWebSocket = (
 
   // Send audio data
   const sendAudio = useCallback((audioData: ArrayBuffer | Uint8Array): boolean => {
-    if (!wsServiceRef.current || !isStreaming) {
+    if (!wsServiceRef.current) {
+      console.warn('❌ [sendAudio] No WebSocket service')
       return false
     }
     
+    // Let the WebSocket service handle streaming state checks internally
+    // Removed React state dependency to avoid timing issues
     return wsServiceRef.current.sendAudio(audioData)
-  }, [isStreaming])
+  }, []) // No dependencies - avoid React state timing issues
 
   // Clear transcripts
   const clearTranscripts = useCallback(() => {
@@ -233,6 +247,13 @@ export const useSpeakerWebSocket = (
   const updateSettings = useCallback((settings: Partial<SpeakerWebSocketOptions>) => {
     if (wsServiceRef.current) {
       wsServiceRef.current.updateOptions(settings)
+    }
+  }, [])
+
+  // Set raw Deepgram callback
+  const setRawDeepgramCallback = useCallback((callback: (data: any) => void) => {
+    if (wsServiceRef.current) {
+      wsServiceRef.current.updateOptions({ onRawDeepgram: callback })
     }
   }, [])
 
@@ -264,6 +285,9 @@ export const useSpeakerWebSocket = (
     updateSettings,
     
     // Statistics
-    stats
+    stats,
+    
+    // Raw Deepgram access
+    setRawDeepgramCallback
   }
 }

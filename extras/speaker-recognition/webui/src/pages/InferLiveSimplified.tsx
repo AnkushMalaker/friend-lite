@@ -18,6 +18,10 @@ export default function InferLiveSimplified() {
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
+  
+  // Refs to track real-time state for audio processor (avoids closure capture issues)
+  const isConnectedRef = useRef(false)
+  const isStreamingRef = useRef(false)
 
   // Use Deepgram session for API key management
   const deepgramSession = useDeepgramSession()
@@ -33,6 +37,12 @@ export default function InferLiveSimplified() {
     deepgramApiKey: deepgramSession.deepgramApiKey || undefined,
   })
 
+  // Keep refs updated with current state (for audio processor real-time access)
+  useEffect(() => {
+    isConnectedRef.current = speakerWS.isConnected
+    isStreamingRef.current = speakerWS.isStreaming
+  }, [speakerWS.isConnected, speakerWS.isStreaming])
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -41,13 +51,23 @@ export default function InferLiveSimplified() {
     }
   }, [])
 
-  // Update WebSocket settings when they change
+  // Update WebSocket settings when they change (but avoid unnecessary updates)
   useEffect(() => {
-    speakerWS.updateSettings({
-      userId: user?.id,
-      confidenceThreshold,
-      deepgramApiKey: deepgramSession.deepgramApiKey || undefined,
-    })
+    // Only update if we have a user and WebSocket is initialized
+    if (user?.id && deepgramSession.deepgramApiKey) {
+      console.log('🔧 [Settings] Updating WebSocket settings:', { 
+        userId: user.id, 
+        confidenceThreshold, 
+        hasApiKey: !!deepgramSession.deepgramApiKey,
+        isConnected: speakerWS.isConnected,
+        isStreaming: speakerWS.isStreaming
+      })
+      speakerWS.updateSettings({
+        userId: user?.id,
+        confidenceThreshold,
+        deepgramApiKey: deepgramSession.deepgramApiKey || undefined,
+      })
+    }
   }, [user?.id, confidenceThreshold, deepgramSession.deepgramApiKey])
 
   const startAudioCapture = async () => {
@@ -77,7 +97,10 @@ export default function InferLiveSimplified() {
       const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1)
 
       processor.onaudioprocess = (event) => {
-        if (speakerWS.isConnected && speakerWS.isStreaming) {
+        // Use refs for real-time state (avoids React closure capture issues)
+        const shouldSend = isConnectedRef.current && isStreamingRef.current
+        
+        if (shouldSend) {
           const inputBuffer = event.inputBuffer
           const inputData = inputBuffer.getChannelData(0)
 
@@ -89,7 +112,17 @@ export default function InferLiveSimplified() {
           }
 
           // Send audio to WebSocket
-          speakerWS.sendAudio(int16Buffer.buffer)
+          const success = speakerWS.sendAudio(int16Buffer.buffer)
+          if (success) {
+            // Only log successful sends to reduce spam
+            if (Math.random() < 0.01) { // Log ~1% of sends
+              console.log(`🎙️ [AUDIO] Sending ${int16Buffer.buffer.byteLength} bytes to WebSocket`)
+            }
+          } else {
+            console.warn('❌ [AUDIO] Failed to send audio data')
+          }
+        } else if (Math.random() < 0.1) { // Log ~10% of failed attempts to reduce spam
+          console.warn(`⚠️ [AUDIO] Not sending audio - connected: ${isConnectedRef.current}, streaming: ${isStreamingRef.current}`)
         }
       }
 
@@ -209,9 +242,9 @@ export default function InferLiveSimplified() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Live Inference (Simplified)</h1>
-          <p className="text-gray-600">Real-time transcription with speaker change detection</p>
-          <p className="text-sm text-blue-600">Uses server-side VAD processing - much simpler!</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Live Inference</h1>
+          <p className="text-gray-600">Real-time transcription with server-side processing</p>
+          <p className="text-sm text-gray-500">Server handles audio processing, VAD, and speaker identification</p>
         </div>
       </div>
 
@@ -311,7 +344,7 @@ export default function InferLiveSimplified() {
       <div className="bg-white border rounded-lg">
         <div className="p-4 border-b">
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Live Transcription</h3>
-          <p className="text-sm text-gray-500">Speaker boundaries detected server-side using Pyannote VAD</p>
+          <p className="text-sm text-gray-500">Utterance boundaries detected using server-side VAD processing</p>
         </div>
         <div className="p-4 space-y-4 max-h-96 overflow-y-auto">
           {speakerWS.transcriptSegments.length === 0 ? (
