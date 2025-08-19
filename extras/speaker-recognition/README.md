@@ -16,7 +16,16 @@ cp .env.template .env
 ```
 Get your HF token from https://huggingface.co/settings/tokens
 
-### 2. Start the system
+### 2. Choose CPU or GPU setup
+```bash
+# For CPU-only (lighter, works on any machine)
+uv sync --group cpu
+
+# For GPU acceleration (requires NVIDIA GPU + CUDA)
+uv sync --group gpu
+```
+
+### 3. Start the system
 ```bash
 cd extras/speaker-recognition
 docker-compose up --build -d
@@ -50,6 +59,7 @@ This starts two services:
 - **Multi-user Support**: Each user manages their own speaker data
 - **SQLite Database**: Local storage for annotations, speakers, and sessions  
 - **Quality Assessment**: Automatic audio quality scoring with recommendations
+- **CPU/GPU Support**: Flexible deployment with dedicated dependency groups
 - **Export Formats**: 
   - Concatenated audio (max 10min per file)
   - Segmented files: `./exported_data/speaker-1/audio001.wav`
@@ -834,8 +844,13 @@ The advanced backend communicates with this service through the `client.py` modu
 
 ## Performance Notes
 
-- First inference may be slow due to model loading
-- GPU memory usage scales with model size (~2-4GB)
+### CPU vs GPU Performance
+- **CPU Mode**: Slower inference (~10-30s for enrollment), smaller memory footprint (~2-4GB)
+- **GPU Mode**: Faster inference (~2-5s for enrollment), requires NVIDIA GPU with CUDA (~4-8GB VRAM)
+- **Model Loading**: First inference may be slow due to model loading (both modes)
+- **Deployment**: Use CPU mode for CI/testing, GPU mode for production workloads
+
+### General Performance
 - Audio files should be accessible from both services (use shared volumes)
 - Microphone recording dynamically detects browser sample rate (typically 44.1kHz or 48kHz) for optimal compatibility
 - Microphone recording requires `pyaudio` and proper audio device setup 

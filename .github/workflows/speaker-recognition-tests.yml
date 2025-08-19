@@ -50,7 +50,7 @@ jobs:
     - name: Install dependencies with uv
       run: |
         cd extras/speaker-recognition
-        uv sync --dev
+        uv sync --group cpu --group test
         
     - name: Set up environment variables
       env:
