@@ -29,7 +29,7 @@ ARG COMPUTE_MODE=cpu
 RUN if [ "$COMPUTE_MODE" = "gpu" ]; then \
         uv sync --no-default-groups --group gpu; \
     else \
-        uv sync --group cpu; \
+        uv sync --no-default-groups --group cpu; \
     fi
 
 # Create directories
