@@ -26,8 +26,7 @@ COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 # Install dependencies and package  
 # Use build arg to control CPU vs GPU mode
 ARG COMPUTE_MODE=cpu
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$COMPUTE_MODE" = "gpu" ]; then \
+RUN if [ "$COMPUTE_MODE" = "gpu" ]; then \
         uv sync --no-default-groups --group gpu; \
     else \
         uv sync --group cpu; \
