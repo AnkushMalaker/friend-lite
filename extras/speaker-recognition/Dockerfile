@@ -23,9 +23,14 @@ COPY uv.lock ./
 RUN mkdir -p src/simple_speaker_recognition
 COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 
-# Install dependencies and package
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev
+# Install dependencies and package  
+# Use build arg to control CPU vs GPU mode
+ARG COMPUTE_MODE=cpu
+RUN if [ "$COMPUTE_MODE" = "gpu" ]; then \
+        uv sync --no-default-groups --group gpu; \
+    else \
+        uv sync --no-default-groups --group cpu; \
+    fi
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /app/data /models

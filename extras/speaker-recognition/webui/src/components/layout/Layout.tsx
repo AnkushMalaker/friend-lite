@@ -16,8 +16,8 @@ export default function Layout({ children }: LayoutProps) {
     { path: '/enrollment', label: 'Enrollment', icon: User },
     { path: '/speakers', label: 'Speakers', icon: Users },
     { path: '/inference', label: 'Inference', icon: Brain },
-    { path: '/infer-live', label: 'Live Inference', icon: Radio },
-    { path: '/infer-live-simple', label: 'Live Inference (Simple)', icon: Wifi },
+    { path: '/infer-live', label: 'Live Inference (Complex)', icon: Radio },
+    { path: '/infer-live-simple', label: 'Live Inference', icon: Wifi },
   ]
 
   return (
