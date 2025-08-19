@@ -1,6 +1,5 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { UserProvider } from './contexts/UserContext'
-import { ThemeProvider } from './contexts/ThemeContext'
 import Layout from './components/layout/Layout'
 import AudioViewer from './pages/AudioViewer'
 import Annotation from './pages/Annotation'
@@ -13,24 +12,22 @@ import './App.css'
 
 function App() {
   return (
-    <ThemeProvider>
-      <UserProvider>
-        <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<AudioViewer />} />
-              <Route path="/audio" element={<AudioViewer />} />
-              <Route path="/annotation" element={<Annotation />} />
-              <Route path="/enrollment" element={<Enrollment />} />
-              <Route path="/speakers" element={<Speakers />} />
-              <Route path="/inference" element={<Inference />} />
-              <Route path="/infer-live" element={<InferLive />} />
-              <Route path="/infer-live-simple" element={<InferLiveSimplified />} />
-            </Routes>
-          </Layout>
-        </Router>
-      </UserProvider>
-    </ThemeProvider>
+    <UserProvider>
+      <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<AudioViewer />} />
+            <Route path="/audio" element={<AudioViewer />} />
+            <Route path="/annotation" element={<Annotation />} />
+            <Route path="/enrollment" element={<Enrollment />} />
+            <Route path="/speakers" element={<Speakers />} />
+            <Route path="/inference" element={<Inference />} />
+            <Route path="/infer-live" element={<InferLive />} />
+            <Route path="/infer-live-simple" element={<InferLiveSimplified />} />
+          </Routes>
+        </Layout>
+      </Router>
+    </UserProvider>
   )
 }
 

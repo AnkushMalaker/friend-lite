@@ -43,9 +43,9 @@ class YouTubeTranscriber:
         try:
             self.logger.info(f"Starting audio download from: {url}")
             
-            # Configure yt-dlp options for audio extraction
+            # Configure yt-dlp options for audio extraction with fallback formats
             ydl_opts = {
-                'format': 'bestaudio',
+                'format': 'bestaudio/best',  # Fallback to best if bestaudio fails
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'wav',
@@ -54,6 +54,7 @@ class YouTubeTranscriber:
                 'postprocessor_args': ['-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le'],
                 'outtmpl': '%(title)s.%(ext)s',
                 'quiet': True,
+                'ignoreerrors': False,
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -136,7 +137,7 @@ class YouTubeTranscriber:
             self.logger.error(f"Audio segmentation failed for {audio_path}: {str(e)}", exc_info=True)
             raise
     
-    async def transcribe_audio(self, audio_path: str, use_cache: bool = True) -> dict:
+    def transcribe_audio(self, audio_path: str, use_cache: bool = True, diarize: bool = True) -> dict:
         """Transcribe audio using Deepgram Nova-3 with diarization, with caching support"""
         try:
             # Validate file exists and is readable
@@ -150,12 +151,12 @@ class YouTubeTranscriber:
             # Create parameters for cache key
             api_params = {
                 "model": "nova-3",
-                "diarize": True,
+                "diarize": diarize,
                 "multichannel": False,
                 "smart_format": True,
                 "punctuate": True,
                 "language": self.options.get("language", "multi"),
-                "utterances": True,
+                "utterances": diarize,  # Only use utterances if diarizing
                 "paragraphs": True,
             }
             
@@ -180,24 +181,26 @@ class YouTubeTranscriber:
             with open(audio_path, "rb") as audio_file:
                 buffer_data = audio_file.read()
             
-            # Create FileSource payload as dictionary
-            payload = {"buffer": buffer_data}
+            # Create proper source object for Deepgram SDK
+            source = {"buffer": buffer_data}
             
             options = PrerecordedOptions(
                 model="nova-3",
-                diarize=True,
+                diarize=diarize,
                 multichannel=False,  # Changed to False since we're using mono audio
                 smart_format=True,
                 punctuate=True,
                 language=self.options.get("language", "multi"),
-                utterances=True,
+                utterances=diarize,  # Only use utterances if diarizing
                 paragraphs=True,
             )
             
             self.logger.info(f"💸 Making Deepgram API call for {audio_path} (no cache found)")
             
-            # Use the current API method (remove deprecated v("1"))
-            response = await self.deepgram.listen.asyncprerecorded.transcribe_file(payload, options)
+            # Use the correct API method for latest SDK - sync version
+            response = self.deepgram.listen.rest.v("1").transcribe_file(
+                source=source, options=options
+            )
             
             if response and hasattr(response, 'results'):
                 self.logger.info(f"Transcription completed successfully for {audio_path}")
@@ -396,7 +399,7 @@ class YouTubeTranscriber:
             
             print(f"Transcribing segment {i}/{len(segments)}: {segment_path}")
             
-            response = await self.transcribe_audio(segment_path)
+            response = self.transcribe_audio(segment_path)
             
             if response:
                 # Save raw JSON

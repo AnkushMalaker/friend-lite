@@ -1,99 +1,294 @@
-## iOS Installation
+# Friend-Lite Mobile App
 
-### Method 1: Using Xcode (Development)
-1. Navigate to the `app` folder
-2. Run prebuild command:
-   ```bash
-   npx expo prebuild --clean
-   ```
-3. Navigate to the `ios` folder
-4. Install iOS dependencies:
-   ```bash
-   pod install
-   ```
-5. Open `friendlite.xcworkspace` in Xcode
-6. Build and run the app from Xcode
+React Native mobile application for connecting OMI devices and streaming audio to Friend-Lite backends. Supports cross-platform deployment on iOS and Android with Bluetooth integration.
 
-### Method 2: Using Expo CLI (Recommended)
-1. Navigate to the `app` folder
-2. Clean and prebuild the project:
-   ```bash
-   npx expo prebuild --clean
-   ```
-3. Install Expo development client:
-   ```bash
-   npx expo install expo-dev-client
-   ```
-4. Start the development server:
-   ```bash
-   npx expo start --dev-client
-   ```
-5. Run on iOS device:
-   ```bash
-   npx expo run:ios --device
-   ```
+## Features
 
-## Android Installation
+- **OMI Device Integration**: Connect via Bluetooth and stream audio
+- **Cross-Platform**: iOS and Android support using React Native
+- **Real-time Audio Streaming**: OPUS audio transmission to backend services
+- **WebSocket Communication**: Efficient real-time data transfer
+- **Backend Selection**: Configure connection to any compatible backend
 
-Follow the same Expo CLI procedure as iOS Method 2 above, but use the Android run command:
+## Quick Start
+
+### Prerequisites
+
+- Node.js 18+ and npm installed
+- Expo CLI: `npm install -g @expo/cli`
+- **iOS**: Xcode and iOS Simulator or physical iOS device
+- **Android**: Android Studio and Android device/emulator
+
+### Installation
+
 ```bash
+# Navigate to app directory
+cd app
+
+# Install dependencies
+npm install
+
+# Start development server
+npm start
+```
+
+## Platform-Specific Setup
+
+### iOS Development
+
+#### Method 1: Expo Development Build (Recommended)
+
+```bash
+# Clean and prebuild
+npx expo prebuild --clean
+
+# Install development client
+npx expo install expo-dev-client
+
+# Start development server
+npx expo start --dev-client
+
+# Run on iOS device
+npx expo run:ios --device
+```
+
+#### Method 2: Xcode Development
+
+```bash
+# Prebuild for iOS
+npx expo prebuild --clean
+
+# Install iOS dependencies
+cd ios && pod install && cd ..
+
+# Open in Xcode
+open ios/friendlite.xcworkspace
+```
+
+Build and run from Xcode interface.
+
+### Android Development
+
+```bash
+# Build and run on Android device
 npx expo run:android --device
 ```
 
-### Android Network Configuration
+#### Android Network Configuration
 
-After building, you'll need to configure network permissions for local development:
+For local development, configure network permissions:
 
-1. The build process generates `android/app/src/main/AndroidManifest.xml`
-2. Add `usesCleartextTraffic="true"` to the application tag for local development:
-   ```xml
-   <application
-       android:usesCleartextTraffic="true"
-       ... >
-   ```
-   **Security Note**: This allows unencrypted HTTP traffic and should only be used for development with local servers.
+**Development (Local Backend):**
+Add to `android/app/src/main/AndroidManifest.xml`:
+```xml
+<application
+    android:usesCleartextTraffic="true"
+    ... >
+```
 
-### Production Network Security (Android)
+**Production (HTTPS Backend):**
+Create `android/app/src/main/res/xml/network_security_config.xml`:
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">your-backend-domain.com</domain>
+    </domain-config>
+</network-security-config>
+```
 
-For production deployments, use a more secure network configuration:
+Reference in `AndroidManifest.xml`:
+```xml
+<application
+    android:networkSecurityConfig="@xml/network_security_config"
+    ... >
+```
 
-1. Create `android/app/src/main/res/xml/network_security_config.xml`:
-   ```xml
-   <?xml version="1.0" encoding="utf-8"?>
-   <network-security-config>
-       <domain-config cleartextTrafficPermitted="true">
-           <domain includeSubdomains="true">your-domain.com</domain>
-       </domain-config>
-   </network-security-config>
-   ```
+## Backend Configuration
 
-2. Reference the config in your `AndroidManifest.xml`:
-   ```xml
-   <application
-       android:networkSecurityConfig="@xml/network_security_config"
-       ... >
-   ```
+### Supported Backends
 
-Replace `your-domain.com` with your actual domain name.
+The app connects to any backend that accepts OPUS audio streams:
 
+1. **Simple Backend** (`backends/simple/`)
+   - Basic audio capture and storage
+   - Good for testing and development
+   - WebSocket endpoint: `/ws`
 
-# URL to put
-The URL you need to put in the APP is any backend that accepts OPUS audio in bytes.
-Currently, there are two backends provided in this repository:
-1. `backends/simple-backend` - This is good for getting started, it simply saves the audio from the app into the backend - you can listen to it and verify if everything sounds good.
-2. `backends/advanced-backend` - This is a more "complete" backend that provides the essentials. A database (mongodb) to store transcripts, a STT (speech to text) connection to transform the audio to transcripts, an LLM connection via ollama to store "memories" from transcripts, etc. 
+2. **Advanced Backend** (`backends/advanced-backend/`)
+   - Full transcription and memory features
+   - Real-time processing with speaker recognition
+   - WebSocket endpoint: `/ws_pcm`
 
-Once you start them (instructions should be in their respective readme), you need to do one of two things:
-1. Directly put the local/public IP of the machine where you're hosting the backend. 
-2. Expose the IP via something like ngrok/cloudflare over https 
-For example with ngrok, do:
-`ngrok http 8000`  
-(or if you did docker compose up, you can go to "http://machine-ip:4040/status). This will give you a URL. 
-You need to paste 
+### Connection Setup
 
-`<THAT URL>/ws`
+#### Local Development
+```
+Backend URL: ws://[machine-ip]:8000/ws_pcm
+Example: ws://192.168.1.100:8000/ws_pcm
+```
 
-into the app.
-;_;
-Yeah its ugly 
+#### Public Access (Production)
+Use ngrok or similar tunneling service:
 
+```bash
+# Start ngrok tunnel
+ngrok http 8000
+
+# Use provided URL in app
+Backend URL: wss://[ngrok-subdomain].ngrok.io/ws_pcm
+```
+
+### Configuration Steps
+
+1. **Start your chosen backend** (see backend-specific README)
+2. **Open the mobile app**
+3. **Navigate to Settings**
+4. **Enter Backend URL**:
+   - Local: `ws://[your-ip]:8000/ws_pcm`
+   - Public: `wss://[your-domain]/ws_pcm`
+5. **Save configuration**
+
+## User Workflow
+
+### Device Connection
+
+1. **Enable Bluetooth** on your mobile device
+2. **Open Friend-Lite app**
+3. **Pair OMI device**:
+   - Go to Device Settings
+   - Scan for nearby OMI devices
+   - Select your device from the list
+   - Complete pairing process
+
+### Audio Streaming
+
+1. **Configure backend connection** (see Configuration Steps above)
+2. **Test connection**:
+   - Tap "Test Connection" in settings
+   - Verify green status indicator
+3. **Start recording**:
+   - Press record button in main interface
+   - Speak into OMI device
+   - Audio streams to backend in real-time
+
+### Monitoring
+
+1. **Check connection status** in app header
+2. **View real-time indicators**:
+   - Audio level meters
+   - Connection status
+   - Battery level (if supported)
+3. **Access backend dashboard** for processed results
+
+## Troubleshooting
+
+### Common Issues
+
+**Bluetooth Connection Problems:**
+- Ensure OMI device is in pairing mode
+- Reset Bluetooth on mobile device
+- Clear app cache and restart
+- Check device compatibility
+
+**Audio Streaming Issues:**
+- Verify backend URL format (include `ws://` or `wss://`)
+- Check network connectivity
+- Test with simple backend first
+- Monitor backend logs for connection attempts
+
+**Build Errors:**
+- Clear Expo cache: `npx expo start --clear`
+- Clean prebuild: `npx expo prebuild --clean`
+- Reinstall dependencies: `rm -rf node_modules && npm install`
+
+### Debug Mode
+
+Enable detailed logging:
+1. Go to app Settings
+2. Enable "Debug Mode"
+3. View console logs for connection details
+
+### Network Testing
+
+Test backend connectivity:
+```bash
+# Test WebSocket endpoint
+curl -i -N -H "Connection: Upgrade" \
+     -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Key: test" \
+     -H "Sec-WebSocket-Version: 13" \
+     http://[backend-ip]:8000/ws_pcm
+```
+
+## Development
+
+### Project Structure
+```
+app/
+├── src/
+│   ├── components/     # React Native components
+│   ├── screens/        # App screens
+│   ├── services/       # WebSocket and Bluetooth services
+│   └── utils/          # Helper utilities
+├── app.json           # Expo configuration
+└── package.json       # Dependencies
+```
+
+### Key Dependencies
+- **React Native**: Cross-platform mobile framework
+- **Expo**: Development and build toolchain
+- **React Native Bluetooth**: OMI device communication
+- **WebSocket**: Real-time backend communication
+
+### Building for Production
+
+#### iOS App Store
+```bash
+# Build for iOS
+npx expo build:ios
+
+# Follow Expo documentation for App Store submission
+```
+
+#### Android Play Store
+```bash
+# Build for Android
+npx expo build:android
+
+# Generate signed APK for distribution
+```
+
+## Integration Examples
+
+### WebSocket Communication
+```javascript
+// Connect to backend
+const ws = new WebSocket('ws://backend-url:8000/ws_pcm');
+
+// Send audio data
+ws.send(audioBuffer);
+
+// Handle responses
+ws.onmessage = (event) => {
+  // Process transcription or acknowledgment
+};
+```
+
+### Bluetooth Audio Capture
+```javascript
+// Start audio streaming from OMI device
+await BluetoothService.startAudioStream();
+
+// Handle audio data
+BluetoothService.onAudioData = (audioBuffer) => {
+  websocket.send(audioBuffer);
+};
+```
+
+## Related Documentation
+
+- **[Backend Setup](../backends/)**: Choose and configure backend services
+- **[Quick Start Guide](../quickstart.md)**: Complete system setup
+- **[Advanced Backend](../backends/advanced-backend/)**: Full-featured backend option
+- **[Simple Backend](../backends/simple/)**: Basic backend for testing

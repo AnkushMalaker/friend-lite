@@ -138,9 +138,35 @@ export function useSpeakerIdentification(
 
   const processAudio = useCallback(async (
     audio: ProcessedAudio,
-    mode?: ProcessingMode
+    modeOrOptions?: ProcessingMode | Partial<ProcessingOptions>
   ): Promise<ProcessingResult | null> => {
-    const processingMode = mode || currentMode
+    // Handle both old signature (mode) and new signature (options)
+    let processingOptions: ProcessingOptions
+    if (typeof modeOrOptions === 'string') {
+      // Legacy mode parameter
+      processingOptions = {
+        mode: modeOrOptions,
+        userId: user?.id,
+        confidenceThreshold,
+        minDuration: 1.0,
+        identifyOnlyEnrolled: false,
+        enhanceSpeakers: true
+      }
+    } else {
+      // New options object
+      const options = modeOrOptions || {}
+      processingOptions = {
+        mode: options.mode || currentMode,
+        userId: user?.id,
+        confidenceThreshold,
+        minDuration: 1.0,
+        identifyOnlyEnrolled: false,
+        enhanceSpeakers: true,
+        ...options
+      }
+    }
+
+    const processingMode = processingOptions.mode
 
     try {
       setIsProcessing(true)
@@ -149,38 +175,29 @@ export function useSpeakerIdentification(
       // Create abort controller for this operation
       processingAbortController.current = new AbortController()
 
-      // Prepare processing options
-      const processingOptions: ProcessingOptions = {
-        mode: processingMode,
-        userId: user?.id,
-        confidenceThreshold,
-        minDuration: 1.0,
-        identifyOnlyEnrolled: false,
-        enhanceSpeakers: true
-      }
-
       // Update progress based on mode
-      const progressMessages = {
-        diarization: 'Analyzing speakers...',
-        deepgram: 'Transcribing with Deepgram...',
-        hybrid: 'Processing hybrid mode...',
-        plain: 'Performing plain diarization...'
+      const progressMessages: Record<string, string> = {
+        'diarization-only': 'Performing diarization...',
+        'speaker-identification': 'Analyzing speakers...',
+        'deepgram-enhanced': 'Transcribing with Deepgram...',
+        'deepgram-transcript-internal-speakers': 'Processing hybrid mode...',
+        'diarize-identify-match': 'Matching transcript to speakers...'
       }
-      setProcessingProgress(progressMessages[processingMode])
+      setProcessingProgress(progressMessages[processingMode] || 'Processing audio...')
 
       // Ensure we have a valid file
       if (!audio.file) {
         throw new Error('ProcessedAudio object is missing the file property')
       }
 
-      // Process audio
+      // Process audio with all options
       const result = await speakerIdentificationService.processAudio(
         audio.file,
         processingOptions
       )
 
       // Add to results
-      setResults(prev => [result, ...prev])
+      setResults((prev: ProcessingResult[]) => [result, ...prev])
       setSelectedResult(result)
 
       // Call completion callback
@@ -212,7 +229,7 @@ export function useSpeakerIdentification(
         error: error.message
       }
       
-      setResults(prev => [failedResult, ...prev])
+      setResults((prev: ProcessingResult[]) => [failedResult, ...prev])
       return null
 
     } finally {

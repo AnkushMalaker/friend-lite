@@ -21,6 +21,8 @@ export interface UseDeepgramIntegrationOptions {
   userId?: number
   confidenceThreshold?: number
   enableSpeakerIdentification?: boolean
+  utteranceEndMs?: number
+  endpointingMs?: number
   onTransript?: (transcript: StreamingTranscript) => void
   onSpeechStarted?: (event: SpeechStartedEvent) => void
   onUtteranceEnd?: (event: UtteranceEndEvent) => void
@@ -74,6 +76,10 @@ export interface UseDeepgramIntegrationReturn {
   setConfidenceThreshold: (threshold: number) => void
   enableSpeakerIdentification: boolean
   setEnableSpeakerIdentification: (enabled: boolean) => void
+  utteranceEndMs: number
+  setUtteranceEndMs: (ms: number) => void
+  endpointingMs: number
+  setEndpointingMs: (ms: number) => void
   
   // Statistics
   stats: {
@@ -92,6 +98,8 @@ export const useDeepgramIntegration = (
     userId,
     confidenceThreshold: initialConfidence = 0.15,
     enableSpeakerIdentification: initialEnableId = true,
+    utteranceEndMs: initialUtteranceEndMs = 1000,
+    endpointingMs: initialEndpointingMs = 300,
     onTransript,
     onSpeechStarted,
     onUtteranceEnd,
@@ -118,6 +126,8 @@ export const useDeepgramIntegration = (
   // Settings
   const [confidenceThreshold, setConfidenceThreshold] = useState(initialConfidence)
   const [enableSpeakerIdentification, setEnableSpeakerIdentification] = useState(initialEnableId)
+  const [utteranceEndMs, setUtteranceEndMs] = useState(initialUtteranceEndMs)
+  const [endpointingMs, setEndpointingMs] = useState(initialEndpointingMs)
   
   // Sample rate management
   const [actualSampleRate, setActualSampleRate] = useState<number>(16000)
@@ -236,8 +246,8 @@ export const useDeepgramIntegration = (
         sample_rate: actualSampleRate,
         interim_results: true,
         vad_events: true,
-        utterance_end_ms: 1000,
-        endpointing: 300
+        utterance_end_ms: utteranceEndMs,
+        endpointing: endpointingMs
       }
 
       deepgramRef.current = new DeepgramStreaming(config)
@@ -530,6 +540,10 @@ export const useDeepgramIntegration = (
     setConfidenceThreshold,
     enableSpeakerIdentification,
     setEnableSpeakerIdentification,
+    utteranceEndMs,
+    setUtteranceEndMs,
+    endpointingMs,
+    setEndpointingMs,
     
     // Statistics
     stats

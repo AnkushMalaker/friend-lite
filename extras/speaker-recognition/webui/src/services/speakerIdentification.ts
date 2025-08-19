@@ -32,6 +32,8 @@ export interface ProcessingOptions {
   identifyOnlyEnrolled?: boolean
   enhanceSpeakers?: boolean
   transcriptData?: any  // For diarize-identify-match mode
+  collar?: number  // Collar duration for merging segments
+  minDurationOff?: number  // Minimum silence duration for boundaries
 }
 
 export interface ProcessingResult {
@@ -109,14 +111,20 @@ export class SpeakerIdentificationService {
 
     } catch (error) {
       // Provide more helpful error messages based on the error type
-      let errorMessage = `Processing failed: ${error.message}`
+      let errorMessage = `Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       
       if (error.message?.includes('500') || error.message?.includes('Internal Server Error')) {
         errorMessage = `Server error during ${options.mode} processing. This might be due to a backend issue. Please try again or contact support.`
       } else if (error.message?.includes('404') || error.message?.includes('Not Found')) {
         errorMessage = `Processing endpoint not available. The ${options.mode} mode might not be fully implemented yet.`
+      } else if (error.message?.includes('400') || error.message?.includes('Bad Request')) {
+        errorMessage = `Bad request during ${options.mode} processing. This might be due to invalid audio format or missing transcript data. Please check your input files.`
       } else if (error.message?.includes('timeout')) {
         errorMessage = `Processing timed out. The audio file might be too large or the server is busy. Please try a shorter audio file.`
+      } else if (error.message?.includes('transcript data is required')) {
+        errorMessage = `Transcript data is required for ${options.mode} mode. Please upload a Deepgram JSON file first.`
+      } else if (error.message?.includes('Failed to transform Deepgram data')) {
+        errorMessage = `Invalid Deepgram JSON format. Please ensure you've uploaded a valid Deepgram API response file.`
       }
       
       throw new Error(errorMessage)
@@ -346,7 +354,9 @@ export class SpeakerIdentificationService {
         identify_only_enrolled: (options.identifyOnlyEnrolled || false).toString(),
         ...(options.userId && { user_id: options.userId.toString() }),
         ...(options.minSpeakers && { min_speakers: options.minSpeakers.toString() }),
-        ...(options.maxSpeakers && { max_speakers: options.maxSpeakers.toString() })
+        ...(options.maxSpeakers && { max_speakers: options.maxSpeakers.toString() }),
+        ...(options.collar !== undefined && { collar: options.collar.toString() }),
+        ...(options.minDurationOff !== undefined && { min_duration_off: options.minDurationOff.toString() })
       }
 
       // Ensure we have a valid file
@@ -413,9 +423,12 @@ export class SpeakerIdentificationService {
         throw new Error('Transcript data is required for diarize-identify-match mode')
       }
 
+      // Transform Deepgram JSON to expected format
+      const transformedTranscriptData = this.transformDeepgramForDiarizeMatch(options.transcriptData)
+
       const formData = new FormData()
       formData.append('file', audioFile)
-      formData.append('transcript_data', JSON.stringify(options.transcriptData))
+      formData.append('transcript_data', transformedTranscriptData)
       
       // Add speaker processing parameters
       if (options.userId) {
@@ -432,6 +445,12 @@ export class SpeakerIdentificationService {
       }
       if (options.maxSpeakers !== undefined) {
         formData.append('max_speakers', options.maxSpeakers.toString())
+      }
+      if (options.collar !== undefined) {
+        formData.append('collar', options.collar.toString())
+      }
+      if (options.minDurationOff !== undefined) {
+        formData.append('min_duration_off', options.minDurationOff.toString())
       }
 
       const response = await apiService.post('/v1/diarize-identify-match', formData, {
@@ -507,6 +526,43 @@ export class SpeakerIdentificationService {
         description: 'Match existing transcript to internal diarization + speaker identification'
       }
     ]
+  }
+
+  /**
+   * Transform Deepgram JSON to the format expected by diarize-identify-match API
+   */
+  private transformDeepgramForDiarizeMatch(deepgramData: any): string {
+    try {
+      // Extract words from Deepgram format: results.channels[0].alternatives[0].words
+      let words: Array<{word: string, start: number, end: number}> = []
+      let fullText = ""
+      
+      if (deepgramData?.results?.channels?.[0]?.alternatives?.[0]) {
+        const alternative = deepgramData.results.channels[0].alternatives[0]
+        
+        // Extract words with timestamps
+        if (alternative.words) {
+          words = alternative.words.map((wordData: any) => ({
+            word: wordData.word || wordData.punctuated_word || '',
+            start: parseFloat(wordData.start || 0),
+            end: parseFloat(wordData.end || 0)
+          })).filter((word: any) => word.word) // Remove empty words
+        }
+        
+        // Extract full transcript
+        fullText = alternative.transcript || ''
+      }
+      
+      // Format for backend API
+      const formattedData = {
+        words: words,
+        text: fullText
+      }
+      
+      return JSON.stringify(formattedData)
+    } catch (error) {
+      throw new Error(`Failed to transform Deepgram data: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   /**

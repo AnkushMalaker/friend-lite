@@ -454,7 +454,7 @@ export default function EmbeddingPlot({
     <div className={compact ? "space-y-4" : "space-y-6"}>
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h3 className={`${compact ? 'text-md' : 'text-lg'} font-semibold text-gray-900`}>
+        <h3 className={`${compact ? 'text-md' : 'text-lg'} font-semibold text-primary`}>
           {title || '📊 Embedding Analysis'}
         </h3>
         <div className="flex space-x-2">
@@ -505,7 +505,7 @@ export default function EmbeddingPlot({
 
       {/* Settings Panel */}
       {showSettings && (
-        <div className="bg-gray-50 border rounded-lg p-4">
+        <div className="card-secondary border border-gray-200 dark:border-gray-700 p-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -582,7 +582,7 @@ export default function EmbeddingPlot({
 
       {/* Error State */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
           <div className="flex items-center space-x-2">
             <Info className="h-5 w-5 text-red-600" />
             <div>
@@ -602,7 +602,7 @@ export default function EmbeddingPlot({
       )}
 
       {/* Main Plot */}
-      <div className="bg-white border rounded-lg p-4">
+      <div className="card p-4">
         <div ref={plotRef} style={{ width: '100%', height: compact ? '400px' : '500px' }} />
       </div>
 
@@ -610,7 +610,7 @@ export default function EmbeddingPlot({
       {analysisData && (
         <div className={`grid grid-cols-1 ${dataSource.type === 'combined' ? 'lg:grid-cols-4' : dataSource.type === 'segments' ? 'lg:grid-cols-3' : 'lg:grid-cols-2'} gap-6`}>
           {/* Clustering Info */}
-          <div className="bg-white border rounded-lg p-4">
+          <div className="card p-4">
             <h4 className="text-md font-semibold text-gray-900 mb-3">🔍 Clustering Results</h4>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
@@ -638,8 +638,8 @@ export default function EmbeddingPlot({
 
           {/* Segment Info - For annotation and combined analysis */}
           {(dataSource.type === 'segments' || dataSource.type === 'combined') && analysisData.segment_info && (
-            <div className="bg-white border rounded-lg p-4">
-              <h4 className="text-md font-semibold text-gray-900 mb-3">📋 Analysis Info</h4>
+            <div className="card p-4">
+              <h4 className="text-md font-semibold text-primary mb-3">📋 Analysis Info</h4>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Total Segments:</span>
@@ -679,10 +679,10 @@ export default function EmbeddingPlot({
 
           {/* Smart Suggestion - Only for combined analysis */}
           {dataSource.type === 'combined' && analysisData.smart_suggestion && (
-            <div className="bg-white border rounded-lg p-4">
-              <h4 className="text-md font-semibold text-gray-900 mb-3">🎯 Smart Suggestion</h4>
+            <div className="card p-4">
+              <h4 className="text-md font-semibold text-primary mb-3">🎯 Smart Suggestion</h4>
               <div className="space-y-3">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
                   <div className="text-center">
                     <div className="text-2xl font-bold text-blue-600">
                       {formatMetric(analysisData.smart_suggestion.suggested_threshold, 2)}
@@ -710,7 +710,7 @@ export default function EmbeddingPlot({
           )}
 
           {/* Quality Metrics */}
-          <div className="bg-white border rounded-lg p-4">
+          <div className="card p-4">
             <h4 className="text-md font-semibold text-gray-900 mb-3">📈 Quality Metrics</h4>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
@@ -730,21 +730,21 @@ export default function EmbeddingPlot({
 
           {/* Similar Speakers */}
           {analysisData.similar_speakers.length > 0 && (
-            <div className={`bg-white border rounded-lg p-4 ${
+            <div className={`card p-4 ${
               dataSource.type === 'combined' ? 'lg:col-span-4' : 
               dataSource.type === 'segments' ? 'lg:col-span-3' : 
               'lg:col-span-2'
             }`}>
-              <h4 className="text-md font-semibold text-gray-900 mb-3">⚠️ Similar Speakers</h4>
+              <h4 className="text-md font-semibold text-primary mb-3">⚠️ Similar Speakers</h4>
               <div className="space-y-2">
                 {analysisData.similar_speakers.slice(0, 5).map((pair, index) => (
-                  <div key={index} className="flex justify-between items-center p-2 bg-yellow-50 border border-yellow-200 rounded">
+                  <div key={index} className="flex justify-between items-center p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
                     <div className="text-sm">
-                      <span className="font-medium">{pair.speaker1.split('_').pop()}</span>
-                      {' ↔ '}
-                      <span className="font-medium">{pair.speaker2.split('_').pop()}</span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100">{pair.speaker1.split('_').pop()}</span>
+                      <span className="text-gray-600 dark:text-gray-300">{' ↔ '}</span>
+                      <span className="font-medium text-gray-900 dark:text-gray-100">{pair.speaker2.split('_').pop()}</span>
                     </div>
-                    <span className="text-sm font-bold text-yellow-700">
+                    <span className="text-sm font-bold text-yellow-700 dark:text-yellow-300">
                       {formatMetric(pair.similarity)}
                     </span>
                   </div>
