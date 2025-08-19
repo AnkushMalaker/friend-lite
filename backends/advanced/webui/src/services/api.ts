@@ -71,6 +71,8 @@ export const systemApi = {
   getProcessorStatus: () => api.get('/api/processor/status'),
   getProcessorTasks: () => api.get('/api/processor/tasks'),
   getActiveClients: () => api.get('/api/clients/active'),
+  getDiarizationSettings: () => api.get('/api/diarization-settings'),
+  saveDiarizationSettings: (settings: any) => api.post('/api/diarization-settings', settings),
 }
 
 export const uploadApi = {

@@ -186,6 +186,10 @@ export default function InferLive() {
         deepgramApiKeySource={deepgram.apiKeySource}
         enableSpeakerIdentification={deepgram.enableSpeakerIdentification}
         onEnableSpeakerIdentificationChange={deepgram.setEnableSpeakerIdentification}
+        utteranceEndMs={deepgram.utteranceEndMs}
+        onUtteranceEndMsChange={deepgram.setUtteranceEndMs}
+        endpointingMs={deepgram.endpointingMs}
+        onEndpointingMsChange={deepgram.setEndpointingMs}
         showApiKeySection={true}
         showProcessingOptions={true}
         collapsible={true}

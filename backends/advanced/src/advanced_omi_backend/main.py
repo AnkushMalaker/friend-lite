@@ -18,12 +18,12 @@ import json
 import os
 import time
 import uuid
-
-import aiohttp
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import Optional
+
+import aiohttp
 
 # Import Beanie for user management
 from beanie import init_beanie
@@ -32,8 +32,8 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from motor.motor_asyncio import AsyncIOMotorClient
 from friend_lite.decoder import OmiOpusDecoder
+from motor.motor_asyncio import AsyncIOMotorClient
 from wyoming.audio import AudioChunk
 from wyoming.client import AsyncTcpClient
 
@@ -45,10 +45,8 @@ from advanced_omi_backend.auth import (
     fastapi_users,
     websocket_auth,
 )
-from advanced_omi_backend.users import UserRead, UserUpdate
 from advanced_omi_backend.client import ClientState
 from advanced_omi_backend.client_manager import generate_client_id
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.constants import (
     OMI_CHANNELS,
     OMI_SAMPLE_RATE,
@@ -67,8 +65,14 @@ from advanced_omi_backend.processors import (
     init_processor_manager,
 )
 from advanced_omi_backend.task_manager import init_task_manager
+from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import get_transcription_provider
-from advanced_omi_backend.users import User, register_client_to_user
+from advanced_omi_backend.users import (
+    User,
+    UserRead,
+    UserUpdate,
+    register_client_to_user,
+)
 
 ###############################################################################
 # SETUP
@@ -762,9 +766,9 @@ async def health_check():
             "active_clients": len(active_clients),
             "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
             "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
-            "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
-            "llm_model": os.getenv("OPENAI_MODEL", "gpt-4o"),
-            "llm_base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            "llm_provider": os.getenv("LLM_PROVIDER"),
+            "llm_model": os.getenv("OPENAI_MODEL"),
+            "llm_base_url": os.getenv("OPENAI_BASE_URL"),
         },
     }
 

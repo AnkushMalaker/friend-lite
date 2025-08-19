@@ -20,6 +20,12 @@ export default function Inference() {
 
   // State for uploaded audio (separate from recorded audio)
   const [uploadedAudio, setUploadedAudio] = useState<any>(null)
+  
+  // State for diarization parameters
+  const [minSpeakers, setMinSpeakers] = useState(1)
+  const [maxSpeakers, setMaxSpeakers] = useState(4)
+  const [collar, setCollar] = useState(2.0)
+  const [minDurationOff, setMinDurationOff] = useState(1.5)
 
   // Use our new shared hooks
   const recording = useAudioRecording({
@@ -65,7 +71,13 @@ export default function Inference() {
     if (!audioForProcessing) return
 
     try {
-      await speakerProcessing.processAudio(audioForProcessing, mode)
+      await speakerProcessing.processAudio(audioForProcessing, {
+        mode,
+        minSpeakers,
+        maxSpeakers,
+        collar,
+        minDurationOff
+      })
     } catch (error) {
       console.error('Processing failed:', error)
     }
@@ -180,6 +192,14 @@ export default function Inference() {
           isProcessing={speakerProcessing.isProcessing}
           confidenceThreshold={speakerProcessing.confidenceThreshold}
           onConfidenceThresholdChange={speakerProcessing.setConfidenceThreshold}
+          minSpeakers={minSpeakers}
+          onMinSpeakersChange={setMinSpeakers}
+          maxSpeakers={maxSpeakers}
+          onMaxSpeakersChange={setMaxSpeakers}
+          collar={collar}
+          onCollarChange={setCollar}
+          minDurationOff={minDurationOff}
+          onMinDurationOffChange={setMinDurationOff}
           showSettings={true}
         />
       )}

@@ -309,8 +309,10 @@ class TranscriptionManager:
                 # Add speakers if we have them
                 speakers_found = set()
                 for segment in final_segments:
-                    if segment.get("speaker"):
-                        speakers_found.add(segment["speaker"])
+                    # Use identified name if available, fallback to generic label
+                    speaker_name = segment.get("identified_as") or segment.get("speaker")
+                    if speaker_name:
+                        speakers_found.add(speaker_name)
 
                 for speaker in speakers_found:
                     await self.chunk_repo.add_speaker(self._current_audio_uuid, speaker)

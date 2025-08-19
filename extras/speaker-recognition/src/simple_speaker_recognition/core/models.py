@@ -50,6 +50,8 @@ class DiarizeRequest(BaseModel):
     min_duration: Optional[float] = Field(default=None, description="Minimum duration for speaker segments (seconds)")
     min_speakers: Optional[int] = Field(default=None, description="Minimum number of speakers to detect")
     max_speakers: Optional[int] = Field(default=None, description="Maximum number of speakers to detect")
+    collar: Optional[float] = Field(default=2.0, description="Collar duration (seconds) around speaker boundaries to merge segments")
+    min_duration_off: Optional[float] = Field(default=1.5, description="Minimum silence duration (seconds) before treating it as a segment boundary")
 
 
 class DiarizeAndIdentifyRequest(BaseModel):
@@ -60,6 +62,8 @@ class DiarizeAndIdentifyRequest(BaseModel):
     similarity_threshold: Optional[float] = Field(default=None, description="Override default similarity threshold for identification")
     identify_only_enrolled: bool = Field(default=False, description="Only return segments for enrolled speakers")
     user_id: Optional[int] = Field(default=None, description="User ID to scope speaker identification to user's enrolled speakers")
+    collar: Optional[float] = Field(default=2.0, description="Collar duration (seconds) around speaker boundaries to merge segments")
+    min_duration_off: Optional[float] = Field(default=1.5, description="Minimum silence duration (seconds) before treating it as a segment boundary")
 
 
 class SpeakerStatus(str, Enum):
