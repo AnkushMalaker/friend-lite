@@ -68,6 +68,7 @@ jobs:
         echo "DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY" >> .env
         echo "SIMILARITY_THRESHOLD=0.15" >> .env
         echo "SPEAKER_SERVICE_HOST=speaker-service" >> .env
+        echo "COMPUTE_MODE=cpu" >> .env
         echo "SPEAKER_SERVICE_PORT=8085" >> .env
         echo "SPEAKER_SERVICE_URL=http://speaker-service:8085" >> .env
         echo "SPEAKER_SERVICE_TEST_PORT=8086" >> .env
@@ -96,6 +97,19 @@ jobs:
         
         # Run the integration test with timeout (speaker recognition models need time)
         timeout 1800 uv run pytest tests/test_speaker_service_integration.py -v -s --tb=short
+        
+    - name: Debug Docker build failure
+      if: failure()
+      run: |
+        cd extras/speaker-recognition
+        echo "=== Docker images ==="
+        docker images
+        echo "=== Docker containers ==="
+        docker ps -a
+        echo "=== Docker Compose logs ==="
+        docker compose -f docker-compose-test.yml logs || true
+        echo "=== Docker system info ==="
+        docker system df || true
         
     - name: Upload test logs on failure
       if: failure()

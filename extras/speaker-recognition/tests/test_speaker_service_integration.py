@@ -73,24 +73,32 @@ def _compose_up():
     if not _command_exists("docker"):
         pytest.skip("Docker not available; skipping speaker recognition integration tests")
 
-    subprocess.run(
-        [
-            "docker",
-            "compose",
-            "-f",
-            str(COMPOSE_FILE),
-            "up",
-            "-d",
-            "--build",
-            # Service name varies by compose file
-            "speaker-service-test" if COMPOSE_FILE.name.endswith("docker-compose-test.yml") else "speaker-service",
-        ],
-        cwd=str(SPEAKER_DIR),
-        env=env,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(COMPOSE_FILE),
+                "up",
+                "-d",
+                "--build",
+                # Service name varies by compose file
+                "speaker-service-test" if COMPOSE_FILE.name.endswith("docker-compose-test.yml") else "speaker-service",
+            ],
+            cwd=str(SPEAKER_DIR),
+            env=env,
+            check=True,
+            # Remove stdout/stderr capture to show Docker build output
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Docker Compose build failed with exit code {e.returncode}")
+        print("Attempting to show Docker logs...")
+        try:
+            subprocess.run(["docker", "compose", "-f", str(COMPOSE_FILE), "logs"], cwd=str(SPEAKER_DIR))
+        except Exception:
+            pass
+        raise
 
 
 def _compose_down():
