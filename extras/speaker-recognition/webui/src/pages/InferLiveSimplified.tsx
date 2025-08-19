@@ -353,23 +353,34 @@ export default function InferLiveSimplified() {
             </div>
           ) : (
             speakerWS.transcriptSegments.map((segment) => (
-              <div key={segment.id} className="border-l-4 border-blue-500 pl-4">
+              <div key={segment.id} className={`border-l-4 pl-4 ${
+                segment.status === 'interim' ? 'border-yellow-400 opacity-70' : 'border-blue-500'
+              }`}>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center space-x-2 text-sm text-gray-500 mb-1">
                       <span>
                         {segment.speaker_name || 'Unknown Speaker'}
                       </span>
+                      {segment.status === 'interim' && (
+                        <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full animate-pulse">
+                          Speaking...
+                        </span>
+                      )}
                       {segment.status === 'identified' && segment.confidence > 0 && (
                         <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
                           {(segment.confidence * 100).toFixed(1)}%
                         </span>
                       )}
-                      <span className="text-xs text-gray-400">
-                        {segment.duration.toFixed(1)}s
-                      </span>
+                      {segment.duration > 0 && (
+                        <span className="text-xs text-gray-400">
+                          {segment.duration.toFixed(1)}s
+                        </span>
+                      )}
                     </div>
-                    <p className="text-gray-900 dark:text-gray-100">{segment.text}</p>
+                    <p className={`${segment.status === 'interim' ? 'text-gray-600 italic' : 'text-gray-900'} dark:text-gray-100`}>
+                      {segment.text}
+                    </p>
                   </div>
                   <div className="text-xs text-gray-400 ml-4">
                     {new Date(segment.timestamp).toLocaleTimeString()}

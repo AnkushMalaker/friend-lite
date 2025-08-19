@@ -18,7 +18,7 @@ export interface TranscriptSegment {
   speaker_id: string | null
   confidence: number
   duration: number
-  status: 'identified' | 'unknown' | 'error'
+  status: 'identified' | 'unknown' | 'error' | 'interim'
   audio_segment: {
     start: number
     end: number
@@ -96,8 +96,8 @@ export const useSpeakerWebSocket = (
     return () => clearInterval(interval)
   }, [isStreaming])
 
-  // Handle utterance boundary events
-  const handleUtteranceBoundary = useCallback((event: UtteranceBoundaryEvent) => {
+  // Handle utterance boundary and speaker identified events
+  const handleSpeakerEvent = useCallback((event: UtteranceBoundaryEvent | any) => {
     const segmentId = `segment_${segmentIdRef.current++}`
     const timestamp = Date.now()
 
@@ -113,8 +113,26 @@ export const useSpeakerWebSocket = (
       audio_segment: event.audio_segment
     }
 
-    // Add segment to list
-    setTranscriptSegments(prev => [...prev, segment])
+    // Handle interim vs final transcripts
+    setTranscriptSegments(prev => {
+      if (segment.status === 'interim') {
+        // Replace the last interim transcript, or add if no interim exists
+        const lastSegment = prev[prev.length - 1]
+        if (lastSegment?.status === 'interim') {
+          // Replace the last interim transcript
+          return [...prev.slice(0, -1), segment]
+        } else {
+          // Add new interim transcript
+          return [...prev, segment]
+        }
+      } else {
+        // For final transcripts, always add (and remove any trailing interim)
+        const withoutTrailingInterim = prev[prev.length - 1]?.status === 'interim' 
+          ? prev.slice(0, -1) 
+          : prev
+        return [...withoutTrailingInterim, segment]
+      }
+    })
 
     // Update statistics
     setStats(prev => {
@@ -147,7 +165,8 @@ export const useSpeakerWebSocket = (
 
     wsServiceRef.current = new SpeakerWebSocketService({
       ...initialOptions,
-      onUtteranceBoundary: handleUtteranceBoundary,
+      onUtteranceBoundary: handleSpeakerEvent,
+      onSpeakerIdentified: handleSpeakerEvent,  // Handle both event types the same way
       onReady: () => {
         console.log('🟢 Speaker WebSocket ready')
       },
@@ -162,7 +181,7 @@ export const useSpeakerWebSocket = (
         setIsConnected(newConnected)
       }
     })
-  }, [initialOptions, handleUtteranceBoundary])
+  }, [initialOptions, handleSpeakerEvent])
 
   // Connect to WebSocket
   const connect = useCallback(async () => {

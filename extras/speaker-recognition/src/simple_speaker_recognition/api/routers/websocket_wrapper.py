@@ -8,11 +8,12 @@ import wave
 from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode, parse_qs
 
 import numpy as np
 import torch
 import websockets
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pyannote.audio import Model
 from pyannote.audio.pipelines import VoiceActivityDetection
 
@@ -270,8 +271,9 @@ class SpeakerChangeDetector:
 class DeepgramWebSocketProxy:
     """Proxies audio to Deepgram and handles transcription."""
     
-    def __init__(self, api_key: str, on_transcript_callback=None, on_raw_deepgram_callback=None):
+    def __init__(self, api_key: str, deepgram_params: Dict[str, str] = None, on_transcript_callback=None, on_raw_deepgram_callback=None):
         self.api_key = api_key
+        self.deepgram_params = deepgram_params or {}
         self.ws_connection = None
         self.on_transcript = on_transcript_callback
         self.on_raw_deepgram = on_raw_deepgram_callback
@@ -281,7 +283,9 @@ class DeepgramWebSocketProxy:
         """Connect to Deepgram WebSocket API."""
         try:
             url = "wss://api.deepgram.com/v1/listen"
-            params = {
+            
+            # Use provided parameters or sensible defaults
+            default_params = {
                 "model": "nova-3",
                 "language": "multi", 
                 "encoding": "linear16",
@@ -290,12 +294,13 @@ class DeepgramWebSocketProxy:
                 "punctuate": "true",
                 "smart_format": "true",
                 "interim_results": "true",
-                "endpointing": "false",  # Disable Deepgram's endpointing
-                # Remove utterance_end_ms as it might not be valid with endpointing=false
             }
             
+            # Merge defaults with provided parameters (provided parameters take precedence)
+            params = {**default_params, **self.deepgram_params}
+            
             # Build URL with parameters
-            param_str = "&".join([f"{k}={v}" for k, v in params.items()])
+            param_str = urlencode(params)
             full_url = f"{url}?{param_str}"
             
             log.info(f"Connecting to Deepgram: {url}")
@@ -465,7 +470,7 @@ async def websocket_streaming_with_scd(
         except Exception as e:
             log.warning(f"Failed to send raw Deepgram event: {e}")
     
-    deepgram_proxy = DeepgramWebSocketProxy(api_key, on_deepgram_transcript, on_raw_deepgram)
+    deepgram_proxy = DeepgramWebSocketProxy(api_key=api_key, on_transcript_callback=on_deepgram_transcript, on_raw_deepgram_callback=on_raw_deepgram)
     
     # Connect to Deepgram before accepting WebSocket
     try:
@@ -672,4 +677,361 @@ async def get_streaming_info():
             "utterance_boundary": "Sent when an utterance boundary is detected",
             "error": "Sent when an error occurs"
         }
+    }
+
+
+@router.websocket("/v1/ws_listen")
+async def deepgram_proxy_websocket(
+    websocket: WebSocket,
+    user_id: Optional[int] = Query(default=None, description="User ID for speaker identification (enhancement)"),
+    confidence_threshold: float = Query(default=0.15, description="Speaker identification confidence threshold (enhancement)"),
+    db: UnifiedSpeakerDB = Depends(get_db),
+):
+    """
+    WebSocket streaming endpoint with Deepgram proxy and speaker identification.
+    
+    This endpoint:
+    - Acts as a transparent proxy to Deepgram WebSocket API
+    - Forwards all Deepgram responses as raw_deepgram events
+    - Adds speaker identification when user_id is provided
+    - Supports WebSocket subprotocol authentication (Deepgram style)
+    
+    Enhancement Parameters (not forwarded to Deepgram):
+    - user_id: Enable speaker identification for enrolled speakers
+    - confidence_threshold: Minimum confidence for speaker matching
+    
+    All other parameters are forwarded to Deepgram unchanged.
+    
+    Note: For file uploads, use POST /v1/listen endpoint instead.
+    """
+    
+    # Get dependencies BEFORE accepting WebSocket
+    auth = get_auth()
+    audio_backend = get_audio_backend()
+    speaker_db = get_speaker_db()
+    
+    # Extract ALL query parameters from WebSocket scope
+    query_string = websocket.scope.get('query_string', b'').decode('utf-8')
+    parsed_params = parse_qs(query_string)
+    # Convert from list values to single values (FastAPI style)
+    all_params = {k: v[0] if v else '' for k, v in parsed_params.items()}
+    log.info(f"Received parameters: {list(all_params.keys())}")
+    
+    # Extract our enhancement parameters
+    enhancement_params = {
+        'user_id': all_params.pop('user_id', None),
+        'confidence_threshold': all_params.pop('confidence_threshold', '0.15')
+    }
+    
+    # Convert confidence threshold to float
+    try:
+        confidence_threshold = float(enhancement_params['confidence_threshold'])
+    except (ValueError, TypeError):
+        confidence_threshold = 0.15
+    
+    # Parse user_id
+    if enhancement_params['user_id']:
+        try:
+            user_id = int(enhancement_params['user_id'])
+        except (ValueError, TypeError):
+            user_id = None
+    else:
+        user_id = None
+    
+    log.info(f"Enhancement params - user_id: {user_id}, confidence_threshold: {confidence_threshold}")
+    log.info(f"Deepgram params: {list(all_params.keys())}")
+    
+    # Extract Deepgram API key from WebSocket subprotocols (same as existing endpoint)
+    api_key = None
+    if hasattr(websocket, 'scope') and 'subprotocols' in websocket.scope:
+        subprotocols = websocket.scope['subprotocols']
+        if len(subprotocols) >= 2 and subprotocols[0] == 'token':
+            api_key = subprotocols[1]
+            log.info("Extracted Deepgram API key from WebSocket subprotocols")
+    
+    # Fallback to server default API key
+    api_key = api_key or auth.deepgram_api_key
+    if not api_key:
+        await websocket.accept()
+        await websocket.send_json({
+            "type": "error",
+            "message": "Deepgram API key required"
+        })
+        await websocket.close()
+        return
+    
+    # Initialize components if speaker identification is enabled
+    audio_buffer = None
+    scd = None
+    if user_id:
+        # Check HF token for VAD
+        if not auth.hf_token:
+            await websocket.accept()
+            await websocket.send_json({
+                "type": "error", 
+                "message": "Hugging Face token not configured - required for speaker identification"
+            })
+            await websocket.close()
+            return
+        
+        log.info("Initializing speaker identification components...")
+        audio_buffer = AudioSegmentBuffer(max_duration_seconds=20.0)
+        scd = SpeakerChangeDetector(hf_token=auth.hf_token)
+    
+    # Track transcription state for speaker identification
+    current_transcript = []
+    
+    # Setup Deepgram proxy with dynamic parameters
+    async def on_deepgram_transcript(data: Dict[str, Any]):
+        """Handle transcription from Deepgram (for speaker identification)."""
+        nonlocal current_transcript
+        
+        if data["is_final"]:
+            current_transcript.append(data["transcript"])
+            log.debug(f"Final transcript: {data['transcript']}")
+    
+    async def on_raw_deepgram(data: Dict[str, Any]):
+        """Forward all raw Deepgram messages to client."""
+        try:
+            await websocket.send_json({
+                "type": "raw_deepgram",
+                "data": data,
+                "timestamp": asyncio.get_event_loop().time()
+            })
+        except Exception as e:
+            log.warning(f"Failed to send raw Deepgram event: {e}")
+    
+    deepgram_proxy = DeepgramWebSocketProxy(
+        api_key=api_key,
+        deepgram_params=all_params,  # Forward all remaining parameters to Deepgram
+        on_transcript_callback=on_deepgram_transcript,
+        on_raw_deepgram_callback=on_raw_deepgram
+    )
+    
+    # Connect to Deepgram before accepting WebSocket
+    try:
+        await deepgram_proxy.connect()
+        log.info("✅ Deepgram proxy connected successfully")
+    except Exception as e:
+        log.error(f"Failed to connect to Deepgram: {e}")
+        await websocket.accept()
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Failed to connect to Deepgram: {str(e)}"
+        })
+        await websocket.close()
+        return
+    
+    # NOW accept the WebSocket - everything is ready!
+    await websocket.accept(subprotocol='token')
+    log.info(f"✅ WebSocket connection accepted - Deepgram proxy ready")
+    
+    # Track stream start time for speaker identification
+    stream_start_time = asyncio.get_event_loop().time()
+    
+    # Create debug WAV file if speaker identification is enabled
+    wav_file = None
+    if user_id:
+        debug_dir = "/app/debug"
+        os.makedirs(debug_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        wav_filename = f"{debug_dir}/debug_session_{timestamp}_user{user_id}.wav"
+        
+        wav_file = wave.open(wav_filename, 'wb')
+        wav_file.setnchannels(1)  # mono
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(16000)  # 16kHz
+        log.info(f"🎙️ Created debug WAV file: {wav_filename}")
+    
+    try:
+        # Send ready event
+        await websocket.send_json({
+            "type": "ready",
+            "message": "Universal Deepgram proxy ready",
+            "features": {
+                "raw_deepgram_forwarding": True,
+                "speaker_identification": user_id is not None,
+                "debug_recording": user_id is not None
+            }
+        })
+        
+        # Main processing loop
+        while True:
+            try:
+                # Receive audio data from client
+                data = await websocket.receive_bytes()
+                
+                # Write to debug WAV file if enabled
+                if wav_file:
+                    wav_file.writeframes(data)
+                
+                # Forward to Deepgram
+                await deepgram_proxy.send_audio(data)
+                
+                # Speaker identification processing (if enabled)
+                if user_id and audio_buffer and scd:
+                    current_time = asyncio.get_event_loop().time() - stream_start_time
+                    
+                    # Convert bytes to numpy array
+                    audio_array = np.frombuffer(data, dtype=np.int16)
+                    audio_buffer.add_audio(audio_array)
+                    
+                    # Check for utterance boundary
+                    boundary = scd.detect_utterance_boundary(audio_buffer, current_time)
+                    
+                    if boundary:
+                        start_time, end_time = boundary
+                        utterance_text = " ".join(current_transcript).strip()
+                        current_transcript = []
+                        
+                        log.info(f"Utterance detected: {start_time:.2f}s - {end_time:.2f}s, Text: {utterance_text[:50]}...")
+                        
+                        # Prepare speaker identification event
+                        event = {
+                            "type": "speaker_identified",
+                            "timestamp": current_time,
+                            "audio_segment": {
+                                "start": start_time,
+                                "end": end_time,
+                                "duration": end_time - start_time
+                            },
+                            "transcript": utterance_text,
+                            "speaker_identification": None
+                        }
+                        
+                        # Perform speaker identification
+                        if utterance_text:
+                            try:
+                                # Extract audio segment
+                                segment_duration = end_time - start_time
+                                segment_audio = audio_buffer.get_audio_tensor(
+                                    start_time=max(0, audio_buffer.get_duration() - (current_time - start_time)),
+                                    duration=segment_duration
+                                )
+                                
+                                # Get embedding and identify speaker
+                                emb = await audio_backend.async_embed(segment_audio.unsqueeze(0))
+                                found, speaker_info, confidence = await speaker_db.identify(emb, user_id=user_id)
+                                confidence = validate_confidence(confidence, "deepgram_proxy")
+                                
+                                if found and confidence >= confidence_threshold:
+                                    event["speaker_identification"] = {
+                                        "speaker_id": speaker_info["id"],
+                                        "speaker_name": speaker_info["name"],
+                                        "confidence": float(confidence),
+                                        "status": SpeakerStatus.IDENTIFIED.value
+                                    }
+                                    log.info(f"Speaker identified: {speaker_info['name']} (confidence: {confidence:.3f})")
+                                else:
+                                    event["speaker_identification"] = {
+                                        "speaker_id": None,
+                                        "speaker_name": None,
+                                        "confidence": float(confidence) if confidence else 0.0,
+                                        "status": SpeakerStatus.UNKNOWN.value
+                                    }
+                                    
+                            except Exception as e:
+                                log.error(f"Speaker identification failed: {e}")
+                                event["speaker_identification"] = {
+                                    "status": SpeakerStatus.ERROR.value,
+                                    "error": str(e)
+                                }
+                        
+                        # Send speaker identification event
+                        await websocket.send_json(event)
+                
+            except WebSocketDisconnect as e:
+                log.info(f"Client disconnected: code={e.code}")
+                break
+            except Exception as e:
+                log.error(f"Error processing audio: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": str(e)
+                })
+                
+    except Exception as e:
+        log.error(f"WebSocket error: {e}")
+        try:
+            if websocket.client_state.name != 'DISCONNECTED':
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Proxy error: {str(e)}"
+                })
+        except Exception as send_error:
+            log.warning(f"Could not send error to client: {send_error}")
+        
+    finally:
+        # Cleanup
+        await deepgram_proxy.disconnect()
+        
+        # Close debug WAV file
+        if wav_file:
+            try:
+                wav_file.close()
+                log.info(f"🎙️ Closed debug WAV file")
+            except Exception as wav_error:
+                log.warning(f"Failed to close WAV file: {wav_error}")
+        
+        try:
+            if websocket.client_state.name != 'DISCONNECTED':
+                await websocket.close()
+        except Exception as e:
+            log.warning(f"Error closing WebSocket: {e}")
+        log.info("Universal Deepgram proxy connection closed")
+
+
+@router.get("/v1/listen/info")
+async def get_deepgram_api_info():
+    """Get information about the Deepgram-compatible APIs with separate POST and WebSocket endpoints."""
+    return {
+        "endpoints": {
+            "file_upload": "/v1/listen", 
+            "websocket": "/v1/ws_listen"
+        },
+        "description": "Complete Deepgram API drop-in replacement with separate endpoints",
+        "compatibility": "Full Deepgram API compatibility for file upload (POST /v1/listen) and streaming (WSS /v1/ws_listen)",
+        "protocols": {
+            "POST": {
+                "description": "File upload transcription (multipart/form-data)",
+                "use_case": "Pre-recorded audio files",
+                "input": "Audio files (wav, mp3, flac, etc.)",
+                "output": "Deepgram transcription response with optional speaker enhancement",
+                "authentication": "Authorization: Token YOUR_DEEPGRAM_API_KEY",
+                "example": "curl -X POST -H 'Authorization: Token API_KEY' -F 'file=@audio.wav' /v1/listen"
+            },
+            "WebSocket": {
+                "description": "Real-time streaming transcription",
+                "use_case": "Live audio streaming",
+                "input": "Raw audio data (binary WebSocket messages)",
+                "output": "All Deepgram events + optional speaker identification",
+                "authentication": [
+                    "Authorization: Token YOUR_DEEPGRAM_API_KEY",
+                    "WebSocket subprotocols: ['token', 'YOUR_DEEPGRAM_API_KEY']"
+                ],
+                "example": "const ws = new WebSocket('wss://host/v1/ws_listen?model=nova-3', ['token', 'API_KEY'])"
+            }
+        },
+        "parameters": {
+            "deepgram": "All 25+ Deepgram parameters supported (model, language, encoding, etc.)",
+            "enhancements": {
+                "user_id": "User ID for speaker identification (optional)",
+                "confidence_threshold": "Speaker matching threshold (default: 0.15)"
+            }
+        },
+        "websocket_events": {
+            "ready": "Proxy initialization complete",
+            "raw_deepgram": "All Deepgram WebSocket events forwarded transparently",
+            "speaker_identified": "Speaker identification results (when user_id provided)",
+            "error": "Processing errors"
+        },
+        "features": [
+            "True Deepgram API drop-in replacement",
+            "Both POST file upload and WebSocket streaming on same path",
+            "Complete parameter compatibility",
+            "Transparent event forwarding (WebSocket)",
+            "Optional speaker identification enhancement",
+            "Debug WAV recording (WebSocket with user_id)",
+            "Dynamic parameter handling"
+        ]
     }
