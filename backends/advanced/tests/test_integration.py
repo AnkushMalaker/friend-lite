@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import openai
 import pytest
 import requests
 from pymongo import MongoClient
@@ -49,7 +50,7 @@ TEST_ENV_VARS = {
     "ADMIN_PASSWORD": "test-admin-password-123",
     "ADMIN_EMAIL": "test-admin@example.com",
     "LLM_PROVIDER": "openai",
-    "OPENAI_MODEL": "gpt-4o-mini",  # Cheaper model for tests
+    "OPENAI_MODEL": "gpt-5-mini",  # Cheaper model for tests
     "MONGODB_URI": "mongodb://localhost:27018",  # Test port (database specified in backend)
     "QDRANT_BASE_URL": "localhost",
 }
@@ -271,9 +272,15 @@ class IntegrationTestRunner:
                     # Force rebuild in CI when rebuild flag is set with BuildKit disabled
                     env = os.environ.copy()
                     env['DOCKER_BUILDKIT'] = '0'
+                    logger.info("🔨 Running Docker build command...")
                     build_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "build"], capture_output=True, text=True, env=env)
+                    logger.info(f"📋 Build command stdout: {build_result.stdout}")
+                    if build_result.stderr:
+                        logger.warning(f"📋 Build command stderr: {build_result.stderr}")
                     if build_result.returncode != 0:
-                        logger.error(f"Build failed: {build_result.stderr}")
+                        logger.error(f"❌ Build failed with exit code {build_result.returncode}")
+                        logger.error(f"📋 Build stderr: {build_result.stderr}")
+                        logger.error(f"📋 Build stdout: {build_result.stdout}")
                         raise RuntimeError("Docker compose build failed")
                 cmd = ["docker", "compose", "-f", "docker-compose-test.yml", "up", "-d", "--no-build"]
             else:
@@ -288,11 +295,48 @@ class IntegrationTestRunner:
             # Start test services with BuildKit disabled to avoid bake issues
             env = os.environ.copy()
             env['DOCKER_BUILDKIT'] = '0'
+            logger.info(f"🚀 Running Docker compose command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
             
+            # Always log the command outputs for debugging
+            logger.info(f"📋 Docker compose command stdout:\n{result.stdout}")
+            if result.stderr:
+                logger.warning(f"📋 Docker compose command stderr:\n{result.stderr}")
+            logger.info(f"📋 Docker compose exit code: {result.returncode}")
+            
             if result.returncode != 0:
-                logger.error(f"Failed to start services: {result.stderr}")
-                logger.error(f"Command output: {result.stdout}")
+                logger.error(f"❌ Failed to start services with exit code {result.returncode}")
+                logger.error(f"❌ Command stderr: {result.stderr}")
+                logger.error(f"❌ Command stdout: {result.stdout}")
+                
+                # Check individual container logs for better error details
+                logger.error("🔍 Checking individual container logs for details...")
+                try:
+                    container_logs_result = subprocess.run(
+                        ["docker", "compose", "-f", "docker-compose-test.yml", "logs", "--tail=50"],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    if container_logs_result.stdout:
+                        logger.error("📋 Container logs:")
+                        logger.error(container_logs_result.stdout)
+                    if container_logs_result.stderr:
+                        logger.error("📋 Container logs stderr:")
+                        logger.error(container_logs_result.stderr)
+                except Exception as e:
+                    logger.warning(f"Could not fetch container logs: {e}")
+                
+                # Check container status
+                logger.error("🔍 Checking container status...")
+                try:
+                    status_result = subprocess.run(
+                        ["docker", "compose", "-f", "docker-compose-test.yml", "ps"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if status_result.stdout:
+                        logger.error("📋 Container status:")
+                        logger.error(status_result.stdout)
+                except Exception as e:
+                    logger.warning(f"Could not fetch container status: {e}")
                 
                 # Try alternative approach for macOS
                 if "permission denied" in result.stderr.lower():
@@ -705,7 +749,6 @@ class IntegrationTestRunner:
     def check_transcript_similarity_simple(self, actual_transcript: str, expected_transcript: str) -> dict:
         """Use OpenAI to check transcript similarity with simple boolean response."""
         try:
-            import openai
             
             client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
             
@@ -721,16 +764,14 @@ class IntegrationTestRunner:
             
             Respond in JSON format with:
             {{
-                "similar": true/false,
                 "reason": "brief explanation"
+                "similar": true/false,
             }}
             """
             
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0,
                 response_format={"type": "json_object"}
             )
             
@@ -808,10 +849,8 @@ class IntegrationTestRunner:
             """
             
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0,
                 response_format={"type": "json_object"}
             )
             
@@ -823,8 +862,8 @@ class IntegrationTestRunner:
             except json.JSONDecodeError:
                 # If JSON parsing fails, return a basic result
                 return {
+                    "reason": f"Could not parse response: {response_text}",
                     "similar": False,
-                    "reason": f"Could not parse response: {response_text}"
                 }
             
         except Exception as e:

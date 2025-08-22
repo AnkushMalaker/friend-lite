@@ -356,6 +356,4 @@ def get_transcription_provider(
                 f"Unknown transcription provider '{provider_name}'. Supported: 'deepgram', 'mistral'"
             )
     else:
-        raise RuntimeError(
-            "No transcription provider configured. Please set DEEPGRAM_API_KEY or MISTRAL_API_KEY environment variable"
-        )
+        return None
