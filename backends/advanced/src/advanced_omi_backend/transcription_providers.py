@@ -1,24 +1,53 @@
 """
-Transcription provider abstraction for multiple online ASR services.
+Transcription provider abstraction for multiple ASR services (online and offline).
+
+Provider Output Formats (2025):
+--------------------------------
+All providers return a standardized dictionary with the following structure:
+{
+    "text": str,        # Full transcript text
+    "words": List[dict],  # Word-level data (if available)
+    "segments": List[dict]  # Speaker segments (if available)
+}
+
+Word object format (when available):
+{
+    "word": str,        # The word text
+    "start": float,     # Start time in seconds
+    "end": float,       # End time in seconds
+    "confidence": float,  # Confidence score (0-1)
+    "speaker": int      # Speaker ID (optional)
+}
+
+Provider-specific behaviors:
+- Deepgram: Returns rich word-level timestamps with confidence scores
+- NeMo Parakeet: Returns word-level timestamps (streaming and batch modes)
 """
 
 import abc
+import asyncio
+import json
 import logging
-import re
-from typing import Optional
+import os
+import tempfile
+import uuid
+from typing import Dict, Optional
 
 import httpx
+import numpy as np
+import websockets
+from easy_audio_interfaces.audio_interfaces import AudioChunk
+from easy_audio_interfaces.filesystem import LocalFileSink
 
 logger = logging.getLogger(__name__)
 
-
-class OnlineTranscriptionProvider(abc.ABC):
-    """Abstract base class for online transcription providers."""
+class BaseTranscriptionProvider(abc.ABC):
+    """Abstract base class for all transcription providers."""
 
     @abc.abstractmethod
     async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
         """
-        Transcribe audio data to text with optional speaker diarization.
+        Transcribe audio data to text with word-level timestamps.
 
         Args:
             audio_data: Raw audio bytes (PCM format)
@@ -27,8 +56,8 @@ class OnlineTranscriptionProvider(abc.ABC):
         Returns:
             Dictionary containing:
             - text: Transcribed text string
-            - segments: List of speaker segments (if diarization available)
-            - words: List of word-level data with timestamps and speakers
+            - words: List of word-level data with timestamps (required)
+            - segments: List of speaker segments (empty for non-RTTM providers)
         """
         pass
 
@@ -38,9 +67,59 @@ class OnlineTranscriptionProvider(abc.ABC):
         """Return the provider name for logging."""
         pass
 
+    @property
+    @abc.abstractmethod
+    def mode(self) -> str:
+        """Return 'streaming' or 'batch' for processing mode."""
+        pass
 
-class DeepgramProvider(OnlineTranscriptionProvider):
-    """Deepgram transcription provider using Nova-3 model."""
+    async def connect(self, client_id: Optional[str] = None):
+        """Initialize/connect the provider. Default implementation does nothing."""
+        pass
+
+    async def disconnect(self):
+        """Cleanup/disconnect the provider. Default implementation does nothing."""
+        pass
+
+
+class StreamingTranscriptionProvider(BaseTranscriptionProvider):
+    """Base class for streaming transcription providers."""
+
+    @property
+    def mode(self) -> str:
+        return "streaming"
+
+    @abc.abstractmethod
+    async def start_stream(self, client_id: str, sample_rate: int = 16000):
+        """Start a transcription stream for a client."""
+        pass
+
+    @abc.abstractmethod
+    async def process_audio_chunk(self, client_id: str, audio_chunk: bytes) -> Optional[dict]:
+        """
+        Process audio chunk and return partial/final transcription.
+        
+        Returns:
+            None for partial results, dict with transcription for final results
+        """
+        pass
+
+    @abc.abstractmethod
+    async def end_stream(self, client_id: str) -> dict:
+        """End stream and return final transcription with word-level timestamps."""
+        pass
+
+
+class BatchTranscriptionProvider(BaseTranscriptionProvider):
+    """Base class for batch transcription providers."""
+
+    @property
+    def mode(self) -> str:
+        return "batch"
+
+
+class DeepgramProvider(BatchTranscriptionProvider):
+    """Deepgram batch transcription provider using Nova-3 model."""
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -194,166 +273,533 @@ class DeepgramProvider(OnlineTranscriptionProvider):
             return {"text": "", "words": [], "segments": []}
 
 
-class MistralProvider(OnlineTranscriptionProvider):
-    """Mistral transcription provider using Voxtral models."""
+class DeepgramStreamingProvider(StreamingTranscriptionProvider):
+    """Deepgram streaming transcription provider using WebSocket connection."""
 
-    def __init__(self, api_key: str, model: str = "voxtral-mini-2507"):
+    def __init__(self, api_key: str):
         self.api_key = api_key
-        self.model = model
-        self.url = "https://api.mistral.ai/v1/audio/transcriptions"
+        self.ws_url = "wss://api.deepgram.com/v1/listen"
+        self._streams: Dict[str, Dict] = {}  # client_id -> stream data
 
     @property
     def name(self) -> str:
-        return "Mistral"
+        return "Deepgram-Streaming"
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
-        """Transcribe audio using Mistral's REST API."""
+    async def start_stream(self, client_id: str, sample_rate: int = 16000):
+        """Start a WebSocket connection for streaming transcription."""
         try:
-            # Mistral expects audio files, so we need to send it as a file upload
-            # Convert raw PCM to WAV format by adding WAV header
-            wav_data = self._create_wav_header(audio_data, sample_rate) + audio_data
-
-            headers = {
-                "x-api-key": self.api_key,
+            logger.info(f"Starting Deepgram streaming for client {client_id}")
+            
+            # WebSocket connection parameters
+            params = {
+                "model": "nova-3",
+                "language": "multi",
+                "smart_format": "true",
+                "punctuate": "true",
+                "diarize": "false",
+                "encoding": "linear16",
+                "sample_rate": str(sample_rate),
+                "channels": "1",
+                "interim_results": "true",
+                "endpointing": "300",  # 300ms silence for endpoint detection
             }
 
-            # Prepare multipart form data
-            files = {"file": ("audio.wav", wav_data, "audio/wav")}
-
-            data = {"model": self.model}
-
-            logger.info(f"Sending {len(wav_data)} bytes to Mistral API with model {self.model}")
-
-            # Calculate timeout based on audio duration
-            estimated_duration = len(audio_data) / (sample_rate * 2 * 1)  # 16-bit mono
-            processing_timeout = max(120, int(estimated_duration * 3))
-
-            timeout_config = httpx.Timeout(
-                connect=30.0,
-                read=processing_timeout,
-                write=max(
-                    180.0, int(len(wav_data) / (sample_rate * 2))
-                ),  # bytes per second for 16-bit PCM
-                pool=10.0,
+            # Build WebSocket URL with parameters
+            query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+            ws_url = f"{self.ws_url}?{query_string}"
+            
+            # Connect to WebSocket
+            websocket = await websockets.connect(
+                ws_url,
+                extra_headers={"Authorization": f"Token {self.api_key}"}
             )
+            
+            # Store stream data
+            self._streams[client_id] = {
+                "websocket": websocket,
+                "final_transcript": "",
+                "words": [],
+                "stream_id": str(uuid.uuid4())
+            }
+            
+            logger.info(f"Deepgram WebSocket connected for client {client_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to start Deepgram streaming for {client_id}: {e}")
+            raise
 
-            logger.info(
-                f"Estimated audio duration: {estimated_duration:.1f}s, timeout: {processing_timeout}s"
-            )
+    async def process_audio_chunk(self, client_id: str, audio_chunk: bytes) -> Optional[dict]:
+        """Send audio chunk to WebSocket and process responses."""
+        if client_id not in self._streams:
+            logger.error(f"No active stream for client {client_id}")
+            return None
+            
+        try:
+            stream_data = self._streams[client_id]
+            websocket = stream_data["websocket"]
+            
+            # Send audio chunk
+            await websocket.send(audio_chunk)
+            
+            # Check for responses (non-blocking)
+            try:
+                while True:
+                    response = await asyncio.wait_for(websocket.recv(), timeout=0.01)
+                    result = json.loads(response)
+                    
+                    if result.get("type") == "Results":
+                        channel = result.get("channel", {})
+                        alternatives = channel.get("alternatives", [])
+                        
+                        if alternatives:
+                            alt = alternatives[0]
+                            is_final = channel.get("is_final", False)
+                            
+                            if is_final:
+                                # Accumulate final transcript and words
+                                transcript = alt.get("transcript", "")
+                                words = alt.get("words", [])
+                                
+                                if transcript.strip():
+                                    stream_data["final_transcript"] += transcript + " "
+                                    stream_data["words"].extend(words)
+                                    
+                                logger.debug(f"Final transcript chunk: {transcript}")
+                                    
+            except asyncio.TimeoutError:
+                # No response available, continue
+                pass
+                
+            return None  # Streaming, no final result yet
+            
+        except Exception as e:
+            logger.error(f"Error processing audio chunk for {client_id}: {e}")
+            return None
 
-            async with httpx.AsyncClient(timeout=timeout_config) as client:
-                response = await client.post(self.url, headers=headers, files=files, data=data)
+    async def end_stream(self, client_id: str) -> dict:
+        """Close WebSocket connection and return final transcription."""
+        if client_id not in self._streams:
+            logger.error(f"No active stream for client {client_id}")
+            return {"text": "", "words": [], "segments": []}
+            
+        try:
+            stream_data = self._streams[client_id]
+            websocket = stream_data["websocket"]
+            
+            # Send close message
+            close_msg = json.dumps({"type": "CloseStream"})
+            await websocket.send(close_msg)
+            
+            # Wait a bit for final responses
+            try:
+                end_time = asyncio.get_event_loop().time() + 2.0  # 2 second timeout
+                while asyncio.get_event_loop().time() < end_time:
+                    response = await asyncio.wait_for(websocket.recv(), timeout=0.5)
+                    result = json.loads(response)
+                    
+                    if result.get("type") == "Results":
+                        channel = result.get("channel", {})
+                        alternatives = channel.get("alternatives", [])
+                        
+                        if alternatives and channel.get("is_final", False):
+                            alt = alternatives[0]
+                            transcript = alt.get("transcript", "")
+                            words = alt.get("words", [])
+                            
+                            if transcript.strip():
+                                stream_data["final_transcript"] += transcript
+                                stream_data["words"].extend(words)
+                                
+            except asyncio.TimeoutError:
+                pass
+                
+            # Close WebSocket
+            await websocket.close()
+            
+            # Prepare final result
+            final_transcript = stream_data["final_transcript"].strip()
+            final_words = stream_data["words"]
+            
+            logger.info(f"Deepgram streaming completed for {client_id}: {len(final_transcript)} chars, {len(final_words)} words")
+            
+            # Clean up
+            del self._streams[client_id]
+            
+            return {
+                "text": final_transcript,
+                "words": final_words,
+                "segments": []
+            }
+            
+        except Exception as e:
+            logger.error(f"Error ending stream for {client_id}: {e}")
+            # Clean up on error
+            if client_id in self._streams:
+                del self._streams[client_id]
+            return {"text": "", "words": [], "segments": []}
 
+    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+        """For streaming provider, this method is not typically used."""
+        logger.warning("transcribe() called on streaming provider - use streaming methods instead")
+        return {"text": "", "words": [], "segments": []}
+
+    async def disconnect(self):
+        """Close all active WebSocket connections."""
+        for client_id in list(self._streams.keys()):
+            try:
+                websocket = self._streams[client_id]["websocket"]
+                await websocket.close()
+            except Exception as e:
+                logger.error(f"Error closing WebSocket for {client_id}: {e}")
+            finally:
+                del self._streams[client_id]
+        
+        logger.info("All Deepgram streaming connections closed")
+
+
+class ParakeetProvider(BatchTranscriptionProvider):
+    """Parakeet HTTP batch transcription provider."""
+
+    def __init__(self, service_url: str):
+        self.service_url = service_url.rstrip('/')
+        self.transcribe_url = f"{self.service_url}/transcribe"
+
+    @property
+    def name(self) -> str:
+        return "Parakeet"
+
+    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+        """Transcribe audio using Parakeet HTTP service."""
+        try:
+            
+            logger.info(f"Sending {len(audio_data)} bytes to Parakeet service at {self.transcribe_url}")
+            
+            # Convert PCM bytes to audio file for upload
+            if sample_rate != 16000:
+                logger.warning(f"Sample rate {sample_rate} != 16000, audio may not be optimal")
+            
+            # Assume 16-bit PCM
+            audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+            audio_array = audio_array / np.iinfo(np.int16).max  # Normalize to [-1, 1]
+            
+            # Create temporary WAV file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                # sf.write(tmp_file.name, audio_array, 16000)  # Force 16kHz
+                async with LocalFileSink(tmp_file.name, sample_rate, 1) as sink:
+                    await sink.write(AudioChunk(
+                        rate=sample_rate,
+                        width=2,
+                        channels=1,
+                        audio=audio_data,
+                    ))
+
+                tmp_filename = tmp_file.name
+            
+            try:
+                # Upload file to Parakeet service
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    with open(tmp_filename, "rb") as f:
+                        files = {"file": ("audio.wav", f, "audio/wav")}
+                        response = await client.post(self.transcribe_url, files=files)
+                
                 if response.status_code == 200:
                     result = response.json()
-
-                    # Extract transcript from response
-                    transcript = result.get("text", "").strip()
-
-                    if transcript:
-                        logger.info(
-                            f"Mistral transcription successful: {len(transcript)} characters"
-                        )
-                        return {"text": transcript, "words": [], "segments": []}
-                    else:
-                        logger.warning("Mistral returned empty transcript")
-                        return {"text": "", "words": [], "segments": []}
+                    logger.info(f"Parakeet transcription successful: {len(result.get('text', ''))} chars, {len(result.get('words', []))} words")
+                    return result
                 else:
-                    logger.error(f"Mistral API error: {response.status_code} - {response.text}")
+                    error_msg = f"Parakeet service error: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    
+                    # For 5xx errors, raise exception to trigger retry/failure handling
+                    if response.status_code >= 500:
+                        raise RuntimeError(f"Parakeet service unavailable: HTTP {response.status_code}")
+                    
+                    # For 4xx errors, return empty result (client error, won't retry)
                     return {"text": "", "words": [], "segments": []}
-
-        except httpx.TimeoutException as e:
-            logger.error(f"HTTP timeout during Mistral API call for {len(audio_data)} bytes: {e}")
-            return {"text": "", "words": [], "segments": []}
+                    
+            finally:
+                # Clean up temporary file
+                if os.path.exists(tmp_filename):
+                    os.unlink(tmp_filename)
+                    
         except Exception as e:
-            logger.error(f"Error calling Mistral API: {e}")
+            logger.error(f"Error calling Parakeet service: {e}")
             return {"text": "", "words": [], "segments": []}
 
-    def _create_wav_header(self, audio_data: bytes, sample_rate: int) -> bytes:
-        """Create a WAV header for raw PCM data."""
-        import struct
 
-        # WAV header parameters
-        channels = 1
-        bits_per_sample = 16
-        byte_rate = sample_rate * channels * bits_per_sample // 8
-        block_align = channels * bits_per_sample // 8
-        data_size = len(audio_data)
-        file_size = data_size + 36  # 36 = header size - 8
+class ParakeetStreamingProvider(StreamingTranscriptionProvider):
+    """Parakeet WebSocket streaming transcription provider."""
 
-        # Build WAV header
-        header = struct.pack(
-            "<4sI4s4sIHHIIHH4sI",
-            b"RIFF",  # ChunkID
-            file_size,  # ChunkSize
-            b"WAVE",  # Format
-            b"fmt ",  # Subchunk1ID
-            16,  # Subchunk1Size (16 for PCM)
-            1,  # AudioFormat (1 for PCM)
-            channels,  # NumChannels
-            sample_rate,  # SampleRate
-            byte_rate,  # ByteRate
-            block_align,  # BlockAlign
-            bits_per_sample,  # BitsPerSample
-            b"data",  # Subchunk2ID
-            data_size,  # Subchunk2Size
-        )
+    def __init__(self, service_url: str):
+        self.service_url = service_url.rstrip('/')
+        self.ws_url = service_url.replace("http://", "ws://").replace("https://", "wss://") + "/stream"
+        self._streams: Dict[str, Dict] = {}  # client_id -> stream data
 
-        return header
+    @property
+    def name(self) -> str:
+        return "Parakeet-Streaming"
+
+    async def start_stream(self, client_id: str, sample_rate: int = 16000):
+        """Start a WebSocket connection for streaming transcription."""
+        try:
+            logger.info(f"Starting Parakeet streaming for client {client_id}")
+            
+            # Connect to WebSocket
+            websocket = await websockets.connect(self.ws_url)
+            
+            # Send transcribe event to start session
+            session_config = {
+                "vad_enabled": True,
+                "vad_silence_ms": 1000,
+                "time_interval_seconds": 30,
+                "return_interim_results": True,
+                "min_audio_seconds": 0.5
+            }
+            
+            start_message = {
+                "type": "transcribe",
+                "session_id": client_id,
+                "config": session_config
+            }
+            
+            await websocket.send(json.dumps(start_message))
+            
+            # Wait for session_started confirmation
+            response = await websocket.recv()
+            response_data = json.loads(response)
+            
+            if response_data.get("type") != "session_started":
+                raise RuntimeError(f"Failed to start session: {response_data}")
+            
+            # Store stream data
+            self._streams[client_id] = {
+                "websocket": websocket,
+                "sample_rate": sample_rate,
+                "session_id": client_id,
+                "interim_results": [],
+                "final_result": None
+            }
+            
+            logger.info(f"Parakeet WebSocket connected for client {client_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to start Parakeet streaming for {client_id}: {e}")
+            raise
+
+    async def process_audio_chunk(self, client_id: str, audio_chunk: bytes) -> Optional[dict]:
+        """Send audio chunk to WebSocket and process responses."""
+        if client_id not in self._streams:
+            logger.error(f"No active stream for client {client_id}")
+            return None
+            
+        try:
+            stream_data = self._streams[client_id]
+            websocket = stream_data["websocket"]
+            sample_rate = stream_data["sample_rate"]
+            
+            # Send audio_chunk event
+            chunk_message = {
+                "type": "audio_chunk",
+                "session_id": client_id,
+                "rate": sample_rate,
+                "width": 2,  # 16-bit
+                "channels": 1
+            }
+            
+            await websocket.send(json.dumps(chunk_message))
+            await websocket.send(audio_chunk)
+            
+            # Check for responses (non-blocking)
+            try:
+                while True:
+                    response = await asyncio.wait_for(websocket.recv(), timeout=0.01)
+                    result = json.loads(response)
+                    
+                    if result.get("type") == "interim_result":
+                        # Store interim result but don't return it (handled by backend differently)
+                        stream_data["interim_results"].append(result)
+                        logger.debug(f"Received interim result: {result.get('text', '')[:50]}...")
+                    elif result.get("type") == "final_result":
+                        # This shouldn't happen during chunk processing, but store it
+                        stream_data["final_result"] = result
+                        logger.debug(f"Received final result during chunk processing: {result.get('text', '')[:50]}...")
+                        
+            except asyncio.TimeoutError:
+                # No response available, continue
+                pass
+                
+            return None  # Streaming, no final result yet
+            
+        except Exception as e:
+            logger.error(f"Error processing audio chunk for {client_id}: {e}")
+            return None
+
+    async def end_stream(self, client_id: str) -> dict:
+        """Close WebSocket connection and return final transcription."""
+        if client_id not in self._streams:
+            logger.error(f"No active stream for client {client_id}")
+            return {"text": "", "words": [], "segments": []}
+            
+        try:
+            stream_data = self._streams[client_id]
+            websocket = stream_data["websocket"]
+            
+            # Send finalize event
+            finalize_message = {
+                "type": "finalize",
+                "session_id": client_id
+            }
+            await websocket.send(json.dumps(finalize_message))
+            
+            # Wait for final result
+            try:
+                end_time = asyncio.get_event_loop().time() + 5.0  # 5 second timeout
+                while asyncio.get_event_loop().time() < end_time:
+                    response = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                    result = json.loads(response)
+                    
+                    if result.get("type") == "final_result":
+                        stream_data["final_result"] = result
+                        break
+                        
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout waiting for final result from {client_id}")
+                
+            # Close WebSocket
+            await websocket.close()
+            
+            # Prepare final result
+            final_result = stream_data.get("final_result")
+            if final_result:
+                result_data = {
+                    "text": final_result.get("text", ""),
+                    "words": final_result.get("words", []),
+                    "segments": final_result.get("segments", [])
+                }
+            else:
+                # Fallback: aggregate interim results if no final result received
+                interim_texts = [r.get("text", "") for r in stream_data["interim_results"]]
+                all_words = []
+                for r in stream_data["interim_results"]:
+                    all_words.extend(r.get("words", []))
+                    
+                result_data = {
+                    "text": " ".join(interim_texts),
+                    "words": all_words,
+                    "segments": []
+                }
+            
+            logger.info(f"Parakeet streaming completed for {client_id}: {len(result_data.get('text', ''))} chars")
+            
+            # Clean up
+            del self._streams[client_id]
+            
+            return result_data
+            
+        except Exception as e:
+            logger.error(f"Error ending stream for {client_id}: {e}")
+            # Clean up on error
+            if client_id in self._streams:
+                try:
+                    await self._streams[client_id]["websocket"].close()
+                except:
+                    pass
+                del self._streams[client_id]
+            return {"text": "", "words": [], "segments": []}
+
+    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+        """For streaming provider, this method is not typically used."""
+        logger.warning("transcribe() called on streaming provider - use streaming methods instead")
+        return {"text": "", "words": [], "segments": []}
+
+    async def disconnect(self):
+        """Close all active WebSocket connections."""
+        for client_id in list(self._streams.keys()):
+            try:
+                websocket = self._streams[client_id]["websocket"]
+                await websocket.close()
+            except Exception as e:
+                logger.error(f"Error closing WebSocket for {client_id}: {e}")
+            finally:
+                del self._streams[client_id]
+        
+        logger.info("All Parakeet streaming connections closed")
 
 
 def get_transcription_provider(
     provider_name: Optional[str] = None,
-) -> OnlineTranscriptionProvider:
+    mode: Optional[str] = None,
+) -> Optional[BaseTranscriptionProvider]:
     """
     Factory function to get the appropriate transcription provider.
 
     Args:
-        provider_name: Name of the provider ('deepgram', 'mistral').
-                      If None, will check environment for available keys.
+        provider_name: Name of the provider ('deepgram', 'parakeet').
+                      If None, will auto-select based on available configuration.
+        mode: Processing mode ('streaming', 'batch'). If None, defaults to 'batch'.
 
     Returns:
-        An instance of OnlineTranscriptionProvider.
+        An instance of BaseTranscriptionProvider, or None if no provider is configured.
 
     Raises:
-        RuntimeError: If no transcription provider is configured or requested provider is unavailable.
+        RuntimeError: If a specific provider is requested but not properly configured.
     """
-    import os
-
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
-    mistral_key = os.getenv("MISTRAL_API_KEY")
-    mistral_model = os.getenv("MISTRAL_MODEL", "voxtral-mini-2507")  # Default to voxtral-mini
-
+    parakeet_url = os.getenv("PARAKEET_ASR_URL")
+    
     if provider_name:
         provider_name = provider_name.lower()
+    
+    if mode is None:
+        mode = "batch"
+    mode = mode.lower()
 
-    if provider_name == "deepgram" and deepgram_key:
-        return DeepgramProvider(deepgram_key)
-    elif provider_name == "mistral" and mistral_key:
-        logger.info(f"Using Mistral transcription provider with model: {mistral_model}")
-        return MistralProvider(mistral_key, mistral_model)
-    elif provider_name is None:
-        # Auto-select based on available keys (Deepgram preferred)
-        if deepgram_key:
-            logger.info("Using Deepgram transcription provider")
-            return DeepgramProvider(deepgram_key)
-        elif mistral_key:
-            logger.info(f"Using Mistral transcription provider with model: {mistral_model}")
-            return MistralProvider(mistral_key, mistral_model)
-
-    # No provider available or configured
-    if provider_name:
-        if provider_name == "deepgram":
+    # Handle specific provider requests
+    if provider_name == "deepgram":
+        if not deepgram_key:
             raise RuntimeError(
-                f"Deepgram transcription provider requested but DEEPGRAM_API_KEY not configured"
+                "Deepgram transcription provider requested but DEEPGRAM_API_KEY not configured"
             )
-        elif provider_name == "mistral":
-            raise RuntimeError(
-                f"Mistral transcription provider requested but MISTRAL_API_KEY not configured"
-            )
+        logger.info(f"Using Deepgram transcription provider in {mode} mode")
+        if mode == "streaming":
+            return DeepgramStreamingProvider(deepgram_key)
         else:
+            return DeepgramProvider(deepgram_key)
+
+    elif provider_name == "parakeet":
+        if not parakeet_url:
             raise RuntimeError(
-                f"Unknown transcription provider '{provider_name}'. Supported: 'deepgram', 'mistral'"
+                "Parakeet ASR provider requested but PARAKEET_ASR_URL not configured"
             )
-    else:
-        return None
+        logger.info(f"Using Parakeet ASR transcription provider in {mode} mode")
+        if mode == "streaming":
+            return ParakeetStreamingProvider(parakeet_url)
+        else:
+            return ParakeetProvider(parakeet_url)
+
+    elif provider_name:
+        raise RuntimeError(
+            f"Unknown transcription provider '{provider_name}'. Supported: 'deepgram', 'parakeet'"
+        )
+
+    # Auto-select based on available configuration
+    if deepgram_key:
+        logger.info(f"Auto-selected Deepgram transcription provider in {mode} mode")
+        if mode == "streaming":
+            return DeepgramStreamingProvider(deepgram_key)
+        else:
+            return DeepgramProvider(deepgram_key)
+    elif parakeet_url:
+        logger.info(f"Auto-selected Parakeet ASR transcription provider in {mode} mode")
+        if mode == "streaming":
+            return ParakeetStreamingProvider(parakeet_url)
+        else:
+            return ParakeetProvider(parakeet_url)
+
+    # No provider configured
+    logger.warning(
+        "No transcription provider configured. Please set one of: "
+        "DEEPGRAM_API_KEY or PARAKEET_ASR_URL"
+    )
+    return None
+

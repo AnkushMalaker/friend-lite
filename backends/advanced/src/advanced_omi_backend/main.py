@@ -129,16 +129,14 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://localhost:8765")
 
-# Determine which transcription service to use
-USE_ONLINE_TRANSCRIPTION = bool(TRANSCRIPTION_PROVIDER and (DEEPGRAM_API_KEY or MISTRAL_API_KEY))
-USE_OFFLINE_ASR = not USE_ONLINE_TRANSCRIPTION and bool(OFFLINE_ASR_TCP_URI)
-
-
+# Get configured transcription provider (online or offline)
 transcription_provider = get_transcription_provider(TRANSCRIPTION_PROVIDER)
 if transcription_provider:
-    logger.info(f"✅ Using {transcription_provider.name} transcription provider")
+    logger.info(
+        f"✅ Using {transcription_provider.name} transcription provider ({transcription_provider.mode})"
+    )
 else:
-    logger.info("⚠️ No online transcription provider configured")
+    logger.warning("⚠️ No transcription provider configured - speech-to-text will not be available")
 
 # Ollama & Qdrant Configuration
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
@@ -183,7 +181,7 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
         code = message.get("code", 1000)
         reason = message.get("reason", "")
         raise WebSocketDisconnect(code=code, reason=reason)
-    
+
     # Handle text message (JSON header)
     if "text" in message:
         header_text = message["text"]
@@ -748,20 +746,17 @@ async def health_check():
             "transcription_service": (
                 f"Speech to Text ({transcription_provider.name})"
                 if transcription_provider
-                else (
-                    "Speech to Text (Offline ASR)"
-                    if USE_OFFLINE_ASR
-                    else "Speech to Text (Not Configured)"
-                )
+                else "Speech to Text (Not Configured)"
             ),
             "asr_uri": (
-                f"REST API ({transcription_provider.name})"
+                f"{transcription_provider.mode.upper()} ({transcription_provider.name})"
                 if transcription_provider
-                else OFFLINE_ASR_TCP_URI if USE_OFFLINE_ASR else "Not configured"
+                else "Not configured"
             ),
-            "transcription_provider": TRANSCRIPTION_PROVIDER or "offline",
-            "online_transcription_enabled": USE_ONLINE_TRANSCRIPTION,
-            "offline_asr_enabled": USE_OFFLINE_ASR,
+            "transcription_provider": TRANSCRIPTION_PROVIDER or "auto-detect",
+            "provider_type": (
+                transcription_provider.mode if transcription_provider else "none"
+            ),
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": len(active_clients),
             "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
@@ -861,80 +856,34 @@ async def health_check():
         }
         overall_healthy = False
 
-    # Check Speech to Text service based on configuration
-    if USE_ONLINE_TRANSCRIPTION and transcription_provider:
-        # Check online transcription provider
+    # Check Speech to Text service based on configured provider
+    if transcription_provider:
+        provider_name = transcription_provider.name
+        provider_type = transcription_provider.mode
+
+        # Generic provider health check - let each provider handle its own connection logic
         try:
-            # For online providers, we just check that API keys are configured
-            provider_name = transcription_provider.name
-            if provider_name == "Deepgram" and DEEPGRAM_API_KEY:
-                health_status["services"]["speech_to_text"] = {
-                    "status": "✅ API Key Configured",
-                    "healthy": True,
-                    "type": "REST API",
-                    "provider": "Deepgram",
-                    "critical": False,
-                }
-            elif provider_name == "Mistral" and MISTRAL_API_KEY:
-                health_status["services"]["speech_to_text"] = {
-                    "status": "✅ API Key Configured",
-                    "healthy": True,
-                    "type": "REST API",
-                    "provider": "Mistral",
-                    "critical": False,
-                }
-            else:
-                health_status["services"]["speech_to_text"] = {
-                    "status": f"❌ API Key Missing for {provider_name}",
-                    "healthy": False,
-                    "type": "REST API",
-                    "provider": provider_name,
-                    "critical": False,
-                }
-                overall_healthy = False
+            # Test provider connection
+            await transcription_provider.connect("health-check")
+            await transcription_provider.disconnect()
+
+            health_status["services"]["speech_to_text"] = {
+                "status": "✅ Provider Available",
+                "healthy": True,
+                "type": provider_type.title(),
+                "provider": provider_name,
+                "critical": False,
+            }
         except Exception as e:
             health_status["services"]["speech_to_text"] = {
                 "status": f"⚠️ Provider Error: {str(e)}",
                 "healthy": False,
-                "type": "REST API",
-                "provider": TRANSCRIPTION_PROVIDER,
+                "type": provider_type.title(),
+                "provider": provider_name,
                 "critical": False,
             }
-            overall_healthy = False
-    elif USE_OFFLINE_ASR:
-        # Check offline ASR service (non-critical - may be external)
-        try:
-            test_client = AsyncTcpClient.from_uri(OFFLINE_ASR_TCP_URI)
-            await asyncio.wait_for(test_client.connect(), timeout=5.0)
-            await test_client.disconnect()
-            health_status["services"]["speech_to_text"] = {
-                "status": "✅ Connected",
-                "healthy": True,
-                "type": "Offline TCP",
-                "provider": "Wyoming ASR",
-                "uri": OFFLINE_ASR_TCP_URI,
-                "critical": False,
-            }
-        except asyncio.TimeoutError:
-            health_status["services"]["speech_to_text"] = {
-                "status": f"⚠️ Connection Timeout (5s) - Check external ASR service",
-                "healthy": False,
-                "type": "Offline TCP",
-                "provider": "Wyoming ASR",
-                "uri": OFFLINE_ASR_TCP_URI,
-                "critical": False,
-            }
-            overall_healthy = False
-        except Exception as e:
-            health_status["services"]["speech_to_text"] = {
-                "status": f"⚠️ Connection Failed: {str(e)} - Check external ASR service",
-                "healthy": False,
-                "type": "Offline TCP",
-                "provider": "Wyoming ASR",
-                "uri": OFFLINE_ASR_TCP_URI,
-                "critical": False,
-            }
-            overall_healthy = False
+            # Don't mark overall health as unhealthy for transcription issues
+            # since the service may be external or optional
     else:
         # No transcription service configured
         health_status["services"]["speech_to_text"] = {

@@ -217,9 +217,6 @@ def _build_mem0_config() -> dict:
                 "temperature": llm_settings.get(
                     "temperature", 0.1
                 ),  # Default from YAML is acceptable
-                "max_tokens": llm_settings.get(
-                    "max_tokens", 2000
-                ),  # Default from YAML is acceptable
             },
         }
         # NOTE: base_url not supported in current mem0 version for OpenAI provider
@@ -267,9 +264,6 @@ def _build_mem0_config() -> dict:
                 "ollama_base_url": ollama_base_url,
                 "temperature": llm_settings.get(
                     "temperature", 0.1
-                ),  # Default from YAML is acceptable
-                "max_tokens": llm_settings.get(
-                    "max_tokens", 2000
                 ),  # Default from YAML is acceptable
             },
         }
