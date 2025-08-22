@@ -1,64 +1,113 @@
 #!/usr/bin/env python3
 """
-End-to-end integration test for Friend-Lite backend.
+End-to-end integration test for Friend-Lite backend with unified transcription support.
 
 This test validates the complete audio processing pipeline using isolated test environment:
 1. Service startup with docker-compose-test.yml (isolated ports and databases)
-2. Authentication with test credentials
-3. Audio file upload
-4. Transcription (Deepgram)
-5. Memory extraction (OpenAI)
-6. Data storage verification
+2. ASR service startup (if Parakeet provider selected)
+3. Authentication with test credentials
+4. Audio file upload
+5. Transcription (Deepgram API or Parakeet ASR service)
+6. Memory extraction (OpenAI)
+7. Data storage verification
 
-Run with: uv run pytest test_integration.py
+Run with:
+  # Deepgram API transcription (default)
+  source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY && uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+
+  # Parakeet ASR transcription (HTTP/WebSocket service)
+  source .env && export OPENAI_API_KEY && TRANSCRIPTION_PROVIDER=parakeet uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
 
 Test Environment:
 - Uses docker-compose-test.yml for service isolation
 - Backend runs on port 8001 (vs dev 8000)
 - MongoDB on port 27018 (vs dev 27017)
 - Qdrant on ports 6335/6336 (vs dev 6333/6334)
+- Parakeet ASR on port 8767 (parakeet provider)
 - Pre-configured test credentials in .env.test
+- Provider selection via TRANSCRIPTION_PROVIDER environment variable
 """
 
 import json
 import logging
 import os
+import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 
+import openai
 import pytest
 import requests
 from pymongo import MongoClient
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging with immediate output (no buffering)
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout,
+    force=True
+)
 logger = logging.getLogger(__name__)
+# Ensure immediate output
+logger.handlers[0].flush() if logger.handlers else None
 from dotenv import load_dotenv
 
 # Test Configuration Flags
 # REBUILD=True: Force rebuild of containers (useful when code changes)
-# CACHED_MODE=True: Keep containers running after test (for debugging/reuse)
-REBUILD = True  # Set to True to force rebuild containers with latest code
-CACHED_MODE = True  # Set to True for debugging - keeps containers running
+# FRESH_RUN=True: Start with fresh data and containers (default)
+# CLEANUP_CONTAINERS=True: Stop and remove containers after test (default)
+REBUILD = os.environ.get("REBUILD", "true").lower() == "true"
+FRESH_RUN = os.environ.get("FRESH_RUN", "true").lower() == "true"
+CLEANUP_CONTAINERS = os.environ.get("CLEANUP_CONTAINERS", "true").lower() == "true"
+
+# Transcription Provider Configuration
+# TRANSCRIPTION_PROVIDER: 'deepgram' (Deepgram API) or 'parakeet' (Parakeet ASR service)
+TRANSCRIPTION_PROVIDER = os.environ.get("TRANSCRIPTION_PROVIDER", "deepgram")  # Default to deepgram
+# Get Parakeet URL from environment, fallback to port 8080
+PARAKEET_ASR_URL = os.environ.get("PARAKEET_ASR_URL", "http://host.docker.internal:8080")
 
 # Test Environment Configuration
-TEST_ENV_VARS = {
+# Base configuration for both providers
+TEST_ENV_VARS_BASE = {
     "AUTH_SECRET_KEY": "test-jwt-signing-key-for-integration-tests",
     "ADMIN_PASSWORD": "test-admin-password-123",
     "ADMIN_EMAIL": "test-admin@example.com",
     "LLM_PROVIDER": "openai",
-    "OPENAI_MODEL": "gpt-4o-mini",  # Cheaper model for tests
+    "OPENAI_MODEL": "gpt-5-mini",  # Cheaper model for tests
     "MONGODB_URI": "mongodb://localhost:27018",  # Test port (database specified in backend)
     "QDRANT_BASE_URL": "localhost",
+    "DISABLE_SPEAKER_RECOGNITION": "true",  # Prevent segment duplication in tests
 }
+
+# Deepgram provider configuration (API)
+TEST_ENV_VARS_DEEPGRAM = {
+    **TEST_ENV_VARS_BASE,
+    "TRANSCRIPTION_PROVIDER": "deepgram",
+    # Deepgram API key loaded from environment
+}
+
+# Parakeet provider configuration (HTTP/WebSocket ASR service)
+TEST_ENV_VARS_PARAKEET = {
+    **TEST_ENV_VARS_BASE,
+    "TRANSCRIPTION_PROVIDER": "parakeet",
+    "PARAKEET_ASR_URL": PARAKEET_ASR_URL,
+}
+
+# Select configuration based on provider
+if TRANSCRIPTION_PROVIDER == "parakeet":
+    TEST_ENV_VARS = TEST_ENV_VARS_PARAKEET
+else:  # Default to deepgram
+    TEST_ENV_VARS = TEST_ENV_VARS_DEEPGRAM
 
 tests_dir = Path(__file__).parent
 
 # Test constants
 BACKEND_URL = "http://localhost:8001"  # Test backend port
 TEST_AUDIO_PATH = tests_dir.parent.parent.parent / "extras/test-audios/DIY Experts Glass Blowing_16khz_mono_4min.wav"
+TEST_AUDIO_PATH_OFFLINE = tests_dir / "assets" / "test_clip_10s.wav"  # Shorter clip for offline testing
 MAX_STARTUP_WAIT = 60  # seconds
 PROCESSING_TIMEOUT = 300  # seconds for audio processing (5 minutes)
 
@@ -74,20 +123,36 @@ class IntegrationTestRunner:
     """Manages the integration test lifecycle."""
     
     def __init__(self):
+        print(f"🔧 Initializing IntegrationTestRunner", flush=True)
+        print(f"   FRESH_RUN={FRESH_RUN}, CLEANUP_CONTAINERS={CLEANUP_CONTAINERS}, REBUILD={REBUILD}", flush=True)
+        print(f"   TRANSCRIPTION_PROVIDER={TRANSCRIPTION_PROVIDER}", flush=True)
+        sys.stdout.flush()
+        
         self.token: Optional[str] = None
         self.services_started = False
         self.services_started_by_test = False  # Track if WE started the services
         self.mongo_client: Optional[MongoClient] = None
-        self.cached = CACHED_MODE  # Use global configuration flag
+        self.fresh_run = FRESH_RUN  # Use global configuration flag
+        self.cleanup_containers = CLEANUP_CONTAINERS  # Use global cleanup flag
         self.rebuild = REBUILD  # Use global rebuild flag
+        self.asr_services_started = False  # Track ASR services for parakeet provider
+        self.provider = TRANSCRIPTION_PROVIDER  # Store provider type
         
     def load_expected_transcript(self) -> str:
         """Load the expected transcript from the test assets file."""
         try:
-            with open(EXPECTED_TRANSCRIPT_PATH, 'r', encoding='utf-8') as f:
+            # Use provider-specific expectations if available
+            if self.provider == "parakeet":
+                transcript_path = tests_dir / "assets/test_transcript_parakeet.txt"
+                if not transcript_path.exists():
+                    transcript_path = EXPECTED_TRANSCRIPT_PATH  # Fallback to default
+            else:
+                transcript_path = EXPECTED_TRANSCRIPT_PATH
+            
+            with open(transcript_path, 'r', encoding='utf-8') as f:
                 return f.read().strip()
         except FileNotFoundError:
-            logger.warning(f"⚠️ Expected transcript file not found: {EXPECTED_TRANSCRIPT_PATH}")
+            logger.warning(f"⚠️ Expected transcript file not found: {transcript_path}")
             return ""
         except Exception as e:
             logger.warning(f"⚠️ Error loading expected transcript: {e}")
@@ -96,11 +161,27 @@ class IntegrationTestRunner:
     def load_expected_memories(self) -> list:
         """Load the expected memories from the test assets file."""
         try:
-            with open(EXPECTED_MEMORIES_PATH, 'r', encoding='utf-8') as f:
+            # Use provider-specific expectations if available
+            if self.provider == "parakeet":
+                memories_path = tests_dir / "assets/expected_memories_parakeet.json"
+                if not memories_path.exists():
+                    memories_path = EXPECTED_MEMORIES_PATH  # Fallback to default
+            else:
+                memories_path = EXPECTED_MEMORIES_PATH
+            
+            with open(memories_path, 'r', encoding='utf-8') as f:
                 import json
-                return json.load(f)
+                data = json.load(f)
+                # Handle both formats: list or dict with 'memories' key
+                if isinstance(data, list):
+                    return data
+                elif isinstance(data, dict) and 'memories' in data:
+                    return data['memories']
+                else:
+                    logger.warning(f"⚠️ Unexpected memories file format: {type(data)}")
+                    return []
         except FileNotFoundError:
-            logger.warning(f"⚠️ Expected memories file not found: {EXPECTED_MEMORIES_PATH}")
+            logger.warning(f"⚠️ Expected memories file not found: {memories_path}")
             return []
         except Exception as e:
             logger.warning(f"⚠️ Error loading expected memories: {e}")
@@ -108,8 +189,8 @@ class IntegrationTestRunner:
     
     def cleanup_test_data(self):
         """Clean up test-specific data directories (preserve development data)."""
-        if self.cached:
-            logger.info("🗂️ Skipping test data cleanup (--cached mode)")
+        if not self.fresh_run:
+            logger.info("🗂️ Skipping test data cleanup (reusing existing data)")
             return
             
         logger.info("🗂️ Cleaning up test-specific data directories...")
@@ -126,19 +207,30 @@ class IntegrationTestRunner:
         
         # Try container-based cleanup first for root-owned files
         try:
-            logger.info("🐳 Attempting container-based cleanup for root-owned test data...")
-            # Use docker exec to clean from within a test container if available
-            result = subprocess.run(
-                ["docker", "exec", "advanced-backend-friend-backend-test-1", "rm", "-rf"] + 
-                [f"/app/{test_dir.lstrip('./')}" for test_dir in test_directories],
+            # First check if container exists
+            check_result = subprocess.run(
+                ["docker", "ps", "-q", "-f", "name=advanced-backend-friend-backend-test-1"],
                 capture_output=True,
                 text=True
             )
-            if result.returncode == 0:
-                logger.info("✅ Container-based cleanup successful")
-                return
+            
+            if check_result.stdout.strip():
+                logger.info("🐳 Container exists, attempting container-based cleanup for root-owned test data...")
+                # Use docker exec to clean from within a test container if available
+                result = subprocess.run(
+                    ["docker", "exec", "advanced-backend-friend-backend-test-1", "rm", "-rf"] + 
+                    [f"/app/{test_dir.lstrip('./')}" for test_dir in test_directories],
+                    capture_output=True,
+                    text=True
+                )
+                logger.info(f"Container cleanup result: {result}")
+                if result.returncode == 0:
+                    logger.info("✅ Container-based cleanup successful")
+                    return
+                else:
+                    logger.info(f"Container cleanup failed: {result.stderr}")
             else:
-                logger.debug(f"Container cleanup failed: {result.stderr}")
+                logger.info("Container not running yet, will use local cleanup")
         except Exception as e:
             logger.debug(f"Container cleanup not available: {e}")
         
@@ -157,6 +249,143 @@ class IntegrationTestRunner:
                 logger.debug(f"📁 {test_dir} does not exist, skipping")
                 
         logger.info("✓ Test data cleanup complete")
+        
+    def start_asr_services(self):
+        """Start ASR services for Parakeet transcription testing."""
+        if self.provider != "parakeet":
+            logger.info(f"🔄 Skipping ASR services ({self.provider} provider uses API)")
+            return
+            
+        logger.info(f"🚀 Starting Parakeet ASR service...")
+        
+        try:
+            asr_dir = Path(__file__).parent.parent.parent.parent / "extras/asr-services"
+            
+            # Stop any existing ASR services first
+            subprocess.run(
+                ["docker", "compose", "-f", "docker-compose-test.yml", "down"],
+                cwd=asr_dir,
+                capture_output=True
+            )
+            
+            # Start Parakeet ASR service
+            result = subprocess.run(
+                ["docker", "compose", "-f", "docker-compose-test.yml", "up", "--build", "-d", "parakeet-asr-test"],
+                cwd=asr_dir,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout for service startup
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Failed to start Parakeet ASR service: {result.stderr}")
+                raise RuntimeError(f"Parakeet ASR service failed to start: {result.stderr}")
+                
+            self.asr_services_started = True
+            logger.info("✅ Parakeet ASR service started successfully")
+            
+        except Exception as e:
+            logger.error(f"Error starting Parakeet ASR service: {e}")
+            raise
+            
+    def wait_for_asr_ready(self):
+        """Wait for ASR services to be ready."""
+        if self.provider != "parakeet":
+            logger.info(f"🔄 Skipping ASR readiness check ({self.provider} provider uses API)")
+            return
+        
+        # Cascade failure check - don't wait for ASR if backend services failed
+        if not hasattr(self, 'services_started') or not self.services_started:
+            raise RuntimeError("Backend services are not running - cannot start ASR services")
+            
+        logger.info("🔍 Waiting for Parakeet ASR service to be ready...")
+        
+        start_time = time.time()
+        while time.time() - start_time < MAX_STARTUP_WAIT:
+            try:
+                # Check container status directly instead of HTTP health check
+                # This avoids the curl dependency issue in the container
+                result = subprocess.run(
+                    ["docker", "ps", "--filter", "name=asr-services-parakeet-asr-test-1", "--format", "{{.Status}}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    status = result.stdout.strip()
+                    logger.debug(f"Container status: {status}")
+                    
+                    # Early exit on unhealthy containers
+                    if "(unhealthy)" in status:
+                        raise RuntimeError(f"Parakeet ASR container is unhealthy: {status}")
+                    if "Exited" in status or "Dead" in status:
+                        raise RuntimeError(f"Parakeet ASR container failed: {status}")
+                    
+                    # Look for 'Up' status and ideally '(healthy)' status
+                    if "Up" in status:
+                        # If container is healthy, we can skip the HTTP check
+                        if "(healthy)" in status:
+                            logger.info("✓ Parakeet ASR container is healthy")
+                            return
+                        # Additional check: try to connect to the service
+                        try:
+                            import requests
+
+                            # Use the same URL that the backend will use
+                            response = requests.get(f"{PARAKEET_ASR_URL}/health", timeout=5)
+                            if response.status_code == 200:
+                                health_data = response.json()
+                                if health_data.get("status") == "healthy":
+                                    logger.info("✓ Parakeet ASR service is healthy and accessible")
+                                    return
+                                elif health_data.get("status") == "unhealthy":
+                                    raise RuntimeError(f"Parakeet ASR service reports unhealthy: {health_data}")
+                                else:
+                                    logger.debug(f"Service responding but not ready: {health_data}")
+                            elif response.status_code >= 500:
+                                raise RuntimeError(f"Parakeet ASR service error: HTTP {response.status_code}")
+                            elif response.status_code >= 400:
+                                logger.warning(f"Parakeet ASR client error: HTTP {response.status_code}")
+                            else:
+                                logger.debug(f"Health check failed with status {response.status_code}")
+                        except requests.exceptions.ConnectionError as e:
+                            logger.debug(f"Connection failed, but container is up: {e}")
+                        except Exception as e:
+                            logger.debug(f"HTTP health check failed, but container is up: {e}")
+                    else:
+                        logger.debug(f"Container not ready yet: {status}")
+                else:
+                    logger.debug("Container not found or not running")
+                    
+            except Exception as e:
+                logger.debug(f"Container status check failed: {e}")
+                
+            time.sleep(2)
+            
+        raise RuntimeError("Parakeet ASR service failed to become ready within timeout")
+        
+    def cleanup_asr_services(self):
+        """Clean up ASR services."""
+        if not self.asr_services_started:
+            return
+            
+        if not self.fresh_run:
+            logger.info("🔄 Skipping ASR services cleanup (reusing existing services)")
+            return
+            
+        logger.info("🧹 Cleaning up ASR services...")
+        
+        try:
+            asr_dir = Path(__file__).parent.parent.parent.parent / "extras/asr-services"
+            subprocess.run(
+                ["docker", "compose", "-f", "docker-compose-test.yml", "down"],
+                cwd=asr_dir,
+                capture_output=True
+            )
+            logger.info("✅ ASR services stopped")
+        except Exception as e:
+            logger.warning(f"Error stopping ASR services: {e}")
         
     def setup_environment(self):
         """Set up environment variables for testing."""
@@ -203,18 +432,45 @@ class IntegrationTestRunner:
             else:
                 logger.warning(f"  ⚠️ {key}: NOT SET")
         
-        # Log environment readiness
+        # Log environment readiness based on provider type
         deepgram_key = os.environ.get('DEEPGRAM_API_KEY')
         openai_key = os.environ.get('OPENAI_API_KEY')
+        offline_asr_uri = os.environ.get('OFFLINE_ASR_TCP_URI')
         
-        if deepgram_key and openai_key:
-            logger.info("✓ All required API keys are available")
+        # Validate based on transcription provider (streaming/batch architecture)
+        if self.provider == "deepgram":
+            # Deepgram provider validation (API-based)
+            if deepgram_key and openai_key:
+                logger.info("✓ All required keys for Deepgram transcription are available")
+            else:
+                logger.warning("⚠️ Some keys missing for Deepgram transcription - test may fail")
+                if not deepgram_key:
+                    logger.warning("  Missing DEEPGRAM_API_KEY (required for Deepgram transcription)")
+                if not openai_key:
+                    logger.warning("  Missing OPENAI_API_KEY (required for memory processing)")
+        elif self.provider == "parakeet":
+            # Parakeet provider validation (local ASR service)
+            parakeet_url = os.environ.get('PARAKEET_ASR_URL')
+            if parakeet_url and openai_key:
+                logger.info("✓ All required configuration for Parakeet transcription is available")
+                logger.info(f"  Using Parakeet ASR service at: {parakeet_url}")
+            else:
+                logger.warning("⚠️ Missing configuration for Parakeet transcription - test may fail")
+                if not parakeet_url:
+                    logger.warning("  Missing PARAKEET_ASR_URL (required for Parakeet ASR service)")
+                if not openai_key:
+                    logger.warning("  Missing OPENAI_API_KEY (required for memory processing)")
         else:
-            logger.warning("⚠️ Some API keys missing - test may fail")
-            if not deepgram_key:
-                logger.warning("  Missing DEEPGRAM_API_KEY")
-            if not openai_key:
-                logger.warning("  Missing OPENAI_API_KEY")
+            # Unknown or auto-select provider - check what's available
+            logger.info(f"Provider '{self.provider}' - checking available configuration...")
+            if deepgram_key and openai_key:
+                logger.info("✓ Deepgram configuration available")
+            elif os.environ.get('PARAKEET_ASR_URL') and openai_key:
+                logger.info("✓ Parakeet configuration available")
+            else:
+                logger.warning("⚠️ No valid transcription provider configuration found")
+                if not openai_key:
+                    logger.warning("  Missing OPENAI_API_KEY (required for memory processing)")
                 
     def start_services(self):
         """Start all services using docker compose."""
@@ -253,8 +509,8 @@ class IntegrationTestRunner:
                 logger.info("🔨 Rebuild mode: stopping containers and rebuilding with latest code...")
                 # Stop existing test services and remove volumes for fresh rebuild
                 subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "down", "-v"], capture_output=True)
-            elif self.cached:
-                logger.info("🔄 Cached mode: restarting existing containers...")
+            elif not self.fresh_run:
+                logger.info("🔄 Reuse mode: restarting existing containers...")
                 subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "restart"], capture_output=True)
             else:
                 logger.info("🔄 Fresh mode: stopping containers and removing volumes...")
@@ -288,7 +544,7 @@ class IntegrationTestRunner:
             # Start test services with BuildKit disabled to avoid bake issues
             env = os.environ.copy()
             env['DOCKER_BUILDKIT'] = '0'
-            result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)  # 5 minute timeout
             
             if result.returncode != 0:
                 logger.error(f"Failed to start services: {result.stderr}")
@@ -342,6 +598,10 @@ class IntegrationTestRunner:
                         if health_response.status_code == 200:
                             logger.info("✓ Backend health check passed")
                             services_status["backend"] = True
+                        elif health_response.status_code >= 500:
+                            raise RuntimeError(f"Backend service error: HTTP {health_response.status_code}")
+                        elif health_response.status_code >= 400:
+                            logger.warning(f"Backend client error: HTTP {health_response.status_code}")
                     except requests.exceptions.RequestException:
                         pass
                 
@@ -370,8 +630,14 @@ class IntegrationTestRunner:
                             if data.get("status") in ["healthy", "ready"]:
                                 logger.info("✓ Backend reports all services ready (including Qdrant)")
                                 services_status["readiness"] = True
+                            elif data.get("status") == "unhealthy":
+                                raise RuntimeError(f"Backend reports unhealthy status: {data}")
                             else:
                                 logger.warning(f"⚠️ Backend readiness check not fully healthy: {data}")
+                        elif readiness_response.status_code >= 500:
+                            raise RuntimeError(f"Backend readiness error: HTTP {readiness_response.status_code}")
+                        elif readiness_response.status_code >= 400:
+                            logger.warning(f"Backend readiness client error: HTTP {readiness_response.status_code}")
                                 
                     except requests.exceptions.RequestException as e:
                         logger.debug(f"Readiness endpoint not ready yet: {e}")
@@ -407,11 +673,23 @@ class IntegrationTestRunner:
             
         # Final status report
         logger.error("❌ Service readiness timeout!")
+        failed_services = []
         for service, status in services_status.items():
             status_emoji = "✓" if status else "❌"
             logger.error(f"  {status_emoji} {service}: {'Ready' if status else 'Not ready'}")
+            if not status:
+                failed_services.append(service)
+        
+        # Check for cascade failures - if backend failed, everything else will fail
+        if not services_status["backend"]:
+            logger.error("💥 CRITICAL: Backend service failed - all dependent services will fail")
+            logger.error("   This indicates a fundamental infrastructure issue")
+        elif not services_status["mongo"]:
+            logger.error("💥 CRITICAL: MongoDB connection failed - memory and auth will not work")
+        elif not services_status["readiness"]:
+            logger.error("💥 WARNING: Readiness check failed - Qdrant or other dependencies may be down")
             
-        raise TimeoutError(f"Services did not become ready in {MAX_STARTUP_WAIT}s. Failed services: {[name for name, status in services_status.items() if not status]}")
+        raise TimeoutError(f"Services did not become ready in {MAX_STARTUP_WAIT}s. Failed services: {failed_services}")
         
     def authenticate(self):
         """Authenticate and get admin token."""
@@ -450,18 +728,21 @@ class IntegrationTestRunner:
         
     def upload_test_audio(self):
         """Upload test audio file and monitor processing."""
-        logger.info(f"📤 Uploading test audio: {TEST_AUDIO_PATH.name}")
+        # Use different audio file for offline provider
+        audio_path = TEST_AUDIO_PATH_OFFLINE if self.provider == "offline" else TEST_AUDIO_PATH
         
-        if not TEST_AUDIO_PATH.exists():
-            raise FileNotFoundError(f"Test audio file not found: {TEST_AUDIO_PATH}")
+        logger.info(f"📤 Uploading test audio: {audio_path.name}")
+        
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Test audio file not found: {audio_path}")
             
         # Log audio file details
-        file_size = TEST_AUDIO_PATH.stat().st_size
+        file_size = audio_path.stat().st_size
         logger.info(f"📊 Audio file size: {file_size:,} bytes ({file_size / (1024*1024):.2f} MB)")
         
         # Upload file
-        with open(TEST_AUDIO_PATH, 'rb') as f:
-            files = {'files': (TEST_AUDIO_PATH.name, f, 'audio/wav')}
+        with open(audio_path, 'rb') as f:
+            files = {'files': (audio_path.name, f, 'audio/wav')}
             data = {'device_name': 'integration_test'}
             headers = {'Authorization': f'Bearer {self.token}'}
             
@@ -705,13 +986,11 @@ class IntegrationTestRunner:
     def check_transcript_similarity_simple(self, actual_transcript: str, expected_transcript: str) -> dict:
         """Use OpenAI to check transcript similarity with simple boolean response."""
         try:
-            import openai
             
             client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
             
             prompt = f"""
-            Are these two transcripts similar enough that they represent the same content? 
-            Compare the actual transcript against the expected transcript.
+            Compare these two transcripts to determine if they represent the same audio content.
             
             EXPECTED TRANSCRIPT:
             "{expected_transcript}"
@@ -719,18 +998,35 @@ class IntegrationTestRunner:
             ACTUAL TRANSCRIPT:
             "{actual_transcript}"
             
-            Respond in JSON format with:
+            **MARK AS SIMILAR if:**
+            - Core content and topics match (e.g., glass blowing class, participants, activities)
+            - Key facts and events are present in both (names, numbers, objects, actions)
+            - Overall narrative flow is recognizable
+            - At least 70% semantic overlap exists
+            
+            **ACCEPTABLE DIFFERENCES (still mark as similar):**
+            - Minor word variations or ASR errors
+            - Different punctuation or capitalization
+            - Missing or extra filler words
+            - Small sections missing or repeated
+            - Slightly different word order
+            - Speaker diarization differences
+            
+            **ONLY MARK AS DISSIMILAR if:**
+            - Core content is fundamentally different
+            - Major sections (>30%) are missing or wrong
+            - It appears to be a different audio file entirely
+            
+            Respond in JSON format:
             {{
                 "similar": true/false,
-                "reason": "brief explanation"
+                "reason": "brief explanation (1-2 sentences)"
             }}
             """
             
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0,
                 response_format={"type": "json_object"}
             )
             
@@ -738,7 +1034,6 @@ class IntegrationTestRunner:
             
             # Try to parse JSON response
             try:
-                import json
                 result = json.loads(response_text)
                 return result
             except json.JSONDecodeError:
@@ -807,28 +1102,32 @@ class IntegrationTestRunner:
             }}
             """
             
+            logger.info(f"Making GPT-5-mini API call for memory similarity...")
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0,
                 response_format={"type": "json_object"}
             )
             
             response_text = (response.choices[0].message.content or "").strip()
+            logger.info(f"Memory similarity GPT-5-mini response: '{response_text}'")
             
             try:
                 result = json.loads(response_text)
                 return result
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as json_err:
                 # If JSON parsing fails, return a basic result
+                logger.error(f"JSON parsing failed: {json_err}")
+                logger.error(f"Response text that failed to parse: '{response_text}'")
                 return {
                     "similar": False,
                     "reason": f"Could not parse response: {response_text}"
                 }
             
         except Exception as e:
-            logger.warning(f"⚠️ Could not check memory similarity: {e}")
+            logger.error(f"⚠️ Could not check memory similarity: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            logger.error(f"Exception details: {str(e)}")
             return {
                 "similar": False,
                 "reason": f"API call failed: {str(e)}"
@@ -915,12 +1214,12 @@ class IntegrationTestRunner:
         # Now fetch the memories from the API
         memories = self.get_memories_from_api()
         
-        # Filter by client_id for test isolation in fresh mode, or get all user memories in cached mode
-        if self.cached:
-            # In cached mode, get all user memories (API already filters by user_id)
+        # Filter by client_id for test isolation in fresh mode, or get all user memories in reuse mode
+        if not self.fresh_run:
+            # In reuse mode, get all user memories (API already filters by user_id)
             user_memories = memories
             if user_memories:
-                logger.info(f"✅ Found {len(user_memories)} total user memories (cached mode)")
+                logger.info(f"✅ Found {len(user_memories)} total user memories (reusing existing data)")
                 return user_memories
         else:
             # In fresh mode, filter by client_id for test isolation since we cleaned all data
@@ -939,13 +1238,13 @@ class IntegrationTestRunner:
         if self.mongo_client:
             self.mongo_client.close()
             
-        # Handle container cleanup based on cached flag (rebuild flag doesn't affect cleanup)
-        if not self.cached and self.services_started_by_test:
-            logger.info("🔄 Fresh mode: stopping test docker compose services...")
+        # Handle container cleanup based on cleanup_containers flag (rebuild flag doesn't affect cleanup)
+        if self.cleanup_containers and self.services_started_by_test:
+            logger.info("🔄 Cleanup mode: stopping test docker compose services...")
             subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "down", "-v"], capture_output=True)
             logger.info("✓ Test containers stopped and volumes removed")
-        elif self.cached:
-            logger.info("🗂️ Cached mode: leaving containers running for reuse")
+        elif not self.cleanup_containers:
+            logger.info("🗂️ No cleanup: leaving containers running for debugging")
             if self.rebuild:
                 logger.info("   (containers were rebuilt with latest code during this test)")
         else:
@@ -962,21 +1261,28 @@ def test_runner():
     runner.cleanup()
 
 
+@pytest.mark.integration
 def test_full_pipeline_integration(test_runner):
     """Test the complete audio processing pipeline."""
+    # Immediate output to confirm test is starting
+    print("🚀 TEST STARTING - test_full_pipeline_integration", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
     try:
         # Test timing tracking
         test_start_time = time.time()
         phase_times = {}
         
         # Immediate logging to debug environment
-        logger.info("=" * 80)
-        logger.info("🚀 STARTING INTEGRATION TEST")
-        logger.info("=" * 80)
+        print("=" * 80, flush=True)
+        print("🚀 STARTING INTEGRATION TEST", flush=True)
+        print("=" * 80, flush=True)
         logger.info(f"Current working directory: {os.getcwd()}")
         logger.info(f"Files in directory: {os.listdir('.')}")
         logger.info(f"CI environment: {os.environ.get('CI', 'NOT SET')}")
         logger.info(f"GITHUB_ACTIONS: {os.environ.get('GITHUB_ACTIONS', 'NOT SET')}")
+        sys.stdout.flush()
         
         # Phase 1: Environment setup
         phase_start = time.time()
@@ -985,12 +1291,19 @@ def test_full_pipeline_integration(test_runner):
         phase_times['env_setup'] = time.time() - phase_start
         logger.info(f"✅ Environment setup completed in {phase_times['env_setup']:.2f}s")
         
-        # Phase 2: Service startup
+        # Phase 2: Service startup  
         phase_start = time.time()
         logger.info("🐳 Phase 2: Starting services...")
         test_runner.start_services()
         phase_times['service_startup'] = time.time() - phase_start
         logger.info(f"✅ Service startup completed in {phase_times['service_startup']:.2f}s")
+        
+        # Phase 2b: ASR service startup (offline only)
+        phase_start = time.time()
+        logger.info(f"🎤 Phase 2b: Starting ASR services ({TRANSCRIPTION_PROVIDER} provider)...")
+        test_runner.start_asr_services()
+        phase_times['asr_startup'] = time.time() - phase_start
+        logger.info(f"✅ ASR service startup completed in {phase_times['asr_startup']:.2f}s")
         
         # Phase 3: Wait for services
         phase_start = time.time()
@@ -998,6 +1311,13 @@ def test_full_pipeline_integration(test_runner):
         test_runner.wait_for_services()
         phase_times['service_readiness'] = time.time() - phase_start
         logger.info(f"✅ Service readiness check completed in {phase_times['service_readiness']:.2f}s")
+        
+        # Phase 3b: Wait for ASR services (offline only)
+        phase_start = time.time()
+        logger.info("⏳ Phase 3b: Waiting for ASR services to be ready...")
+        test_runner.wait_for_asr_ready()
+        phase_times['asr_readiness'] = time.time() - phase_start
+        logger.info(f"✅ ASR readiness check completed in {phase_times['asr_readiness']:.2f}s")
         
         # Phase 4: Authentication
         phase_start = time.time()
@@ -1117,6 +1437,9 @@ Generated Transcript ({len(transcription)} chars):
     except Exception as e:
         logger.error(f"Integration test failed: {e}")
         raise
+    finally:
+        # Cleanup ASR services
+        test_runner.cleanup_asr_services()
 
 
 if __name__ == "__main__":

@@ -85,7 +85,6 @@ MEM0_CONFIG = {
             "model": "llama3.1:latest",
             "ollama_base_url": OLLAMA_BASE_URL,
             "temperature": 0,
-            "max_tokens": 2000,
         },
     },
     "embedder": {
@@ -174,10 +173,10 @@ For better JSON parsing and reduced errors, switch to OpenAI:
 # In your .env file
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-4o  # Recommended for reliable JSON output
+OPENAI_MODEL=gpt-5-mini  # Recommended for reliable JSON output
 
 # Alternative models
-# OPENAI_MODEL=gpt-4o-mini  # Faster, cheaper option
+# OPENAI_MODEL=gpt-5-mini  # Faster, cheaper option
 # OPENAI_MODEL=gpt-3.5-turbo  # Budget option
 ```
 
@@ -186,17 +185,15 @@ Or configure via `memory_config.yaml`:
 ```yaml
 memory_extraction:
   llm_settings:
-    model: "gpt-4o"  # When LLM_PROVIDER=openai
+    model: "gpt-5-mini"  # When LLM_PROVIDER=openai
     temperature: 0.1
-    max_tokens: 2000
 
 
 fact_extraction:
   enabled: true  # Safe to enable with GPT-4o
   llm_settings:
-    model: "gpt-4o"
+    model: "gpt-5-mini"
     temperature: 0.0
-    max_tokens: 1500
 ```
 
 #### Adjust LLM Parameters
@@ -204,7 +201,6 @@ fact_extraction:
 ```python
 MEM0_CONFIG["llm"]["config"].update({
     "temperature": 0.1,      # Higher for more creative summaries
-    "max_tokens": 4000,      # More tokens for longer memories
     "top_p": 0.9,           # Nucleus sampling
 })
 ```
