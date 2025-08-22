@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import openai
 import pytest
 import requests
 from pymongo import MongoClient
@@ -748,7 +749,6 @@ class IntegrationTestRunner:
     def check_transcript_similarity_simple(self, actual_transcript: str, expected_transcript: str) -> dict:
         """Use OpenAI to check transcript similarity with simple boolean response."""
         try:
-            import openai
             
             client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
             
@@ -862,7 +862,7 @@ class IntegrationTestRunner:
             except json.JSONDecodeError:
                 # If JSON parsing fails, return a basic result
                 return {
-                    "reason": f"Could not parse response: {response_text}"
+                    "reason": f"Could not parse response: {response_text}",
                     "similar": False,
                 }
             
