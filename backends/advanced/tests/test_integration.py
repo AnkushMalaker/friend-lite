@@ -49,7 +49,7 @@ TEST_ENV_VARS = {
     "ADMIN_PASSWORD": "test-admin-password-123",
     "ADMIN_EMAIL": "test-admin@example.com",
     "LLM_PROVIDER": "openai",
-    "OPENAI_MODEL": "gpt-4o-mini",  # Cheaper model for tests
+    "OPENAI_MODEL": "gpt-5-mini",  # Cheaper model for tests
     "MONGODB_URI": "mongodb://localhost:27018",  # Test port (database specified in backend)
     "QDRANT_BASE_URL": "localhost",
 }
@@ -764,16 +764,14 @@ class IntegrationTestRunner:
             
             Respond in JSON format with:
             {{
-                "similar": true/false,
                 "reason": "brief explanation"
+                "similar": true/false,
             }}
             """
             
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0,
                 response_format={"type": "json_object"}
             )
             
@@ -851,10 +849,8 @@ class IntegrationTestRunner:
             """
             
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0,
                 response_format={"type": "json_object"}
             )
             
@@ -866,8 +862,8 @@ class IntegrationTestRunner:
             except json.JSONDecodeError:
                 # If JSON parsing fails, return a basic result
                 return {
-                    "similar": False,
                     "reason": f"Could not parse response: {response_text}"
+                    "similar": False,
                 }
             
         except Exception as e:
