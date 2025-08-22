@@ -802,3 +802,4 @@ def get_transcription_provider(
         "DEEPGRAM_API_KEY or PARAKEET_ASR_URL"
     )
     return None
+

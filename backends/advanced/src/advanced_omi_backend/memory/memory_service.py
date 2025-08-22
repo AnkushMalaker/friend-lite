@@ -181,7 +181,6 @@ def _build_mem0_config() -> dict:
     """Build Mem0 configuration from YAML config and environment variables."""
     config_loader = get_config_loader()
     memory_config = config_loader.get_memory_extraction_config()
-    fact_config = config_loader.get_fact_extraction_config()
     llm_settings = memory_config.get("llm_settings", {})
 
     # Get LLM provider from environment - required
@@ -258,15 +257,11 @@ def _build_mem0_config() -> dict:
 
         # Use OpenAI-compatible configuration for Ollama
         llm_config = {
-            "provider": "openai",  # Use OpenAI provider for Ollama compatibility
+            "provider": "ollama",  # Use OpenAI provider for Ollama compatibility
             "config": {
                 "model": model,
                 "api_key": os.getenv("OPENAI_API_KEY", "dummy"),  # Ollama doesn't need real key
-                "base_url": (
-                    f"{ollama_base_url}/v1"
-                    if not ollama_base_url.endswith("/v1")
-                    else ollama_base_url
-                ),
+                "ollama_base_url": ollama_base_url,
                 "temperature": llm_settings.get(
                     "temperature", 0.1
                 ),  # Default from YAML is acceptable
@@ -340,15 +335,15 @@ def _build_mem0_config() -> dict:
         # This is the main prompt that determines what gets extracted as memories
         memory_prompt = config_loader.get_memory_prompt()
         mem0_config["custom_fact_extraction_prompt"] = memory_prompt
-        memory_logger.info(f"✅ Memory extraction enabled with custom prompt")
-        memory_logger.info(f"🔍 FULL MEMORY EXTRACTION PROMPT:")
-        memory_logger.info(f"=== PROMPT START ===")
+        memory_logger.info("✅ Memory extraction enabled with custom prompt")
+        memory_logger.info("🔍 FULL MEMORY EXTRACTION PROMPT:")
+        memory_logger.info("=== PROMPT START ===")
         memory_logger.info(memory_prompt)
-        memory_logger.info(f"=== PROMPT END ===")
+        memory_logger.info("=== PROMPT END ===")
         memory_logger.info(f"Prompt length: {len(memory_prompt)} characters")
     else:
         memory_logger.warning(
-            f"⚠️ Fact extraction disabled - this may prevent mem0 from creating memories due to library limitations"
+            "⚠️ Fact extraction disabled - this may prevent mem0 from creating memories due to library limitations"
         )
 
     memory_logger.debug(
@@ -416,6 +411,7 @@ def init_memory_config(
         MEM0_APP_ID = app_id
 
     return MEM0_CONFIG
+
 
 class MemoryService:
     """Service class for managing memory operations."""
@@ -681,7 +677,6 @@ class MemoryService:
                 return False, []
 
         except Exception as error:
-            error_type = type(error).__name__
             memory_logger.error(f"Error while adding memory for {audio_uuid}: {error}")
             return False, []
 
@@ -713,7 +708,7 @@ class MemoryService:
 
                 # Check if this is a fallback transcript memory
                 is_fallback = (
-                    metadata.get("empty_results") == True
+                    metadata.get("empty_results")
                     or metadata.get("reason") == "llm_returned_empty_results"
                     or str(memory_id).startswith("transcript_")
                 )
@@ -795,7 +790,7 @@ class MemoryService:
 
                 # Check if this is a fallback transcript memory
                 is_fallback = (
-                    metadata.get("empty_results") == True
+                    metadata.get("empty_results")
                     or metadata.get("reason") == "llm_returned_empty_results"
                     or str(memory_id).startswith("transcript_")
                 )
