@@ -18,7 +18,7 @@ memory:
   mem0:
     model_provider: "openai"  # or "ollama" for local
     embedding_model: "text-embedding-3-small"
-    llm_model: "gpt-4o-mini"
+    llm_model: "gpt-5-mini"
 ```
 
 3. **Set environment variables** in `.env`:
@@ -44,7 +44,7 @@ memory:
   mem0:
     model_provider: "openai"  # or "ollama"
     embedding_model: "text-embedding-3-small"
-    llm_model: "gpt-4o-mini"
+    llm_model: "gpt-5-mini"
     prompt_template: "custom_prompt_here"  # Optional
 ```
 
@@ -61,7 +61,7 @@ memory:
 ### Model Selection
 
 #### OpenAI Models
-- **LLM**: `gpt-4o-mini`, `gpt-4o`, `gpt-3.5-turbo`
+- **LLM**: `gpt-5-mini`, `gpt-5-mini`, `gpt-3.5-turbo`
 - **Embeddings**: `text-embedding-3-small`, `text-embedding-3-large`
 
 #### Ollama Models (Local)
@@ -106,7 +106,7 @@ memory:
   mem0:
     model_provider: "openai"
     embedding_model: "text-embedding-3-small"
-    llm_model: "gpt-4o-mini"
+    llm_model: "gpt-5-mini"
 ```
 
 ### Local Ollama Setup

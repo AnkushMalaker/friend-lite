@@ -26,6 +26,14 @@ from pathlib import Path
 import pytest
 import requests
 
+# Test Configuration Flags
+# FRESH_RUN=True: Start with fresh data and containers (default)
+# CLEANUP_CONTAINERS=True: Stop and remove containers after test (default)
+# REBUILD=True: Force rebuild of containers (useful when code changes)
+FRESH_RUN = os.environ.get("FRESH_RUN", "true").lower() == "true"
+CLEANUP_CONTAINERS = os.environ.get("CLEANUP_CONTAINERS", "true").lower() == "true"
+REBUILD = os.environ.get("REBUILD", "false").lower() == "true"
+
 REPO_ROOT = Path(__file__).resolve().parents[3]  # Go up to friend-lite root
 SPEAKER_DIR = REPO_ROOT / "extras" / "speaker-recognition"
 TEST_ASSETS_DIR = SPEAKER_DIR / "tests" / "assets"
@@ -73,19 +81,30 @@ def _compose_up():
     if not _command_exists("docker"):
         pytest.skip("Docker not available; skipping speaker recognition integration tests")
 
+    # Determine build flag based on REBUILD setting
+    compose_args = [
+        "docker",
+        "compose",
+        "-f",
+        str(COMPOSE_FILE),
+        "up",
+        "-d",
+    ]
+    
+    if REBUILD:
+        compose_args.append("--build")
+        print(f"🔨 Rebuilding containers (REBUILD=True)")
+    else:
+        print(f"🔄 Using existing containers (REBUILD=False)")
+    
+    # Service name varies by compose file
+    compose_args.append(
+        "speaker-service-test" if COMPOSE_FILE.name.endswith("docker-compose-test.yml") else "speaker-service"
+    )
+    
     try:
         subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(COMPOSE_FILE),
-                "up",
-                "-d",
-                "--build",
-                # Service name varies by compose file
-                "speaker-service-test" if COMPOSE_FILE.name.endswith("docker-compose-test.yml") else "speaker-service",
-            ],
+            compose_args,
             cwd=str(SPEAKER_DIR),
             env=env,
             check=True,
@@ -119,13 +138,22 @@ def _compose_down():
 @pytest.fixture(scope="session", autouse=False)
 def speaker_service():
     try:
+        if FRESH_RUN:
+            print(f"🔄 Fresh run: starting with clean containers (FRESH_RUN=True)")
+            _compose_down()  # Ensure clean state
+        else:
+            print(f"♻️ Reuse mode: using existing data/containers if available (FRESH_RUN=False)")
+        
         _compose_up()
         _wait_for_health(SPEAKER_SERVICE_URL, timeout_seconds=600)
         yield
     finally:
-        # Keep containers up if SPEAKER_TEST_KEEP_CONTAINERS=1
-        if os.environ.get("SPEAKER_TEST_KEEP_CONTAINERS", "0") != "1":
+        # Clean up containers based on CLEANUP_CONTAINERS flag
+        if CLEANUP_CONTAINERS:
+            print(f"🧹 Cleaning up containers (CLEANUP_CONTAINERS=True)")
             _compose_down()
+        else:
+            print(f"🗂️ Keeping containers running for debugging (CLEANUP_CONTAINERS=False)")
 
 
 def test_speaker_recognition_pipeline(speaker_service):

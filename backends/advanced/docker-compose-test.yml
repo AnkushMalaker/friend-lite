@@ -23,6 +23,12 @@ services:
       # Import API keys from environment
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # LLM provider configuration (required for memory service)
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-5-mini}
+      # Transcription provider configuration
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER}
+      - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
     depends_on:
       qdrant-test:
         condition: service_started

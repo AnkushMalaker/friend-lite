@@ -1,34 +1,42 @@
 #!/usr/bin/env python3
 """
-Wyoming ASR server using Nemo Parakeet ASR + Silero VAD.
+FastAPI HTTP/WebSocket ASR server using NeMo Parakeet ASR + Silero VAD.
 
-Dependencies
-------------
-pip install numpy silero-vad nemo_toolkit[asr] soundfile wyoming easy_audio_interfaces pydub
+Provides both batch transcription (HTTP POST) and streaming transcription (WebSocket)
+with configurable processing triggers (VAD + time-based) and interim results.
+
+Dependencies are managed via pyproject.toml with uv.
 """
 
 import argparse
 import asyncio
-import csv
+import json
 import logging
 import os
 import tempfile
 import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence, cast
+from typing import Dict, List, Optional, Sequence, cast
 
 import nemo.collections.asr as nemo_asr
 import numpy as np
 import torch
+import uvicorn
 from easy_audio_interfaces.audio_interfaces import ResamplingBlock
-from easy_audio_interfaces.filesystem import LocalFileSink
+from easy_audio_interfaces.filesystem import LocalFileSink, LocalFileStreamer
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import JSONResponse
 from silero_vad import VADIterator, load_silero_vad
-from wyoming.asr import Transcribe, Transcript
-from wyoming.audio import AudioChunk, AudioStart, AudioStop
-from wyoming.event import Event
-from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
-from wyoming.server import AsyncEventHandler, AsyncTcpServer
-from wyoming.vad import VoiceStarted, VoiceStopped
+from wyoming.audio import AudioChunk
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -39,8 +47,19 @@ CHUNK_SAMPLES = 512  # Silero requirement (32 ms @ 16 kHz)
 MAX_SPEECH_SECS = 120  # Max duration of a speech segment
 MIN_SPEECH_SECS = 0.5  # Min duration for transcription
 
+@dataclass
+class ProcessEventConfig:
+    """Configuration for streaming processing triggers."""
+    vad_enabled: bool = False
+    vad_silence_ms: int = 1000  # Silence duration to trigger processing
+    time_interval_seconds: int = 30  # Max time between processing
+    max_buffer_seconds: int = 120  # Force processing after this duration
+    return_interim_results: bool = True  # Send partial results during streaming
+    min_audio_seconds: float = 0.5  # Minimum audio length to process
+
 
 def _chunk_to_numpy_float(chunk: AudioChunk) -> np.ndarray:
+    """Convert AudioChunk to numpy float32 array."""
     if chunk.channels != 1:
         raise ValueError(f"Unsupported channels: {chunk.channels}")
     if chunk.rate != PARAKEET_SAMPLING_RATE:
@@ -60,13 +79,12 @@ def _chunk_to_numpy_float(chunk: AudioChunk) -> np.ndarray:
     else:
         raise ValueError(f"Unsupported width: {chunk.width}")
 
-
 # --------------------------------------------------------------------------- #
 class SharedTranscriber:
     """Shared transcriber instance that can be used by multiple clients."""
 
     def __init__(self, model_name: str = "nvidia/parakeet-tdt-0.6b-v2"):
-        logger.info(f"Loading shared Nemo ASR model: {model_name}")
+        logger.info(f"Loading shared NeMo ASR model: {model_name}")
         self.model = cast(
             nemo_asr.models.ASRModel,
             nemo_asr.models.ASRModel.from_pretrained(model_name=model_name),
@@ -75,29 +93,26 @@ class SharedTranscriber:
         self._model_name = model_name
         self._lock = asyncio.Lock()
 
-        # Note: warmup will be called separately after initialization
-
     async def warmup(self) -> None:
         """Warm up the ASR model."""
-        logger.info("Warming up shared Nemo ASR model...")
+        logger.info("Warming up shared NeMo ASR model...")
         try:
             await self._transcribe(
                 [
                     AudioChunk(
-                        audio=np.zeros(self._rate // 10, np.int32).tobytes(),
+                        audio=np.zeros(self._rate // 10, np.int16).tobytes(),
                         rate=self._rate,
                         channels=1,
                         width=2,
                     )
                 ]
             )  # 0.1s silence
-            logger.info("Shared Nemo ASR model warmed up successfully.")
+            logger.info("Shared NeMo ASR model warmed up successfully.")
         except Exception as e:
             logger.error(f"Error during ASR model warm-up: {e}")
 
-    async def _transcribe(self, speech: Sequence[AudioChunk]) -> str:
-        """Internal transcription method."""
-
+    async def _transcribe(self, speech: Sequence[AudioChunk]) -> dict:
+        """Internal transcription method that returns structured result."""
         assert len(speech) > 0
         sample_rate = speech[0].rate
         channels = speech[0].channels
@@ -124,493 +139,376 @@ class SharedTranscriber:
                 results = self.model.transcribe( # type: ignore
                     [tmpfile_name], batch_size=1, timestamps=True
                 )
-            logger.debug(f"Transcription results: {results}")
+            logger.info(f"Transcription results: {results}")
 
             if results and len(results) > 0:
-                # Check if the first result is an object with a .text attribute
-                if hasattr(results[0], "text") and results[0].text is not None:
-                    return results[0].text
-                # Check if the first result is directly a string (some models/configs)
-                elif isinstance(results[0], str):
-                    return results[0]
-            return ""  # Return empty string if transcription failed or no text
+                result = results[0]
+                
+                # Extract text
+                if hasattr(result, "text") and result.text:
+                    text = result.text
+                elif isinstance(result, str):
+                    text = result
+                else:
+                    text = ""
+
+                # Extract word-level timestamps - NeMo Parakeet format
+                words = []
+                for word_data in result.timestamp['word']:
+                    word_dict = {
+                        "word": word_data['word'],
+                        "start": word_data['start'],
+                        "end": word_data['end'],
+                        "confidence": 1.0,
+                    }
+                    words.append(word_dict)
+                
+                logger.info(f"NeMo transcription successful: {len(text)} chars, {len(words)} words")
+                
+                response_data = {
+                    "text": text,
+                    "words": words,
+                    "segments": []  # Empty for non-RTTM providers
+                }
+                
+                # LOG THE FULL RESPONSE FOR DEBUGGING
+                logger.info(f"🔍 PARAKEET RESPONSE DEBUG:")
+                logger.info(f"  - Text length: {len(response_data['text'])}")
+                logger.info(f"  - First 100 chars: {repr(response_data['text'][:100])}")
+                logger.info(f"  - Words count: {len(response_data['words'])}")
+                logger.info(f"  - First 3 words: {response_data['words'][:3] if response_data['words'] else 'None'}")
+                logger.info(f"  - Full response keys: {list(response_data.keys())}")
+                
+                return response_data
+            else:
+                logger.warning("NeMo returned empty results")
+                return {"text": "", "words": [], "segments": []}
+                
         except Exception as e:
             logger.error(f"Error during transcription: {e}")
-            return ""
+            return {"text": "", "words": [], "segments": []}
         finally:
             if tmpfile_name and os.path.exists(tmpfile_name):
-                # os.remove(tmpfile_name)
-                logger.warning(f"Not removing tmpfile: {tmpfile_name}")
-                pass
+                os.remove(tmpfile_name)
 
-    async def transcribe_async(self, speech: Sequence[AudioChunk]) -> str:
+    async def transcribe_async(self, speech: Sequence[AudioChunk]) -> dict:
         """Thread-safe async transcription method."""
-
         async with self._lock:
             return await self._transcribe(speech)
 
-
 # --------------------------------------------------------------------------- #
-class ParakeetTranscriptionHandler(AsyncEventHandler):
-    """
-    Wyoming ASR handler for Parakeet offline transcription.
-    """
-
-    def __init__(
-        self,
-        *args,
-        shared_transcriber: SharedTranscriber,
-        vad_enabled: bool = True,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
-        self._transcriber = shared_transcriber
-        self._model_name = shared_transcriber._model_name
-        self._vad_enabled = vad_enabled
-
-        # VAD-related initialization
-        if self._vad_enabled:
-            self._vad_model = load_silero_vad(onnx=True)
-            self._vad_iterator = VADIterator(
-                model=self._vad_model,
-                sampling_rate=VAD_SAMPLING_RATE,
-                threshold=0.4,  # VAD sensitivity
-                min_silence_duration_ms=1000,  # Minimum silence duration in ms
-            )
-        else:
-            self._vad_model = None
-            self._vad_iterator = None
-
-        self._chunk_sequence: list[AudioChunk] = []
-        self._recording = False
-
-        # Non-VAD mode: collect everything from AudioStart to AudioStop
-        self._collecting_audio = False
-
-        # VAD sample buffering - ensure exactly 512 samples per VAD call
-        self._vad_sample_buffer = np.array([], dtype=np.float32)
-        self._vad_buffer_size = CHUNK_SAMPLES
-
-        self._debug_dir = Path("debug")
-        self._debug_dir.mkdir(parents=True, exist_ok=True)
-
-        # Results directory for CSV logging
-        self._results_dir = Path("results")
-        self._results_dir.mkdir(parents=True, exist_ok=True)
-
-        # CSV file for logging transcriptions
-        self._csv_file = self._results_dir / "transcription_results.csv"
-        self._csv_lock = asyncio.Lock()
-        self._init_csv_file()
-
-        # Debug file handling
-        self._recording_debug_handle = None
-        self._current_debug_file_path = None
-        self._DEBUG_LENGTH = 30  # seconds
-        self._cur_seg_duration = 0
-        self._resampler = ResamplingBlock(
-            resample_rate=PARAKEET_SAMPLING_RATE,
-            resample_channels=1,
-        )
-
-    def _init_csv_file(self) -> None:
-        """Initialize CSV file with headers if it doesn't exist."""
-        if not self._csv_file.exists():
-            with open(self._csv_file, "w", newline="", encoding="utf-8") as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(
-                    ["timestamp", "audio_path", "transcription", "ground_truth"]
-                )
-                logger.info(f"Created CSV file: {self._csv_file}")
-
-    async def _log_to_csv(self, audio_path: str, transcription: str) -> None:
-        """Log transcription result to CSV file."""
-        async with self._csv_lock:
-            try:
-                with open(self._csv_file, "a", newline="", encoding="utf-8") as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow(
-                        [time.time(), audio_path, transcription, ""]
-                    )  # Empty ground_truth
-                    logger.info(f"Logged to CSV: {audio_path} -> '{transcription}'")
-            except Exception as e:
-                logger.error(f"Error writing to CSV: {e}")
-
-    def soft_reset(self) -> None:
-        """Reset only the iterator's state, not the underlying model."""
-        if self._vad_enabled and self._vad_iterator:
-            self._vad_iterator.triggered = False
-            self._vad_iterator.temp_end = 0
-            self._vad_iterator.current_sample = 0
-            # Clear the VAD sample buffer
-            self._vad_sample_buffer = np.array([], dtype=np.float32)
-            logger.debug("VAD iterator soft reset.")
-        self._resampler.reset()
-
-    async def _write_debug_file(self, event: AudioChunk) -> None:
-        """Logic to create debug files"""
-        if self._recording_debug_handle is None:
-            self._cur_seg_duration = 0
-            self._current_debug_file_path = self._debug_dir / f"{time.time()}.wav"
-            logger.info(f"Writing debug file: {self._current_debug_file_path}\n\
-                        with rate: {event.rate}\n\
-                        channels: {event.channels}\n\
-                        width: {event.width}\n\
-                        samples: {event.samples}\n\
-                        seconds: {event.seconds}\n\
-                        ")
-            self._recording_debug_handle = LocalFileSink(
-                file_path=self._current_debug_file_path,
-                sample_rate=event.rate,
-                channels=event.channels,
-                sample_width=event.width,
-            )
-            await self._recording_debug_handle.open()
-        await self._recording_debug_handle.write(event)
-        logger.debug(f"Wrote debug file: {self._recording_debug_handle._file_path}")
-        self._cur_seg_duration += event.samples / event.rate
-        logger.debug(f"Current segment duration: {self._cur_seg_duration} seconds")
-        if self._cur_seg_duration > self._DEBUG_LENGTH:
-            await self._recording_debug_handle.close()
-            self._recording_debug_handle = None
-            self._current_debug_file_path = None
-
-    async def _process_audio_chunk(self, chunk: AudioChunk) -> None:
-        """Process audio chunk with VAD and transcription."""
-        async for chonk in self._resampler.process_chunk(chunk):
-            if self._vad_enabled:
-                # VAD-enabled mode: use VAD to detect speech segments
-                await self._buffer_and_process_vad(chonk)
-            else:
-                # VAD-disabled mode: collect all audio from start to stop
-                await self._write_debug_file(chonk)
-                await self._process_without_vad(chonk)
-
-    async def _process_without_vad(self, chunk: AudioChunk) -> None:
-        """Process audio chunk without VAD - collect everything from start to stop."""
-        if self._collecting_audio:
-            self._chunk_sequence.append(chunk)
-
-            # Safety check: if speech buffer gets too long, force transcription
-            speech_duration = sum(c.seconds for c in self._chunk_sequence)
-            if speech_duration >= MAX_SPEECH_SECS:
-                logger.warning(
-                    f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription."
-                )
-                await self._transcribe_and_send(self._chunk_sequence)
-                self._chunk_sequence.clear()
-
-    async def _transcribe_and_send(self, speech: Sequence[AudioChunk]) -> None:
-        """Transcribe speech and send Wyoming transcript event."""
-        try:
-            # Run blocking ASR call using the shared transcriber
-            logger.info(
-                f"audio_chunk_details:\
-                   audio length: {len(speech[0].audio)}\
-                   audio rate: {speech[0].rate}\
-                   audio channels: {speech[0].channels}\
-                   audio width: {speech[0].width}\
-                   audio samples: {speech[0].samples}\
-                   audio seconds: {speech[0].seconds}\
-                   total samples: {sum(chunk.samples for chunk in speech)}\
-                   total chunks: {len(speech)}\
-                   "
-            )
-            text = await self._transcriber.transcribe_async(speech)
-            sample_rate = speech[0].rate
-            channels = speech[0].channels
-            sample_width = speech[0].width
-
-            if not text:  # If transcription is empty or failed
-                logger.warning("Transcription resulted in empty text. Not sending.")
-                return
-
-            logger.info(f"Transcription result: '{text}'")
-
-            # Log to CSV if we have a current debug file path
-            if self._current_debug_file_path:
-                await self._log_to_csv(str(self._current_debug_file_path), text)
-            else:
-                # Create a temporary audio file for this transcription segment
-                temp_audio_path = self._debug_dir / f"transcription_{time.time()}.wav"
-                try:
-                    # Save the audio segment for CSV logging
-                    sink = LocalFileSink(
-                        file_path=temp_audio_path,
-                        sample_rate=sample_rate,
-                        channels=channels,
-                        sample_width=sample_width,
-                    )
-                    await sink.open()
-                    for chunk in speech:
-                        await sink.write(chunk)
-                    await sink.close()
-                    await self._log_to_csv(str(temp_audio_path), text)
-                except Exception as e:
-                    logger.error(f"Error saving temporary audio file: {e}")
-                    # Log with timestamp as fallback
-                    await self._log_to_csv(f"temp_audio_{time.time()}", text)
-
-            # Send Wyoming transcript event
-            transcript = Transcript(text=text)
-            await self.write_event(transcript.event())
-
-        except Exception as e:
-            logger.error(f"Error during transcription: {e}")
-
-    async def handle_event(self, event: Event) -> bool:
-        """Handle Wyoming protocol events"""
-        if Transcribe.is_type(event.type):
-            # Reset for new transcription request
-            self._recording = False
-            self._collecting_audio = False
-            if len(self._chunk_sequence) > 0:
-                logger.warning(
-                    f"Clearing speech buffer of {len(self._chunk_sequence)} chunks"
-                )
-            self._chunk_sequence.clear()
-            self.soft_reset()
-            return True
-        elif AudioStart.is_type(event.type):
-            # Start a new audio stream
-            logger.info("Audio stream started")
-            if not self._vad_enabled:
-                # In non-VAD mode, start collecting all audio
-                self._collecting_audio = True
-                self._chunk_sequence.clear()
-                logger.info("Started collecting audio (VAD disabled)")
-            return True
-        elif AudioChunk.is_type(event.type):
-            # Process audio chunk
-            audio_chunk = AudioChunk.from_event(event)
-            await self._process_audio_chunk(audio_chunk)
-            return True
-        elif AudioStop.is_type(event.type):
-            # End of audio stream
-            logger.info("Audio stream stopped")
-
-            if self._vad_enabled:
-                # Flush any remaining samples in the VAD buffer
-                await self._flush_vad_buffer()
-
-                # VAD mode: transcribe any remaining speech if we were recording
-                if (
-                    self._recording
-                    and len(self._chunk_sequence) >= MIN_SPEECH_SECS * PARAKEET_SAMPLING_RATE
-                ):
-                    logger.info("Audio stream ended. Transcribing remaining speech.")
-                    await self._transcribe_and_send(self._chunk_sequence)
-            else:
-                # Non-VAD mode: transcribe the entire collected audio
-                if self._collecting_audio and self._chunk_sequence:
-                    speech_duration = sum(chunk.seconds for chunk in self._chunk_sequence)
-                    logger.info(
-                        f"Audio stream ended. Transcribing entire segment (duration: {speech_duration:.2f}s)"
-                    )
-                    if speech_duration >= MIN_SPEECH_SECS:
-                        await self._transcribe_and_send(self._chunk_sequence)
-                    else:
-                        logger.info(
-                            "Audio segment too short for transcription. Discarding."
-                        )
-
-            # Reset state
-            self._chunk_sequence.clear()
-            self._recording = False
-            self._collecting_audio = False
-            self.soft_reset()
-            return True
-        elif Describe.is_type(event.type):
-            # Respond with service capabilities
-            model = AsrModel(
-                name=self._model_name,
-                attribution=Attribution(
-                    name="Nemo Parakeet ASR", url="https://github.com/NVIDIA/NeMo"
-                ),
-                installed=True,
-                description="Nemo Parakeet ASR model",
-                version="1.0.0",
-                languages=["en"],
-            )
-
-            program = AsrProgram(
-                name="parakeet-asr",
-                attribution=Attribution(
-                    name="Nemo Parakeet ASR", url="https://github.com/NVIDIA/NeMo"
-                ),
-                installed=True,
-                description="Nemo Parakeet ASR with Silero VAD",
-                version="1.0.0",
-                models=[model],
-            )
-
-            info = Info(asr=[program])
-            await self.write_event(info.event())
-            return True
-
-        return False
-
-    async def disconnect(self) -> None:
-        """Clean up debug file handle on disconnect"""
-        if self._recording_debug_handle is not None:
-            await self._recording_debug_handle.close()
-
-    async def _process_vad_samples(self, samples: np.ndarray) -> None:
-        """Process exactly 512 samples with VAD iterator."""
-        if len(samples) != self._vad_buffer_size:
-            logger.warning(
-                f"Expected {self._vad_buffer_size} samples, got {len(samples)}"
-            )
-            return
-
-        try:
-            assert self._vad_iterator is not None
-            vad_event = self._vad_iterator(samples)
-            logger.debug(f"VAD event: {vad_event}")
-        except Exception as e:
-            logger.error(f"Error during VAD: {e}")
-            return
-
-        if vad_event:
-            logger.info(f"VAD event: {vad_event}")
-
-            if "start" in vad_event and not self._recording:
-                # Start recording
-                self._recording = True
-                await self.write_event(VoiceStarted().event())
-                logger.info("Started recording speech")
-
-            elif "end" in vad_event and self._recording:
-                # End recording and transcribe
-                self._recording = False
-                await self.write_event(VoiceStopped().event())
-
-                speech_duration = sum(chunk.seconds for chunk in self._chunk_sequence)
-                logger.info(
-                    f"VAD end detected. Speech duration: {speech_duration:.2f}s"
-                )
-
-                if speech_duration >= MIN_SPEECH_SECS:
-                    await self._transcribe_and_send(self._chunk_sequence)
-                else:
-                    logger.info("Speech too short for transcription. Discarding.")
-
-                # Clear buffer and reset
-                self._chunk_sequence.clear()
-                self.soft_reset()
-
-    async def _buffer_and_process_vad(
-        self, chunk: AudioChunk
-    ) -> None:
-        """Buffer audio samples and process VAD with exactly 512 samples at a time."""
-        # 1. accumulate samples
-        chunk_array = _chunk_to_numpy_float(chunk)
-        self._vad_sample_buffer = np.concatenate([self._vad_sample_buffer, chunk_array])
-
-        # 2. feed VAD in fixed 512-sample blocks
-        while len(self._vad_sample_buffer) >= self._vad_buffer_size:
-            samples = self._vad_sample_buffer[: self._vad_buffer_size]
-            await self._process_vad_samples(samples)
-            self._vad_sample_buffer = self._vad_sample_buffer[self._vad_buffer_size:]
-
-        # 3. do these exactly once per *original* chunk
-        await self._write_debug_file(chunk)
-        if self._recording:
-            self._chunk_sequence.append(chunk)
-
-            # Safety check: if speech buffer gets too long, force transcription
-            speech_duration = sum(c.seconds for c in self._chunk_sequence)
-            if speech_duration >= MAX_SPEECH_SECS:
-                logger.warning(
-                    f"Max speech length {MAX_SPEECH_SECS}s reached. Forcing transcription."
-                )
-                await self._transcribe_and_send(self._chunk_sequence)
-                self._chunk_sequence.clear()
-                self._recording = False
-                self.soft_reset()
-
-    async def _flush_vad_buffer(self) -> None:
-        """Process any remaining samples in the VAD buffer at stream end."""
-        if len(self._vad_sample_buffer) > 0:
-            logger.debug(
-                f"Flushing {len(self._vad_sample_buffer)} remaining samples from VAD buffer"
-            )
-
-            # Pad with zeros to reach 512 samples if needed
-            if len(self._vad_sample_buffer) < self._vad_buffer_size:
-                padding_needed = self._vad_buffer_size - len(self._vad_sample_buffer)
-                self._vad_sample_buffer = np.concatenate(
-                    [
-                        self._vad_sample_buffer,
-                        np.zeros(padding_needed, dtype=np.float32),
-                    ]
-                )
-
-            # Process the final chunk
-            await self._process_vad_samples(self._vad_sample_buffer)
-
-            # Clear the buffer
-            self._vad_sample_buffer = np.array([], dtype=np.float32)
-
-
-# --------------------------------------------------------------------------- #
-async def main() -> None:
-    parser = argparse.ArgumentParser(description="Nemo Parakeet ASR Wyoming Server")
-    parser.add_argument(
-        "--model_name",
-        default="nvidia/parakeet-tdt-0.6b-v2",
-        help="Nemo ASR model name from HuggingFace or NGC (default: nvidia/parakeet-tdt-0.6b-v2)",
-    )
-    parser.add_argument(
-        "--host",
-        default="0.0.0.0",
-        help="Interface to bind the TCP server (default: 0.0.0.0)",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8765,
-        help="Port to bind the TCP server (default: 8765)",
-    )
-    parser.add_argument(
-        "--disable-vad",
-        action="store_true",
-        help="Disable VAD and use normal Wyoming protocol (default: VAD enabled)",
-    )
-    args = parser.parse_args()
-
-    # Create shared transcriber instance once
-    logger.info("Initializing shared transcriber...")
-    shared_transcriber = SharedTranscriber(args.model_name)
-    logger.info("Shared transcriber initialized successfully")
+class StreamingSession:
+    """Manages a single streaming transcription session."""
     
-    # Perform async warmup
-    try:
-        await shared_transcriber.warmup()
-    except Exception as e:
-        logger.error(f"Error during ASR model warm-up: {e}")
-
-    server = AsyncTcpServer(host=args.host, port=args.port)
-    vad_enabled = not args.disable_vad
-    logger.info(
-        f"Parakeet ASR service starting on {args.host}:{args.port} (model={args.model_name}, VAD={'enabled' if vad_enabled else 'disabled'})"
-    )
-    await server.run(
-        handler_factory=lambda *_args, **_kwargs: ParakeetTranscriptionHandler(
-            *_args,
-            shared_transcriber=shared_transcriber,
-            vad_enabled=vad_enabled,
-            **_kwargs,
+    def __init__(self, session_id: str, config: ProcessEventConfig, transcriber: SharedTranscriber):
+        self.session_id = session_id
+        self.config = config
+        self.transcriber = transcriber
+        self.audio_chunks: List[AudioChunk] = []
+        self.last_process_time = time.time()
+        self.created_at = time.time()
+        
+        # Resampling setup - will be configured on first chunk
+        self.resampler = ResamplingBlock(
+            resample_rate=PARAKEET_SAMPLING_RATE,
+            resample_channels=1
         )
-    )
+        self.input_rate = None  # Will be set from first chunk  
+        self.needs_resampling = False
+        
+        # VAD setup
+        if config.vad_enabled:
+            self.vad_model = load_silero_vad(onnx=True)
+            self.vad_iterator = VADIterator(
+                model=self.vad_model,
+                sampling_rate=VAD_SAMPLING_RATE,
+                threshold=0.4,
+                min_silence_duration_ms=config.vad_silence_ms,
+            )
+            self.vad_sample_buffer = np.array([], dtype=np.float32)
+        else:
+            self.vad_model = None
+            self.vad_iterator = None
+            self.vad_sample_buffer = None
 
+    async def add_audio_chunk(self, audio_data: bytes, rate: int, width: int, channels: int) -> bool:
+        """Add audio chunk with resampling and check if processing should be triggered."""
+        
+        # Detect format on first chunk
+        if self.input_rate is None:
+            self.input_rate = rate
+            self.needs_resampling = (rate != PARAKEET_SAMPLING_RATE or channels != 1)
+            if self.needs_resampling:
+                logger.info(f"Session {self.session_id}: Resampling {rate}Hz/{channels}ch → {PARAKEET_SAMPLING_RATE}Hz/1ch")
+            else:
+                logger.info(f"Session {self.session_id}: No resampling needed - audio already at 16kHz mono")
+        
+        # Create input chunk
+        input_chunk = AudioChunk(audio=audio_data, rate=rate, width=width, channels=channels)
+        
+        # Resample if needed and keep track of processed chunk for VAD
+        processed_chunk = None
+        if self.needs_resampling:
+            async for resampled_chunk in self.resampler.process_chunk(input_chunk):
+                self.audio_chunks.append(resampled_chunk)
+                processed_chunk = resampled_chunk  # Use last resampled chunk for VAD
+        else:
+            self.audio_chunks.append(input_chunk)
+            processed_chunk = input_chunk  # Use input chunk for VAD
+        
+        # Check processing triggers
+        current_time = time.time()
+        
+        # Time-based trigger
+        time_trigger = (current_time - self.last_process_time) > self.config.time_interval_seconds
+        
+        # Buffer size trigger  
+        buffer_duration = sum(len(chunk.audio) / (chunk.rate * chunk.width * chunk.channels) for chunk in self.audio_chunks)
+        buffer_trigger = buffer_duration > self.config.max_buffer_seconds
+        
+        # VAD trigger
+        vad_trigger = False
+        if self.config.vad_enabled and self.vad_iterator and processed_chunk:
+            try:
+                # Convert chunk to float for VAD
+                audio_float = _chunk_to_numpy_float(processed_chunk)
+                if self.vad_sample_buffer is not None:
+                    self.vad_sample_buffer = np.append(self.vad_sample_buffer, audio_float)
+                
+                # Process in CHUNK_SAMPLES increments
+                while len(self.vad_sample_buffer) >= CHUNK_SAMPLES:
+                    samples = self.vad_sample_buffer[:CHUNK_SAMPLES]
+                    self.vad_sample_buffer = self.vad_sample_buffer[CHUNK_SAMPLES:]
+                    
+                    speech_dict = self.vad_iterator(samples)
+                    if "end" in speech_dict:
+                        vad_trigger = True
+                        break
+                        
+            except Exception as e:
+                logger.warning(f"VAD processing error: {e}")
+        
+        return time_trigger or buffer_trigger or vad_trigger
+
+    async def process_buffered_audio(self) -> dict:
+        """Process all buffered audio and return transcription."""
+        if not self.audio_chunks:
+            return {"text": "", "words": [], "segments": []}
+            
+        # Check minimum duration
+        total_duration = sum(
+            len(chunk.audio) / (chunk.rate * chunk.width * chunk.channels) 
+            for chunk in self.audio_chunks
+        )
+        
+        if total_duration < self.config.min_audio_seconds:
+            logger.debug(f"Audio too short ({total_duration:.2f}s), skipping processing")
+            return {"text": "", "words": [], "segments": []}
+        
+        logger.info(f"Processing {len(self.audio_chunks)} chunks ({total_duration:.2f}s) for session {self.session_id}")
+        
+        # Transcribe buffered audio
+        result = await self.transcriber.transcribe_async(self.audio_chunks)
+        
+        # Clear processed chunks (keep small buffer for continuity)
+        processed_chunks = len(self.audio_chunks)
+        self.audio_chunks = self.audio_chunks[-2:] if len(self.audio_chunks) > 2 else []
+        self.last_process_time = time.time()
+        
+        logger.info(f"Processed {processed_chunks} chunks, result: {len(result.get('text', ''))} chars")
+        return result
+
+# --------------------------------------------------------------------------- #
+# FastAPI App
+app = FastAPI(title="Parakeet ASR Service", version="1.0.0")
+
+# Global transcriber instance
+transcriber: Optional[SharedTranscriber] = None
+active_sessions: Dict[str, StreamingSession] = {}
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the transcriber on startup."""
+    global transcriber
+    model_name = os.getenv("PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v2")
+    transcriber = SharedTranscriber(model_name)
+    await transcriber.warmup()
+    logger.info("Parakeet ASR service started")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "model": transcriber._model_name if transcriber else "not_loaded"}
+
+@app.post("/transcribe")
+async def batch_transcribe(file: UploadFile = File(...)):
+    """Batch transcription endpoint."""
+    if not transcriber:
+        raise HTTPException(status_code=503, detail="Transcriber not initialized")
+    
+    try:
+        # Read uploaded file
+        audio_content = await file.read()
+        
+        # Save to temporary file for processing
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            tmp_file.write(audio_content)
+            tmp_filename = tmp_file.name
+        
+        try:
+            streamer = LocalFileStreamer(tmp_filename,
+                                         chunk_size_samples=CHUNK_SAMPLES)
+            await streamer.open()
+            
+            # Get audio properties from first chunk to determine if resampling needed
+            first_chunk = await streamer.read()
+            original_rate = first_chunk.rate
+            original_channels = first_chunk.channels
+            original_width = first_chunk.width
+            
+            logger.info(f"Input audio: {original_rate}Hz, {original_channels}ch, {original_width*8}bit")
+            
+            # Collect ALL audio chunks using iter_frames()  
+            all_chunks = [first_chunk]  # Include the first chunk we already read
+            async for chunk in streamer.iter_frames():
+                all_chunks.append(chunk)
+            
+            logger.info(f"Loaded {len(all_chunks)} audio chunks, total duration: {sum(len(c.audio)/(c.rate*c.width*c.channels) for c in all_chunks):.2f}s")
+            
+            # Setup resampling if needed
+            needs_resampling = (original_rate != PARAKEET_SAMPLING_RATE or original_channels != 1)
+            
+            if needs_resampling:
+                logger.info(f"Resampling from {original_rate}Hz/{original_channels}ch to {PARAKEET_SAMPLING_RATE}Hz/1ch")
+                resampler = ResamplingBlock(
+                    resample_rate=PARAKEET_SAMPLING_RATE,
+                    resample_channels=1
+                )
+                
+                # Resample all chunks
+                resampled_chunks = []
+                for chunk in all_chunks:
+                    async for resampled_chunk in resampler.process_chunk(chunk):
+                        resampled_chunks.append(resampled_chunk)
+                
+                final_chunks = resampled_chunks
+                logger.info(f"Resampled to {len(final_chunks)} chunks at {PARAKEET_SAMPLING_RATE}Hz")
+            else:
+                final_chunks = all_chunks
+                logger.info("No resampling needed - audio already at 16kHz mono")
+            
+            # Transcribe with all chunks (assertion will verify they're all 16kHz)
+            result = await transcriber.transcribe_async(final_chunks)
+            return JSONResponse(content=result)
+            
+        finally:
+            os.unlink(tmp_filename)
+            
+    except Exception as e:
+        logger.error(f"Error in batch transcription: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/stream")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket streaming transcription endpoint."""
+    if not transcriber:
+        await websocket.close(code=1011, reason="Transcriber not initialized")
+        return
+        
+    await websocket.accept()
+    logger.info("WebSocket connection established")
+    
+    session_id: Optional[str] = None
+    session: Optional[StreamingSession] = None
+    
+    try:
+        while True:
+            # Receive message
+            message = await websocket.receive_text()
+            data = json.loads(message)
+            
+            if data["type"] == "transcribe":
+                # Start new session
+                session_id = data.get("session_id", str(uuid.uuid4()))
+                config_data = data.get("config", {})
+                config = ProcessEventConfig(**config_data)
+                
+                session = StreamingSession(session_id, config, transcriber)
+                active_sessions[session_id] = session
+                
+                logger.info(f"Started streaming session {session_id} with config: {config}")
+                await websocket.send_text(json.dumps({
+                    "type": "session_started",
+                    "session_id": session_id
+                }))
+                
+            elif data["type"] == "audio_chunk":
+                if not session:
+                    logger.warning("Received audio_chunk without active session")
+                    continue
+                    
+                # Receive binary audio data
+                audio_data = await websocket.receive_bytes()
+                
+                # Add chunk and check if processing should be triggered
+                rate = data.get("rate", 16000)
+                width = data.get("width", 2)
+                channels = data.get("channels", 1)
+                
+                should_process = await session.add_audio_chunk(audio_data, rate, width, channels)
+                
+                if should_process and session.config.return_interim_results:
+                    # Process buffered audio and send interim result
+                    result = await session.process_buffered_audio()
+                    if result["text"]:  # Only send if we have actual text
+                        await websocket.send_text(json.dumps({
+                            "type": "interim_result",
+                            "session_id": session_id,
+                            "is_final": False,
+                            **result
+                        }))
+                
+            elif data["type"] == "finalize":
+                if not session:
+                    logger.warning("Received finalize without active session")
+                    continue
+                    
+                # Process any remaining audio and send final result
+                result = await session.process_buffered_audio()
+                
+                # Send final result
+                await websocket.send_text(json.dumps({
+                    "type": "final_result", 
+                    "session_id": session_id,
+                    "is_final": True,
+                    **result
+                }))
+                
+                # Cleanup session
+                if session_id in active_sessions:
+                    del active_sessions[session_id]
+                logger.info(f"Finalized session {session_id}")
+                
+            else:
+                logger.warning(f"Unknown message type: {data['type']}")
+                
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        # Cleanup
+        if session_id and session_id in active_sessions:
+            del active_sessions[session_id]
 
 if __name__ == "__main__":
-    # Set up logging format
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    logging.basicConfig(level=logging.INFO, format=log_format)
-    logger = logging.getLogger(
-        __name__
-    )  # Re-initialize logger with new format for main scope
-
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Parakeet ASR HTTP/WebSocket Service")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
+    parser.add_argument("--port", type=int, default=8080, help="Port to bind to")
+    parser.add_argument("--model", default="nvidia/parakeet-tdt-0.6b-v2", help="NeMo model name")
+    args = parser.parse_args()
+    
+    # Set model via environment variable
+    os.environ["PARAKEET_MODEL"] = args.model
+    
+    uvicorn.run(app, host=args.host, port=args.port)
