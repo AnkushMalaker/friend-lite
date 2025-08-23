@@ -1,0 +1,53 @@
+# docker-compose-test.yml
+# Test environment for ASR services
+# Uses different ports to avoid conflicts with development environment
+
+services:
+  # moonshine-asr-test:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile_Moonshine
+  #   image: moonshine-asr:test
+  #   ports:
+  #     - "8766:8765"  # Test port to avoid conflict with dev (8765)
+  #   volumes:
+  #     # Test-specific data directories to avoid clobbering dev data
+  #     - ./model_cache:/models
+  #     - ./audio_chunks_test:/app/audio_chunks
+  #     - ./debug_test:/app/debug
+  #     - ./results_test:/app/results
+  #   environment:
+  #     - HF_HOME=/models
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 30s
+
+  parakeet-asr-test:
+    build:
+      context: .
+      dockerfile: Dockerfile_Parakeet
+    image: parakeet-asr:test
+    ports:
+      - "8767:8765"  # Different test port for parakeet
+    volumes:
+      - ./model_cache:/models
+      - ./debug_test:/app/debug
+      - ./results_test:/app/results
+    environment:
+      - HF_HOME=/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# Networks for test isolation
+networks:
+  default:
+    name: asr-test-network

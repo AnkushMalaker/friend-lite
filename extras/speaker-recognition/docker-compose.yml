@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        COMPUTE_MODE: ${COMPUTE_MODE:-cpu}
     image: speaker-recognition:latest
     ports:
       - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"

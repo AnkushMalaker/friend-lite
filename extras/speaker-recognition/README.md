@@ -9,13 +9,23 @@ A comprehensive speaker recognition system with web-based UI for audio annotatio
 - Hugging Face account (for model access)
 - 8GB+ RAM, 10GB+ disk space
 
-### 1. Set up your Hugging Face token (use .env recommended)
+### 1. Configure environment variables
 ```bash
-export HF_TOKEN="your_huggingface_token"
+cp .env.template .env
+# Edit .env and add your Hugging Face token
 ```
-Get your token from https://huggingface.co/settings/tokens
+Get your HF token from https://huggingface.co/settings/tokens
 
-### 2. Start the system
+### 2. Choose CPU or GPU setup
+```bash
+# For CPU-only (lighter, works on any machine)
+uv sync --group cpu
+
+# For GPU acceleration (requires NVIDIA GPU + CUDA)
+uv sync --group gpu
+```
+
+### 3. Start the system
 ```bash
 cd extras/speaker-recognition
 docker-compose up --build -d
@@ -49,6 +59,7 @@ This starts two services:
 - **Multi-user Support**: Each user manages their own speaker data
 - **SQLite Database**: Local storage for annotations, speakers, and sessions  
 - **Quality Assessment**: Automatic audio quality scoring with recommendations
+- **CPU/GPU Support**: Flexible deployment with dedicated dependency groups
 - **Export Formats**: 
   - Concatenated audio (max 10min per file)
   - Segmented files: `./exported_data/speaker-1/audio001.wav`
@@ -591,81 +602,150 @@ DELETE /speakers/{speaker_id}
 }
 ```
 
+## API Endpoint Architecture
+
+### Deepgram API Compatible Endpoints
+
+The system provides **complete Deepgram API compatibility** with clearly separated endpoints:
+
+| Protocol | Endpoint | Purpose | Usage |
+|----------|----------|---------|-------|
+| **POST** | `/v1/listen` | File upload transcription | Upload audio files for processing |
+| **WebSocket** | `/v1/ws_listen` | Real-time streaming | Stream live audio for transcription |
+
+**File Upload**: `POST https://your-domain/v1/listen` (multipart/form-data with audio file)
+**WebSocket Streaming**: `wss://your-domain/v1/ws_listen?model=nova-3&language=en&user_id=1&confidence_threshold=0.15`
+
+### Complete Endpoint Reference
+
+#### Core Processing Endpoints
+- `POST /v1/listen` - Deepgram-compatible file transcription with speaker enhancement
+- `POST /v1/transcribe-and-diarize` - Hybrid mode: Deepgram transcription + internal speaker identification  
+- `POST /v1/diarize-only` - Pure speaker diarization without transcription
+- `POST /diarize-and-identify` - Internal speaker identification with diarization
+
+#### Streaming Endpoints  
+- `WSS /v1/ws_listen` - Deepgram-compatible WebSocket streaming with speaker identification
+- `GET /v1/listen/info` - API documentation and capability information
+
+#### Speaker Management
+- `GET /speakers` - List enrolled speakers
+- `POST /enroll/upload` - Enroll single speaker
+- `POST /enroll/batch` - Batch speaker enrollment
+- `POST /enroll/append` - Add samples to existing speaker
+- `DELETE /speakers/{speaker_id}` - Remove speaker
+- `POST /speakers/reset` - Reset all speakers
+
+#### Health & Configuration  
+- `GET /health` - Service health check
+- `GET /deepgram/config` - Get Deepgram API key for frontend
+
+#### Authentication
+API key passed via WebSocket subprotocols:
+```javascript
+const protocols = ['token', 'your_deepgram_api_key']
+const ws = new WebSocket(url, protocols)
+```
+
+#### Event Types
+
+**Client → Server**:
+- Binary audio data (16-bit PCM, 16kHz, mono)
+
+**Server → Client**:
+
+##### `ready`
+```json
+{
+  "type": "ready",
+  "message": "WebSocket ready for audio streaming"
+}
+```
+
+##### `utterance_boundary` 
+Server-side VAD detected speech segment with speaker identification:
+```json
+{
+  "type": "utterance_boundary",
+  "timestamp": 1234567890,
+  "audio_segment": {
+    "start": 1.2,
+    "end": 3.8,
+    "duration": 2.6
+  },
+  "transcript": "Hello world",
+  "speaker_identification": {
+    "speaker_id": "john_doe",
+    "speaker_name": "John Doe", 
+    "confidence": 0.892,
+    "status": "identified"
+  }
+}
+```
+
+##### `raw_deepgram`
+All Deepgram API responses forwarded transparently:
+```json
+{
+  "type": "raw_deepgram",
+  "data": {
+    // Complete Deepgram WebSocket response
+    "channel": { ... },
+    "is_final": true,
+    "type": "Results"
+  },
+  "timestamp": 1234567890
+}
+```
+
+##### `error`
+```json
+{
+  "type": "error", 
+  "message": "Error description"
+}
+```
+
+#### Features
+
+- **Speaker Change Detection**: Server-side VAD using Pyannote
+- **Real-time Speaker ID**: Identify enrolled speakers automatically  
+- **Complete Deepgram Access**: All Deepgram events forwarded via `raw_deepgram`
+- **Debug Recording**: Server creates WAV files for troubleshooting
+- **HTTPS/WSS Support**: Full browser microphone compatibility
+
+#### True Deepgram Compatibility
+
+These endpoints perfectly mimic Deepgram's API behavior:
+
+```javascript
+// Existing Deepgram WebSocket code works unchanged:
+const ws = new WebSocket('wss://api.deepgram.com/v1/listen?model=nova-3', ['token', 'API_KEY'])
+
+// Drop-in replacement - use /v1/ws_listen for streaming:
+const ws = new WebSocket('wss://your-domain/v1/ws_listen?model=nova-3', ['token', 'API_KEY'])
+```
+
+```bash
+# Existing Deepgram POST API works unchanged:
+curl -X POST "https://api.deepgram.com/v1/listen" \
+  -H "Authorization: Token API_KEY" -F "file=@audio.wav"
+
+# Drop-in replacement:
+curl -X POST "https://your-domain/v1/listen" \
+  -H "Authorization: Token API_KEY" -F "file=@audio.wav"
+```
+
+#### Live Inference Modes
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **Live Inference** | `/v1/ws_listen` WebSocket (true Deepgram streaming replacement) | Production use, existing Deepgram clients |
+| **Live Inference (Complex)** | Direct Deepgram streaming, client-side coordination | Advanced features, maximum control |
+
 ## Integration with Advanced Backend
 
 The advanced backend communicates with this service through the `client.py` module, which provides both async and sync interfaces for backward compatibility.
-
-## Laptop Client
-
-The `laptop_client.py` provides a command-line interface for recording from your microphone and interacting with the speaker recognition service.
-
-### Setup
-
-1. **Install dependencies**:
-   ```bash
-   pip install -r requirements-laptop.txt
-   ```
-
-2. **Start the speaker service** (using Docker or locally):
-   ```bash
-   docker-compose up
-   # or
-   python speaker_service.py
-   ```
-
-### Usage
-
-#### Enroll a Speaker
-Record 10 seconds of audio to enroll a new speaker:
-```bash
-python laptop_client.py enroll --speaker-id "john" --speaker-name "John Doe" --duration 10
-```
-
-#### Identify a Speaker
-Record 5 seconds of audio to identify who is speaking:
-```bash
-python laptop_client.py identify --duration 5
-```
-
-#### Verify a Speaker
-Check if the voice matches a specific enrolled speaker:
-```bash
-python laptop_client.py verify --speaker-id "john" --duration 3
-```
-
-#### List Enrolled Speakers
-```bash
-python laptop_client.py list
-```
-
-#### Remove a Speaker
-```bash
-python laptop_client.py remove --speaker-id "john"
-```
-
-### Options
-
-- `--service-url`: Change the service URL (default: http://localhost:8001)
-- `--duration`: Recording duration in seconds
-- `--speaker-id`: Unique identifier for speaker
-- `--speaker-name`: Display name for speaker
-
-### Example Workflow
-
-1. Start the service:
-   ```bash
-   docker-compose up
-   ```
-
-2. Enroll yourself:
-   ```bash
-   python laptop_client.py enroll --speaker-id "myself" --speaker-name "My Name" --duration 15
-   ```
-
-3. Test identification:
-   ```bash
-   python laptop_client.py identify --duration 5
-   ```
 
 ## Laptop Client
 
@@ -720,14 +800,57 @@ python laptop_client.py --service-url "http://192.168.1.100:8001" identify
 - **Real-time Feedback**: Shows recording progress and results with emojis
 - **Error Handling**: Graceful handling of network and audio errors
 
+## Testing
+
+### Integration Tests
+
+The service includes comprehensive integration tests that validate the complete speaker recognition pipeline:
+
+```bash
+# Run integration tests (requires HF_TOKEN in environment)
+cd extras/speaker-recognition
+source .env && export HF_TOKEN && uv run pytest tests/test_speaker_service_integration.py -v -s
+```
+
+#### Test Requirements
+- **Environment Variables**: `HF_TOKEN` must be set (for pyannote models)
+- **Docker**: Must be available for test containers
+- **Test Assets**: Audio files for Evan and Katelyn speakers (included in `tests/assets/`)
+
+#### What the Tests Cover
+1. **Service Health**: Verifies Docker containers start and service is accessible
+2. **Speaker Enrollment**: Batch enrollment of multiple speakers with audio files  
+3. **Database Persistence**: Confirms speakers are stored correctly
+4. **Individual Identification**: Tests single-speaker identification accuracy
+5. **Conversation Processing**: Full conversation analysis with speaker diarization
+
+#### Test Configuration
+- **Test Compose**: Uses `docker-compose-test.yml` with isolated test containers
+- **Test Port**: Service runs on port 8086 (vs. 8085 for development)
+- **Keep Containers**: Set `SPEAKER_TEST_KEEP_CONTAINERS=1` to debug test failures
+
+### Docker Compose Files
+
+The service provides two Docker Compose configurations:
+
+| File | Purpose | Service Port | Use Case |
+|------|---------|-------------|----------|
+| `docker-compose.yml` | Development/Production | 8085 | Normal usage, WebUI access |
+| `docker-compose-test.yml` | Testing | 8086 | Integration tests, isolated environment |
+
 ## Integration with Advanced Backend
 
 The advanced backend communicates with this service through the `client.py` module, which provides both async and sync interfaces for backward compatibility.
 
 ## Performance Notes
 
-- First inference may be slow due to model loading
-- GPU memory usage scales with model size (~2-4GB)
+### CPU vs GPU Performance
+- **CPU Mode**: Slower inference (~10-30s for enrollment), smaller memory footprint (~2-4GB)
+- **GPU Mode**: Faster inference (~2-5s for enrollment), requires NVIDIA GPU with CUDA (~4-8GB VRAM)
+- **Model Loading**: First inference may be slow due to model loading (both modes)
+- **Deployment**: Use CPU mode for CI/testing, GPU mode for production workloads
+
+### General Performance
 - Audio files should be accessible from both services (use shared volumes)
 - Microphone recording dynamically detects browser sample rate (typically 44.1kHz or 48kHz) for optimal compatibility
 - Microphone recording requires `pyaudio` and proper audio device setup 
