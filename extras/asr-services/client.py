@@ -10,7 +10,6 @@ import logging
 from pathlib import Path
 
 from easy_audio_interfaces.audio_interfaces import ResamplingBlock
-from easy_audio_interfaces.extras.local_audio import InputMicStream
 from easy_audio_interfaces.filesystem import LocalFileStreamer
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioStart, AudioStop
@@ -50,6 +49,9 @@ async def write_transcript(text: str, output_file: Path | None = None):
 
 async def run_mic_transcription(asr_url: str, device_index: int | None = None, output_file: Path | None = None):
     """Run ASR transcription from microphone input (original behavior)."""
+    # Import here to only need pyaudio when calling inputmicstream
+    from easy_audio_interfaces.extras.local_audio import InputMicStream
+    
     print(f"Connecting to ASR service: {asr_url}")
     async with AsyncTcpClient.from_uri(asr_url) as client:
         print("Connected to ASR service")
@@ -102,6 +104,9 @@ async def run_mic_transcription(asr_url: str, device_index: int | None = None, o
 
 async def run_mic_transcription_with_timing(asr_url: str, device_index: int | None = None, output_file: Path | None = None):
     """Run ASR transcription from microphone with proper timing and audio-stop signaling."""
+    # Import here to only need pyaudio when calling inputmicstream
+    from easy_audio_interfaces.extras.local_audio import InputMicStream
+
     print(f"Connecting to ASR service: {asr_url}")
     async with AsyncTcpClient.from_uri(asr_url) as client:
         print("Connected to ASR service")
@@ -237,6 +242,11 @@ async def run_file_transcription(asr_url: str, file_path: str | Path, output_fil
                     logger.info("Finished sending audio file")
                     send_end_time = asyncio.get_event_loop().time()
                     logger.info(f"Finished sending audio file in {send_end_time - send_start_time:.2f} seconds")
+                    
+                    # Send AudioStop to signal end of stream
+                    await client.write_event(AudioStop().event())
+                    logger.info("Sent AudioStop event")
+                    
                     await asyncio.sleep(TIMEOUT_SECONDS)
                     stop_event.set()
                 except (KeyboardInterrupt, asyncio.CancelledError):

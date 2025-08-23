@@ -10,9 +10,9 @@ dependencies = [
   "websockets>=12.0",
   "numpy>=1.26",
   "soundfile>=0.12",
-  "omi-sdk>=0.1.4",
   "fastapi>=0.115.12",
   "uvicorn>=0.34.2",
+  "python-multipart>=0.0.6",
   "silero-vad>=5.1.2",
   "wyoming>=1.7.0",
   "easy-audio-interfaces>=0.6.0",
@@ -38,6 +38,8 @@ demo = [
 ]
 dev = [
     "black>=25.1.0",
+    "requests>=2.31.0",
+    "pytest>=8.0.0",
 ]
 
 moonshine = [

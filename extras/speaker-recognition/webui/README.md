@@ -6,10 +6,11 @@ A React-based web interface for the speaker recognition system, converted from t
 
 - **User Management**: Simple user selection with default admin user and ability to create new users
 - **Audio Viewer**: Upload and visualize audio files with interactive waveform plots
-- **Annotation Tool**: Label speaker segments with hash-based persistence (Coming Soon)
-- **Speaker Enrollment**: Register speakers via file upload or guided recording (Coming Soon)
-- **Speaker Management**: Manage enrolled speakers and view metrics (Coming Soon)
-- **Speaker Inference**: Identify speakers in new audio files (Coming Soon)
+- **Annotation Tool**: Label speaker segments with hash-based persistence
+- **Speaker Enrollment**: Register speakers via file upload or guided recording
+- **Speaker Management**: Manage enrolled speakers and view metrics
+- **Speaker Inference**: Identify speakers in new audio files
+- **Live Inference**: Real-time transcription and speaker identification
 
 ## Technology Stack
 

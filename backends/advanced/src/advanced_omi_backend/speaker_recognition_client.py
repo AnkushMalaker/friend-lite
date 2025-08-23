@@ -27,13 +27,19 @@ class SpeakerRecognitionClient:
             service_url: URL of the speaker recognition service (e.g., http://speaker-service:8085)
                         If not provided, uses SPEAKER_SERVICE_URL env var
         """
-        self.service_url = service_url or os.getenv("SPEAKER_SERVICE_URL")
-        self.enabled = bool(self.service_url)
-
-        if self.enabled:
-            logger.info(f"Speaker recognition client initialized with URL: {self.service_url}")
+        # Check if speaker recognition is explicitly disabled
+        if os.getenv("DISABLE_SPEAKER_RECOGNITION", "").lower() in ["true", "1", "yes"]:
+            self.service_url = None
+            self.enabled = False
+            logger.info("Speaker recognition client disabled (DISABLE_SPEAKER_RECOGNITION=true)")
         else:
-            logger.info("Speaker recognition client disabled (no service URL configured)")
+            self.service_url = service_url or os.getenv("SPEAKER_SERVICE_URL")
+            self.enabled = bool(self.service_url)
+
+            if self.enabled:
+                logger.info(f"Speaker recognition client initialized with URL: {self.service_url}")
+            else:
+                logger.info("Speaker recognition client disabled (no service URL configured)")
 
     async def diarize_identify_match(
         self, audio_path: str, transcript_data: Dict, user_id: Optional[str] = None

@@ -75,12 +75,20 @@ class OpenAILLMClient(LLMClient):
     ) -> str:
         """Generate text completion using OpenAI-compatible API."""
         try:
-            response = self.client.chat.completions.create(
-                model=model or self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature or self.temperature,
-                max_tokens=2000,
-            )
+            model_name = model or self.model
+            temp = temperature or self.temperature
+            
+            # Build completion parameters
+            params = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            
+            # Skip temperature for GPT-5-mini as it only supports default (1)
+            if not (model_name and "gpt-5-mini" in model_name):
+                params["temperature"] = temp
+            
+            response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content.strip()
         except Exception as e:
             self.logger.error(f"Error generating completion: {e}")
@@ -116,7 +124,7 @@ class OpenAILLMClient(LLMClient):
 
     def get_default_model(self) -> str:
         """Get the default model for this client."""
-        return self.model
+        return self.model or "gpt-5-mini"
 
 
 class LLMClientFactory:

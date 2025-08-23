@@ -1,6 +1,16 @@
 # Own your Friend DevKit, DevKit 2, OMI
 
-# Intro
+## Quick Start
+
+**🚀 Get started in 5 minutes:**
+1. Go to `backends/advanced/` for the main application
+2. Copy `.env.template` to `.env` and configure your API keys
+3. Run `docker compose up --build -d`
+4. Visit `http://localhost:3000` for the web interface
+
+**📖 Full documentation:** See `CLAUDE.md` and `backends/advanced/Docs/`
+
+## Intro
 The idea of this repo is to provide just enough to be useful for developers.
 It should provide the minimal requirements to either:
 1. Provide firmware, sdks, examples to make your own software

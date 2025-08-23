@@ -5,9 +5,9 @@ services:
       dockerfile: Dockerfile_Parakeet
     image: parakeet-asr:latest
     ports:
-      - "8765:8765"
+      - "8080:8765"  # Host port 8080 -> Container port 8765
     volumes:
-      # Persist Hugging Face cache (models + tokenizer) between restarts
+      # Persist Hugging Face cache (models + tokenizer) between restarts
       - ./model_cache:/models
       - ./debug:/app/debug
       - ./results:/app/results
@@ -20,6 +20,7 @@ services:
               capabilities: [gpu]
     environment:
       - HF_HOME=/models
+      - PARAKEET_MODEL=nvidia/parakeet-tdt-0.6b-v2
     restart: unless-stopped
 
   # moonshine-asr:
@@ -28,9 +29,9 @@ services:
   #     dockerfile: Dockerfile_Moonshine
   #   image: moonshine-asr:latest
   #   ports:
-  #     - "8765:8765"
+  #     - "8765:8765"  # Keep Moonshine on 8765 
   #   volumes:
-  #     # Persist Hugging Face cache (models + tokenizer) between restarts
+  #     # Persist Hugging Face cache (models + tokenizer) between restarts
   #     - ./model_cache:/models
   #     - ./audio_chunks:/app/audio_chunks
   #     - ./debug:/app/debug

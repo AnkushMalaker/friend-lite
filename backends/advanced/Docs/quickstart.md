@@ -45,7 +45,7 @@ ADMIN_EMAIL=admin@example.com
 # Option 1: OpenAI (Recommended for best memory extraction)
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your-openai-api-key-here
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5-mini
 
 # Option 2: Local Ollama
 LLM_PROVIDER=ollama
@@ -416,7 +416,7 @@ The system supports **multiple LLM providers** - configure via environment varia
 # In your .env file
 LLM_PROVIDER=openai          # RECOMMENDED: Use "openai" for best results
 OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-4o          # RECOMMENDED: "gpt-4o" for better memory extraction
+OPENAI_MODEL=gpt-5-mini          # RECOMMENDED: "gpt-5-mini" for better memory extraction
 
 # Alternative: Local Ollama (may have reduced memory quality)
 LLM_PROVIDER=ollama          
@@ -440,10 +440,9 @@ memory_extraction:
   llm_settings:
     # Model selection based on LLM_PROVIDER:
     # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
-    # - OpenAI: "gpt-4o" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    # - OpenAI: "gpt-5-mini" (recommended for JSON reliability), "gpt-5-mini", "gpt-3.5-turbo", etc.
     model: "gemma3n:e4b"
     temperature: 0.1
-    max_tokens: 2000
 
 fact_extraction:
   enabled: false  # Disabled to avoid JSON parsing issues
@@ -451,8 +450,6 @@ fact_extraction:
   llm_settings:
     model: "gemma3n:e4b"  # Auto-switches based on LLM_PROVIDER
     temperature: 0.0  # Lower for factual accuracy
-    max_tokens: 1500
-
 ```
 
 **Provider-Specific Behavior:**
@@ -469,7 +466,7 @@ If you experience JSON parsing errors in fact extraction:
    # In your .env file
    LLM_PROVIDER=openai
    OPENAI_API_KEY=your-openai-api-key
-   OPENAI_MODEL=gpt-4o
+   OPENAI_MODEL=gpt-5-mini
    ```
 
 2. **Enable fact extraction** with reliable JSON output:
@@ -504,7 +501,7 @@ To verify your OpenAI setup is working:
    docker logs advanced-backend | grep -i "openai"
    
    # You should see:
-   # "Using OpenAI provider with model: gpt-4o"
+   # "Using OpenAI provider with model: gpt-5-mini"
    ```
 
 2. **Test memory extraction** with a conversation:
@@ -525,7 +522,7 @@ If you see errors about missing API keys or models, verify your `.env` file has:
 ```bash
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-your-actual-api-key-here
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5-mini
 ```
 
 ### Quality Control Settings
