@@ -835,14 +835,6 @@ wheels = [
 ]
 
 [[package]]
-name = "faiss-gpu"
-version = "1.7.2"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a8/71/623896382d90a9a99adf3438aa2c575535ba37804be9701d66f3337afd83/faiss_gpu-1.7.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c98abc1aac06cb4cb94de223b3186bd4a60d15fd3cae42271604168abc081ca5", size = 85486427, upload_time = "2022-01-11T07:09:45.751Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.115.14"
 source = { registry = "https://pypi.org/simple" }
@@ -3411,7 +3403,6 @@ dependencies = [
     { name = "alembic" },
     { name = "deepgram-sdk" },
     { name = "easy-audio-interfaces" },
-    { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "librosa" },
     { name = "matplotlib" },
@@ -3430,8 +3421,6 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "streamlit" },
     { name = "streamlit-webrtc" },
-    { name = "torch" },
-    { name = "torchaudio" },
     { name = "umap-learn" },
     { name = "uvicorn" },
     { name = "websockets" },
@@ -3446,16 +3435,21 @@ local-audio = [
 [package.dev-dependencies]
 cpu = [
     { name = "faiss-cpu" },
+    { name = "torch" },
+    { name = "torchaudio" },
 ]
 dev = [
     { name = "black" },
     { name = "isort" },
 ]
 gpu = [
-    { name = "faiss-gpu" },
+    { name = "faiss-cpu" },
+    { name = "torch" },
+    { name = "torchaudio" },
 ]
 test = [
     { name = "pytest" },
+    { name = "requests" },
 ]
 
 [package.metadata]
@@ -3465,7 +3459,6 @@ requires-dist = [
     { name = "deepgram-sdk", specifier = ">=4.7.0" },
     { name = "easy-audio-interfaces", specifier = ">=0.7.1" },
     { name = "easy-audio-interfaces", extras = ["local-audio"], marker = "extra == 'local-audio'", specifier = ">=0.7.1" },
-    { name = "faiss-cpu", specifier = ">=1.8" },
     { name = "fastapi", specifier = ">=0.115.12" },
     { name = "librosa", specifier = ">=0.10.0" },
     { name = "matplotlib", specifier = ">=3.8.0" },
@@ -3483,8 +3476,6 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "streamlit", specifier = ">=1.31.0" },
     { name = "streamlit-webrtc", specifier = ">=0.47.0" },
-    { name = "torch", specifier = ">=2.0.0" },
-    { name = "torchaudio", specifier = ">=2.0.0" },
     { name = "umap-learn", specifier = ">=0.5.3" },
     { name = "uvicorn", specifier = ">=0.34.2" },
     { name = "websockets", specifier = ">=12.0" },
@@ -3493,13 +3484,24 @@ requires-dist = [
 provides-extras = ["local-audio"]
 
 [package.metadata.requires-dev]
-cpu = [{ name = "faiss-cpu", specifier = ">=1.8" }]
+cpu = [
+    { name = "faiss-cpu", specifier = ">=1.8" },
+    { name = "torch", specifier = ">=2.0.0" },
+    { name = "torchaudio", specifier = ">=2.0.0" },
+]
 dev = [
     { name = "black", specifier = ">=25.1.0" },
     { name = "isort", specifier = ">=6.0.1" },
 ]
-gpu = [{ name = "faiss-gpu", specifier = ">=1.7" }]
-test = [{ name = "pytest" }]
+gpu = [
+    { name = "faiss-cpu", specifier = ">=1.8" },
+    { name = "torch", specifier = ">=2.0.0" },
+    { name = "torchaudio", specifier = ">=2.0.0" },
+]
+test = [
+    { name = "pytest" },
+    { name = "requests" },
+]
 
 [[package]]
 name = "six"
@@ -3859,23 +3861,23 @@ dependencies = [
     { name = "jinja2" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
     { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cudnn-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cufft-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cufile-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-curand-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-cusparselt-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
-    { name = "setuptools", marker = "python_full_version >= '3.12' or (extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufile-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparselt-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "setuptools", marker = "python_full_version >= '3.12'" },
     { name = "sympy" },
-    { name = "triton", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu') or (sys_platform != 'linux' and extra == 'group-26-simple-speaker-recognition-cpu' and extra == 'group-26-simple-speaker-recognition-gpu')" },
+    { name = "triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "typing-extensions" },
 ]
 wheels = [
