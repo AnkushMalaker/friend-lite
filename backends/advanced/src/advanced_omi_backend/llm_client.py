@@ -2,7 +2,7 @@
 Abstract LLM client interface for unified LLM operations across different providers.
 
 This module provides a standardized interface for LLM operations that works with
-OpenAI, Ollama, Anthropic, and other OpenAI-compatible APIs.
+OpenAI, Ollama, and other OpenAI-compatible APIs.
 """
 
 import asyncio
@@ -133,9 +133,6 @@ class LLMClientFactory:
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL"),
             )
-        elif provider == "anthropic":
-            # Future implementation for Anthropic
-            raise NotImplementedError("Anthropic provider not yet implemented")
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")
 
