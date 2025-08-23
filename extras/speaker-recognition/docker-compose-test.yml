@@ -1,0 +1,36 @@
+services:
+  # FastAPI Speaker Recognition Service (Test Variant)
+  speaker-service-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        COMPUTE_MODE: ${COMPUTE_MODE:-cpu}
+    image: speaker-recognition:test
+    ports:
+      # Map host test port (default 8086) to container port 8085
+      - "${SPEAKER_SERVICE_TEST_PORT:-8086}:8085"
+    volumes:
+      # Mount source code for development (live reload)
+      - ./src:/app/src
+      # Persist Hugging Face cache (models) between restarts
+      - ./model_cache:/models
+      # Test-specific data directories to avoid clobbering dev data
+      - ./audio_chunks_test:/app/audio_chunks
+      - ./debug_test:/app/debug
+      - ./speaker_data_test:/app/data
+    environment:
+      - HF_HOME=/models
+      - HF_TOKEN=${HF_TOKEN}
+      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.15}
+      - SPEAKER_SERVICE_HOST=0.0.0.0
+      - SPEAKER_SERVICE_PORT=8085
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+

@@ -849,9 +849,12 @@ class ProcessorManager:
 
             # Lazy import memory service
             if self.memory_service is None:
+                audio_logger.info(f"🔧 Initializing memory service for {item.audio_uuid}...")
                 self.memory_service = get_memory_service()
+                audio_logger.info(f"✅ Memory service initialized for {item.audio_uuid}")
 
             # Process memory with timeout
+            audio_logger.info(f"🔥 About to call add_memory() for {item.audio_uuid}...")
             memory_result = await asyncio.wait_for(
                 self.memory_service.add_memory(
                     full_conversation,
