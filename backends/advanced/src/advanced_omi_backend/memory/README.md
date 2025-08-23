@@ -280,14 +280,6 @@ sequenceDiagram
     User->>Compat: add_memory(transcript, ...)
     Compat->>Core: add_memory(transcript, ...)
     
-    alt Memory Extraction Enabled
-        Core->>LLM: extract_memories(transcript, prompt)
-        LLM->>LLM: process with GPT/Ollama
-        LLM-->>Core: List[memory_strings]
-    else Extraction Disabled
-        Core->>Core: use raw transcript
-    end
-    
     Core->>Core: _deduplicate_memories()
     Core->>LLM: generate_embeddings(memory_texts)
     LLM->>LLM: create vector embeddings
@@ -858,27 +850,8 @@ class CustomMemoryService(CoreMemoryService):
 # For OpenAI
 export OPENAI_EMBEDDER_MODEL=text-embedding-3-large  # 3072 dimensions
 
-# For Ollama
-export OLLAMA_EMBEDDING_MODEL=nomic-embed-text  # 768 dimensions
-
 # For custom dimensions
 export QDRANT_EMBEDDING_DIMS=3072
-```
-
-#### Q: How do I disable memory extraction and use raw transcripts?
-
-**A:** Set environment variable:
-
-```bash
-export MEMORY_EXTRACTION_ENABLED=false
-```
-
-Or in code:
-```python
-config = MemoryConfig(
-    # ... other config
-    extraction_enabled=False
-)
 ```
 
 ---
