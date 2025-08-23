@@ -11,9 +11,14 @@
 # - MEM0_ORGANIZATION_ID: Organization ID for mem0 (default: "friend-lite-org")
 # - MEM0_PROJECT_ID: Project ID for mem0 (default: "audio-conversations") 
 # - MEM0_APP_ID: Application ID for mem0 (default: "omi-backend")
-# - OPENAI_EMBEDDER_MODEL: OpenAI embedder model (default: "text-embedding-3-small")
-# - OLLAMA_EMBEDDER_MODEL: Ollama embedder model (default: "nomic-embed-text:latest")
+# - OPENAI_EMBEDDER_MODEL: OpenAI embedder model
+# - OLLAMA_EMBEDDER_MODEL: Ollama embedder model
 # - NEO4J_HOST, NEO4J_USER, NEO4J_PASSWORD: For graph storage (optional)
+#
+# CONFIGURATION PRIORITY:
+# 1. memory_config.yaml llm_settings.embedding_model (highest priority)
+# 2. Environment variables (OPENAI_EMBEDDER_MODEL or OLLAMA_EMBEDDER_MODEL)
+# 3. Default values (text-embedding-3-small for OpenAI, nomic-embed-text:latest for Ollama)
 
 # General memory extraction settings
 memory_extraction:
@@ -89,7 +94,10 @@ memory_extraction:
     # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
     # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
     # model: "gemma3n:e4b"
-    model: "gpt-5"
+    model: "mistral:7b-instruct-v0.3-q8_0"
+    # Embedding model selection:
+    # - OpenAI: "text-embedding-3-small" (default), "text-embedding-3-large", "text-embedding-ada-002"
+    embedding_model: "erwan2/DeepSeek-R1-Distill-Qwen-1.5B:latest"
 
 # Fact extraction settings (structured information)
 fact_extraction:
@@ -135,7 +143,9 @@ fact_extraction:
     max_tokens: 1500
     # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-5"
+    model: "erwan2/DeepSeek-R1-Distill-Qwen-1.5B:latest"
+    # Embedding model selection (inherits from main llm_settings if not specified)
+    # embedding_model: "text-embedding-3-small"
 
 
 # Memory categorization settings
@@ -179,7 +189,9 @@ categorization:
     temperature: 0.2
     max_tokens: 100
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-5"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "mistral:7b-instruct-v0.3-q8_0"  # Model based on LLM_PROVIDER (ollama/openai)
+    # Embedding model selection (inherits from main llm_settings if not specified)
+    # embedding_model: "text-embedding-3-small"
 
 # Quality control settings
 quality_control:
