@@ -84,8 +84,8 @@ class OpenAILLMClient(LLMClient):
                 "messages": [{"role": "user", "content": prompt}],
             }
             
-            # Skip temperature for GPT-5-mini as it only supports default (1)
-            if not (model_name and "gpt-5-mini" in model_name):
+            # Skip temperature for gpt-4o-mini as it only supports default (1)
+            if not (model_name and "gpt-4o-mini" in model_name):
                 params["temperature"] = temp
             
             response = self.client.chat.completions.create(**params)
@@ -124,7 +124,7 @@ class OpenAILLMClient(LLMClient):
 
     def get_default_model(self) -> str:
         """Get the default model for this client."""
-        return self.model or "gpt-5-mini"
+        return self.model or "gpt-4o-mini"
 
 
 class LLMClientFactory:

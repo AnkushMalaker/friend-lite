@@ -84,10 +84,12 @@ memory_extraction:
     # RECOMMENDATION: Use "gpt-5-mini" with OpenAI provider to minimize JSON parsing errors
     # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-5-mini
     # model: "gemma3n:e4b"
-    model: "mistral:7b-instruct-v0.3-q8_0"
+    # model: "mistral:7b-instruct-v0.3-q8_0"
+    model: "gpt-4o-mini"
     # Embedding model selection:
     # - OpenAI: "text-embedding-3-small" (default), "text-embedding-3-large", "text-embedding-ada-002"
-    embedding_model: "erwan2/DeepSeek-R1-Distill-Qwen-1.5B:latest"
+    # embedding_model: "erwan2/DeepSeek-R1-Distill-Qwen-1.5B:latest"
+    embedding_model: "text-embedding-3-small"
 
 # Fact extraction settings (structured information)
 fact_extraction:
@@ -133,7 +135,8 @@ fact_extraction:
     # RECOMMENDATION: Use "gpt-5-mini" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
 
-    model: "erwan2/DeepSeek-R1-Distill-Qwen-1.5B:latest"
+    model: "text-embedding-3-small"
+    # model: "erwan2/DeepSeek-R1-Distill-Qwen-1.5B:latest"
     # Embedding model selection (inherits from main llm_settings if not specified)
     # embedding_model: "text-embedding-3-small"
 
@@ -179,7 +182,7 @@ categorization:
     # temperature: removed - GPT-5-mini only supports default value
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
 
-    model: "mistral:7b-instruct-v0.3-q8_0"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-4o-mini"  # Model based on LLM_PROVIDER (ollama/openai)
     # Embedding model selection (inherits from main llm_settings if not specified)
     # embedding_model: "text-embedding-3-small"
 
