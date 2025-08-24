@@ -779,7 +779,7 @@ class ProcessorManager:
                                 "client_id": item.client_id,
                                 "audio_uuid": item.audio_uuid,
                                 "type": "memory",
-                                "timeout": 300.0,  # 5 minutes
+                                "timeout": 3600,  # 60 minutes
                             },
                         )
 
@@ -865,7 +865,7 @@ class ProcessorManager:
                     allow_update=True,
                     db_helper=None,  # Using ConversationRepository now
                 ),
-                timeout=300.0,  # 5 minutes
+                timeout=3600,  # 60 minutes
             )
 
             if memory_result:

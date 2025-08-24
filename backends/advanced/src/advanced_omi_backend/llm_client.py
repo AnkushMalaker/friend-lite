@@ -59,7 +59,7 @@ class OpenAILLMClient(LLMClient):
 
         # Initialize OpenAI client
         try:
-            import openai
+            import langfuse.openai as openai
 
             self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
             self.logger.info(f"OpenAI client initialized with base_url: {self.base_url}")

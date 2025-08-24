@@ -215,7 +215,7 @@ processing:
   max_concurrent_tasks: 1
   
   # Timeout for memory processing (seconds) - generous timeout for Ollama processing
-  processing_timeout: 600
+  processing_timeout: 3600
   
   # Whether to retry failed extractions
   retry_failed: true

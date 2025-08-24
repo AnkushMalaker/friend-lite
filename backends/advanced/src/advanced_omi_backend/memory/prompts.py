@@ -8,7 +8,7 @@ This module contains the prompts used by the LLM providers for:
 """
 
 from datetime import datetime
-
+import json
 
 MEMORY_ANSWER_PROMPT = """
 You are an expert at answering questions based on the provided memories. Your task is to provide accurate and concise answers to the questions by leveraging the information given in the memories.
@@ -239,6 +239,25 @@ You are a memory summarization system that records and preserves the complete in
 ... (Additional numbered steps for subsequent actions)
 ```
 """
+
+def build_update_memory_messages(retrieved_old_memory_dict, response_content, custom_update_memory_prompt=None):
+   if custom_update_memory_prompt is None:
+        custom_update_memory_prompt = DEFAULT_UPDATE_MEMORY_PROMPT
+    
+   if not retrieved_old_memory_dict or len(retrieved_old_memory_dict) == 0:
+      retrieved_old_memory_dict = "None"
+   
+   prompt = (
+        "Old: " + json.dumps(retrieved_old_memory_dict, ensure_ascii=False) + "\n" +
+        "Facts: " + json.dumps(response_content, ensure_ascii=False) + "\n" +
+        "Output:"
+    )
+
+   messages = [
+        {"role": "system", "content": custom_update_memory_prompt.strip()},
+        {"role": "user", "content": prompt}
+    ]
+   return messages
 
 
 def get_update_memory_messages(retrieved_old_memory_dict, response_content, custom_update_memory_prompt=None):
