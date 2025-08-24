@@ -76,7 +76,7 @@ TEST_ENV_VARS_BASE = {
     "ADMIN_PASSWORD": "test-admin-password-123",
     "ADMIN_EMAIL": "test-admin@example.com",
     "LLM_PROVIDER": "openai",
-    "OPENAI_MODEL": "gpt-5-mini",  # Cheaper model for tests
+    "OPENAI_MODEL": "gpt-4o-mini",  # Cheaper model for tests
     "MONGODB_URI": "mongodb://localhost:27018",  # Test port (database specified in backend)
     "QDRANT_BASE_URL": "localhost",
     "DISABLE_SPEAKER_RECOGNITION": "true",  # Prevent segment duplication in tests
@@ -1068,7 +1068,7 @@ class IntegrationTestRunner:
             """
             
             response = client.chat.completions.create(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
             )
@@ -1147,7 +1147,7 @@ class IntegrationTestRunner:
             
             logger.info(f"Making GPT-5-mini API call for memory similarity...")
             response = client.chat.completions.create(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
             )

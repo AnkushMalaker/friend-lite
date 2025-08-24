@@ -88,7 +88,7 @@ memory_extraction:
     # RECOMMENDATION: Use "gpt-5-mini" with OpenAI provider to minimize JSON parsing errors
     # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-5-mini
     # model: "gemma3n:e4b"
-    model: "gpt-5-mini"
+    model: "gpt-4o-mini"
 
 # Fact extraction settings (structured information)
 fact_extraction:
@@ -126,7 +126,7 @@ fact_extraction:
     # temperature: removed - GPT-5-mini only supports default value
     # RECOMMENDATION: Use "gpt-5-mini" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-5-mini"
+    model: "gpt-4o-mini"
 
 
 # Memory categorization settings
@@ -159,7 +159,7 @@ categorization:
   llm_settings:
     # temperature: removed - GPT-5-mini only supports default value
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-5-mini"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-4o-mini"  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Quality control settings
 quality_control:
