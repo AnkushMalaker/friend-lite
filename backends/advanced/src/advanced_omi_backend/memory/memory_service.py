@@ -155,15 +155,16 @@ class MemoryService(MemoryServiceBase):
                 fact_memories_text = [transcript]
                 memory_logger.info(f"💾 No memories extracted, storing raw transcript for {audio_uuid}")
 
+            memory_logger.debug(f"🧠 fact_memories_text: {fact_memories_text}")
             # Simple deduplication of extracted memories within the same call
             fact_memories_text = self._deduplicate_memories(fact_memories_text)
-
+            memory_logger.debug(f"🧠 fact_memories_text after deduplication: {fact_memories_text}")
             # Generate embeddings
             embeddings = await asyncio.wait_for(
                 self.llm_provider.generate_embeddings(fact_memories_text),
                 timeout=self.config.timeout_seconds
             )
-            
+            memory_logger.info(f"embeddings generated")
             if not embeddings or len(embeddings) != len(fact_memories_text):
                 memory_logger.error(f"❌ Embedding generation failed for {audio_uuid}")
                 return False, []
@@ -174,10 +175,12 @@ class MemoryService(MemoryServiceBase):
 
             # If allow_update, try LLM-driven action proposal
             if allow_update and fact_memories_text:
+                memory_logger.info(f"🔍 Allowing update for {audio_uuid}")
                 created_ids = await self._process_memory_updates(
                     fact_memories_text, embeddings, user_id, client_id, audio_uuid, user_email
                 )
             else:
+                memory_logger.info(f"🔍 Not allowing update for {audio_uuid}")
                 # Add all extracted memories normally
                 memory_entries = self._create_memory_entries(
                     fact_memories_text, embeddings, client_id, audio_uuid, user_id, user_email

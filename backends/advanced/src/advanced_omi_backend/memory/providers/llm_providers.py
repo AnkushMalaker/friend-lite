@@ -11,13 +11,43 @@ memory action proposals using their respective APIs.
 import json
 import logging
 from typing import Dict, List, Any, Optional
+import spacy
 
 from ..base import LLMProviderBase
 from ..utils import extract_json_from_text
-from ..prompts import FACT_RETRIEVAL_PROMPT, get_update_memory_messages
+from ..prompts import FACT_RETRIEVAL_PROMPT, get_update_memory_messages, build_update_memory_messages
+from ..update_memory_utils import items_to_json, parse_memory_xml, extract_assistant_xml_from_openai_response
 
 memory_logger = logging.getLogger("memory_service")
 
+nlp = spacy.load("en_core_web_sm")
+
+def chunk_text_with_spacy(text: str, max_tokens: int = 100) -> List[str]:
+    """Split text into chunks using spaCy sentence segmentation.
+    max_tokens is the maximum number of words in a chunk.
+    """
+    doc = nlp(text)
+    
+    chunks = []
+    current_chunk = ""
+    current_tokens = 0
+    
+    for sent in doc.sents:
+        sent_text = sent.text.strip()
+        sent_tokens = len(sent_text.split())  # Simple word count
+        
+        if current_tokens + sent_tokens > max_tokens and current_chunk:
+            chunks.append(current_chunk.strip())
+            current_chunk = sent_text
+            current_tokens = sent_tokens
+        else:
+            current_chunk += " " + sent_text if current_chunk else sent_text
+            current_tokens += sent_tokens
+    
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    
+    return chunks
 
 class OpenAIProvider(LLMProviderBase):
     """OpenAI LLM provider implementation.
@@ -53,7 +83,7 @@ class OpenAIProvider(LLMProviderBase):
             List of extracted memory strings
         """
         try:
-            import openai
+            import langfuse.openai as openai
             
             client = openai.AsyncOpenAI(
                 api_key=self.api_key,
@@ -63,27 +93,68 @@ class OpenAIProvider(LLMProviderBase):
             # Use the provided prompt or fall back to default
             system_prompt = prompt if prompt.strip() else FACT_RETRIEVAL_PROMPT
             
+            # local models can only handle small chunks of input text
+            text_chunks = chunk_text_with_spacy(text)
+            
+            # Process all chunks in sequence, not concurrently
+            results = [
+                await self._process_chunk(client, system_prompt, chunk, i) 
+                for i, chunk in enumerate(text_chunks)
+            ]
+            
+            # Spread list of list of facts into a single list of facts
+            cleaned_facts = []
+            for result in results:
+                memory_logger.info(f"Cleaned facts: {result}")
+                cleaned_facts.extend(result)
+            
+            return cleaned_facts
+                
+        except Exception as e:
+            memory_logger.error(f"OpenAI memory extraction failed: {e}")
+            return []
+        
+    async def _process_chunk(self, client, system_prompt: str, chunk: str, index: int) -> List[str]:
+        """Process a single text chunk to extract memories using OpenAI API.
+        
+        This private method handles the LLM interaction for a single chunk of text,
+        sending it to OpenAI's chat completion API with the specified system prompt
+        to extract structured memory facts.
+        
+        Args:
+            client: OpenAI async client instance for API communication
+            system_prompt: System prompt that guides the memory extraction behavior
+            chunk: Individual text chunk to process for memory extraction
+            index: Index of the chunk for logging and error tracking purposes
+            
+        Returns:
+            List of extracted memory fact strings from the chunk. Returns empty list
+            if no facts are found or if an error occurs during processing.
+            
+        Note:
+            Errors are logged but don't propagate to avoid failing the entire
+            memory extraction process.
+        """
+        try:
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text}
+                    {"role": "user", "content": chunk}
                 ],
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
-                response_format={"type": "json_object"}  # Ensure JSON response
+                response_format={"type": "json_object"}
             )
             
             facts = (response.choices[0].message.content or "").strip()
             if not facts:
                 return []
 
-            cleaned_facts = _parse_memories_content(facts)
-            memory_logger.info(f"Cleaned facts: {cleaned_facts}")
-            return cleaned_facts
-                
+            return _parse_memories_content(facts)
+            
         except Exception as e:
-            memory_logger.error(f"OpenAI memory extraction failed: {e}")
+            memory_logger.error(f"Error processing chunk {index}: {e}")
             return []
 
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -96,7 +167,7 @@ class OpenAIProvider(LLMProviderBase):
             List of embedding vectors, one per input text
         """
         try:
-            import openai
+            import langfuse.openai as openai
             
             client = openai.AsyncOpenAI(
                 api_key=self.api_key,
@@ -121,7 +192,7 @@ class OpenAIProvider(LLMProviderBase):
             True if connection successful, False otherwise
         """
         try:
-            import openai
+            import langfuse.openai as openai
             
             client = openai.AsyncOpenAI(
                 api_key=self.api_key,
@@ -137,7 +208,7 @@ class OpenAIProvider(LLMProviderBase):
 
     async def propose_memory_actions(
         self,
-        retrieved_old_memory: List[Dict[str, str]],
+        retrieved_old_memory: List[Dict[str, str]] | List[str],
         new_facts: List[str],
         custom_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -152,10 +223,10 @@ class OpenAIProvider(LLMProviderBase):
             Dictionary containing proposed memory actions
         """
         try:
-            import openai
+            import langfuse.openai as openai
 
             # Generate the complete prompt using the helper function
-            prompt_message = get_update_memory_messages(
+            update_memory_messages = build_update_memory_messages(
                 retrieved_old_memory, 
                 new_facts, 
                 custom_prompt
@@ -168,18 +239,24 @@ class OpenAIProvider(LLMProviderBase):
 
             response = await client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "user", "content": prompt_message}
-                ],
+                messages=update_memory_messages,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
-                response_format={"type": "json_object"},
             )
 
             content = (response.choices[0].message.content or "").strip()
             if not content:
                 return {}
-            return json.loads(content)
+
+            xml = extract_assistant_xml_from_openai_response(response)
+            memory_logger.info(f"OpenAI propose_memory_actions xml: {xml}")
+            items = parse_memory_xml(xml)
+            memory_logger.info(f"OpenAI propose_memory_actions items: {items}")
+            result = items_to_json(items)
+            # example {'memory': [{'id': '0', 'event': 'UPDATE', 'text': 'My name is John', 'old_memory': None}}
+            memory_logger.info(f"OpenAI propose_memory_actions result: {result}")
+            return result
+
         except Exception as e:
             memory_logger.error(f"OpenAI propose_memory_actions failed: {e}")
             return {}
