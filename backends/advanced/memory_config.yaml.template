@@ -1,5 +1,6 @@
 # Memory Extraction Configuration
 # This file controls how memories and facts are extracted from conversations
+# This file is only used if you are using mem0
 #
 # REQUIRED ENVIRONMENT VARIABLES:
 # - LLM_PROVIDER: Set to "openai" or "ollama" 
@@ -21,6 +22,7 @@ memory_extraction:
   enabled: true
   
   # Main prompt for memory extraction - INCLUDES JSON format and few-shot examples for mem0 compatibility
+  # These prompts are only used if you use mem0
   prompt: |
     You are a Personal Information Organizer, specialized in accurately storing facts, user memories, and preferences. Your primary role is to extract relevant pieces of information from conversations and organize them into distinct, manageable facts. This allows for easy retrieval and personalization in future interactions.
 
@@ -98,6 +100,7 @@ fact_extraction:
   enabled: true
   
   # Prompt for extracting structured facts
+  # These prompts are only used if you use mem0
   prompt: |
     Extract important information from this conversation, including facts, events this conversation. Focus on:
     - Names of people and their roles/titles. Ensure to extract the names all all existing participants in the conversation, even if they're only mentioned once.
@@ -151,6 +154,7 @@ categorization:
     - other
   
   # Prompt for categorizing memories
+  # These prompts are only used if you use mem0
   prompt: |
     Categorize this conversation into one or more of these categories:
     personal, work, meeting, project, learning, social, health, finance, travel, other
