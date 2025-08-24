@@ -36,12 +36,6 @@ memory_extraction:
     8. **Entertainment and Media**: Remember favorite movies, shows, books, games, creators, channels they follow.
     9. **Interests from Content**: Extract personal interests even from tutorial, educational, or entertainment content they engage with.
 
-    **Special Instructions for Tutorial/Entertainment Content:**
-    - If someone watches tutorials about crafts, extract their interest in those crafts
-    - If someone discusses product comparisons, extract their preferences and decision-making style
-    - If someone engages with specific creators or channels, note their content preferences
-    - Creative projects reveal artistic interests and skill development goals
-
     **Output Format:** Return the facts and preferences in JSON format as shown in examples below.
 
     **Examples:**
@@ -67,9 +61,6 @@ memory_extraction:
     Input: I'm working on a Pokemon-themed rug design. I really like Pikachu and Charmander characters.
     Output: {"facts" : ["Working on Pokemon-themed craft projects", "Likes Pokemon characters Pikachu and Charmander", "Enjoys character-based creative projects"]}
 
-    Input: Katelyn and Evan from that crafting channel really know what they're doing. I love how they explain everything step by step.
-    Output: {"facts" : ["Follows creators Katelyn and Evan", "Prefers detailed step-by-step tutorials", "Values clear instructional content"]}
-
     **Remember:**
     - Extract facts about the USER's interests, preferences, and activities
     - Include information that reveals personality traits, hobbies, and learning goals
@@ -80,16 +71,15 @@ memory_extraction:
   # LLM parameters for memory extraction
   # Provider is controlled by LLM_PROVIDER environment variable (ollama/openai)
   llm_settings:
-    temperature: 0.3  # Lower temperature for more consistent extraction
-    max_tokens: 2000
+    # temperature: removed - GPT-5-mini only supports default value
     # Model selection based on provider:
     # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
-    # - OpenAI: "gpt-4o" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    # - OpenAI: "gpt-5-mini" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
     # 
-    # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
-    # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
+    # RECOMMENDATION: Use "gpt-5-mini" with OpenAI provider to minimize JSON parsing errors
+    # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-5-mini
     # model: "gemma3n:e4b"
-    model: "gpt-5"
+    model: "gpt-5-mini"
 
 # Fact extraction settings (structured information)
 fact_extraction:
@@ -131,11 +121,10 @@ fact_extraction:
   
   # LLM parameters for fact extraction
   llm_settings:
-    temperature: 0.3  # Very low temperature for factual accuracy
-    max_tokens: 1500
-    # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
+    # temperature: removed - GPT-5-mini only supports default value
+    # RECOMMENDATION: Use "gpt-5-mini" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-5"
+    model: "gpt-5-mini"
 
 
 # Memory categorization settings
@@ -176,10 +165,9 @@ categorization:
   
   # LLM parameters for categorization
   llm_settings:
-    temperature: 0.2
-    max_tokens: 100
+    # temperature: removed - GPT-5-mini only supports default value
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
-    model: "gpt-5"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-5-mini"  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Quality control settings
 quality_control:

@@ -80,16 +80,16 @@ memory_extraction:
   # LLM parameters for memory extraction
   # Provider is controlled by LLM_PROVIDER environment variable (ollama/openai)
   llm_settings:
-    temperature: 0.3  # Lower temperature for more consistent extraction
-    max_tokens: 2000
+    # temperature: removed - GPT-5-mini only supports default value
     # Model selection based on provider:
     # - Ollama: "gemma3n:e4b", "llama3.1:latest", "llama3.2:latest", etc.
-    # - OpenAI: "gpt-4o" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
+    # - OpenAI: "gpt-5-mini" (recommended for JSON reliability), "gpt-4o-mini", "gpt-3.5-turbo", etc.
     # 
-    # RECOMMENDATION: Use "gpt-4o" with OpenAI provider to minimize JSON parsing errors
-    # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-4o
+    # RECOMMENDATION: Use "gpt-5-mini" with OpenAI provider to minimize JSON parsing errors
+    # Set environment variables: LLM_PROVIDER=openai and OPENAI_MODEL=gpt-5-mini
     # model: "gemma3n:e4b"
-    model: "gpt-4o"
+    # model: "mistral:7b-instruct-v0.3-q8_0"
+    model: "gpt-5-mini"
 
 # Fact extraction settings (structured information)
 fact_extraction:
@@ -124,13 +124,12 @@ fact_extraction:
   
   # LLM parameters for fact extraction
   llm_settings:
-    temperature: 0.3  # Very low temperature for factual accuracy
-    max_tokens: 1500
-    # RECOMMENDATION: Use "gpt-4o" for more reliable JSON output
+    # temperature: removed - GPT-5-mini only supports default value
+    # RECOMMENDATION: Use "gpt-5-mini" for more reliable JSON output
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
     # model: "mistral:7b-instruct-v0.3-q8_0"
     embedding_model: "text-embedding-3-small"
-    model: "gpt-4o"
+    model: "gpt-5-mini"
 
 
 # Memory categorization settings
@@ -161,11 +160,10 @@ categorization:
   
   # LLM parameters for categorization
   llm_settings:
-    temperature: 0.2
-    max_tokens: 100
+    # temperature: removed - GPT-5-mini only supports default value
     # model: "gemma3n:e4b"  # Model based on LLM_PROVIDER (ollama/openai)
     # model: "mistral:7b-instruct-v0.3-q8_0"
-    model: "gpt-4o"  # Model based on LLM_PROVIDER (ollama/openai)
+    model: "gpt-5-mini"  # Model based on LLM_PROVIDER (ollama/openai)
 
 # Quality control settings
 quality_control:
