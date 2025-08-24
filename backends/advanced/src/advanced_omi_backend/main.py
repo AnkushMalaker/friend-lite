@@ -988,3 +988,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     application_logger.info("Starting Omi unified service at ws://%s:%s/ws", host, port)
     uvicorn.run("main:app", host=host, port=port, reload=False)
+
