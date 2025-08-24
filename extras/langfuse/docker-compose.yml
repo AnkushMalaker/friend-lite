@@ -14,7 +14,7 @@ services:
     ports:
       - 3030:3030
     environment: &langfuse-worker-env
-      NEXTAUTH_URL: http://0.0.0.0:3001
+      NEXTAUTH_URL: http://0.0.0.0:3002
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       SALT: "mysalt"
       ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -66,7 +66,7 @@ services:
     restart: always
     depends_on: *langfuse-depends-on
     ports:
-      - 3001:3000
+      - 3002:3000
     environment:
       <<: *langfuse-worker-env
       NEXTAUTH_SECRET: mysecret

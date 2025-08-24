@@ -364,7 +364,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # Configure CORS with configurable origins (includes Tailscale support by default)
-default_origins = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000"
+default_origins = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000","http://127.0.0.1:3002"
 cors_origins = os.getenv("CORS_ORIGINS", default_origins)
 allowed_origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
 
