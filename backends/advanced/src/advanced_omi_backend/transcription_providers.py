@@ -771,5 +771,7 @@ def get_transcription_provider(
             raise RuntimeError(
                 "Parakeet ASR provider requested but PARAKEET_ASR_URL not configured"
             )
+        logger.info(f"Using Parakeet transcription provider in {mode} mode")
+        return ParakeetProvider(parakeet_url)
     else:
         return None
