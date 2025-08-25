@@ -1,8 +1,33 @@
 import axios from 'axios'
 
-// Get backend URL from environment or default to localhost
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
-console.log('🌐 API: Backend URL configured as:', BACKEND_URL)
+// Get backend URL from environment or auto-detect based on current location
+const getBackendUrl = () => {
+  // If explicitly set in environment, use that
+  if (import.meta.env.VITE_BACKEND_URL) {
+    return import.meta.env.VITE_BACKEND_URL
+  }
+  
+  // If accessed through proxy (standard ports), use relative URLs
+  const { protocol, hostname, port } = window.location
+  const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) || 
+                         (protocol === 'http:' && (port === '' || port === '80'))
+  
+  if (isStandardPort) {
+    // We're being accessed through nginx proxy, use same origin
+    return ''  // Empty string means use relative URLs (same origin)
+  }
+  
+  // Development mode - direct access to dev server
+  if (port === '5173') {
+    return 'http://localhost:8000'
+  }
+  
+  // Fallback
+  return `${protocol}//${hostname}:8000`
+}
+
+const BACKEND_URL = getBackendUrl()
+console.log('🌐 API: Backend URL configured as:', BACKEND_URL || 'Same origin (relative URLs)')
 
 // Export BACKEND_URL for use in other components
 export { BACKEND_URL }
@@ -76,8 +101,50 @@ export const systemApi = {
 }
 
 export const uploadApi = {
-  uploadAudioFiles: (files: FormData) => api.post('/api/process-audio-files', files, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 300000, // 5 minutes
-  }),
+  uploadAudioFiles: (files: FormData, onProgress?: (progress: number) => void) => 
+    api.post('/api/process-audio-files', files, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000, // 5 minutes
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+          onProgress(progress)
+        }
+      }
+    }),
+}
+
+export const chatApi = {
+  // Session management
+  createSession: (title?: string) => api.post('/api/chat/sessions', { title }),
+  getSessions: (limit = 50) => api.get('/api/chat/sessions', { params: { limit } }),
+  getSession: (sessionId: string) => api.get(`/api/chat/sessions/${sessionId}`),
+  updateSession: (sessionId: string, title: string) => api.put(`/api/chat/sessions/${sessionId}`, { title }),
+  deleteSession: (sessionId: string) => api.delete(`/api/chat/sessions/${sessionId}`),
+  
+  // Messages
+  getMessages: (sessionId: string, limit = 100) => api.get(`/api/chat/sessions/${sessionId}/messages`, { params: { limit } }),
+  
+  // Statistics
+  getStatistics: () => api.get('/api/chat/statistics'),
+  
+  // Health check
+  getHealth: () => api.get('/api/chat/health'),
+  
+  // Streaming chat (returns EventSource for Server-Sent Events)
+  sendMessage: (message: string, sessionId?: string) => {
+    const requestBody: any = { message }
+    if (sessionId) {
+      requestBody.session_id = sessionId
+    }
+    
+    return fetch(`${BACKEND_URL}/api/chat/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify(requestBody)
+    })
+  }
 }

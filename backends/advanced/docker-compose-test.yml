@@ -9,8 +9,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8001:8000"  # Avoid conflict with dev on 8000
-    env_file:
-      - .env.test
     volumes:
       - ./data/test_audio_chunks:/app/audio_chunks
       - ./data/test_debug_dir:/app/debug_dir
@@ -25,10 +23,16 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       # LLM provider configuration (required for memory service)
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-5-mini}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Authentication (test-specific)
+      - AUTH_SECRET_KEY=test-jwt-signing-key-for-integration-tests
+      - ADMIN_PASSWORD=test-admin-password-123
+      - ADMIN_EMAIL=test-admin@example.com
       # Transcription provider configuration
-      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER}
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
+      # Disable speaker recognition in test environment to prevent segment duplication
+      - DISABLE_SPEAKER_RECOGNITION=true
     depends_on:
       qdrant-test:
         condition: service_started

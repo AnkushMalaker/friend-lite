@@ -188,65 +188,42 @@ class IntegrationTestRunner:
             return []
     
     def cleanup_test_data(self):
-        """Clean up test-specific data directories (preserve development data)."""
+        """Clean up test-specific data directories using lightweight Docker container."""
         if not self.fresh_run:
             logger.info("🗂️ Skipping test data cleanup (reusing existing data)")
             return
             
         logger.info("🗂️ Cleaning up test-specific data directories...")
         
-        # Test data directories to clean (match docker-compose-test.yml mount paths)
-        test_directories = [
-            "./data/test_audio_chunks/",
-            "./data/test_data/", 
-            "./data/test_debug_dir/",
-            "./data/test_mongo_data/",
-            "./data/test_qdrant_data/",
-            "./data/test_neo4j/"
-        ]
-        
-        # Try container-based cleanup first for root-owned files
+        # Use lightweight Docker container to clean root-owned files
         try:
-            # First check if container exists
-            check_result = subprocess.run(
-                ["docker", "ps", "-q", "-f", "name=advanced-backend-friend-backend-test-1"],
-                capture_output=True,
-                text=True
-            )
+            result = subprocess.run([
+                "docker", "run", "--rm",
+                "-v", f"{Path.cwd()}/data:/data",
+                "alpine:latest",
+                "sh", "-c", "rm -rf /data/test_*"
+            ], capture_output=True, text=True, timeout=30)
             
-            if check_result.stdout.strip():
-                logger.info("🐳 Container exists, attempting container-based cleanup for root-owned test data...")
-                # Use docker exec to clean from within a test container if available
-                result = subprocess.run(
-                    ["docker", "exec", "advanced-backend-friend-backend-test-1", "rm", "-rf"] + 
-                    [f"/app/{test_dir.lstrip('./')}" for test_dir in test_directories],
-                    capture_output=True,
-                    text=True
-                )
-                logger.info(f"Container cleanup result: {result}")
-                if result.returncode == 0:
-                    logger.info("✅ Container-based cleanup successful")
-                    return
-                else:
-                    logger.info(f"Container cleanup failed: {result.stderr}")
+            if result.returncode == 0:
+                logger.info("✅ Docker cleanup successful")
             else:
-                logger.info("Container not running yet, will use local cleanup")
+                logger.warning(f"⚠️ Docker cleanup failed: {result.stderr}")
+                logger.info("🔄 Falling back to local cleanup...")
+                # Simple fallback - try local cleanup without complex logic
+                import shutil
+                for test_dir in ["./data/test_audio_chunks", "./data/test_data", "./data/test_debug_dir", 
+                                "./data/test_mongo_data", "./data/test_qdrant_data", "./data/test_neo4j"]:
+                    test_path = Path(test_dir)
+                    if test_path.exists():
+                        try:
+                            shutil.rmtree(test_path)
+                            logger.info(f"✓ Cleaned {test_dir}")
+                        except PermissionError:
+                            logger.warning(f"⚠️ Permission denied cleaning {test_dir} - Docker cleanup recommended")
+                            
         except Exception as e:
-            logger.debug(f"Container cleanup not available: {e}")
-        
-        # Fallback to local cleanup
-        for test_dir in test_directories:
-            test_path = Path(test_dir)
-            if test_path.exists():
-                try:
-                    import shutil
-                    shutil.rmtree(test_path)
-                    logger.info(f"✓ Cleaned {test_dir}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to clean {test_dir}: {e}")
-                    logger.warning(f"💡 You may need to run: sudo rm -rf {test_dir}")
-            else:
-                logger.debug(f"📁 {test_dir} does not exist, skipping")
+            logger.warning(f"⚠️ Docker cleanup failed: {e}")
+            logger.warning("💡 Ensure Docker is running and accessible")
                 
         logger.info("✓ Test data cleanup complete")
         

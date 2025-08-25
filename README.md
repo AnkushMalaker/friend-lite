@@ -2,16 +2,16 @@
 
 ## Quick Start
 
-**🚀 Get started in 5 minutes:**
+**Quick start:**
 1. Go to `backends/advanced/` for the main application
 2. Copy `.env.template` to `.env` and configure your API keys
 3. Run `docker compose up --build -d`
 4. Visit `http://localhost:3000` for the web interface
 
-**📖 Full documentation:** See `CLAUDE.md` and `backends/advanced/Docs/`
+**Documentation:** See `CLAUDE.md` and `backends/advanced/Docs/`
 
-## Intro
-The idea of this repo is to provide just enough to be useful for developers.
+## Overview
+Friend-Lite provides essential components for developers working with OMI-compatible audio devices:
 It should provide the minimal requirements to either:
 1. Provide firmware, sdks, examples to make your own software
 2. Advanced solution or tutorial for one such that you can get full use of your devices.
@@ -35,23 +35,44 @@ Regardless - this repo will try to do the minimal of this - multiple OMI-like au
 - Action items
 - Home automation
 
-# Arch
+# Use Cases
+Friend-Lite supports AI-powered personal systems through multiple OMI-compatible audio devices:
+
+**Core Features:**
+- **Memory extraction** from conversations
+- **Action item detection** and tracking  
+- **Home automation** integration
+- **Multi-device support** for comprehensive audio capture
+
+**Device Support:**
+- OMI pendants and wearables
+- Smart glasses with audio capture
+- Any Bluetooth-enabled audio device
+
+# Architecture
 ![Architecture Diagram](.assets/plan.png)
 
-## Arch description
-The current DevKit2 streams audio via Bluetooth to some device in the OPUS codec.
-Once you have audio, you need transcription (you need speech to text AKA STT or automatic speech recognition AKA ASR. Deepgram is an API based service where you stream your audio to them and they give you transcripts. You can host this locally) from it and then any other things you want, such as -
-Conversation summarization (typically done via LLMs, so ollama or call OpenAI)
-You also need to store these things somewhere - and you need to store different things -
-1. Transcript
-2. Conversation summary
-3. Maybe the audio itself?
-4. Memories
+## Architecture Overview
+DevKit2 streams audio via Bluetooth using OPUS codec. The processing pipeline includes:
 
-Memories are stored in qdrant
-Conversation, and like, general logging is done on mongodb.
+**Audio Processing:**
+- Bluetooth audio capture from OMI devices
+- OPUS codec streaming to backend services
+- WebSocket-based real-time audio transport
 
-Its a little complicated to turn that into PCM, which most Apps use.
+**Transcription Services:**
+- Cloud-based: Deepgram API for high-quality transcription
+- Self-hosted: Local ASR services (Parakeet, Moonshine)
+
+**AI Processing:**
+- LLM-based conversation analysis (OpenAI or local Ollama)
+- Memory extraction and semantic storage
+- Action item detection
+
+**Data Storage:**
+- MongoDB: User data, conversations, and transcripts
+- Qdrant: Vector storage for semantic memory search
+- Audio files: Optional conversation recording
 
 # Repository Structure
 
@@ -67,7 +88,7 @@ Its a little complicated to turn that into PCM, which most Apps use.
 Choose one based on your needs:
 
 #### **Simple Backend** (`backends/simple-backend/`)
-**Best for:** Getting started, basic audio processing, learning
+**Use case:** Getting started, basic audio processing, learning
 
 **Features:**
 - ✅ Basic audio ingestion (OPUS → PCM → WAV chunks)
@@ -88,7 +109,7 @@ Choose one based on your needs:
 ---
 
 #### **Advanced Backend** (`backends/advanced-backend/`) **RECOMMENDED**
-**Best for:** Production use, full feature set
+**Use case:** Production use, full feature set
 
 **Features:**
 - Audio processing pipeline with real-time WebSocket support
@@ -110,7 +131,7 @@ Choose one based on your needs:
 ---
 
 #### **OMI-Webhook-Compatible Backend** (`backends/omi-webhook-compatible/`)
-**Best for:** Existing OMI users, migration from official OMI backend
+**Use case:** Existing OMI users, migration from official OMI backend
 
 **Features:**
 - ✅ Compatible with official OMI app webhook system
@@ -128,16 +149,16 @@ Choose one based on your needs:
 ---
 
 #### **Example Satellite Backend** (`backends/example-satellite/`)
-**Best for:** Distributed setups, Wyoming protocol integration
+**Use case:** Distributed setups, external ASR integration
 
 **Features:**
-- ✅ Wyoming protocol satellite
-- ✅ Streams audio to remote Wyoming servers
+- ✅ Audio streaming satellite
+- ✅ Streams audio to remote ASR servers
 - ✅ Bluetooth OMI device discovery
-- ✅ Integration with Home Assistant/Wyoming ecosystem
+- ✅ Integration with external voice processing systems
 
 **Requirements:**
-- Separate Wyoming ASR server
+- Separate ASR server
 
 **Limitations:**
 - Limited standalone functionality
@@ -145,7 +166,7 @@ Choose one based on your needs:
 ### 🔧 Additional Services (`extras/`)
 
 #### **ASR Services** (`extras/asr-services/`)
-- **Wyoming-compatible** ASR services
+- **Self-hosted** ASR services
 - **Moonshine** - Fast offline ASR
 - **Parakeet** - Alternative offline ASR
 - Self-hosted transcription options
@@ -159,11 +180,11 @@ Choose one based on your needs:
 - Audio relay service
 - Protocol bridging capabilities
 
-# Wyoming Protocol Compatibility
+# Audio Streaming Protocol
 
-Both backends and ASR services use the **Wyoming protocol** for standardized communication:
+Backends and ASR services use standardized audio streaming:
 - Consistent audio streaming format
-- Interoperable with Home Assistant
+- Interoperable with external systems
 - Modular ASR service architecture
 - Easy to swap ASR providers
 
@@ -186,9 +207,9 @@ Both backends and ASR services use the **Wyoming protocol** for standardized com
 3. Point your OMI app to the webhook URL
 
 ## For Home Assistant Users
-1. Use **Example Satellite Backend** with Wyoming integration
+1. Use **Example Satellite Backend** for audio streaming
 2. Set up ASR services from `extras/asr-services/`
-3. Configure Home Assistant Wyoming integration
+3. Configure external voice processing integration
 
 ## For Distributed/Self-Hosting Users
 1. Use **Advanced Backend** for full feature set
@@ -245,4 +266,4 @@ Both backends and ASR services use the **Wyoming protocol** for standardized com
 
 Each backend directory contains detailed setup instructions and docker-compose files for easy deployment.
 
-**Need help choosing?** See the feature comparison table above and start with **Advanced Backend** for the complete experience.
+**Choosing a backend:** Start with **Advanced Backend** for complete functionality. See feature comparison above for specific requirements.

@@ -35,9 +35,12 @@ docker compose up --build -d
 
 ### 3. Access the Web UI
 
-Open https://localhost/ in your browser (accept the SSL certificate warning).
+- **Local access**: Open https://localhost:8444/ in your browser 
+- **Network access**: Open https://your-tailscale-ip:8444/ in your browser
 
-You can also access via your Tailscale IP: https://your-tailscale-ip/
+**Important**: Accept the SSL certificate warning when prompted. Self-signed certificates are used for local development.
+
+**Note**: Speaker Recognition runs on port 8444 (HTTPS) and 8081 (HTTP) to avoid conflicts with the main Friend-Lite backend which uses the standard ports 443/80.
 
 **Need to customize other settings?** Copy `.env.template` to `.env` and modify:
 ```bash

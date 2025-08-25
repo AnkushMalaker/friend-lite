@@ -25,20 +25,32 @@ uv sync --group cpu
 uv sync --group gpu
 ```
 
-### 3. Start the system
+### 3. Initialize HTTPS (Required for Microphone Access)
+
 ```bash
 cd extras/speaker-recognition
+./init.sh 100.83.66.30  # Replace with your Tailscale/network IP
+```
+
+This generates SSL certificates and configures nginx for your IP address.
+
+### 4. Start the system
+```bash
 docker-compose up --build -d
 ```
 
-This starts two services:
-- **FastAPI backend** on http://localhost:8085 (speaker recognition API)
-- **React web UI** on https://localhost:5173 (Modern React interface with HTTPS)
+This starts three services:
+- **FastAPI backend** on port 8085 (internal, proxied through nginx)
+- **React web UI** on port 5175 (internal, proxied through nginx) 
+- **Nginx proxy** on ports 8444/8081 (HTTPS/HTTP access)
 
-### 3. Access the Web UI
-- **React UI**: https://localhost:5173 (with HTTPS enabled for microphone access)
+### 5. Access the Web UI
+- **HTTPS (Secure)**: https://localhost:8444/ or https://your-ip:8444/
+- **HTTP (Redirect)**: http://localhost:8081/ → https://localhost:8444/
 
-### 4. Get Started
+**Microphone access requires HTTPS for network connections (not just localhost).**
+
+### 6. Get Started
 1. **Create a user** using the sidebar
 2. **Upload audio** in the "Audio Viewer" page
 3. **Annotate segments** in the "Annotation" page
