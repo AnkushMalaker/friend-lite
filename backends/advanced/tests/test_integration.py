@@ -31,6 +31,7 @@ Test Environment:
 import json
 import logging
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -207,19 +208,7 @@ class IntegrationTestRunner:
             if result.returncode == 0:
                 logger.info("✅ Docker cleanup successful")
             else:
-                logger.warning(f"⚠️ Docker cleanup failed: {result.stderr}")
-                logger.info("🔄 Falling back to local cleanup...")
-                # Simple fallback - try local cleanup without complex logic
-                import shutil
-                for test_dir in ["./data/test_audio_chunks", "./data/test_data", "./data/test_debug_dir", 
-                                "./data/test_mongo_data", "./data/test_qdrant_data", "./data/test_neo4j"]:
-                    test_path = Path(test_dir)
-                    if test_path.exists():
-                        try:
-                            shutil.rmtree(test_path)
-                            logger.info(f"✓ Cleaned {test_dir}")
-                        except PermissionError:
-                            logger.warning(f"⚠️ Permission denied cleaning {test_dir} - Docker cleanup recommended")
+                logger.warning(f"Error during Docker cleanup: {result.stderr}")
                             
         except Exception as e:
             logger.warning(f"⚠️ Docker cleanup failed: {e}")
@@ -494,6 +483,13 @@ class IntegrationTestRunner:
                 # Stop existing test services and remove volumes for fresh start
                 subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "down", "-v"], capture_output=True)
             
+            # Ensure memory_config.yaml exists by copying from template
+            memory_config_path = "memory_config.yaml"
+            memory_template_path = "memory_config.yaml.template"
+            if not os.path.exists(memory_config_path) and os.path.exists(memory_template_path):
+                logger.info(f"📋 Creating {memory_config_path} from template...")
+                shutil.copy2(memory_template_path, memory_config_path)
+            
             # Check if we're in CI environment
             is_ci = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
             
@@ -570,24 +566,8 @@ class IntegrationTestRunner:
                 except Exception as e:
                     logger.warning(f"Could not fetch container status: {e}")
                 
-                # Try alternative approach for macOS
-                if "permission denied" in result.stderr.lower():
-                    logger.info("Permission issue detected, trying alternative approach...")
-                    alt_result = subprocess.run(
-                        ["docker", "compose", "-f", "docker-compose-test.yml", "up", "-d", "--no-build"],
-                        capture_output=True,
-                        text=True
-                    )
-                    if alt_result.returncode == 0:
-                        logger.info("Alternative approach successful")
-                        result = alt_result
-                    else:
-                        logger.error("Alternative approach also failed")
-                        raise RuntimeError("Docker compose failed to start - try running:\n" +
-                                         "  sudo chown -R $(whoami):staff \"$HOME/.docker/buildx\"\n" +
-                                         "  sudo chmod -R 755 \"$HOME/.docker/buildx\"")
-                else:
-                    raise RuntimeError("Docker compose failed to start")
+                # Fail fast - no retry attempts
+                raise RuntimeError("Docker compose failed to start")
                 
             self.services_started = True
             self.services_started_by_test = True  # Mark that we started the services
