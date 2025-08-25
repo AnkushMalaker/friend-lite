@@ -1,5 +1,5 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
-import { Music, MessageSquare, Brain, Users, Upload, Settings, LogOut, Sun, Moon, Shield } from 'lucide-react'
+import { Music, MessageSquare, MessageCircle, Brain, Users, Upload, Settings, LogOut, Sun, Moon, Shield, Radio } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 
@@ -9,6 +9,8 @@ export default function Layout() {
   const { isDark, toggleTheme } = useTheme()
 
   const navigationItems = [
+    { path: '/live-record', label: 'Live Record', icon: Radio },
+    { path: '/chat', label: 'Chat', icon: MessageCircle },
     { path: '/conversations', label: 'Conversations', icon: MessageSquare },
     { path: '/memories', label: 'Memories', icon: Brain },
     { path: '/users', label: 'User Management', icon: Users },

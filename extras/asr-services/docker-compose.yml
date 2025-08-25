@@ -20,7 +20,7 @@ services:
               capabilities: [gpu]
     environment:
       - HF_HOME=/models
-      - PARAKEET_MODEL=nvidia/parakeet-tdt-0.6b-v2
+      - PARAKEET_MODEL=$PARAKEET_MODEL
     restart: unless-stopped
 
   # moonshine-asr:

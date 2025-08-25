@@ -24,9 +24,16 @@ At the moment, the basic functionalities are:
 
 ## Quick Start
 
-### 0. Forbidden Knowledge
-This is a secret command for the daring. It runs a full end to end tests with a lot of logging. Folling that is probably THE quickest way to understand whats happening end to end.
-`source .env && export DEEPGRAM_API_KEY OPENAI_API_KEY && uv run pytest tests/test_integration.py -vv -s --log-cli-level=INFO --log-cli-format='%(asctime)s - %(levelname)s - %(message)s'`   
+### 0. Quick Testing (Optional)
+To verify your setup, run the integration test suite:
+```bash
+# Ensure .env file has DEEPGRAM_API_KEY and OPENAI_API_KEY configured
+./run-test.sh
+
+# Alternative: Manual test with detailed logging
+source .env && export DEEPGRAM_API_KEY OPENAI_API_KEY && uv run pytest tests/test_integration.py -vv -s --log-cli-level=INFO --log-cli-format='%(asctime)s - %(levelname)s - %(message)s'
+```
+This end-to-end test demonstrates the complete audio processing pipeline.   
 
 
 ### 1. Environment Setup
@@ -45,7 +52,7 @@ ADMIN_EMAIL=admin@example.com
 # Option 1: OpenAI (Recommended for best memory extraction)
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your-openai-api-key-here
-OPENAI_MODEL=gpt-5-mini
+OPENAI_MODEL=gpt-4o-mini
 
 # Option 2: Local Ollama
 LLM_PROVIDER=ollama
@@ -79,13 +86,13 @@ OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
 
 **Recommended: Docker Compose**
 ```bash
-cd backends/advanced-backend
+cd backends/advanced
 docker compose up --build -d
 ```
 
 This starts:
 - **Backend API**: `http://localhost:8000`
-- **Web Dashboard**: `http://localhost:8501`
+- **Web Dashboard**: `http://localhost:3000`
 - **MongoDB**: `localhost:27017`
 - **Qdrant**: `localhost:6333`
 - (optional) **Ollama**: # commented out
@@ -100,7 +107,7 @@ For self-hosted speech recognition, see instructions in `extras/asr-services/`:
 
 ### Web Dashboard
 
-1. Open `http://localhost:8501`
+1. Open `http://localhost:3000`
 2. **Login** using the sidebar:
    - **Admin**: `admin@example.com` / `your-admin-password`
    - **Create new users** via admin interface
@@ -266,7 +273,7 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 curl http://localhost:8000/health
 
 # Web dashboard
-open http://localhost:8501
+open http://localhost:3000
 
 # View active clients (requires auth token)
 curl -H "Authorization: Bearer your-token" http://localhost:8000/api/clients/active
@@ -416,7 +423,7 @@ The system supports **multiple LLM providers** - configure via environment varia
 # In your .env file
 LLM_PROVIDER=openai          # RECOMMENDED: Use "openai" for best results
 OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-5-mini          # RECOMMENDED: "gpt-5-mini" for better memory extraction
+OPENAI_MODEL=gpt-4o-mini          # RECOMMENDED: "gpt-5-mini" for better memory extraction
 
 # Alternative: Local Ollama (may have reduced memory quality)
 LLM_PROVIDER=ollama          
@@ -466,7 +473,7 @@ If you experience JSON parsing errors in fact extraction:
    # In your .env file
    LLM_PROVIDER=openai
    OPENAI_API_KEY=your-openai-api-key
-   OPENAI_MODEL=gpt-5-mini
+   OPENAI_MODEL=gpt-4o-mini
    ```
 
 2. **Enable fact extraction** with reliable JSON output:
@@ -522,7 +529,7 @@ If you see errors about missing API keys or models, verify your `.env` file has:
 ```bash
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-your-actual-api-key-here
-OPENAI_MODEL=gpt-5-mini
+OPENAI_MODEL=gpt-4o-mini
 ```
 
 ### Quality Control Settings

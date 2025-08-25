@@ -46,6 +46,7 @@ extras/speaker-omni-experimental/cache/*
 
 # SSL
 extras/speaker-recognition/ssl/*
+backends/advanced/ssl/*
 
 # nginx
 extras/speaker-recognition/nginx.conf
