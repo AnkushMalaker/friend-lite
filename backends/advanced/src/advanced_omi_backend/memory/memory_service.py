@@ -166,8 +166,9 @@ class MemoryService(MemoryServiceBase):
             )
             memory_logger.info(f"embeddings generated")
             if not embeddings or len(embeddings) != len(fact_memories_text):
-                memory_logger.error(f"❌ Embedding generation failed for {audio_uuid}")
-                return False, []
+                error_msg = f"❌ Embedding generation failed for {audio_uuid}: got {len(embeddings) if embeddings else 0} embeddings for {len(fact_memories_text)} memories"
+                memory_logger.error(error_msg)
+                raise RuntimeError(error_msg)
             
             # Create or update memory entries
             memory_entries = []
@@ -199,14 +200,16 @@ class MemoryService(MemoryServiceBase):
                 memory_logger.info(f"✅ Upserted {len(created_ids)} memories for {audio_uuid}")
                 return True, created_ids
 
-            return False, []
+            error_msg = f"❌ No memories created for {audio_uuid}: memory_entries={len(memory_entries) if memory_entries else 0}, allow_update={allow_update}"
+            memory_logger.error(error_msg)
+            raise RuntimeError(error_msg)
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             memory_logger.error(f"⏰ Memory processing timed out for {audio_uuid}")
-            return False, []
+            raise e
         except Exception as e:
             memory_logger.error(f"❌ Add memory failed for {audio_uuid}: {e}")
-            return False, []
+            raise e
 
     async def search_memories(self, query: str, user_id: str, limit: int = 10) -> List[MemoryEntry]:
         """Search memories using semantic similarity.
@@ -727,6 +730,35 @@ async def example_usage():
         print("🧹 Cleaned up test data")
     
     memory_service.shutdown()
+
+
+# Global memory service instance
+_memory_service: Optional[MemoryService] = None
+
+
+def get_memory_service() -> MemoryService:
+    """Get the global memory service instance.
+    
+    Returns:
+        MemoryService: The initialized memory service instance
+        
+    Raises:
+        RuntimeError: If memory service has not been initialized
+    """
+    global _memory_service
+    if _memory_service is None:
+        from .config import build_memory_config_from_env
+        config = build_memory_config_from_env()
+        _memory_service = MemoryService(config)
+        # Initialize in background if not already done
+        try:
+            loop = asyncio.get_event_loop()
+            if not _memory_service._initialized:
+                loop.create_task(_memory_service.initialize())
+        except RuntimeError:
+            # No event loop running, will initialize on first use
+            pass
+    return _memory_service
 
 
 if __name__ == "__main__":
