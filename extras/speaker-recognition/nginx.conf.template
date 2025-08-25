@@ -46,7 +46,7 @@ http {
     }
     
     upstream web_ui {
-        server web-ui:5173;
+        server web-ui:5175;
     }
     
     # HTTPS Server
