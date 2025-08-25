@@ -30,6 +30,7 @@ services:
       - ADMIN_EMAIL=test-admin@example.com
       # Transcription provider configuration
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
+      - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       # Disable speaker recognition in test environment to prevent segment duplication
       - DISABLE_SPEAKER_RECOGNITION=true
