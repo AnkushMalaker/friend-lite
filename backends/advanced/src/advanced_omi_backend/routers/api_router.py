@@ -10,6 +10,7 @@ import logging
 from fastapi import APIRouter
 
 from .modules import (
+    chat_router,
     client_router,
     conversation_router,
     memory_router,
@@ -25,6 +26,7 @@ router = APIRouter(prefix="/api", tags=["api"])
 
 # Include all sub-routers
 router.include_router(user_router)
+router.include_router(chat_router)
 router.include_router(client_router)
 router.include_router(conversation_router)
 router.include_router(memory_router)

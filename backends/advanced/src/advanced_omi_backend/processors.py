@@ -485,6 +485,35 @@ class ProcessorManager:
         self.closing_clients.discard(client_id)
         audio_logger.info(f"✅ Completed close_client_audio for client {client_id}")
 
+    async def ensure_transcription_manager(self, client_id: str):
+        """Ensure a transcription manager exists for the given client.
+        
+        This can be called early (e.g., on audio-start) to create the manager
+        before audio chunks arrive.
+        """
+        if client_id not in self.transcription_managers:
+            audio_logger.info(
+                f"🔌 Creating transcription manager for client {client_id} (early creation)"
+            )
+            manager = TranscriptionManager(
+                chunk_repo=self.repository, processor_manager=self
+            )
+            try:
+                await manager.connect(client_id)
+                self.transcription_managers[client_id] = manager
+                audio_logger.info(
+                    f"✅ Successfully created transcription manager for {client_id}"
+                )
+            except Exception as e:
+                audio_logger.error(
+                    f"❌ Failed to create transcription manager for {client_id}: {e}"
+                )
+                raise
+        else:
+            audio_logger.debug(
+                f"♻️ Transcription manager already exists for client {client_id}"
+            )
+
     async def _audio_processor(self):
         """Process audio chunks and save to files."""
         audio_logger.info("Audio processor started")

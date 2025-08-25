@@ -78,7 +78,9 @@ export default function Upload() {
         prevFiles.map(f => ({ ...f, status: 'uploading' as const }))
       )
 
-      await uploadApi.uploadAudioFiles(formData)
+      await uploadApi.uploadAudioFiles(formData, (progress) => {
+        setUploadProgress(progress)
+      })
       
       // Mark all files as successful
       setFiles(prevFiles => 

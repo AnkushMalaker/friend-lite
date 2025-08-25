@@ -83,8 +83,8 @@ def _chunk_to_numpy_float(chunk: AudioChunk) -> np.ndarray:
 class SharedTranscriber:
     """Shared transcriber instance that can be used by multiple clients."""
 
-    def __init__(self, model_name: str = "nvidia/parakeet-tdt-0.6b-v2"):
-        logger.info(f"Loading shared NeMo ASR model: {model_name}")
+    def __init__(self, model_name: str):
+        logger.info(f"Loading shared Nemo ASR model: {model_name}")
         self.model = cast(
             nemo_asr.models.ASRModel,
             nemo_asr.models.ASRModel.from_pretrained(model_name=model_name),
@@ -330,7 +330,7 @@ active_sessions: Dict[str, StreamingSession] = {}
 async def startup_event():
     """Initialize the transcriber on startup."""
     global transcriber
-    model_name = os.getenv("PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v2")
+    model_name = str(os.getenv("PARAKEET_MODEL"))
     transcriber = SharedTranscriber(model_name)
     await transcriber.warmup()
     logger.info("Parakeet ASR service started")
@@ -505,10 +505,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parakeet ASR HTTP/WebSocket Service")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind to")
-    parser.add_argument("--model", default="nvidia/parakeet-tdt-0.6b-v2", help="NeMo model name")
+    parser.add_argument("--model", help="NeMo model name", required=False)
     args = parser.parse_args()
     
     # Set model via environment variable
-    os.environ["PARAKEET_MODEL"] = args.model
+    if args.model:
+        os.environ["PARAKEET_MODEL"] = args.model
+    else:
+        os.environ["PARAKEET_MODEL"] = "nvidia/parakeet-tdt-0.6b-v3"
     
     uvicorn.run(app, host=args.host, port=args.port)

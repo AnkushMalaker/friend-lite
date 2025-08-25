@@ -51,36 +51,24 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # Development webui service (default)
   webui:
-    build:
-      context: ./webui
-      dockerfile: Dockerfile
-      args:
-        - VITE_BACKEND_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000}
-    ports:
-      - "${WEBUI_PORT:-3000}:80"
-    depends_on:
-      friend-backend:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # Development webui service (use with docker-compose --profile dev up)
-  webui-dev:
     build:
       context: ./webui
       dockerfile: Dockerfile.dev
     ports:
-      - "${WEBUI_DEV_PORT:-5173}:5173"
+      - "${WEBUI_PORT:-5173}:5173"
     environment:
-      - VITE_BACKEND_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000}
+      # Don't set VITE_BACKEND_URL - let frontend auto-detect based on access method
+      # - VITE_BACKEND_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000}
+      - VITE_HMR_PORT=443
     volumes:
       - ./webui/src:/app/src
       - ./webui/public:/app/public
     depends_on:
       friend-backend:
         condition: service_healthy
-    profiles:
-      - dev
+    restart: unless-stopped
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -97,6 +85,29 @@ services:
       - "27017:27017"
     volumes:
       - ./data/mongo_data:/data/db
+
+  # Nginx reverse proxy for HTTPS access
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      friend-backend:
+        condition: service_healthy
+      webui:
+        condition: service_started
+    profiles:
+      - https
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   ##  Additional
 

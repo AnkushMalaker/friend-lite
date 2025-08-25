@@ -10,6 +10,7 @@ on:
       - 'extras/speaker-recognition/docker-compose.yml'
       - 'extras/speaker-recognition/docker-compose-test.yml'
       - 'extras/speaker-recognition/Dockerfile'
+      - 'extras/speaker-recognition/run-test.sh'
       - '.github/workflows/speaker-recognition-tests.yml'
   pull_request:
     branches: [ main, develop ]
@@ -20,6 +21,7 @@ on:
       - 'extras/speaker-recognition/docker-compose.yml'
       - 'extras/speaker-recognition/docker-compose-test.yml'
       - 'extras/speaker-recognition/Dockerfile'
+      - 'extras/speaker-recognition/run-test.sh'
       - '.github/workflows/speaker-recognition-tests.yml'
 
 jobs:
@@ -44,59 +46,14 @@ jobs:
       with:
         python-version: "3.12"
         
-    - name: Change to speaker recognition directory
-      run: cd extras/speaker-recognition
-      
-    - name: Install dependencies with uv
-      run: |
-        cd extras/speaker-recognition
-        uv sync --group cpu --group test
-        
-    - name: Set up environment variables
+    - name: Run Speaker Recognition Integration Tests
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
         DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
       run: |
         cd extras/speaker-recognition
-        echo "Setting up environment variables..."
-        echo "HF_TOKEN length: ${#HF_TOKEN}"
-        echo "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
-        
-        # Create .env file for tests
-        > .env
-        echo "HF_TOKEN=$HF_TOKEN" >> .env
-        echo "DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY" >> .env
-        echo "SIMILARITY_THRESHOLD=0.15" >> .env
-        echo "SPEAKER_SERVICE_HOST=speaker-service" >> .env
-        echo "COMPUTE_MODE=cpu" >> .env
-        echo "SPEAKER_SERVICE_PORT=8085" >> .env
-        echo "SPEAKER_SERVICE_URL=http://speaker-service:8085" >> .env
-        echo "SPEAKER_SERVICE_TEST_PORT=8086" >> .env
-        echo "REACT_UI_HOST=0.0.0.0" >> .env
-        echo "REACT_UI_PORT=5173" >> .env
-        echo "REACT_UI_HTTPS=false" >> .env
-        
-        echo "Created .env file for tests"
-        
-    - name: Clean test environment
-      run: |
-        cd extras/speaker-recognition
-        # Stop any existing test containers
-        docker compose -f docker-compose-test.yml down -v || true
-        
-    - name: Run speaker recognition integration tests
-      env:
-        DOCKER_BUILDKIT: 0
-      run: |
-        cd extras/speaker-recognition
-        echo "Running speaker recognition integration tests"
-        echo "Disabling BuildKit for integration tests (DOCKER_BUILDKIT=0)"
-        
-        # Export environment variables for test
-        source .env && export HF_TOKEN && export DEEPGRAM_API_KEY
-        
-        # Run the integration test with timeout (speaker recognition models need time)
-        timeout 1800 uv run pytest tests/test_speaker_service_integration.py -v -s --tb=short
+        chmod +x run-test.sh
+        ./run-test.sh
         
     - name: Debug Docker build failure
       if: failure()
@@ -120,11 +77,3 @@ jobs:
           extras/speaker-recognition/docker-compose-test.yml
           extras/speaker-recognition/.env
         retention-days: 7
-        
-    - name: Clean up test containers
-      if: always()
-      run: |
-        cd extras/speaker-recognition
-        # Clean up test containers and volumes
-        docker compose -f docker-compose-test.yml down -v || true
-        docker system prune -f || true
