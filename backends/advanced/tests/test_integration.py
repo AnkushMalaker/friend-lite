@@ -401,7 +401,6 @@ class IntegrationTestRunner:
         # Log environment readiness based on provider type
         deepgram_key = os.environ.get('DEEPGRAM_API_KEY')
         openai_key = os.environ.get('OPENAI_API_KEY')
-        offline_asr_uri = os.environ.get('OFFLINE_ASR_TCP_URI')
         
         # Validate based on transcription provider (streaming/batch architecture)
         if self.provider == "deepgram":

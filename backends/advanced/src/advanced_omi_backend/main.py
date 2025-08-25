@@ -127,7 +127,6 @@ CHUNK_DIR.mkdir(parents=True, exist_ok=True)
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://localhost:8765")
 
 # Get configured transcription provider (online or offline)
 transcription_provider = get_transcription_provider(TRANSCRIPTION_PROVIDER)

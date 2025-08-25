@@ -70,8 +70,8 @@ TRANSCRIPTION_PROVIDER=mistral
 MISTRAL_API_KEY=your-mistral-api-key-here
 MISTRAL_MODEL=voxtral-mini-2507
 
-# Option 3: Local ASR service
-OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
+# Option 3: Local ASR service  
+PARAKEET_ASR_URL=http://host.docker.internal:8080
 ```
 
 **Important Notes:**
@@ -364,7 +364,7 @@ docker run -d --gpus=all -p 11434:11434 \
 # .env configuration for distributed services
 OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434
 SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8001
-OFFLINE_ASR_TCP_URI=tcp://[gpu-machine-tailscale-ip]:8765
+PARAKEET_ASR_URL=http://[gpu-machine-tailscale-ip]:8080
 
 # Start lightweight backend services
 docker compose up --build -d
