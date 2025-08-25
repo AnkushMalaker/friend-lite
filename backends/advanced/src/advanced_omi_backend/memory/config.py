@@ -22,14 +22,22 @@ class VectorStoreProvider(Enum):
     CUSTOM = "custom"
 
 
+class MemoryProvider(Enum):
+    """Supported memory service providers."""
+    FRIEND_LITE = "friend_lite"      # Default sophisticated implementation
+    OPENMEMORY_MCP = "openmemory_mcp"  # OpenMemory MCP backend
+
+
 @dataclass
 class MemoryConfig:
     """Configuration for memory service."""
-    llm_provider: LLMProvider
-    vector_store_provider: VectorStoreProvider
-    llm_config: Dict[str, Any]
-    vector_store_config: Dict[str, Any]
-    embedder_config: Dict[str, Any]
+    memory_provider: MemoryProvider = MemoryProvider.FRIEND_LITE
+    llm_provider: LLMProvider = LLMProvider.OPENAI
+    vector_store_provider: VectorStoreProvider = VectorStoreProvider.QDRANT
+    llm_config: Dict[str, Any] = None
+    vector_store_config: Dict[str, Any] = None
+    embedder_config: Dict[str, Any] = None
+    openmemory_config: Dict[str, Any] = None  # Configuration for OpenMemory MCP
     extraction_prompt: str = None
     extraction_enabled: bool = True
     timeout_seconds: int = 1200
@@ -88,9 +96,49 @@ def create_qdrant_config(
     }
 
 
+def create_openmemory_config(
+    server_url: str = "http://localhost:8765",
+    client_name: str = "friend_lite",
+    user_id: str = "default",
+    timeout: int = 30
+) -> Dict[str, Any]:
+    """Create OpenMemory MCP configuration."""
+    return {
+        "server_url": server_url,
+        "client_name": client_name,
+        "user_id": user_id,
+        "timeout": timeout
+    }
+
+
 def build_memory_config_from_env() -> MemoryConfig:
     """Build memory configuration from environment variables and YAML config."""
     try:
+        # Determine memory provider
+        memory_provider = os.getenv("MEMORY_PROVIDER", "friend_lite").lower()
+        if memory_provider not in [p.value for p in MemoryProvider]:
+            raise ValueError(f"Unsupported memory provider: {memory_provider}")
+        
+        memory_provider_enum = MemoryProvider(memory_provider)
+        
+        # For OpenMemory MCP, configuration is much simpler
+        if memory_provider_enum == MemoryProvider.OPENMEMORY_MCP:
+            openmemory_config = create_openmemory_config(
+                server_url=os.getenv("OPENMEMORY_MCP_URL", "http://localhost:8765"),
+                client_name=os.getenv("OPENMEMORY_CLIENT_NAME", "friend_lite"),
+                user_id=os.getenv("OPENMEMORY_USER_ID", "default"),
+                timeout=int(os.getenv("OPENMEMORY_TIMEOUT", "30"))
+            )
+            
+            memory_logger.info(f"🔧 Memory config: Provider=OpenMemory MCP, URL={openmemory_config['server_url']}")
+            
+            return MemoryConfig(
+                memory_provider=memory_provider_enum,
+                openmemory_config=openmemory_config,
+                timeout_seconds=int(os.getenv("OPENMEMORY_TIMEOUT", "30"))
+            )
+        
+        # For Friend-Lite provider, use existing complex configuration
         # Import config loader
         from advanced_omi_backend.memory_config_loader import get_config_loader
         
@@ -155,9 +203,10 @@ def build_memory_config_from_env() -> MemoryConfig:
         extraction_enabled = config_loader.is_memory_extraction_enabled()
         extraction_prompt = config_loader.get_memory_prompt() if extraction_enabled else None
         
-        memory_logger.info(f"🔧 Memory config: LLM={llm_provider}, VectorStore={vector_store_provider}, Extraction={extraction_enabled}")
+        memory_logger.info(f"🔧 Memory config: Provider=Friend-Lite, LLM={llm_provider}, VectorStore={vector_store_provider}, Extraction={extraction_enabled}")
         
         return MemoryConfig(
+            memory_provider=memory_provider_enum,
             llm_provider=llm_provider_enum,
             vector_store_provider=vector_store_provider_enum,
             llm_config=llm_config,
