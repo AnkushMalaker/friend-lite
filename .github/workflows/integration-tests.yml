@@ -5,11 +5,13 @@ on:
     branches: [ main, develop ]
     paths:
       - 'backends/advanced/src/**'
+      - 'backends/advanced/run-test.sh'
       - '.github/workflows/integration-tests.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'backends/advanced/src/**'
+      - 'backends/advanced/run-test.sh'
       - '.github/workflows/integration-tests.yml'
 
 jobs:
@@ -42,71 +44,22 @@ jobs:
     - name: Install PortAudio dependencies
       run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
         
-    - name: Change to backend directory
-      run: cd backends/advanced
-      
-    - name: Install dependencies with uv
-      run: |
-        cd backends/advanced
-        uv sync --dev --group test
-        
-    - name: Set up environment variables
+    - name: Run Advanced Backend Integration Tests
       env:
         DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
         cd backends/advanced
-        echo "Setting up environment variables..."
-        echo "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
-        echo "OPENAI_API_KEY length: ${#OPENAI_API_KEY}"
-        # Clear existing .env.test file and create fresh one
-        > .env.test
-        echo "DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY" >> .env.test
-        echo "OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.test
-        echo "AUTH_SECRET_KEY=test-jwt-signing-key-for-integration-tests" >> .env.test
-        echo "ADMIN_PASSWORD=test-admin-password-123" >> .env.test
-        echo "ADMIN_EMAIL=test-admin@example.com" >> .env.test
-        echo "LLM_PROVIDER=openai" >> .env.test
-        echo "OPENAI_MODEL=gpt-4o-mini" >> .env.test
-        echo "MONGODB_URI=mongodb://localhost:27018/test_db" >> .env.test
-        echo "QDRANT_BASE_URL=localhost" >> .env.test
-        echo "Created .env.test file with contents:"
-        cat .env.test
-        
-    - name: Clean test environment
-      run: |
-        cd backends/advanced
-        # Clean any existing test data
-        sudo rm -rf ./test_audio_chunks/ ./test_data/ ./test_debug_dir/ ./mongo_data_test/ ./qdrant_data_test/ ./test_neo4j/ || true
-        # Stop any existing test containers
-        docker compose -f docker-compose-test.yml down -v || true
-        
-    - name: Run integration tests
-      env:
-        DOCKER_BUILDKIT: 0
-      run: |
-        cd backends/advanced
-        # Keep CACHED_MODE=False for proper CI testing with fresh environment
-        # With the fixed fact extraction prompt, fresh mode should work correctly
-        echo "Using fresh mode (CACHED_MODE=False) for clean CI testing"
-        echo "Disabling BuildKit for integration tests (DOCKER_BUILDKIT=0)"
-        # Run the integration test with extended timeout (mem0 needs time for comprehensive extraction)
-        timeout 900 uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s --tb=short --log-cli-level=INFO
+        chmod +x run-test.sh
+        ./run-test.sh
         
     - name: Upload test logs on failure
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: test-logs
+        name: integration-test-logs
         path: |
           backends/advanced/test_integration.log
           backends/advanced/docker-compose-test.yml
+          backends/advanced/.env.test
         retention-days: 7
-        
-    - name: Clean up test containers
-      if: always()
-      run: |
-        cd backends/advanced
-        # Clean up test containers and volumes
-        docker compose -f docker-compose-test.yml down -v || true
-        docker system prune -f || true

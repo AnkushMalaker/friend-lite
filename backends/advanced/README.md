@@ -4,21 +4,47 @@
 
 ## Web Interface
 
-The backend includes a modern React-based web dashboard located in `./webui/`. 
+The backend includes a modern React-based web dashboard located in `./webui/` with features including live audio recording, chat interface, conversation management, and system monitoring.
 
-### Quick Start
+### Quick Start (HTTP)
 ```bash
-# Production
-docker compose up webui friend-backend mongo qdrant
-
-# Development (with hot reload)
-docker compose --profile dev up
+# Start with hot reload development server
+docker compose up --build -d
 ```
 
-- **Production**: http://localhost:3000
-- **Development**: http://localhost:5173
+- **Web Dashboard**: http://localhost:5173
 
-See `./webui/README.md` for detailed documentation.
+### HTTPS Setup (Required for Microphone Access)
+
+For network access and microphone features, set up HTTPS:
+
+```bash
+# Initialize HTTPS with your Tailscale/network IP
+./init.sh 100.83.66.30  # Replace with your IP
+
+# Start with HTTPS proxy
+docker compose --profile https up --build -d
+```
+
+#### Access URLs
+
+**Friend-Lite Advanced Backend (Primary - ports 80/443):**
+- **HTTPS Dashboard**: https://localhost/ or https://your-ip/
+- **HTTP**: http://localhost/ (redirects to HTTPS)
+- **Live Recording**: Available at `/live-record` page
+
+**Speaker Recognition Service (Secondary - ports 8081/8444):**
+- **HTTPS Dashboard**: https://localhost:8444/ or https://your-ip:8444/
+- **HTTP**: http://localhost:8081/ (redirects to HTTPS)
+- **Features**: Speaker enrollment, audio analysis, live inference
+
+**Features available with HTTPS:**
+- 🎤 **Live Recording** - Real-time audio streaming with WebSocket
+- 🔒 **Secure WebSocket** connections (WSS)
+- 🌐 **Network Access** from other devices via Tailscale/LAN
+- 🔄 **Automatic protocol detection** - Frontend auto-configures for HTTP/HTTPS
+
+See [Docs/HTTPS_SETUP.md](Docs/HTTPS_SETUP.md) for detailed configuration.
 
 ## Testing
 

@@ -54,7 +54,7 @@ http {
     # HTTPS Server
     server {
         listen 443 ssl http2;
-        server_name localhost 100.83.66.30;
+        server_name localhost TAILSCALE_IP;
         
         # SSL Configuration
         ssl_certificate /etc/nginx/ssl/server.crt;
@@ -215,7 +215,7 @@ http {
     # HTTP redirect to HTTPS
     server {
         listen 80;
-        server_name localhost 100.83.66.30;
+        server_name localhost TAILSCALE_IP;
         return 301 https://$host$request_uri;
     }
 }

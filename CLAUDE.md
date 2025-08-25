@@ -17,7 +17,7 @@ This supports a comprehensive web dashboard for management.
 
 ### Backend Development (Advanced Backend - Primary)
 ```bash
-cd backends/advanced-backend
+cd backends/advanced
 
 # Start full stack with Docker
 docker compose up --build -d
@@ -31,65 +31,79 @@ uv run isort src/
 # Run tests
 uv run pytest
 uv run pytest tests/test_memory_service.py  # Single test file
-uv run pytest test_integration.py  # End-to-end integration test (requires Docker)
-uv run pytest test_endpoints.py  # Integration tests
-uv run pytest test_memory_debug.py  # Memory debug tests
+
+# Run integration tests (local script mirrors CI)
+./run-test.sh  # Complete integration test suite
 
 # Environment setup
 cp .env.template .env  # Configure environment variables
 
 # Reset data (development)
-sudo rm -rf backends/advanced-backend/data/
+sudo rm -rf backends/advanced/data/
 ```
 
-### Integration Test Development and Debugging
+### Testing Infrastructure
 
-#### Running Integration Tests
-These needs keys from .env file if running locally and not through CI.
-This can be done by exporting these keys before hand - 
+#### Local Test Scripts
+The project includes simplified test scripts that mirror CI workflows:
+
 ```bash
-# Basic integration test (requires API keys in .env)
-source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY && uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+# Run all tests from project root
+./run-test.sh [advanced-backend|speaker-recognition|all]
 
-# For debugging: Use cached mode to keep containers running
-# 1. Edit tests/test_integration.py: Set CACHED_MODE = True
-# 2. Run test (containers will persist after test ends)
-uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s --tb=short
+# Advanced backend tests only
+./run-test.sh advanced-backend
 
-# Check running test containers
-docker ps
-docker logs advanced-backend-friend-backend-test-1 --tail=50
-docker logs advanced-backend-mongo-test-1 --tail=20
-docker logs advanced-backend-qdrant-test-1 --tail=20
+# Speaker recognition tests only
+./run-test.sh speaker-recognition
 
-# Clean up test containers
-docker compose -f docker-compose-test.yml down -v
+# Run all test suites (default)
+./run-test.sh all
 ```
 
-#### Integration Test Iteration Methodology
-1. **Set CACHED_MODE = True** in `tests/test_integration.py` for debugging. If CACHE_MODE is false, the test containers will be created fresh before the test, and removed after - so they won't be running after the test to view logs/debug.
-2. **Run the test** - containers will start and persist even if test times out
-3. **Check container logs** to see where the test is hanging:
-   ```bash
-   docker logs advanced-backend-friend-backend-test-1 --tail=100
-   ```
-4. **Test API endpoints manually** while containers are running:
-   ```bash
-   curl -X GET http://localhost:8001/health
-   # Note: Use actual ADMIN_EMAIL and ADMIN_PASSWORD from .env file
-   curl -X POST http://localhost:8001/auth/jwt/login \
-     -H "Content-Type: application/x-www-form-urlencoded" \
-     -d "username=admin@example.com&password=your-admin-password"
-   ```
-5. **Exec into containers** for detailed debugging:
-   ```bash
-   docker exec -it advanced-backend-friend-backend-test-1 /bin/bash
-   ```
-6. **Clean up** when done:
-   ```bash
-   docker compose -f docker-compose-test.yml down -v
-   ```
-7. **Set CACHED_MODE = False** when committing changes for CI compatibility
+#### Advanced Backend Integration Tests
+```bash
+cd backends/advanced
+
+# Requires .env file with DEEPGRAM_API_KEY and OPENAI_API_KEY
+cp .env.template .env  # Configure API keys
+
+# Run full integration test suite
+./run-test.sh
+
+# Manual test execution (for debugging)
+source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY
+uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+```
+
+#### Speaker Recognition Tests
+```bash
+cd extras/speaker-recognition
+
+# Requires .env file with HF_TOKEN and DEEPGRAM_API_KEY
+cp .env.template .env  # Configure tokens
+
+# Run speaker recognition test suite
+./run-test.sh
+```
+
+#### Test Script Features
+- **Environment Compatibility**: Works with both local .env files and CI environment variables
+- **Simplified Configuration**: Uses environment variables directly, no temporary .env.test files
+- **Docker Cleanup**: Uses lightweight Alpine container for reliable permission-free cleanup
+- **Automatic Cleanup**: Stops and removes test containers after execution
+- **Colored Output**: Clear progress indicators and error reporting
+- **Timeout Protection**: 15-minute timeout for advanced backend, 30-minute for speaker recognition
+- **Fresh Testing**: Uses CACHED_MODE=False for clean test environments
+
+#### Debugging Integration Tests
+For advanced debugging, you can still use the cached mode approach:
+
+1. **Edit tests/test_integration.py**: Set CACHED_MODE = True
+2. **Run test manually**: `uv run pytest tests/test_integration.py -v -s --tb=short`
+3. **Debug containers**: `docker logs advanced-backend-friend-backend-test-1 --tail=100`
+4. **Test endpoints**: `curl -X GET http://localhost:8001/health`
+5. **Clean up**: `docker compose -f docker-compose-test.yml down -v`
 
 ### Mobile App Development
 ```bash
@@ -108,12 +122,12 @@ npm run web
 ```bash
 # ASR Services
 cd extras/asr-services
-docker compose up moonshine  # Offline ASR with Moonshine
 docker compose up parakeet   # Offline ASR with Parakeet
 
-# Speaker Recognition
+# Speaker Recognition (with tests)
 cd extras/speaker-recognition
 docker compose up --build
+./run-test.sh  # Run speaker recognition integration tests
 
 # HAVPE Relay (ESP32 bridge)
 cd extras/havpe-relay
@@ -134,11 +148,11 @@ docker compose up --build
 - **Wyoming Protocol**: WebSocket communication uses Wyoming protocol (JSONL + binary) for structured audio sessions
 - **Application-Level Processing**: Centralized processors for audio, transcription, memory, and cropping
 - **Task Management**: BackgroundTaskManager tracks all async tasks to prevent orphaned processes
-- **Transcription**: Deepgram Nova-3 model with Wyoming ASR fallback, auto-reconnection
+- **Unified Transcription**: Deepgram transcription with fallback to offline ASR services
 - **Authentication**: Email-based login with MongoDB ObjectId user system
 - **Client Management**: Auto-generated client IDs as `{user_id_suffix}-{device_name}`, centralized ClientManager
 - **Data Storage**: MongoDB (`audio_chunks` collection for conversations), Qdrant (vector memory)
-- **Web Interface**: Streamlit dashboard with authentication and real-time monitoring
+- **Web Interface**: React-based web dashboard with authentication and real-time monitoring
 
 ### Service Dependencies
 ```yaml
@@ -150,9 +164,9 @@ Required:
 Recommended:
   - Qdrant: Vector storage for semantic memory
   - Deepgram: Primary transcription service (Nova-3 WebSocket)
-  - Wyoming ASR: Fallback transcription service (offline)
 
 Optional:
+  - Parakeet ASR: Offline transcription service
   - Speaker Recognition: Voice identification service
   - Nginx Proxy: Load balancing and routing
 ```
@@ -187,25 +201,37 @@ Optional:
 
 ### Required Environment Variables
 ```bash
+# Authentication
 AUTH_SECRET_KEY=your-super-secret-jwt-key-here
 ADMIN_PASSWORD=your-secure-admin-password
 ADMIN_EMAIL=admin@example.com
 
-# For integration tests (CI/CD)
-DEEPGRAM_API_KEY=your-deepgram-key-here
+# LLM Configuration
+LLM_PROVIDER=openai  # or ollama
 OPENAI_API_KEY=your-openai-key-here
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o
 
-# CI Environment Requirements:
-# - Docker must be available (GitHub Actions ubuntu-latest includes Docker)
-# - User must have Docker permissions (no sudo required)
-# - For macOS local development, run ./mac-os-docker-ci-quickfix.sh if needed
+# Speech-to-Text
+DEEPGRAM_API_KEY=your-deepgram-key-here
+# Optional: PARAKEET_ASR_URL=http://host.docker.internal:8767
+# Optional: TRANSCRIPTION_PROVIDER=deepgram
+
+# Database
+MONGODB_URI=mongodb://mongo:27017
+QDRANT_BASE_URL=qdrant
+
+# Network Configuration
+HOST_IP=localhost
+BACKEND_PUBLIC_PORT=8000
+WEBUI_PORT=5173
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
 
-### Optional Service Configuration
+### Transcription Provider Configuration
 ```bash
-# Transcription (Deepgram primary, Wyoming fallback)
-DEEPGRAM_API_KEY=your-deepgram-key-here
-OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
+# Primary transcription provider
+DEEPGRAM_API_KEY=your-deepgram-key-here     # Primary transcription service
 
 # LLM Processing
 OLLAMA_BASE_URL=http://ollama:11434
@@ -216,6 +242,24 @@ QDRANT_BASE_URL=qdrant
 # Speaker Recognition
 SPEAKER_SERVICE_URL=http://speaker-recognition:8001
 ```
+
+## Transcription Architecture
+
+### Provider System
+Friend-Lite uses Deepgram as the primary transcription provider with support for offline ASR services:
+
+**Online Provider (API-based):**
+- **Deepgram**: Primary transcription service using Nova-3 model with real-time streaming
+
+**Offline Providers (Local processing):**
+- **Parakeet**: Local speech recognition service available in extras/asr-services
+
+**Provider Interface:**
+The transcription system handles:
+- Connection management and health checks
+- Audio format handling (streaming vs batch)
+- Error handling and reconnection
+- Unified transcript format normalization
 
 ## Wyoming Protocol Implementation
 
@@ -305,9 +349,12 @@ websocket.send(JSON.stringify(audioStop) + '\n');
 - **Docker**: Primary deployment method with docker-compose
 
 ### Testing Strategy
+- **Local Test Scripts**: Simplified scripts (`./run-test.sh`) mirror CI workflows for local development
 - **End-to-End Integration**: `test_integration.py` validates complete audio processing pipeline
-- **API Integration Tests**: `test_endpoints.py` covers API functionality
-- **Unit Tests**: Individual service tests in `tests/` directory (NOT IMPLEMENTED)
+- **Speaker Recognition Tests**: `test_speaker_service_integration.py` validates speaker identification
+- **Environment Flexibility**: Tests work with both local .env files and CI environment variables
+- **Automated Cleanup**: Test containers are automatically removed after execution
+- **CI/CD Integration**: GitHub Actions use the same local test scripts for consistency
 
 ### Code Style
 - **Python**: Black formatter with 100-character line length, isort for imports
@@ -331,27 +378,33 @@ The system includes comprehensive health checks:
 - Memory debug system for transcript processing monitoring
 
 ### Integration Test Infrastructure
+- **Unified Test Scripts**: Local `./run-test.sh` scripts mirror GitHub Actions workflows
 - **Test Environment**: `docker-compose-test.yml` provides isolated services on separate ports
 - **Test Database**: Uses `test_db` database with isolated collections
-- **Service Ports**: Backend (8001), MongoDB (27018), Qdrant (6335/6336), Streamlit (8502)
-- **Test Credentials**: Pre-configured in `.env.test` for repeatable testing
+- **Service Ports**: Backend (8001), MongoDB (27018), Qdrant (6335/6336), WebUI (5174)
+- **Test Credentials**: Auto-generated `.env.test` files with secure test configurations
 - **Ground Truth**: Expected transcript established via `scripts/test_deepgram_direct.py`
 - **AI Validation**: OpenAI-powered transcript similarity comparison
 - **Test Audio**: 4-minute glass blowing tutorial (`extras/test-audios/DIY*mono*.wav`)
+- **CI Compatibility**: Same test logic runs locally and in GitHub Actions
 
 ### Cursor Rule Integration
 Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding before coding. Always explain the task and confirm approach before implementation.
 
 
-## Essential Debugging Endpoints
+## API Reference
 
-### System Health & Monitoring
+### Health & Status Endpoints
 - **GET /health**: Basic application health check
 - **GET /readiness**: Service dependency validation (MongoDB, Qdrant, etc.)
 - **GET /api/metrics**: System metrics and debug tracker status (Admin only)
-- **GET /api/processor/status**: Processor queue status and health (Admin only)
+- **GET /api/processor/status**: Processor queue status and health (Admin only)  
 - **GET /api/processor/tasks**: All active processing tasks (Admin only)
 - **GET /api/processor/tasks/{client_id}**: Processing task status for specific client (Admin only)
+
+### WebSocket Endpoints
+- **WS /ws_pcm**: Primary audio streaming endpoint (Wyoming protocol + raw PCM fallback)
+- **WS /ws**: Simple audio streaming endpoint (Opus packets + Wyoming audio-chunk events)
 
 ### Memory & Conversation Debugging
 - **GET /api/admin/memories**: All memories across all users with debug stats (Admin only)
@@ -435,7 +488,7 @@ Access via: `extras/speaker-recognition/webui` → Live Inference
 4. Start live session to begin real-time transcription and speaker ID
 
 **Technical Details:**
-- **Audio Processing**: Uses browser's native sample rate (typically 44.1kHz or 48kHz, not hardcoded 16kHz)
+- **Audio Processing**: Uses browser's native sample rate (typically 44.1kHz or 48kHz)
 - **Buffer Retention**: 120 seconds of audio for improved utterance capture
 - **Real-time Updates**: Live transcription with speaker identification results
 
@@ -471,7 +524,7 @@ All services run on one machine using Docker Compose - ideal for development and
 #### Distributed GPU Setup
 **GPU Machine (High-performance):**
 - LLM services (Ollama with GPU acceleration)
-- ASR services (Whisper, Moonshine, Parakeet with GPU)
+- ASR services (Parakeet with GPU)
 - Speaker recognition service
 - Deepgram fallback can remain on backend machine
 
@@ -517,8 +570,8 @@ docker run -d --gpus=all -p 11434:11434 ollama/ollama:latest
 OLLAMA_BASE_URL=http://100.x.x.x:11434  # GPU machine Tailscale IP
 SPEAKER_SERVICE_URL=http://100.x.x.x:8001  # GPU machine Tailscale IP
 
-# ASR services can also be distributed
-OFFLINE_ASR_TCP_URI=tcp://100.x.x.x:8765
+# Parakeet ASR services can also be distributed (if using offline ASR)
+# PARAKEET_ASR_URL=http://100.x.x.x:8767
 
 # CORS automatically supports Tailscale IPs (no configuration needed)
 ```
@@ -531,8 +584,8 @@ OFFLINE_ASR_TCP_URI=tcp://100.x.x.x:8765
 OLLAMA_BASE_URL=http://100.64.1.100:11434
 OPENAI_BASE_URL=http://100.64.1.100:8080  # For vLLM/OpenAI-compatible APIs
 
-# Speech Recognition (GPU machine) 
-OFFLINE_ASR_TCP_URI=tcp://100.64.1.100:8765
+# Speech Recognition (GPU machine)
+# PARAKEET_ASR_URL=http://100.64.1.100:8767  # If using Parakeet ASR
 SPEAKER_SERVICE_URL=http://100.64.1.100:8001
 
 # Database services (can be on separate machine)
@@ -552,7 +605,7 @@ sudo tailscale up
 #### 2. Deploy GPU services
 ```bash
 # On GPU machine - start GPU-accelerated services
-cd extras/asr-services && docker compose up moonshine -d
+cd extras/asr-services && docker compose up parakeet -d
 cd extras/speaker-recognition && docker compose up --build -d
 
 # Start Ollama with GPU support
@@ -590,6 +643,13 @@ curl http://[gpu-machine-ip]:8001/health     # Speaker recognition
 - LLM requests: Typically <1MB per conversation
 - Memory embeddings: ~3KB per memory vector
 
+**Processing Time Expectations:**
+- Transcription (Deepgram): 2-5 seconds for 4-minute audio
+- Transcription (Parakeet): 5-10 seconds for 4-minute audio
+- Memory extraction (OpenAI GPT-4o-mini): 30-40 seconds for typical conversation
+- Memory extraction (Ollama local): 45-90 seconds depending on model and GPU
+- Full pipeline (4-min audio): 40-60 seconds with cloud services, 60-120 seconds with local models
+
 ### Security Best Practices
 
 **Tailscale Access Control:**
@@ -599,7 +659,7 @@ curl http://[gpu-machine-ip]:8001/health     # Speaker recognition
     {
       "action": "accept",
       "src": ["tag:backend"],
-      "dst": ["tag:gpu:11434", "tag:gpu:8001", "tag:gpu:8765"]
+      "dst": ["tag:gpu:11434", "tag:gpu:8001", "tag:gpu:8767"]
     }
   ],
   "tagOwners": {
@@ -639,7 +699,7 @@ docker ps --format "table {{.Names}}\t{{.Ports}}"
 
 ## Notes for Claude
 Check if the src/ is volume mounted. If not, do compose build so that code changes are reflected. Do not simply run `docker compose restart` as it will not rebuild the image.
-Check backend/advanced-backend/Docs for up to date information on advanced backend.
+Check backends/advanced/Docs for up to date information on advanced backend.
 All docker projects have .dockerignore following the exclude pattern. That means files need to be included for them to be visible to docker.
 The uv package manager is used for all python projects. Wherever you'd call `python3 main.py` you'd call `uv run python main.py`
 
@@ -647,3 +707,5 @@ The uv package manager is used for all python projects. Wherever you'd call `pyt
 - Use `docker compose build` without `--no-cache` by default for faster builds
 - Only use `--no-cache` when explicitly needed (e.g., if cached layers are causing issues or when troubleshooting build problems)
 - Docker's build cache is efficient and saves significant time during development
+
+- Remember that whenever there's a python command, you should use uv run python3 instead
