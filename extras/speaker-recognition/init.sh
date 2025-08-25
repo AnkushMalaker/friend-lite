@@ -18,19 +18,32 @@ if ! echo "$TAILSCALE_IP" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{
     exit 1
 fi
 
-echo "Initializing speaker recognition with Tailscale IP: $TAILSCALE_IP"
+echo "🚀 Initializing speaker recognition with Tailscale IP: $TAILSCALE_IP"
+echo ""
+
+# Generate SSL certificates
+echo "📄 Step 1: Generating SSL certificates..."
+if [ -f "ssl/generate-ssl.sh" ]; then
+    ./ssl/generate-ssl.sh "$TAILSCALE_IP"
+    echo "✅ SSL certificates generated"
+else
+    echo "❌ Error: ssl/generate-ssl.sh not found"
+    exit 1
+fi
+
+echo ""
 
 # Create nginx.conf from template
+echo "📄 Step 2: Creating nginx configuration..."
 if [ ! -f "nginx.conf.template" ]; then
     echo "Error: nginx.conf.template not found"
     exit 1
 fi
 
-echo "Creating nginx.conf with IP: $TAILSCALE_IP"
 sed "s/TAILSCALE_IP/$TAILSCALE_IP/g" nginx.conf.template > nginx.conf
+echo "✅ nginx.conf created with IP: $TAILSCALE_IP"
 
-echo "✅ nginx.conf created successfully"
-echo "✅ Ready to start with: docker compose up --build -d"
+echo "🎉 Initialization complete!"
 echo ""
 echo "Access URLs:"
 echo "  - Web UI: https://localhost/ or https://$TAILSCALE_IP/"
