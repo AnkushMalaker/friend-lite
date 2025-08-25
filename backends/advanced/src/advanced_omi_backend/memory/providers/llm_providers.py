@@ -183,7 +183,7 @@ class OpenAIProvider(LLMProviderBase):
             
         except Exception as e:
             memory_logger.error(f"OpenAI embedding generation failed: {e}")
-            return []
+            raise e
 
     async def test_connection(self) -> bool:
         """Test OpenAI connection.

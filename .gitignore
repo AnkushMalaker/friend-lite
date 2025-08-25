@@ -2,6 +2,8 @@
 *.wav
 **/*.env
 !**/.env.template
+**/memory_config.yaml
+!**/memory_config.yaml.template
 example/*
 **/node_modules/*
 **/ollama-data/*

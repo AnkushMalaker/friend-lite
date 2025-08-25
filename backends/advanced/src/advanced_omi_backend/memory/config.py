@@ -108,8 +108,9 @@ def build_memory_config_from_env() -> MemoryConfig:
             if not openai_api_key:
                 raise ValueError("OPENAI_API_KEY required for OpenAI provider")
             
-            model = memory_config.get("llm_settings", {}).get("model")
-            embedding_model = memory_config.get("llm_settings", {}).get("embedding_model")
+            # Use environment variables for model, fall back to config, then defaults
+            model = os.getenv("OPENAI_MODEL") or memory_config.get("llm_settings", {}).get("model") or "gpt-4o-mini"
+            embedding_model = memory_config.get("llm_settings", {}).get("embedding_model") or "text-embedding-3-small"
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
             memory_logger.info(f"🔧 Memory config: LLM={model}, Embedding={embedding_model}, Base URL={base_url}")
             
