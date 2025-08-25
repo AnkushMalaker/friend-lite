@@ -35,6 +35,12 @@ services:
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_HOST=${LANGFUSE_HOST}
       - LANGFUSE_ENABLE_TELEMETRY=${LANGFUSE_ENABLE_TELEMETRY}
+      # OpenMemory MCP configuration
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER}
+      - OPENMEMORY_MCP_URL=${OPENMEMORY_MCP_URL:-http://host.docker.internal:8765}
+      - OPENMEMORY_CLIENT_NAME=${OPENMEMORY_CLIENT_NAME:-friend_lite}
+      - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
+      - OPENMEMORY_TIMEOUT=${OPENMEMORY_TIMEOUT:-30}
     depends_on:
       qdrant:
         condition: service_started
@@ -84,6 +90,13 @@ services:
       - "27017:27017"
     volumes:
       - ./data/mongo_data:/data/db
+
+  # OpenMemory MCP Server - Use external server from extras/openmemory-mcp
+  # The Friend-Lite backend connects to the external OpenMemory MCP server
+  # running from extras/openmemory-mcp via host.docker.internal:8765
+  # 
+  # To start the external server:
+  # cd extras/openmemory-mcp && docker compose up -d
 
   # Nginx reverse proxy for HTTPS access
   nginx:

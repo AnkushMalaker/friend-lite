@@ -79,6 +79,11 @@ class MemoryService:
         if not self._initialized:
             await self.initialize()
         
+        # Ensure service is initialized if it's not the internal CoreMemoryService
+        if hasattr(self._service, 'initialize') and hasattr(self._service, '_initialized'):
+            if not self._service._initialized:
+                await self._service.initialize()
+        
         return await self._service.add_memory(
             transcript=transcript,
             client_id=client_id,
@@ -353,11 +358,24 @@ def get_memory_service() -> MemoryService:
     """Get the global memory service instance.
     
     Returns:
-        Global MemoryService instance (singleton pattern)
+        Global MemoryService instance (singleton pattern), wrapped for compatibility
     """
     global _memory_service
     if _memory_service is None:
-        _memory_service = MemoryService()
+        # Use the new service factory to create the appropriate service
+        from .service_factory import get_memory_service as get_core_service
+        
+        core_service = get_core_service()
+        
+        # If it's already a compat service, use it directly
+        if isinstance(core_service, MemoryService):
+            _memory_service = core_service
+        else:
+            # Wrap core service with compat layer
+            _memory_service = MemoryService()
+            _memory_service._service = core_service
+            _memory_service._initialized = True
+            
     return _memory_service
 
 
@@ -367,6 +385,10 @@ def shutdown_memory_service():
     if _memory_service:
         _memory_service.shutdown()
         _memory_service = None
+    
+    # Also shutdown the core service
+    from .service_factory import shutdown_memory_service as shutdown_core_service
+    shutdown_core_service()
 
 
 def init_memory_config(
