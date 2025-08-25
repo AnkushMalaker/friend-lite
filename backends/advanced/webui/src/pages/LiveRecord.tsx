@@ -1,14 +1,13 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { Mic, MicOff, Radio, AlertTriangle, Wifi, WifiOff } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 interface AudioVisualizerProps {
   isRecording: boolean
-  audioContext: AudioContext | null
   analyser: AnalyserNode | null
 }
 
-function AudioVisualizer({ isRecording, audioContext, analyser }: AudioVisualizerProps) {
+function AudioVisualizer({ isRecording, analyser }: AudioVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationIdRef = useRef<number>()
 
@@ -106,8 +105,8 @@ export default function LiveRecord() {
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
-  const durationIntervalRef = useRef<NodeJS.Timeout>()
-  const keepAliveIntervalRef = useRef<NodeJS.Timeout>()
+  const durationIntervalRef = useRef<number>()
+  const keepAliveIntervalRef = useRef<number>()
 
   const { user } = useAuth()
 
@@ -549,7 +548,6 @@ export default function LiveRecord() {
       {/* Audio Visualizer */}
       <AudioVisualizer 
         isRecording={isRecording}
-        audioContext={audioContextRef.current}
         analyser={analyserRef.current}
       />
 
