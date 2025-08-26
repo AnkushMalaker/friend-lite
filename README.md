@@ -39,10 +39,12 @@ Regardless - this repo will try to do the minimal of this - multiple OMI-like au
 Friend-Lite supports AI-powered personal systems through multiple OMI-compatible audio devices:
 
 **Core Features:**
-- **Memory extraction** from conversations
+- **Advanced memory system** with pluggable providers (Friend-Lite native or OpenMemory MCP)
+- **Memory extraction** from conversations with individual fact storage
 - **Action item detection** and tracking  
 - **Home automation** integration
 - **Multi-device support** for comprehensive audio capture
+- **Cross-client compatibility** (optional with OpenMemory MCP)
 
 **Device Support:**
 - OMI pendants and wearables
@@ -66,7 +68,9 @@ DevKit2 streams audio via Bluetooth using OPUS codec. The processing pipeline in
 
 **AI Processing:**
 - LLM-based conversation analysis (OpenAI or local Ollama)
-- Memory extraction and semantic storage
+- **Dual memory system**: Friend-Lite native or OpenMemory MCP integration
+- Enhanced memory extraction with individual fact storage
+- Smart deduplication and memory updates (ADD/UPDATE/DELETE)
 - Action item detection
 
 **Data Storage:**
@@ -113,7 +117,9 @@ Choose one based on your needs:
 
 **Features:**
 - Audio processing pipeline with real-time WebSocket support
-- Memory system using mem0 + Qdrant vector storage
+- **Pluggable memory system**: Choose between Friend-Lite native or OpenMemory MCP
+- Enhanced memory extraction with individual fact storage (no generic fallbacks)
+- Smart memory updates with LLM-driven action proposals (ADD/UPDATE/DELETE)
 - Speaker recognition and enrollment
 - Action items extraction from conversations
 - Audio cropping (removes silence, keeps speech)
@@ -122,6 +128,7 @@ Choose one based on your needs:
 - Multiple ASR options (Deepgram API + offline ASR)
 - MongoDB for structured data storage
 - RESTful API for all operations
+- **Cross-client compatibility** (with OpenMemory MCP provider)
 
 **Requirements:**
 - Multiple services (MongoDB, Qdrant, Ollama)

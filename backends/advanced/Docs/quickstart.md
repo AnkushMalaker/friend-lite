@@ -8,10 +8,11 @@ Friend-Lite is an eco-system of services to support "AI wearable" agents/functio
 At the moment, the basic functionalities are:
 - Audio capture (via WebSocket, from OMI device, files, or a laptop)
 - Audio transcription
-- Memory extraction
+- **Advanced memory system** with pluggable providers (Friend-Lite native or OpenMemory MCP)
+- **Enhanced memory extraction** with individual fact storage and smart updates
 - Action item extraction
-- Streamlit web dashboard
-- Basic user management
+- Modern React web dashboard with live recording
+- Comprehensive user management with JWT authentication
 
 **Core Implementation**: See `src/advanced_omi_backend/main.py` for the complete FastAPI application and WebSocket handling.
 
@@ -45,6 +46,19 @@ Copy the `.env.template` file to `.env` and configure the required values:
 AUTH_SECRET_KEY=your-super-secret-jwt-key-here
 ADMIN_PASSWORD=your-secure-admin-password
 ADMIN_EMAIL=admin@example.com
+```
+
+**Memory Provider Configuration:**
+```bash
+# Memory Provider (Choose One)
+# Option 1: Friend-Lite Native (Default - Recommended)
+MEMORY_PROVIDER=friend_lite
+
+# Option 2: OpenMemory MCP (Cross-client compatibility)
+# MEMORY_PROVIDER=openmemory_mcp
+# OPENMEMORY_MCP_URL=http://host.docker.internal:8765
+# OPENMEMORY_CLIENT_NAME=friend_lite
+# OPENMEMORY_USER_ID=openmemory
 ```
 
 **LLM Configuration (Choose One):**
@@ -241,15 +255,22 @@ curl -X POST "http://localhost:8000/api/process-audio-files" \
 - **Manual controls**: Close conversations via API or dashboard
 
 ### Memory & Intelligence
-- **Enhanced Memory Extraction**: Improved fact extraction with granular, specific memories instead of generic transcript storage
+
+#### Pluggable Memory System
+- **Two memory providers**: Choose between Friend-Lite native or OpenMemory MCP
+- **Friend-Lite Provider**: Full control with custom extraction, individual fact storage, smart deduplication
+- **OpenMemory MCP Provider**: Cross-client compatibility (Claude Desktop, Cursor, Windsurf), professional processing
+
+#### Enhanced Memory Processing
+- **Individual fact storage**: No more generic transcript fallbacks
+- **Smart memory updates**: LLM-driven ADD/UPDATE/DELETE actions
+- **Enhanced prompts**: Improved fact extraction with granular, specific memories
 - **User-centric storage**: All memories keyed by database user_id
-- **Memory extraction**: Automatic conversation summaries using LLM with enhanced prompts
-- **Semantic search**: Vector-based memory retrieval
+- **Semantic search**: Vector-based memory retrieval with embeddings
 - **Configurable extraction**: YAML-based configuration for memory extraction
 - **Debug tracking**: SQLite-based tracking of transcript → memory conversion
 - **Client metadata**: Device information preserved for debugging and reference
 - **User isolation**: All data scoped to individual users with multi-device support
-- **No more fallbacks**: System now creates proper memories instead of generic transcript placeholders
 
 **Implementation**: 
 - **Memory System**: `src/advanced_omi_backend/memory/memory_service.py` + `src/advanced_omi_backend/controllers/memory_controller.py`
@@ -401,6 +422,52 @@ The friend-lite backend uses a **user-centric data architecture**:
 - **Multi-device support**: Users can access their data from any registered device
 
 For detailed information, see [User Data Architecture](user-data-architecture.md).
+
+## Memory Provider Selection
+
+### Choosing a Memory Provider
+
+Friend-Lite offers two memory backends:
+
+#### 1. Friend-Lite Native 
+```bash
+# In your .env file
+MEMORY_PROVIDER=friend_lite
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your-openai-key-here
+```
+
+**Benefits:**
+- Full control over memory processing
+- Individual fact storage with no fallbacks
+- Custom prompts and extraction logic
+- Smart deduplication algorithms
+- LLM-driven memory updates (ADD/UPDATE/DELETE)
+- No external dependencies
+
+#### 2. OpenMemory MCP 
+```bash
+# First, start the external server
+cd extras/openmemory-mcp
+docker compose up -d
+
+# Then configure Friend-Lite
+MEMORY_PROVIDER=openmemory_mcp
+OPENMEMORY_MCP_URL=http://host.docker.internal:8765
+```
+
+**Benefits:**
+- Cross-client compatibility (works with Claude Desktop, Cursor, etc.)
+- Professional memory processing
+- Web UI at http://localhost:8765
+- Battle-tested deduplication
+
+**Use OpenMemory MCP when:**
+- You want cross-client memory sharing
+- You're already using OpenMemory in other tools
+- You prefer external expertise over custom logic
+
+**See [MEMORY_PROVIDERS.md](../MEMORY_PROVIDERS.md) for detailed comparison**
 
 ## Memory & Action Item Configuration
 

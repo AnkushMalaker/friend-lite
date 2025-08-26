@@ -10,22 +10,67 @@ memory action proposals using their respective APIs.
 
 import json
 import logging
-from typing import Dict, List, Any, Optional
-import spacy
+from typing import Any, Dict, List, Optional
+
+# TODO: Re-enable spacy when Docker build is fixed
+# import spacy
 
 from ..base import LLMProviderBase
+from ..prompts import (
+    FACT_RETRIEVAL_PROMPT,
+    build_update_memory_messages,
+    get_update_memory_messages,
+)
+from ..update_memory_utils import (
+    extract_assistant_xml_from_openai_response,
+    items_to_json,
+    parse_memory_xml,
+)
 from ..utils import extract_json_from_text
-from ..prompts import FACT_RETRIEVAL_PROMPT, get_update_memory_messages, build_update_memory_messages
-from ..update_memory_utils import items_to_json, parse_memory_xml, extract_assistant_xml_from_openai_response
 
 memory_logger = logging.getLogger("memory_service")
 
-nlp = spacy.load("en_core_web_sm")
+# TODO: Re-enable spacy when Docker build is fixed
+# try:
+#     nlp = spacy.load("en_core_web_sm")
+# except OSError:
+#     # Model not installed, fallback to None
+#     memory_logger.warning("spacy model 'en_core_web_sm' not found. Using fallback text chunking.")
+#     nlp = None
+nlp = None  # Temporarily disabled
 
 def chunk_text_with_spacy(text: str, max_tokens: int = 100) -> List[str]:
     """Split text into chunks using spaCy sentence segmentation.
     max_tokens is the maximum number of words in a chunk.
     """
+    # Fallback chunking when spacy is not available
+    if nlp is None:
+        # Simple sentence-based chunking
+        sentences = text.replace('\n', ' ').split('. ')
+        chunks = []
+        current_chunk = ""
+        current_tokens = 0
+        
+        for sentence in sentences:
+            sentence_tokens = len(sentence.split())
+            
+            if current_tokens + sentence_tokens > max_tokens and current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = sentence
+                current_tokens = sentence_tokens
+            else:
+                if current_chunk:
+                    current_chunk += ". " + sentence
+                else:
+                    current_chunk = sentence
+                current_tokens += sentence_tokens
+        
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+        
+        return chunks if chunks else [text]
+    
+    # Original spacy implementation when available
     doc = nlp(text)
     
     chunks = []
@@ -226,11 +271,13 @@ class OpenAIProvider(LLMProviderBase):
             import langfuse.openai as openai
 
             # Generate the complete prompt using the helper function
+            memory_logger.debug(f"🧠 Facts passed to prompt builder: {new_facts}")
             update_memory_messages = build_update_memory_messages(
                 retrieved_old_memory, 
                 new_facts, 
                 custom_prompt
             )
+            memory_logger.debug(f"🧠 Generated prompt user content: {update_memory_messages[1]['content'][:200]}...")
 
             client = openai.AsyncOpenAI(
                 api_key=self.api_key,

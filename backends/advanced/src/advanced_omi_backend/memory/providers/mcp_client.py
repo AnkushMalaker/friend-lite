@@ -120,10 +120,6 @@ class MCPClient:
     async def search_memory(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search for memories using semantic similarity.
         
-        Note: OpenMemory's REST API doesn't have a direct search endpoint.
-        We'll use the list endpoint with filtering or rely on MCP tools.
-        For now, returning empty list as OpenMemory handles search internally.
-        
         Args:
             query: Search query text
             limit: Maximum number of results to return
@@ -132,11 +128,19 @@ class MCPClient:
             List of memory dictionaries with content and metadata
         """
         try:
-            # OpenMemory doesn't expose search via REST API directly
-            # It's handled through MCP tools for AI agents
-            # For Friend-Lite integration, we can list memories and filter client-side
-            # or rely on OpenMemory's internal search when memories are accessed
+            # First get the app_id for the default app
+            apps_response = await self.client.get(f"{self.server_url}/api/v1/apps/")
+            apps_response.raise_for_status()
+            apps_data = apps_response.json()
             
+            if not apps_data.get("apps") or len(apps_data["apps"]) == 0:
+                memory_logger.warning("No apps found in OpenMemory MCP for search")
+                return []
+            
+            # Use the first (default) app
+            app_id = apps_data["apps"][0]["id"]
+            
+            # Use app-specific memories endpoint with search
             params = {
                 "user_id": self.user_id,
                 "search_query": query,
@@ -145,16 +149,16 @@ class MCPClient:
             }
             
             response = await self.client.get(
-                f"{self.server_url}/api/v1/memories/",
+                f"{self.server_url}/api/v1/apps/{app_id}/memories",
                 params=params
             )
             response.raise_for_status()
             
             result = response.json()
             
-            # Extract memories from paginated response
-            if isinstance(result, dict) and "items" in result:
-                memories = result["items"]
+            # Extract memories from app-specific response format
+            if isinstance(result, dict) and "memories" in result:
+                memories = result["memories"]
             elif isinstance(result, list):
                 memories = result
             else:
@@ -187,6 +191,19 @@ class MCPClient:
             List of memory dictionaries
         """
         try:
+            # First get the app_id for the default app
+            apps_response = await self.client.get(f"{self.server_url}/api/v1/apps/")
+            apps_response.raise_for_status()
+            apps_data = apps_response.json()
+            
+            if not apps_data.get("apps") or len(apps_data["apps"]) == 0:
+                memory_logger.warning("No apps found in OpenMemory MCP")
+                return []
+            
+            # Use the first (default) app
+            app_id = apps_data["apps"][0]["id"]
+            
+            # Use app-specific memories endpoint
             params = {
                 "user_id": self.user_id,
                 "page": 1,
@@ -194,16 +211,16 @@ class MCPClient:
             }
             
             response = await self.client.get(
-                f"{self.server_url}/api/v1/memories/",
+                f"{self.server_url}/api/v1/apps/{app_id}/memories",
                 params=params
             )
             response.raise_for_status()
             
             result = response.json()
             
-            # Extract memories from paginated response
-            if isinstance(result, dict) and "items" in result:
-                memories = result["items"]
+            # Extract memories from app-specific response format
+            if isinstance(result, dict) and "memories" in result:
+                memories = result["memories"]
             elif isinstance(result, list):
                 memories = result
             else:
