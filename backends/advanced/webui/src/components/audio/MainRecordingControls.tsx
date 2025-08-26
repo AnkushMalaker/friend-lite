@@ -1,4 +1,3 @@
-import React from 'react'
 import { Mic, MicOff } from 'lucide-react'
 import { UseAudioRecordingReturn } from '../../hooks/useAudioRecording'
 

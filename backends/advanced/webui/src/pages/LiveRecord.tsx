@@ -1,4 +1,3 @@
-import React from 'react'
 import { Radio } from 'lucide-react'
 import { useSimpleAudioRecording } from '../hooks/useSimpleAudioRecording'
 import SimplifiedControls from '../components/audio/SimplifiedControls'

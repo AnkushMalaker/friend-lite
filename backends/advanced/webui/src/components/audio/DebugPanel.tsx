@@ -1,4 +1,3 @@
-import React from 'react'
 import { UseAudioRecordingReturn } from '../../hooks/useAudioRecording'
 
 interface DebugPanelProps {
