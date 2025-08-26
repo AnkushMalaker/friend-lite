@@ -1,4 +1,3 @@
-import React from 'react'
 import { Wifi, WifiOff, Radio } from 'lucide-react'
 import { UseAudioRecordingReturn } from '../../hooks/useAudioRecording'
 import { useAuth } from '../../contexts/AuthContext'

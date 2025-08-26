@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { useAuth } from '../contexts/AuthContext'
 
 export type RecordingStep = 'idle' | 'mic' | 'websocket' | 'audio-start' | 'streaming' | 'stopping' | 'error'
 
@@ -60,7 +59,7 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
   const chunkCountRef = useRef(0)
   const audioProcessingStartedRef = useRef(false)
   
-  const { user } = useAuth()
+  // Note: user was unused and removed
   
   // Check if we're on localhost or using HTTPS
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'

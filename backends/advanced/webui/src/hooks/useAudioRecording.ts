@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { useAuth } from '../contexts/AuthContext'
 
 export interface ComponentErrors {
   websocket: string | null
@@ -105,50 +104,7 @@ export const useAudioRecording = (): UseAudioRecordingReturn => {
   const keepAliveIntervalRef = useRef<number>()
   const audioProcessingStartedRef = useRef(false)
   const chunkCountRef = useRef(0)
-  const messageQueueRef = useRef<Array<{ message: string, delay?: number }>>([])
-  const messageQueueProcessingRef = useRef(false)
-  
-  const { user } = useAuth()
-  
-  // Queue-based message sending for proper WebSocket protocol timing
-  const queueWebSocketMessage = useCallback((message: string, delay: number = 0) => {
-    messageQueueRef.current.push({ message, delay })
-    if (!messageQueueProcessingRef.current) {
-      processMessageQueue()
-    }
-  }, [])
-  
-  const processMessageQueue = useCallback(async () => {
-    if (messageQueueProcessingRef.current || messageQueueRef.current.length === 0) {
-      return
-    }
-    
-    messageQueueProcessingRef.current = true
-    
-    while (messageQueueRef.current.length > 0) {
-      const { message, delay = 0 } = messageQueueRef.current.shift()!
-      
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        try {
-          if (delay > 0) {
-            await new Promise(resolve => setTimeout(resolve, delay))
-          }
-          wsRef.current.send(message)
-          console.log('📤 Sent queued message:', message.slice(0, 50) + (message.length > 50 ? '...' : ''))
-        } catch (error) {
-          console.error('Failed to send queued message:', error)
-          setError('Failed to send WebSocket message')
-          break
-        }
-      } else {
-        console.error('WebSocket not open, clearing message queue')
-        messageQueueRef.current = []
-        break
-      }
-    }
-    
-    messageQueueProcessingRef.current = false
-  }, [])
+  // Note: Legacy message queue code removed as it was unused
   
   // Check if we're on localhost or using HTTPS
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'

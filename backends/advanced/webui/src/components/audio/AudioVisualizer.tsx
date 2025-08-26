@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 
 interface AudioVisualizerProps {
   isRecording: boolean
