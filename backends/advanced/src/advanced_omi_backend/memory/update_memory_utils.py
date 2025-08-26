@@ -120,6 +120,8 @@ def parse_memory_xml(xml_str: str) -> List[MemoryItem]:
         if text_el is None or (text_el.text or "").strip() == "":
             raise MemoryXMLParseError(f"<text> is required and non-empty for id {item_id}.")
         text_val = (text_el.text or "").strip()
+        
+        # No JSON expansion needed - individual facts are now properly handled by improved prompts
 
         old_el = item.find("old_memory")
         old_val = (old_el.text or "").strip() if old_el is not None else None

@@ -1,10 +1,23 @@
 # Friend-Lite Advanced Backend
 
-[QuickStart](https://github.com/AnkushMalaker/friend-lite/blob/main/backends/advanced-backend/Docs/quickstart.md)
+A FastAPI backend with pluggable memory providers, real-time audio processing, and comprehensive conversation management.
 
-## Web Interface
+[QuickStart](https://github.com/AnkushMalaker/friend-lite/blob/main/backends/advanced-backend/Docs/quickstart.md) | [Memory Providers](./MEMORY_PROVIDERS.md) | [Configuration Guide](./Docs/memory-configuration-guide.md)
 
-The backend includes a modern React-based web dashboard located in `./webui/` with features including live audio recording, chat interface, conversation management, and system monitoring.
+## Key Features
+
+### Memory System
+- **Pluggable Memory Providers**: Choose between Friend-Lite native or OpenMemory MCP
+- **Enhanced Memory Extraction**: Individual facts instead of generic transcripts
+- **Smart Memory Updates**: LLM-driven ADD/UPDATE/DELETE actions
+- **Cross-client Compatibility**: Use OpenMemory with Claude Desktop, Cursor, etc.
+
+### Web Interface
+Modern React-based web dashboard located in `./webui/` with:
+- Live audio recording and real-time streaming
+- Chat interface with conversation management
+- Memory search and management
+- System monitoring and debugging tools
 
 ### Quick Start (HTTP)
 ```bash

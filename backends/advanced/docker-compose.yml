@@ -161,16 +161,6 @@ services:
 
 
 
-  # Use tailscale instead 
-  # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
-  # ngrok:
-  #   image: ngrok/ngrok:latest
-  #   depends_on: [friend-backend, proxy]
-  #   ports:
-  #     - "4040:4040" # Ngrok web interface
-  #   environment:
-  #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-  #   command: "http proxy:80 --url=${NGROK_URL} --basic-auth=${NGROK_BASIC_AUTH}"
 
 
 # Question: These are named volumes, but they are not being used, right? Can we remove them?

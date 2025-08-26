@@ -478,6 +478,7 @@ class MemoryService(MemoryServiceBase):
                 f"🔍 Asking LLM for actions with {len(retrieved_old_memory)} old memories "
                 f"and {len(memories_text)} new facts"
             )
+            memory_logger.debug(f"🧠 Individual facts being sent to LLM: {memories_text}")
             
             # add update or delete etc actions using DEFAULT_UPDATE_MEMORY_PROMPT
             actions_obj = await self.llm_provider.propose_memory_actions(

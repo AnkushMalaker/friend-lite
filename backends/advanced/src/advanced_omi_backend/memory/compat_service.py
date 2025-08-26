@@ -6,6 +6,7 @@ architecture internally.
 """
 
 import os
+import json
 import logging
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -94,6 +95,18 @@ class MemoryService:
             db_helper=db_helper
         )
     
+    def _normalize_memory_content(self, content: str, metadata: Dict[str, Any]) -> str:
+        """Return memory content as-is since individual facts are now stored separately.
+        
+        Args:
+            content: Memory content from the provider
+            metadata: Memory metadata (not used)
+            
+        Returns:
+            Content as-is (no normalization needed)
+        """
+        return content
+    
     async def get_all_memories(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Get all memories for a user - returns dict format for compatibility.
         
@@ -109,11 +122,11 @@ class MemoryService:
         
         memories = await self._service.get_all_memories(user_id, limit)
         
-        # Convert MemoryEntry objects to dict format for compatibility
+        # Convert MemoryEntry objects to dict format for compatibility with normalized content
         return [
             {
                 "id": memory.id,
-                "memory": memory.content,
+                "memory": self._normalize_memory_content(memory.content, memory.metadata),
                 "metadata": memory.metadata,
                 "created_at": memory.created_at,
                 "score": memory.score
@@ -149,11 +162,11 @@ class MemoryService:
         
         memories = await self._service.search_memories(query, user_id, limit)
         
-        # Convert MemoryEntry objects to dict format for compatibility
+        # Convert MemoryEntry objects to dict format for compatibility with normalized content
         return [
             {
                 "id": memory.id,
-                "memory": memory.content,
+                "memory": self._normalize_memory_content(memory.content, memory.metadata),
                 "metadata": memory.metadata,
                 "created_at": memory.created_at,
                 "score": memory.score

@@ -72,7 +72,8 @@ Your output must follow the exact XML format described.
 
 ### Example 1 (Preference Update)
 Old: `[{{"id": "0", "text": "My name is John"}}, {{"id": "1", "text": "My favorite fruit is oranges"}}]`  
-Facts: `["My favorite fruit is apple"]`  
+Facts (each should be a separate XML item):
+  1. My favorite fruit is apple  
 
 Output:
 <result>
@@ -89,13 +90,39 @@ Output:
 
 ### Example 2 (Contradiction / Deletion)
 Old: `[{{"id": "0", "text": "I like pizza"}}]`  
-Facts: `["I no longer like pizza"]`  
+Facts (each should be a separate XML item):
+  1. I no longer like pizza  
 
 Output:
 <result>
   <memory>
     <item id="0" event="DELETE">
       <text>I like pizza</text>
+    </item>
+  </memory>
+</result>
+
+### Example 3 (Multiple New Facts)
+Old: `[{{"id": "0", "text": "I like hiking"}}]`  
+Facts (each should be a separate XML item):
+  1. I enjoy rug tufting
+  2. I watch YouTube tutorials
+  3. I use a projector for crafts
+
+Output:
+<result>
+  <memory>
+    <item id="0" event="NONE">
+      <text>I like hiking</text>
+    </item>
+    <item id="1" event="ADD">
+      <text>I enjoy rug tufting</text>
+    </item>
+    <item id="2" event="ADD">
+      <text>I watch YouTube tutorials</text>
+    </item>
+    <item id="3" event="ADD">
+      <text>I use a projector for crafts</text>
     </item>
   </memory>
 </result>
@@ -247,9 +274,19 @@ def build_update_memory_messages(retrieved_old_memory_dict, response_content, cu
    if not retrieved_old_memory_dict or len(retrieved_old_memory_dict) == 0:
       retrieved_old_memory_dict = "None"
    
+   # Format facts individually to encourage separate XML items
+   if isinstance(response_content, list) and len(response_content) > 1:
+       facts_str = "Facts (each should be a separate XML item):\n"
+       for i, fact in enumerate(response_content):
+           facts_str += f"  {i+1}. {fact}\n"
+       facts_str = facts_str.strip()
+   else:
+       # Single fact or non-list, use original JSON format
+       facts_str = "Facts: " + json.dumps(response_content, ensure_ascii=False)
+   
    prompt = (
         "Old: " + json.dumps(retrieved_old_memory_dict, ensure_ascii=False) + "\n" +
-        "Facts: " + json.dumps(response_content, ensure_ascii=False) + "\n" +
+        facts_str + "\n" +
         "Output:"
     )
 
