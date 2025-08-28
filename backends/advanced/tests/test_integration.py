@@ -28,6 +28,7 @@ Test Environment:
 - Provider selection via TRANSCRIPTION_PROVIDER environment variable
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -1241,6 +1242,145 @@ class IntegrationTestRunner:
         
         logger.warning(f"⚠️ No memories found after processing")
         return []
+    
+    async def create_chat_session(self, title: str = "Integration Test Session", description: str = "Testing memory integration") -> Optional[str]:
+        """Create a new chat session and return session ID."""
+        logger.info(f"📝 Creating chat session: {title}")
+        
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/api/chat/sessions",
+                headers={"Authorization": f"Bearer {self.token}"},
+                json={
+                    "title": title,
+                    "description": description
+                },
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                session_id = data.get("session_id")
+                logger.info(f"✅ Chat session created: {session_id}")
+                return session_id
+            else:
+                logger.error(f"❌ Chat session creation failed: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error creating chat session: {e}")
+            return None
+    
+    async def send_chat_message(self, session_id: str, message: str) -> dict:
+        """Send a message to chat session and parse response."""
+        logger.info(f"💬 Sending message: {message}")
+        
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/api/chat/send",
+                headers={"Authorization": f"Bearer {self.token}"},
+                json={
+                    "message": message,
+                    "session_id": session_id
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                # Parse SSE response
+                full_response = ""
+                memory_ids = []
+                
+                for line in response.text.split('\n'):
+                    if line.startswith('data: '):
+                        try:
+                            event_data = json.loads(line[6:])
+                            event_type = event_data.get("type")
+                            
+                            if event_type == "memory_context":
+                                mem_ids = event_data.get("data", {}).get("memory_ids", [])
+                                memory_ids.extend(mem_ids)
+                            elif event_type == "content":
+                                content = event_data.get("data", {}).get("content", "")
+                                full_response += content
+                            elif event_type == "done":
+                                break
+                        except json.JSONDecodeError:
+                            pass
+                
+                logger.info(f"🤖 Response received ({len(full_response)} chars)")
+                if memory_ids:
+                    logger.info(f"📚 Memories used: {len(memory_ids)} memory IDs")
+                
+                return {
+                    "response": full_response,
+                    "memories_used": memory_ids,
+                    "success": True
+                }
+            else:
+                logger.error(f"❌ Chat message failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": response.text}
+                
+        except Exception as e:
+            logger.error(f"❌ Error sending chat message: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def run_chat_conversation(self, session_id: str) -> bool:
+        """Run a test conversation with memory integration."""
+        logger.info("🎭 Starting chat conversation test...")
+        
+        # Test messages designed to trigger memory retrieval
+        test_messages = [
+            "Hello! I'm testing the chat system with memory integration.",
+            "What do you know about glass blowing? Have I mentioned anything about it?",
+        ]
+        
+        memories_used_total = []
+        
+        for i, message in enumerate(test_messages, 1):
+            logger.info(f"📨 Message {i}/{len(test_messages)}")
+            result = await self.send_chat_message(session_id, message)
+            
+            if not result.get("success"):
+                logger.error(f"❌ Chat message {i} failed: {result.get('error')}")
+                return False
+            
+            # Track memory usage
+            memories_used = result.get("memories_used", [])
+            memories_used_total.extend(memories_used)
+            
+            # Small delay between messages
+            time.sleep(1)
+        
+        logger.info(f"✅ Chat conversation completed. Total memories used: {len(set(memories_used_total))}")
+        return True
+    
+    async def extract_memories_from_chat(self, session_id: str) -> dict:
+        """Extract memories from the chat session."""
+        logger.info(f"🧠 Extracting memories from chat session: {session_id}")
+        
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/api/chat/sessions/{session_id}/extract-memories",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    logger.info(f"✅ Memory extraction successful: {data.get('count', 0)} memories created")
+                    return data
+                else:
+                    logger.warning(f"⚠️ Memory extraction completed but no memories: {data.get('message', 'Unknown')}")
+                    return data
+            else:
+                logger.error(f"❌ Memory extraction failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": response.text}
+                
+        except Exception as e:
+            logger.error(f"❌ Error extracting memories from chat: {e}")
+            return {"success": False, "error": str(e)}
         
     def cleanup(self):
         """Clean up test resources based on cached and rebuild flags."""
@@ -1358,6 +1498,27 @@ def test_full_pipeline_integration(test_runner):
         phase_times['memory_extraction'] = time.time() - phase_start
         logger.info(f"✅ Memory extraction completed in {phase_times['memory_extraction']:.2f}s")
         
+        # Phase 8: Chat with Memory Integration
+        phase_start = time.time()
+        logger.info("💬 Phase 8: Chat with Memory Integration...")
+        
+        # Create chat session
+        session_id = asyncio.run(test_runner.create_chat_session(
+            title="Integration Test Chat",
+            description="Testing chat functionality with memory retrieval"
+        ))
+        assert session_id is not None, "Failed to create chat session"
+        
+        # Run chat conversation
+        chat_success = asyncio.run(test_runner.run_chat_conversation(session_id))
+        assert chat_success, "Chat conversation failed"
+        
+        # Extract memories from chat session (optional - may create additional memories)
+        chat_memory_result = asyncio.run(test_runner.extract_memories_from_chat(session_id))
+        
+        phase_times['chat_integration'] = time.time() - phase_start
+        logger.info(f"✅ Chat integration completed in {phase_times['chat_integration']:.2f}s")
+        
         # Basic assertions
         assert conversation is not None
         assert len(conversation['transcript']) > 0
@@ -1418,6 +1579,7 @@ Generated Transcript ({len(transcription)} chars):
         logger.info(f"  📤 Audio Upload:           {phase_times['audio_upload']:>6.2f}s")
         logger.info(f"  🎤 Transcription:          {phase_times['transcription_processing']:>6.2f}s")
         logger.info(f"  🧠 Memory Extraction:      {phase_times['memory_extraction']:>6.2f}s")
+        logger.info(f"  💬 Chat Integration:       {phase_times['chat_integration']:>6.2f}s")
         logger.info(f"  {'─' * 35}")
         logger.info(f"  🏁 TOTAL TEST TIME:        {total_test_time:>6.2f}s ({total_test_time/60:.1f}m)")
         logger.info("")
