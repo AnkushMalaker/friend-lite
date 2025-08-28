@@ -5,13 +5,13 @@ memory service, maintaining the same interface while using the new
 architecture internally.
 """
 
-import os
 import json
 import logging
-from typing import Optional, List, Dict, Any, Tuple
+import os
+from typing import Any, Dict, List, Optional, Tuple
 
-from .memory_service import MemoryService as CoreMemoryService
 from .config import build_memory_config_from_env
+from .memory_service import MemoryService as CoreMemoryService
 
 memory_logger = logging.getLogger("memory_service")
 
@@ -57,7 +57,7 @@ class MemoryService:
         self,
         transcript: str,
         client_id: str,
-        audio_uuid: str,
+        source_id: str,
         user_id: str,
         user_email: str,
         allow_update: bool = False,
@@ -68,7 +68,7 @@ class MemoryService:
         Args:
             transcript: Raw transcript text to extract memories from
             client_id: Client identifier
-            audio_uuid: Unique identifier for the audio session
+            source_id: Unique identifier for the source (audio session, chat session, etc.)
             user_id: User identifier
             user_email: User email address
             allow_update: Whether to allow updating existing memories
@@ -88,7 +88,7 @@ class MemoryService:
         return await self._service.add_memory(
             transcript=transcript,
             client_id=client_id,
-            audio_uuid=audio_uuid,
+            source_id=source_id,
             user_id=user_id,
             user_email=user_email,
             allow_update=allow_update,
@@ -272,19 +272,19 @@ class MemoryService:
             memory_logger.error("Cannot import database connection")
             return memories  # Return memories without transcript enrichment
         
-        # Extract audio UUIDs for bulk query
-        audio_uuids = []
+        # Extract source IDs for bulk query
+        source_ids = []
         for memory in memories:
             metadata = memory.get("metadata", {})
-            audio_uuid = metadata.get("audio_uuid")
-            if audio_uuid:
-                audio_uuids.append(audio_uuid)
+            source_id = metadata.get("source_id") or metadata.get("audio_uuid")  # Backward compatibility
+            if source_id:
+                source_ids.append(source_id)
         
-        # Bulk query for chunks
-        chunks_cursor = chunks_col.find({"audio_uuid": {"$in": audio_uuids}})
-        chunks_by_uuid = {}
+        # Bulk query for chunks (support both old audio_uuid and new source_id)
+        chunks_cursor = chunks_col.find({"audio_uuid": {"$in": source_ids}})
+        chunks_by_id = {}
         async for chunk in chunks_cursor:
-            chunks_by_uuid[chunk["audio_uuid"]] = chunk
+            chunks_by_id[chunk["audio_uuid"]] = chunk
         
         enriched_memories = []
         
@@ -294,7 +294,7 @@ class MemoryService:
                 "memory_text": memory.get("memory", ""),
                 "created_at": memory.get("created_at", ""),
                 "metadata": memory.get("metadata", {}),
-                "audio_uuid": None,
+                "source_id": None,
                 "transcript": None,
                 "client_id": None,
                 "user_email": None,
@@ -303,17 +303,17 @@ class MemoryService:
                 "memory_length": 0,
             }
             
-            # Extract audio_uuid from memory metadata
+            # Extract source_id from memory metadata (with backward compatibility)
             metadata = memory.get("metadata", {})
-            audio_uuid = metadata.get("audio_uuid")
+            source_id = metadata.get("source_id") or metadata.get("audio_uuid")
             
-            if audio_uuid:
-                enriched_memory["audio_uuid"] = audio_uuid
+            if source_id:
+                enriched_memory["source_id"] = source_id
                 enriched_memory["client_id"] = metadata.get("client_id")
                 enriched_memory["user_email"] = metadata.get("user_email")
                 
                 # Get transcript from bulk-loaded chunks
-                chunk = chunks_by_uuid.get(audio_uuid)
+                chunk = chunks_by_id.get(source_id)
                 if chunk:
                     transcript_segments = chunk.get("transcript", [])
                     if transcript_segments:
@@ -402,41 +402,6 @@ def shutdown_memory_service():
     # Also shutdown the core service
     from .service_factory import shutdown_memory_service as shutdown_core_service
     shutdown_core_service()
-
-
-def init_memory_config(
-    qdrant_base_url: Optional[str] = None,
-    organization_id: Optional[str] = None,
-    project_id: Optional[str] = None,
-    app_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Initialize memory configuration - maintained for compatibility.
-    
-    Args:
-        qdrant_base_url: Qdrant server URL (updates environment if provided)
-        organization_id: Legacy parameter (ignored)
-        project_id: Legacy parameter (ignored)
-        app_id: Legacy parameter (ignored)
-        
-    Returns:
-        Basic configuration dictionary for compatibility
-    """
-    memory_logger.info(f"Initializing MemoryService with Qdrant URL: {qdrant_base_url}")
-    
-    # Update environment variable if provided
-    if qdrant_base_url:
-        os.environ["QDRANT_BASE_URL"] = qdrant_base_url
-    
-    # Return basic config info for compatibility
-    return {
-        "vector_store": {
-            "provider": "qdrant",
-            "config": {
-                "host": qdrant_base_url or os.getenv("QDRANT_BASE_URL", "qdrant"),
-                "collection_name": "omi_memories"
-            }
-        }
-    }
 
 
 # Migration helper functions

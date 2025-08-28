@@ -106,7 +106,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
         self,
         transcript: str,
         client_id: str,
-        audio_uuid: str,
+        source_id: str,
         user_id: str,
         user_email: str,
         allow_update: bool = False,
@@ -121,7 +121,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
         Args:
             transcript: Raw transcript text to extract memories from
             client_id: Client identifier for tracking
-            audio_uuid: Unique identifier for the audio session
+            source_id: Unique identifier for the source (audio session, chat session, etc.)
             user_id: User identifier for memory scoping
             user_email: User email address
             allow_update: Whether to allow updating existing memories (Note: MCP may handle this internally)
@@ -139,7 +139,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
         try:
             # Skip empty transcripts
             if not transcript or len(transcript.strip()) < 10:
-                memory_logger.info(f"Skipping empty transcript for {audio_uuid}")
+                memory_logger.info(f"Skipping empty transcript for {source_id}")
                 return True, []
             
             # Update MCP client user context for this operation
@@ -149,9 +149,9 @@ class OpenMemoryMCPService(MemoryServiceBase):
             try:
                 # Thin client approach: Send raw transcript to OpenMemory MCP server
                 # OpenMemory handles: extraction, deduplication, vector storage, ACL
-                enriched_transcript = f"[Audio: {audio_uuid}, Client: {client_id}] {transcript}"
+                enriched_transcript = f"[Source: {source_id}, Client: {client_id}] {transcript}"
                 
-                memory_logger.info(f"Delegating memory processing to OpenMemory MCP for {audio_uuid}")
+                memory_logger.info(f"Delegating memory processing to OpenMemory MCP for {source_id}")
                 memory_ids = await self.mcp_client.add_memories(text=enriched_transcript)
                     
             finally:
@@ -160,20 +160,21 @@ class OpenMemoryMCPService(MemoryServiceBase):
             
             # Update database relationships if helper provided
             if memory_ids and db_helper:
-                await self._update_database_relationships(db_helper, audio_uuid, memory_ids)
+                await self._update_database_relationships(db_helper, source_id, memory_ids)
             
             if memory_ids:
-                memory_logger.info(f"✅ OpenMemory MCP processed memory for {audio_uuid}: {len(memory_ids)} memories")
+                memory_logger.info(f"✅ OpenMemory MCP processed memory for {source_id}: {len(memory_ids)} memories")
                 return True, memory_ids
             
-            memory_logger.warning(f"⚠️ OpenMemory MCP created no memories for {audio_uuid}")
-            return False, []
+            # NOOP due to deduplication is SUCCESS, not failure
+            memory_logger.info(f"✅ OpenMemory MCP processed {source_id}: no new memories needed (likely deduplication)")
+            return True, []
             
         except MCPError as e:
-            memory_logger.error(f"❌ OpenMemory MCP error for {audio_uuid}: {e}")
+            memory_logger.error(f"❌ OpenMemory MCP error for {source_id}: {e}")
             raise e
         except Exception as e:
-            memory_logger.error(f"❌ OpenMemory MCP service failed for {audio_uuid}: {e}")
+            memory_logger.error(f"❌ OpenMemory MCP service failed for {source_id}: {e}")
             raise e
     
     async def search_memories(
@@ -411,18 +412,18 @@ class OpenMemoryMCPService(MemoryServiceBase):
     async def _update_database_relationships(
         self, 
         db_helper: Any, 
-        audio_uuid: str, 
+        source_id: str, 
         created_ids: List[str]
     ) -> None:
         """Update database relationships for created memories.
         
         Args:
             db_helper: Database helper instance
-            audio_uuid: Audio session identifier
+            source_id: Source session identifier
             created_ids: List of created memory IDs
         """
         for memory_id in created_ids:
             try:
-                await db_helper.add_memory_reference(audio_uuid, memory_id, "created")
+                await db_helper.add_memory_reference(source_id, memory_id, "created")
             except Exception as db_error:
                 memory_logger.error(f"Database relationship update failed: {db_error}")

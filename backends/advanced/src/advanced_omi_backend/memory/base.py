@@ -75,7 +75,7 @@ class MemoryServiceBase(ABC):
         self,
         transcript: str,
         client_id: str,
-        audio_uuid: str,
+        source_id: str,
         user_id: str,
         user_email: str,
         allow_update: bool = False,
@@ -86,7 +86,7 @@ class MemoryServiceBase(ABC):
         Args:
             transcript: Raw transcript text to extract memories from
             client_id: Client identifier 
-            audio_uuid: Unique identifier for the audio session
+            source_id: Unique identifier for the source (audio session, chat session, etc.)
             user_id: User identifier
             user_email: User email address
             allow_update: Whether to allow updating existing memories

@@ -74,7 +74,7 @@ uv sync --dev --group test
 # Set up environment variables for testing
 print_info "Setting up test environment variables..."
 
-print_info "Using environment variables for test configuration (no .env.test file needed)"
+print_info "Using environment variables from .env file for test configuration"
 
 # Clean test environment
 print_info "Cleaning test environment..."
@@ -88,6 +88,17 @@ docker compose -f docker-compose-test.yml down -v || true
 print_info "Running integration tests..."
 print_info "Using fresh mode (CACHED_MODE=False) for clean testing"
 print_info "Disabling BuildKit for integration tests (DOCKER_BUILDKIT=0)"
+
+# Check OpenMemory MCP connectivity if using openmemory_mcp provider
+if [ "$MEMORY_PROVIDER" = "openmemory_mcp" ]; then
+    print_info "Checking OpenMemory MCP connectivity..."
+    if curl -s --max-time 5 http://localhost:8765/docs > /dev/null 2>&1; then
+        print_success "OpenMemory MCP server is accessible at http://localhost:8765"
+    else
+        print_warning "OpenMemory MCP server not accessible at http://localhost:8765"
+        print_info "Make sure to start OpenMemory MCP: cd extras/openmemory-mcp && docker compose up -d"
+    fi
+fi
 
 # Set environment variables for the test
 export DOCKER_BUILDKIT=0

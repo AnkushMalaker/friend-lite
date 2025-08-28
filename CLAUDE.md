@@ -267,6 +267,81 @@ OPENMEMORY_TIMEOUT=30
 OPENAI_API_KEY=your-openai-key-here
 ```
 
+#### OpenMemory MCP Interface Patterns
+
+**Important**: OpenMemory MCP stores memories **per-app**, not globally. Understanding this architecture is critical for proper integration.
+
+**App-Based Storage Architecture:**
+- All memories are stored under specific "apps" (namespaces)
+- Generic endpoints (`/api/v1/memories/`) return empty results
+- App-specific endpoints (`/api/v1/apps/{app_id}/memories`) contain the actual memories
+
+**Hardcoded Values and Configuration:**
+```bash
+# Default app name (configurable via OPENMEMORY_CLIENT_NAME)
+Default: "friend_lite"
+
+# Hardcoded metadata (NOT configurable)
+"source": "friend_lite"  # Always hardcoded in Friend-Lite
+
+# User ID for OpenMemory MCP server
+OPENMEMORY_USER_ID=openmemory  # Configurable
+```
+
+**API Interface Pattern:**
+```python
+# 1. App Discovery - Find app by client_name
+GET /api/v1/apps/
+# Response: {"apps": [{"id": "uuid", "name": "friend_lite", ...}]}
+
+# 2. Memory Creation - Uses generic endpoint but assigns to app
+POST /api/v1/memories/
+{
+  "user_id": "openmemory",
+  "text": "memory content",
+  "app": "friend_lite",  # Uses OPENMEMORY_CLIENT_NAME
+  "metadata": {
+    "source": "friend_lite",    # Hardcoded
+    "client": "friend_lite"     # Uses OPENMEMORY_CLIENT_NAME
+  }
+}
+
+# 3. Memory Retrieval - Must use app-specific endpoint
+GET /api/v1/apps/{app_id}/memories?user_id=openmemory&page=1&size=10
+
+# 4. Memory Search - Must use app-specific endpoint with search_query
+GET /api/v1/apps/{app_id}/memories?user_id=openmemory&search_query=keyword&page=1&size=10
+```
+
+**Friend-Lite Integration Flow:**
+1. **App Discovery**: Query `/api/v1/apps/` to find app matching `OPENMEMORY_CLIENT_NAME`
+2. **Fallback**: If client app not found, use first available app
+3. **Operations**: All memory operations use the app-specific endpoints with discovered `app_id`
+
+**Testing OpenMemory MCP Integration:**
+```bash
+# Configure .env file with OpenMemory MCP settings
+cp .env.template .env
+# Edit .env to set MEMORY_PROVIDER=openmemory_mcp and configure OPENMEMORY_* variables
+
+# Start OpenMemory MCP server
+cd extras/openmemory-mcp && docker compose up -d
+
+# Run integration tests (reads configuration from .env file)
+cd backends/advanced && ./run-test.sh
+
+# Manual testing - Check app structure
+curl -s "http://localhost:8765/api/v1/apps/" | jq
+
+# Test memory creation
+curl -X POST "http://localhost:8765/api/v1/memories/" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "openmemory", "text": "test memory", "app": "friend_lite"}'
+
+# Retrieve memories (replace app_id with actual ID from apps endpoint)
+curl -s "http://localhost:8765/api/v1/apps/{app_id}/memories?user_id=openmemory" | jq
+```
+
 ### Transcription Provider Configuration
 
 Friend-Lite supports multiple transcription services:

@@ -82,7 +82,7 @@ class MCPClient:
                         "client": self.client_name
                     },
                     "infer": True,  # Let OpenMemory extract memories
-                    "app": "openmemory"  # Use default app name
+                    "app": self.client_name  # Use client name as app name
                 }
             )
             response.raise_for_status()
@@ -137,8 +137,16 @@ class MCPClient:
                 memory_logger.warning("No apps found in OpenMemory MCP for search")
                 return []
             
-            # Use the first (default) app
-            app_id = apps_data["apps"][0]["id"]
+            # Find the app matching our client name, or use first app as fallback
+            app_id = None
+            for app in apps_data["apps"]:
+                if app["name"] == self.client_name:
+                    app_id = app["id"]
+                    break
+            
+            if not app_id:
+                memory_logger.warning(f"App '{self.client_name}' not found, using first available app")
+                app_id = apps_data["apps"][0]["id"]
             
             # Use app-specific memories endpoint with search
             params = {
@@ -200,8 +208,16 @@ class MCPClient:
                 memory_logger.warning("No apps found in OpenMemory MCP")
                 return []
             
-            # Use the first (default) app
-            app_id = apps_data["apps"][0]["id"]
+            # Find the app matching our client name, or use first app as fallback
+            app_id = None
+            for app in apps_data["apps"]:
+                if app["name"] == self.client_name:
+                    app_id = app["id"]
+                    break
+            
+            if not app_id:
+                memory_logger.warning(f"App '{self.client_name}' not found, using first available app")
+                app_id = apps_data["apps"][0]["id"]
             
             # Use app-specific memories endpoint
             params = {
