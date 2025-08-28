@@ -56,7 +56,6 @@ from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.llm_client import async_health_check
 from advanced_omi_backend.memory import (
     get_memory_service,
-    init_memory_config,
     shutdown_memory_service,
 )
 from advanced_omi_backend.processors import (
@@ -139,12 +138,7 @@ else:
 
 # Ollama & Qdrant Configuration
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
-
-# Memory configuration is now handled in the memory module
-# Initialize it with our Ollama and Qdrant URLs
-init_memory_config(
-    qdrant_base_url=QDRANT_BASE_URL,
-)
+QDRANT_PORT = os.getenv("QDRANT_PORT", "6333")
 
 # Speaker service configuration
 
@@ -885,7 +879,7 @@ async def health_check():
         "services": {},
         "config": {
             "mongodb_uri": MONGODB_URI,
-            "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
+            "qdrant_url": f"http://{QDRANT_BASE_URL}:{QDRANT_PORT}",
             "transcription_service": (
                 f"Speech to Text ({transcription_provider.name})"
                 if transcription_provider

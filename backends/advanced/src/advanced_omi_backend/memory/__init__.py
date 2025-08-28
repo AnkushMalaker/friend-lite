@@ -22,19 +22,18 @@ memory_logger = logging.getLogger("memory_service")
 get_memory_service = None
 MemoryService = None
 shutdown_memory_service = None
-init_memory_config = None
 test_new_memory_service = None
 migrate_from_mem0 = None
 
 memory_logger.info("🆕 Using NEW memory service implementation")
 try:
     from .compat_service import (
-        get_memory_service, 
-        MemoryService, 
+        MemoryService,
+        get_memory_service,
+        migrate_from_mem0,
         shutdown_memory_service,
-        init_memory_config,
-        migrate_from_mem0
     )
+
     # Also import core implementation for direct access
     from .memory_service import MemoryService as CoreMemoryService
     test_new_memory_service = None  # Will be implemented if needed
@@ -45,32 +44,26 @@ except ImportError as e:
 
 # Also export the new architecture components for direct access when needed
 try:
-    from .base import MemoryServiceBase, LLMProviderBase, VectorStoreBase, MemoryEntry
+    from .base import LLMProviderBase, MemoryEntry, MemoryServiceBase, VectorStoreBase
+    from .config import MemoryProvider  # New memory provider enum
+    from .config import create_openmemory_config  # New OpenMemory config function
     from .config import (
-        MemoryConfig,
         LLMProvider,
+        MemoryConfig,
         VectorStoreProvider,
-        MemoryProvider,  # New memory provider enum
         build_memory_config_from_env,
-        create_openai_config,
         create_ollama_config,
+        create_openai_config,
         create_qdrant_config,
-        create_openmemory_config  # New OpenMemory config function
     )
-    from .providers import (
-        OpenAIProvider,
-        QdrantVectorStore,
-        OpenMemoryMCPService,  # New complete memory service
-        MCPClient,
-        MCPError
-    )
-    from .service_factory import (
-        get_memory_service as get_core_memory_service,
-        create_memory_service,
-        shutdown_memory_service as shutdown_core_memory_service,
-        reset_memory_service,
-        get_service_info as get_core_service_info
-    )
+    from .providers import OpenMemoryMCPService  # New complete memory service
+    from .providers import MCPClient, MCPError, OpenAIProvider, QdrantVectorStore
+    from .service_factory import create_memory_service
+    from .service_factory import get_memory_service as get_core_memory_service
+    from .service_factory import get_service_info as get_core_service_info
+    from .service_factory import reset_memory_service
+    from .service_factory import shutdown_memory_service as shutdown_core_memory_service
+
     # Keep backward compatibility alias
     AbstractMemoryService = CoreMemoryService
 except ImportError as e:
@@ -105,7 +98,6 @@ __all__ = [
     "get_memory_service",
     "MemoryService", 
     "shutdown_memory_service",
-    "init_memory_config",
     
     # New service specific (may be None if not available)
     "test_new_memory_service",

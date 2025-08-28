@@ -17,6 +17,7 @@ services:
       # Override with test-specific settings
       - MONGODB_URI=mongodb://mongo-test:27017/test_db
       - QDRANT_BASE_URL=qdrant-test
+      - QDRANT_PORT=6337
       - DEBUG_DIR=/app/debug_dir
       # Import API keys from environment
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
@@ -30,7 +31,11 @@ services:
       - ADMIN_EMAIL=test-admin@example.com
       # Transcription provider configuration
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
-      - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
+      # - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
+      # Memory provider configuration
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-friend_lite}
+      - OPENMEMORY_MCP_URL=${OPENMEMORY_MCP_URL:-http://host.docker.internal:8765}
+      - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
       # Disable speaker recognition in test environment to prevent segment duplication
       - DISABLE_SPEAKER_RECOGNITION=true
     depends_on:
@@ -65,8 +70,8 @@ services:
   qdrant-test:
     image: qdrant/qdrant:latest
     ports:
-      - "6335:6333"  # gRPC - avoid conflict with dev 6333
-      - "6336:6334"  # HTTP - avoid conflict with dev 6334
+      - "6337:6333"  # gRPC - avoid conflict with dev 6333
+      - "6338:6334"  # HTTP - avoid conflict with dev 6334
     volumes:
       - ./data/test_qdrant_data:/qdrant/storage
 

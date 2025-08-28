@@ -6,18 +6,19 @@ functionality.
 """
 
 import asyncio
+import logging
 import time
 import uuid
-import logging
-from typing import Optional, List, Tuple, Any
+from typing import Any, List, Optional, Tuple
 
-from .base import MemoryServiceBase, MemoryEntry
-from .config import MemoryConfig, LLMProvider as LLMProviderEnum, VectorStoreProvider
+from .base import MemoryEntry, MemoryServiceBase
+from .config import LLMProvider as LLMProviderEnum
+from .config import MemoryConfig, VectorStoreProvider
 from .providers import (
     LLMProviderBase,
-    VectorStoreBase,
     OpenAIProvider,
     QdrantVectorStore,
+    VectorStoreBase,
 )
 
 memory_logger = logging.getLogger("memory_service")
@@ -105,7 +106,7 @@ class MemoryService(MemoryServiceBase):
         self,
         transcript: str,
         client_id: str,
-        audio_uuid: str,
+        source_id: str,
         user_id: str,
         user_email: str,
         allow_update: bool = False,
@@ -120,7 +121,7 @@ class MemoryService(MemoryServiceBase):
         Args:
             transcript: Raw transcript text to extract memories from
             client_id: Client identifier for tracking
-            audio_uuid: Unique identifier for the audio session
+            source_id: Unique identifier for the source (audio session, chat session, etc.)
             user_id: User identifier for memory scoping
             user_email: User email address
             allow_update: Whether to allow updating existing memories
@@ -138,7 +139,7 @@ class MemoryService(MemoryServiceBase):
         try:
             # Skip empty transcripts
             if not transcript or len(transcript.strip()) < 10:
-                memory_logger.info(f"Skipping empty transcript for {audio_uuid}")
+                memory_logger.info(f"Skipping empty transcript for {source_id}")
                 return True, []
 
             # Extract memories using LLM if enabled
@@ -148,12 +149,12 @@ class MemoryService(MemoryServiceBase):
                     self.llm_provider.extract_memories(transcript, self.config.extraction_prompt),
                     timeout=self.config.timeout_seconds
                 )
-                memory_logger.info(f"🧠 Extracted {len(fact_memories_text)} memories from transcript for {audio_uuid}")
+                memory_logger.info(f"🧠 Extracted {len(fact_memories_text)} memories from transcript for {source_id}")
             
             # Fallback to storing raw transcript if no memories extracted
             if not fact_memories_text:
                 fact_memories_text = [transcript]
-                memory_logger.info(f"💾 No memories extracted, storing raw transcript for {audio_uuid}")
+                memory_logger.info(f"💾 No memories extracted, storing raw transcript for {source_id}")
 
             memory_logger.debug(f"🧠 fact_memories_text: {fact_memories_text}")
             # Simple deduplication of extracted memories within the same call
@@ -166,7 +167,7 @@ class MemoryService(MemoryServiceBase):
             )
             memory_logger.info(f"embeddings generated")
             if not embeddings or len(embeddings) != len(fact_memories_text):
-                error_msg = f"❌ Embedding generation failed for {audio_uuid}: got {len(embeddings) if embeddings else 0} embeddings for {len(fact_memories_text)} memories"
+                error_msg = f"❌ Embedding generation failed for {source_id}: got {len(embeddings) if embeddings else 0} embeddings for {len(fact_memories_text)} memories"
                 memory_logger.error(error_msg)
                 raise RuntimeError(error_msg)
             
@@ -176,15 +177,15 @@ class MemoryService(MemoryServiceBase):
 
             # If allow_update, try LLM-driven action proposal
             if allow_update and fact_memories_text:
-                memory_logger.info(f"🔍 Allowing update for {audio_uuid}")
+                memory_logger.info(f"🔍 Allowing update for {source_id}")
                 created_ids = await self._process_memory_updates(
-                    fact_memories_text, embeddings, user_id, client_id, audio_uuid, user_email
+                    fact_memories_text, embeddings, user_id, client_id, source_id, user_email
                 )
             else:
-                memory_logger.info(f"🔍 Not allowing update for {audio_uuid}")
+                memory_logger.info(f"🔍 Not allowing update for {source_id}")
                 # Add all extracted memories normally
                 memory_entries = self._create_memory_entries(
-                    fact_memories_text, embeddings, client_id, audio_uuid, user_id, user_email
+                    fact_memories_text, embeddings, client_id, source_id, user_id, user_email
                 )
 
             # Store new entries in vector database
@@ -194,21 +195,21 @@ class MemoryService(MemoryServiceBase):
 
             # Update database relationships if helper provided
             if created_ids and db_helper:
-                await self._update_database_relationships(db_helper, audio_uuid, created_ids)
+                await self._update_database_relationships(db_helper, source_id, created_ids)
 
             if created_ids:
-                memory_logger.info(f"✅ Upserted {len(created_ids)} memories for {audio_uuid}")
+                memory_logger.info(f"✅ Upserted {len(created_ids)} memories for {source_id}")
                 return True, created_ids
 
-            error_msg = f"❌ No memories created for {audio_uuid}: memory_entries={len(memory_entries) if memory_entries else 0}, allow_update={allow_update}"
+            error_msg = f"❌ No memories created for {source_id}: memory_entries={len(memory_entries) if memory_entries else 0}, allow_update={allow_update}"
             memory_logger.error(error_msg)
             raise RuntimeError(error_msg)
 
         except asyncio.TimeoutError as e:
-            memory_logger.error(f"⏰ Memory processing timed out for {audio_uuid}")
+            memory_logger.error(f"⏰ Memory processing timed out for {source_id}")
             raise e
         except Exception as e:
-            memory_logger.error(f"❌ Add memory failed for {audio_uuid}: {e}")
+            memory_logger.error(f"❌ Add memory failed for {source_id}: {e}")
             raise e
 
     async def search_memories(self, query: str, user_id: str, limit: int = 10) -> List[MemoryEntry]:
@@ -374,7 +375,7 @@ class MemoryService(MemoryServiceBase):
         fact_memories_text: List[str],
         embeddings: List[List[float]],
         client_id: str,
-        audio_uuid: str,
+        source_id: str,
         user_id: str,
         user_email: str
     ) -> List[MemoryEntry]:
@@ -384,7 +385,7 @@ class MemoryService(MemoryServiceBase):
             fact_memories_text: List of factmemory content strings
             embeddings: Corresponding embedding vectors
             client_id: Client identifier
-            audio_uuid: Audio session identifier
+            source_id: Source session identifier
             user_id: User identifier
             user_email: User email
             
@@ -402,7 +403,7 @@ class MemoryService(MemoryServiceBase):
                     metadata={
                         "source": "offline_streaming",
                         "client_id": client_id,
-                        "audio_uuid": audio_uuid,
+                        "source_id": source_id,
                         "user_id": user_id,
                         "user_email": user_email,
                         "timestamp": int(time.time()),
@@ -421,7 +422,7 @@ class MemoryService(MemoryServiceBase):
         embeddings: List[List[float]],
         user_id: str,
         client_id: str,
-        audio_uuid: str,
+        source_id: str,
         user_email: str
     ) -> List[str]:
         """Process memory updates using LLM-driven action proposals.
@@ -435,7 +436,7 @@ class MemoryService(MemoryServiceBase):
             embeddings: Corresponding embeddings
             user_id: User identifier
             client_id: Client identifier
-            audio_uuid: Audio session identifier
+            source_id: Source session identifier
             user_email: User email
             
         Returns:
@@ -495,7 +496,7 @@ class MemoryService(MemoryServiceBase):
         actions_list = self._normalize_actions(actions_obj)
         created_ids = await self._apply_memory_actions(
             actions_list, new_message_embeddings, temp_uuid_mapping,
-            client_id, audio_uuid, user_id, user_email
+            client_id, source_id, user_id, user_email
         )
 
         return created_ids
@@ -541,7 +542,7 @@ class MemoryService(MemoryServiceBase):
         new_message_embeddings: dict,
         temp_uuid_mapping: dict,
         client_id: str,
-        audio_uuid: str,
+        source_id: str,
         user_id: str,
         user_email: str
     ) -> List[str]:
@@ -552,7 +553,7 @@ class MemoryService(MemoryServiceBase):
             new_message_embeddings: Pre-computed embeddings for new content
             temp_uuid_mapping: Mapping from temporary IDs to real IDs
             client_id: Client identifier
-            audio_uuid: Audio session identifier
+            source_id: Source session identifier
             user_id: User identifier
             user_email: User email
             
@@ -583,7 +584,7 @@ class MemoryService(MemoryServiceBase):
             base_metadata = {
                 "source": "offline_streaming",
                 "client_id": client_id,
-                "audio_uuid": audio_uuid,
+                "source_id": source_id,
                 "user_id": user_id,
                 "user_email": user_email,
                 "timestamp": int(time.time()),
@@ -671,17 +672,17 @@ class MemoryService(MemoryServiceBase):
         memory_logger.info(f"✅ Actions processed: {len(memory_entries)} new entries, {len(created_ids)} total changes")
         return created_ids
 
-    async def _update_database_relationships(self, db_helper: Any, audio_uuid: str, created_ids: List[str]) -> None:
+    async def _update_database_relationships(self, db_helper: Any, source_id: str, created_ids: List[str]) -> None:
         """Update database relationships for created memories.
         
         Args:
             db_helper: Database helper instance
-            audio_uuid: Audio session identifier
+            source_id: Source session identifier
             created_ids: List of created memory IDs
         """
         for memory_id in created_ids:
             try:
-                await db_helper.add_memory_reference(audio_uuid, memory_id, "created")
+                await db_helper.add_memory_reference(source_id, memory_id, "created")
             except Exception as db_error:
                 memory_logger.error(f"Database relationship update failed: {db_error}")
 
@@ -690,7 +691,7 @@ class MemoryService(MemoryServiceBase):
 async def example_usage():
     """Example of how to use the memory service."""
     from .config import build_memory_config_from_env
-    
+
     # Build config from environment
     config = build_memory_config_from_env()
     
@@ -702,7 +703,7 @@ async def example_usage():
     success, memory_ids = await memory_service.add_memory(
         transcript="User discussed their goals for the next quarter.",
         client_id="client123",
-        audio_uuid="audio456",
+        source_id="audio456",
         user_id="user789",
         user_email="user@example.com"
     )
@@ -731,35 +732,6 @@ async def example_usage():
         print("🧹 Cleaned up test data")
     
     memory_service.shutdown()
-
-
-# Global memory service instance
-_memory_service: Optional[MemoryService] = None
-
-
-def get_memory_service() -> MemoryService:
-    """Get the global memory service instance.
-    
-    Returns:
-        MemoryService: The initialized memory service instance
-        
-    Raises:
-        RuntimeError: If memory service has not been initialized
-    """
-    global _memory_service
-    if _memory_service is None:
-        from .config import build_memory_config_from_env
-        config = build_memory_config_from_env()
-        _memory_service = MemoryService(config)
-        # Initialize in background if not already done
-        try:
-            loop = asyncio.get_event_loop()
-            if not _memory_service._initialized:
-                loop.create_task(_memory_service.initialize())
-        except RuntimeError:
-            # No event loop running, will initialize on first use
-            pass
-    return _memory_service
 
 
 if __name__ == "__main__":
