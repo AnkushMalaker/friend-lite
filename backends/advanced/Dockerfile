@@ -33,7 +33,7 @@ RUN uv sync --extra deepgram
 # Copy all application code
 COPY . .
 
-# Copy memory config to the expected location
+# Copy memory config (created by init.sh from template)
 COPY memory_config.yaml ./
 
 

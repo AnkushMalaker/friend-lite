@@ -125,6 +125,9 @@ export const chatApi = {
   // Messages
   getMessages: (sessionId: string, limit = 100) => api.get(`/api/chat/sessions/${sessionId}/messages`, { params: { limit } }),
   
+  // Memory extraction
+  extractMemories: (sessionId: string) => api.post(`/api/chat/sessions/${sessionId}/extract-memories`),
+  
   // Statistics
   getStatistics: () => api.get('/api/chat/statistics'),
   
