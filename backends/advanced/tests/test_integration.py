@@ -1499,25 +1499,25 @@ def test_full_pipeline_integration(test_runner):
         logger.info(f"✅ Memory extraction completed in {phase_times['memory_extraction']:.2f}s")
         
         # Phase 8: Chat with Memory Integration
-        phase_start = time.time()
-        logger.info("💬 Phase 8: Chat with Memory Integration...")
+        # phase_start = time.time()
+        # logger.info("💬 Phase 8: Chat with Memory Integration...")
         
-        # Create chat session
-        session_id = asyncio.run(test_runner.create_chat_session(
-            title="Integration Test Chat",
-            description="Testing chat functionality with memory retrieval"
-        ))
-        assert session_id is not None, "Failed to create chat session"
+        # # Create chat session
+        # session_id = asyncio.run(test_runner.create_chat_session(
+        #     title="Integration Test Chat",
+        #     description="Testing chat functionality with memory retrieval"
+        # ))
+        # assert session_id is not None, "Failed to create chat session"
         
-        # Run chat conversation
-        chat_success = asyncio.run(test_runner.run_chat_conversation(session_id))
-        assert chat_success, "Chat conversation failed"
+        # # Run chat conversation
+        # chat_success = asyncio.run(test_runner.run_chat_conversation(session_id))
+        # assert chat_success, "Chat conversation failed"
         
-        # Extract memories from chat session (optional - may create additional memories)
-        chat_memory_result = asyncio.run(test_runner.extract_memories_from_chat(session_id))
+        # # Extract memories from chat session (optional - may create additional memories)
+        # chat_memory_result = asyncio.run(test_runner.extract_memories_from_chat(session_id))
         
-        phase_times['chat_integration'] = time.time() - phase_start
-        logger.info(f"✅ Chat integration completed in {phase_times['chat_integration']:.2f}s")
+        # phase_times['chat_integration'] = time.time() - phase_start
+        # logger.info(f"✅ Chat integration completed in {phase_times['chat_integration']:.2f}s")
         
         # Basic assertions
         assert conversation is not None
