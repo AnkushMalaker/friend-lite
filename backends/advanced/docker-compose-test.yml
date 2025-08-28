@@ -17,7 +17,7 @@ services:
       # Override with test-specific settings
       - MONGODB_URI=mongodb://mongo-test:27017/test_db
       - QDRANT_BASE_URL=qdrant-test
-      - QDRANT_PORT=6337
+      - QDRANT_PORT=6333
       - DEBUG_DIR=/app/debug_dir
       # Import API keys from environment
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
