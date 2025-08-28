@@ -22,13 +22,13 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 
 from advanced_omi_backend.database import get_database
 from advanced_omi_backend.llm_client import get_llm_client
-from advanced_omi_backend.memory.memory_service import get_memory_service
+from advanced_omi_backend.memory import get_memory_service
 from advanced_omi_backend.users import User
 
 logger = logging.getLogger(__name__)
 
 # Configuration from environment variables
-CHAT_LLM_MODEL = os.getenv("CHAT_LLM_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5-mini")
+CHAT_LLM_MODEL = os.getenv("CHAT_LLM_MODEL") or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 CHAT_TEMPERATURE = float(os.getenv("CHAT_TEMPERATURE", "0.7"))
 MAX_MEMORY_CONTEXT = 5  # Maximum number of memories to include in context
 MAX_CONVERSATION_HISTORY = 10  # Maximum conversation turns to keep in context
@@ -473,6 +473,69 @@ If no relevant memories are available, respond normally based on the conversatio
         except Exception as e:
             logger.error(f"Failed to get chat statistics for user {user_id}: {e}")
             return {"total_sessions": 0, "total_messages": 0, "last_chat": None}
+
+    async def extract_memories_from_session(self, session_id: str, user_id: str) -> Tuple[bool, List[str], int]:
+        """Extract and store memories from a chat session.
+        
+        Args:
+            session_id: ID of the chat session to extract memories from
+            user_id: User ID for authorization and memory scoping
+            
+        Returns:
+            Tuple of (success: bool, memory_ids: List[str], memory_count: int)
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            # Verify session belongs to user
+            session = await self.sessions_collection.find_one({
+                "session_id": session_id,
+                "user_id": user_id
+            })
+            
+            if not session:
+                logger.error(f"Session {session_id} not found for user {user_id}")
+                return False, [], 0
+
+            # Get all messages from the session
+            messages = await self.get_session_messages(session_id, user_id)
+            
+            if not messages or len(messages) < 2:  # Need at least user + assistant message
+                logger.info(f"Not enough messages in session {session_id} for memory extraction")
+                return True, [], 0
+
+            # Format messages as a transcript
+            transcript_parts = []
+            for message in messages:
+                role = "User" if message.role == "user" else "Assistant"
+                transcript_parts.append(f"{role}: {message.content}")
+            
+            transcript = "\n".join(transcript_parts)
+            
+            # Get user email for memory service
+            user_email = session.get("user_email", f"user_{user_id}")
+            
+            # Extract memories using the memory service
+            success, memory_ids = await self.memory_service.add_memory(
+                transcript=transcript,
+                client_id="chat_interface",
+                source_id=f"chat_{session_id}",
+                user_id=user_id,
+                user_email=user_email,
+                allow_update=True  # Allow deduplication and updates
+            )
+            
+            if success:
+                logger.info(f"✅ Extracted {len(memory_ids)} memories from chat session {session_id}")
+                return True, memory_ids, len(memory_ids)
+            else:
+                logger.error(f"❌ Failed to extract memories from chat session {session_id}")
+                return False, [], 0
+                
+        except Exception as e:
+            logger.error(f"Failed to extract memories from session {session_id}: {e}")
+            return False, [], 0
 
 
 # Global service instance

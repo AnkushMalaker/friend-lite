@@ -2,7 +2,7 @@
 Abstract LLM client interface for unified LLM operations across different providers.
 
 This module provides a standardized interface for LLM operations that works with
-OpenAI, Ollama, Anthropic, and other OpenAI-compatible APIs.
+OpenAI, Ollama, and other OpenAI-compatible APIs.
 """
 
 import asyncio
@@ -59,7 +59,7 @@ class OpenAILLMClient(LLMClient):
 
         # Initialize OpenAI client
         try:
-            import openai
+            import langfuse.openai as openai
 
             self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
             self.logger.info(f"OpenAI client initialized with base_url: {self.base_url}")
@@ -84,8 +84,8 @@ class OpenAILLMClient(LLMClient):
                 "messages": [{"role": "user", "content": prompt}],
             }
             
-            # Skip temperature for GPT-5-mini as it only supports default (1)
-            if not (model_name and "gpt-5-mini" in model_name):
+            # Skip temperature for gpt-4o-mini as it only supports default (1)
+            if not (model_name and "gpt-4o-mini" in model_name):
                 params["temperature"] = temp
             
             response = self.client.chat.completions.create(**params)
@@ -124,7 +124,7 @@ class OpenAILLMClient(LLMClient):
 
     def get_default_model(self) -> str:
         """Get the default model for this client."""
-        return self.model or "gpt-5-mini"
+        return self.model or "gpt-4o-mini"
 
 
 class LLMClientFactory:
@@ -141,9 +141,6 @@ class LLMClientFactory:
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL"),
             )
-        elif provider == "anthropic":
-            # Future implementation for Anthropic
-            raise NotImplementedError("Anthropic provider not yet implemented")
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")
 

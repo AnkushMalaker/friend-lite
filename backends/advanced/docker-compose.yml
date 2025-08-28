@@ -17,7 +17,6 @@ services:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - MISTRAL_MODEL=${MISTRAL_MODEL}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER}
-      - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - HF_TOKEN=${HF_TOKEN}
       - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
@@ -32,6 +31,16 @@ services:
       - NEO4J_USER=${NEO4J_USER}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
       - CORS_ORIGINS=${CORS_ORIGINS}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST}
+      - LANGFUSE_ENABLE_TELEMETRY=${LANGFUSE_ENABLE_TELEMETRY}
+      # OpenMemory MCP configuration
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER}
+      - OPENMEMORY_MCP_URL=${OPENMEMORY_MCP_URL:-http://host.docker.internal:8765}
+      - OPENMEMORY_CLIENT_NAME=${OPENMEMORY_CLIENT_NAME:-friend_lite}
+      - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
+      - OPENMEMORY_TIMEOUT=${OPENMEMORY_TIMEOUT:-30}
     depends_on:
       qdrant:
         condition: service_started
@@ -81,6 +90,13 @@ services:
       - "27017:27017"
     volumes:
       - ./data/mongo_data:/data/db
+
+  # OpenMemory MCP Server - Use external server from extras/openmemory-mcp
+  # The Friend-Lite backend connects to the external OpenMemory MCP server
+  # running from extras/openmemory-mcp via host.docker.internal:8765
+  # 
+  # To start the external server:
+  # cd extras/openmemory-mcp && docker compose up -d
 
   # Nginx reverse proxy for HTTPS access
   nginx:
@@ -145,16 +161,6 @@ services:
 
 
 
-  # Use tailscale instead 
-  # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
-  # ngrok:
-  #   image: ngrok/ngrok:latest
-  #   depends_on: [friend-backend, proxy]
-  #   ports:
-  #     - "4040:4040" # Ngrok web interface
-  #   environment:
-  #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-  #   command: "http proxy:80 --url=${NGROK_URL} --basic-auth=${NGROK_BASIC_AUTH}"
 
 
 # Question: These are named volumes, but they are not being used, right? Can we remove them?

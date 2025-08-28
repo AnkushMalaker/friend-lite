@@ -896,7 +896,6 @@ NEO4J_PASSWORD=your-neo4j-password
 
 # Transcription Services (Deepgram Primary, Wyoming Fallback)
 DEEPGRAM_API_KEY=your-deepgram-api-key-here
-OFFLINE_ASR_TCP_URI=tcp://host.docker.internal:8765
 
 ```
 

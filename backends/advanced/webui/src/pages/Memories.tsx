@@ -76,8 +76,34 @@ export default function Memories() {
     (memory.category?.toLowerCase() || '').includes(searchQuery.toLowerCase())
   )
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString()
+  const formatDate = (dateInput: string | number) => {
+    // Handle both timestamp numbers and date strings
+    let date: Date
+    
+    if (typeof dateInput === 'number') {
+      // Unix timestamp - multiply by 1000 if needed
+      date = dateInput > 1e10 ? new Date(dateInput) : new Date(dateInput * 1000)
+    } else if (typeof dateInput === 'string') {
+      // Try parsing as ISO string first, then as timestamp
+      if (dateInput.match(/^\d+$/)) {
+        // String containing only digits - treat as timestamp
+        const timestamp = parseInt(dateInput)
+        date = timestamp > 1e10 ? new Date(timestamp) : new Date(timestamp * 1000)
+      } else {
+        // Regular date string
+        date = new Date(dateInput)
+      }
+    } else {
+      date = new Date(dateInput)
+    }
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      console.warn('Invalid date:', dateInput)
+      return 'Invalid Date'
+    }
+    
+    return date.toLocaleString()
   }
 
   const getCategoryColor = (category: string) => {
@@ -90,6 +116,36 @@ export default function Memories() {
       'default': 'bg-gray-100 text-gray-800'
     }
     return colors[category as keyof typeof colors] || colors.default
+  }
+
+  // Simple function to render memory content with proper formatting
+  const renderMemoryText = (content: string) => {
+    // Handle multi-line content (bullet points from backend normalization)
+    const lines = content.split('\n').filter(line => line.trim())
+    
+    if (lines.length > 1) {
+      return (
+        <div className="space-y-1">
+          {lines.map((line, index) => (
+            <div key={index} className="text-gray-900 dark:text-gray-100">
+              {line}
+            </div>
+          ))}
+        </div>
+      )
+    }
+    
+    // Single line content
+    return (
+      <p className="text-gray-900 dark:text-gray-100 leading-relaxed">
+        {content}
+      </p>
+    )
+  }
+
+  const renderMemoryContent = (memory: Memory) => {
+    // Backend now handles all normalization, so we can directly display the content
+    return renderMemoryText(memory.memory)
   }
 
   return (
@@ -216,9 +272,7 @@ export default function Memories() {
 
                 {/* Memory Content */}
                 <div className="prose prose-sm max-w-none">
-                  <p className="text-gray-900 dark:text-gray-100 leading-relaxed">
-                    {memory.memory}
-                  </p>
+                  {renderMemoryContent(memory)}
                 </div>
 
                 {/* Metadata */}

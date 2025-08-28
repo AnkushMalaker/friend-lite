@@ -56,7 +56,6 @@ from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.llm_client import async_health_check
 from advanced_omi_backend.memory import (
     get_memory_service,
-    init_memory_config,
     shutdown_memory_service,
 )
 from advanced_omi_backend.processors import (
@@ -127,7 +126,6 @@ CHUNK_DIR.mkdir(parents=True, exist_ok=True)
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-OFFLINE_ASR_TCP_URI = os.getenv("OFFLINE_ASR_TCP_URI", "tcp://localhost:8765")
 
 # Get configured transcription provider (online or offline)
 transcription_provider = get_transcription_provider(TRANSCRIPTION_PROVIDER)
@@ -140,12 +138,7 @@ else:
 
 # Ollama & Qdrant Configuration
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
-
-# Memory configuration is now handled in the memory module
-# Initialize it with our Ollama and Qdrant URLs
-init_memory_config(
-    qdrant_base_url=QDRANT_BASE_URL,
-)
+QDRANT_PORT = os.getenv("QDRANT_PORT", "6333")
 
 # Speaker service configuration
 
@@ -173,13 +166,16 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
         Tuple of (header_dict, payload_bytes or None)
     """
     # Read data from WebSocket
+    logger.debug(f"parse_wyoming_protocol: About to call ws.receive()")
     message = await ws.receive()
+    logger.debug(f"parse_wyoming_protocol: Received message with keys: {message.keys() if message else 'None'}")
 
     # Handle WebSocket close frame
     if "type" in message and message["type"] == "websocket.disconnect":
         # This is a normal WebSocket close event
         code = message.get("code", 1000)
         reason = message.get("reason", "")
+        logger.info(f"📴 WebSocket disconnect received in parse_wyoming_protocol. Code: {code}, Reason: {reason}")
         raise WebSocketDisconnect(code=code, reason=reason)
 
     # Handle text message (JSON header)
@@ -364,7 +360,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # Configure CORS with configurable origins (includes Tailscale support by default)
-default_origins = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000"
+default_origins = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3002"
 cors_origins = os.getenv("CORS_ORIGINS", default_origins)
 allowed_origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
 
@@ -611,6 +607,14 @@ async def ws_endpoint_pcm(
             f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
         )
 
+        # Send ready message to client (similar to speaker recognition service)
+        try:
+            ready_msg = json.dumps({"type": "ready", "message": "WebSocket connection established"}) + "\n"
+            await ws.send_text(ready_msg)
+            application_logger.debug(f"✅ Sent ready message to {client_id}")
+        except Exception as e:
+            application_logger.error(f"Failed to send ready message to {client_id}: {e}")
+
         # Create client state
         client_state = await create_client_state(client_id, user, device_name)
 
@@ -623,108 +627,186 @@ async def ws_endpoint_pcm(
 
         while True:
             try:
-                # Parse Wyoming protocol or fall back to raw audio
-                header, payload = await parse_wyoming_protocol(ws)
+                if not audio_streaming:
+                    # Control message mode - parse Wyoming protocol
+                    application_logger.debug(f"🔄 Control mode for {client_id}, WebSocket state: {ws.client_state if hasattr(ws, 'client_state') else 'unknown'}")
+                    application_logger.debug(f"📨 About to receive control message for {client_id}")
+                    header, payload = await parse_wyoming_protocol(ws)
+                    application_logger.debug(f"✅ Received message type: {header.get('type')} for {client_id}")
 
-                if header["type"] == "audio-start":
-                    # Handle audio session start
-                    audio_streaming = True
-                    audio_format = header.get("data", {})
-                    application_logger.info(
-                        f"🎙️ Audio session started for {client_id} - "
-                        f"Format: {audio_format.get('rate')}Hz, "
-                        f"{audio_format.get('width')}bytes, "
-                        f"{audio_format.get('channels')}ch"
-                    )
-                    
-                    # Create transcription manager early for this client
-                    processor_manager = get_processor_manager()
-                    try:
-                        await processor_manager.ensure_transcription_manager(client_id)
+                    if header["type"] == "audio-start":
+                        application_logger.debug(f"🎙️ Processing audio-start for {client_id}")
+                        # Handle audio session start
+                        audio_streaming = True
+                        audio_format = header.get("data", {})
                         application_logger.info(
-                            f"🔌 Created transcription manager for {client_id} on audio-start"
+                            f"🎙️ Audio session started for {client_id} - "
+                            f"Format: {audio_format.get('rate')}Hz, "
+                            f"{audio_format.get('width')}bytes, "
+                            f"{audio_format.get('channels')}ch"
                         )
-                    except Exception as tm_error:
-                        application_logger.error(
-                            f"❌ Failed to create transcription manager for {client_id}: {tm_error}"
-                        )
-
-                elif header["type"] == "audio-chunk" and payload:
-                    packet_count += 1
-                    total_bytes += len(payload)
-
-                    if audio_streaming:
-                        application_logger.debug(
-                            f"🎵 Received audio chunk #{packet_count}: {len(payload)} bytes"
-                        )
-
-                        # Extract audio format from header
-                        audio_data = header.get("data", {})
-                        chunk = AudioChunk(
-                            audio=payload,
-                            rate=audio_data.get("rate", 16000),
-                            width=audio_data.get("width", 2),
-                            channels=audio_data.get("channels", 1),
-                            timestamp=audio_data.get("timestamp", int(time.time())),
-                        )
-
-                        # Queue to application-level processor
-                        await processor_manager.queue_audio(
-                            AudioProcessingItem(
-                                client_id=client_id,
-                                user_id=user.user_id,
-                                audio_chunk=chunk,
-                                timestamp=chunk.timestamp,
-                            )
-                        )
-
-                        # Update client state for tracking purposes
-                        client_state.update_audio_received(chunk)
-
-                        # Log every 1000th packet to avoid spam
-                        if packet_count % 1000 == 0:
+                        
+                        # Create transcription manager early for this client
+                        processor_manager = get_processor_manager()
+                        try:
+                            application_logger.debug(f"📋 Creating transcription manager for {client_id}")
+                            await processor_manager.ensure_transcription_manager(client_id)
                             application_logger.info(
-                                f"📊 Processed {packet_count} audio chunks ({total_bytes} bytes total) for client {client_id}"
+                                f"🔌 Created transcription manager for {client_id} on audio-start"
                             )
+                        except Exception as tm_error:
+                            application_logger.error(
+                                f"❌ Failed to create transcription manager for {client_id}: {tm_error}", exc_info=True
+                            )
+                        
+                        application_logger.info(f"🎵 Switching to audio streaming mode for {client_id}")
+                        continue  # Continue to audio streaming mode
+                    
+                    elif header["type"] == "ping":
+                        # Handle keepalive ping from frontend
+                        application_logger.debug(f"🏓 Received ping from {client_id}")
+                        continue
+                    
                     else:
-                        application_logger.warning(
-                            f"⚠️ Received audio chunk without audio-start for {client_id}"
+                        # Unknown control message type
+                        application_logger.debug(
+                            f"Ignoring Wyoming control event type '{header['type']}' for {client_id}"
                         )
-
-                elif header["type"] == "audio-stop":
-                    # Handle audio session stop
-                    audio_streaming = False
-                    application_logger.info(
-                        f"🛑 Audio session stopped for {client_id} - "
-                        f"Total chunks: {packet_count}, Total bytes: {total_bytes}"
-                    )
-
-                    # Signal end of audio stream to processor
-                    await processor_manager.close_client_audio(client_id)
-
-                    # Close current conversation to trigger memory processing
-                    if client_state:
-                        application_logger.info(
-                            f"📝 Closing conversation for {client_id} on audio-stop"
-                        )
-                        await client_state.close_current_conversation()
-
-                    # Reset counters for next session
-                    packet_count = 0
-                    total_bytes = 0
-
-                elif header["type"] == "ping":
-                    # Handle keepalive ping from frontend
-                    application_logger.debug(f"🏓 Received ping from {client_id}")
-                    # Optional: Send pong response if needed
-                    # await ws.send_text(json.dumps({"type": "pong"}) + "\n")
-                
+                        continue
+                        
                 else:
-                    # Unknown event type
-                    application_logger.debug(
-                        f"Ignoring Wyoming event type '{header['type']}' for {client_id}"
-                    )
+                    # Audio streaming mode - receive raw bytes (like speaker recognition)
+                    application_logger.debug(f"🎵 Audio streaming mode for {client_id} - waiting for audio data")
+                    
+                    try:
+                        # Receive raw audio bytes or check for control messages
+                        message = await ws.receive()
+                        
+                        
+                        # Check if it's a disconnect
+                        if "type" in message and message["type"] == "websocket.disconnect":
+                            code = message.get("code", 1000)
+                            reason = message.get("reason", "")
+                            application_logger.info(f"🔌 WebSocket disconnect during audio streaming for {client_id}. Code: {code}, Reason: {reason}")
+                            break
+                        
+                        # Check if it's a text message (control message like audio-stop)
+                        if "text" in message:
+                            try:
+                                control_header = json.loads(message["text"].strip())
+                                if control_header.get("type") == "audio-stop":
+                                    application_logger.info(f"🛑 Audio session stopped for {client_id}")
+                                    audio_streaming = False
+                                    
+                                    # Signal end of audio stream to processor
+                                    await processor_manager.close_client_audio(client_id)
+                                    
+                                    # Close current conversation to trigger memory processing
+                                    if client_state:
+                                        application_logger.info(f"📝 Closing conversation for {client_id} on audio-stop")
+                                        await client_state.close_current_conversation()
+                                    
+                                    # Reset counters for next session
+                                    packet_count = 0
+                                    total_bytes = 0
+                                    continue
+                                elif control_header.get("type") == "ping":
+                                    application_logger.debug(f"🏓 Received ping during streaming from {client_id}")
+                                    continue
+                                elif control_header.get("type") == "audio-start":
+                                    # Handle duplicate audio-start messages gracefully (idempotent behavior)
+                                    application_logger.info(f"🔄 Ignoring duplicate audio-start message during streaming for {client_id}")
+                                    continue
+                                elif control_header.get("type") == "audio-chunk":
+                                    # Handle Wyoming protocol audio-chunk with binary payload
+                                    payload_length = control_header.get("payload_length")
+                                    if payload_length and payload_length > 0:
+                                        # Receive the binary audio data
+                                        payload_msg = await ws.receive()
+                                        if "bytes" in payload_msg:
+                                            audio_data = payload_msg["bytes"]
+                                            packet_count += 1
+                                            total_bytes += len(audio_data)
+                                            
+                                            application_logger.debug(f"🎵 Received audio chunk #{packet_count}: {len(audio_data)} bytes")
+                                            
+                                            # Process audio chunk
+                                            audio_format = control_header.get("data", {})
+                                            chunk = AudioChunk(
+                                                audio=audio_data,
+                                                rate=audio_format.get("rate", 16000),
+                                                width=audio_format.get("width", 2),
+                                                channels=audio_format.get("channels", 1),
+                                                timestamp=audio_format.get("timestamp", int(time.time())),
+                                            )
+                                            
+                                            # Send to audio processing pipeline
+                                            await processor_manager.queue_audio(
+                                                AudioProcessingItem(
+                                                    client_id=client_id,
+                                                    user_id=user.user_id,
+                                                    audio_chunk=chunk,
+                                                    timestamp=chunk.timestamp,
+                                                )
+                                            )
+                                        else:
+                                            application_logger.warning(f"Expected binary payload for audio-chunk, got: {payload_msg.keys()}")
+                                    else:
+                                        application_logger.warning(f"audio-chunk missing payload_length: {payload_length}")
+                                    continue
+                                else:
+                                    application_logger.warning(f"Unknown control message during streaming: {control_header.get('type')}")
+                                    continue
+                            except json.JSONDecodeError:
+                                application_logger.warning(f"Invalid control message during streaming for {client_id}")
+                                continue
+                        
+                        # Check if it's binary data (raw audio without Wyoming protocol)
+                        elif "bytes" in message:
+                            # Raw binary audio data (legacy support)
+                            audio_data = message["bytes"]
+                            packet_count += 1
+                            total_bytes += len(audio_data)
+                            
+                            application_logger.debug(f"🎵 Received raw audio chunk #{packet_count}: {len(audio_data)} bytes")
+                            
+                            # Process raw audio chunk (assume PCM 16kHz mono)
+                            chunk = AudioChunk(
+                                audio=audio_data,
+                                rate=16000,
+                                width=2,
+                                channels=1,
+                                timestamp=int(time.time()),
+                            )
+                            
+                            # Send to audio processing pipeline  
+                            await processor_manager.queue_audio(
+                                AudioProcessingItem(
+                                    client_id=client_id,
+                                    user_id=user.user_id,
+                                    audio_chunk=chunk,
+                                    timestamp=chunk.timestamp,
+                                )
+                            )
+                        
+                        else:
+                            application_logger.warning(f"Unexpected message format in streaming mode: {message.keys()}")
+                            continue
+                            
+                    except Exception as streaming_error:
+                        application_logger.error(f"Error in audio streaming mode: {streaming_error}")
+                        if "disconnect" in str(streaming_error).lower():
+                            break
+                        continue
 
+                # This section is now handled in the streaming mode above
+
+            except WebSocketDisconnect as e:
+                application_logger.info(
+                    f"🔌 WebSocket disconnected during message processing for {client_id}. "
+                    f"Code: {e.code}, Reason: {e.reason}"
+                )
+                break  # Exit the loop on disconnect
             except json.JSONDecodeError as e:
                 application_logger.error(
                     f"❌ JSON decode error in Wyoming protocol for {client_id}: {e}"
@@ -735,12 +817,31 @@ async def ws_endpoint_pcm(
                     f"❌ Protocol error for {client_id}: {e}"
                 )
                 continue  # Skip this message but don't disconnect
+            except RuntimeError as e:
+                # Handle "Cannot call receive once a disconnect message has been received"
+                if "disconnect" in str(e).lower():
+                    application_logger.info(
+                        f"🔌 WebSocket already disconnected for {client_id}: {e}"
+                    )
+                    break  # Exit the loop on disconnect
+                else:
+                    application_logger.error(
+                        f"❌ Runtime error for {client_id}: {e}", exc_info=True
+                    )
+                    continue
             except Exception as e:
                 application_logger.error(
                     f"❌ Unexpected error processing message for {client_id}: {e}", exc_info=True
                 )
-                # Continue processing instead of breaking
-                continue
+                # Check if it's a connection-related error
+                error_msg = str(e).lower()
+                if "disconnect" in error_msg or "closed" in error_msg or "receive" in error_msg:
+                    application_logger.info(
+                        f"🔌 Connection issue detected for {client_id}, exiting loop"
+                    )
+                    break
+                else:
+                    continue  # Skip this message for other errors
                 
     except WebSocketDisconnect:
         application_logger.info(
@@ -778,7 +879,7 @@ async def health_check():
         "services": {},
         "config": {
             "mongodb_uri": MONGODB_URI,
-            "qdrant_url": f"http://{QDRANT_BASE_URL}:6333",
+            "qdrant_url": f"http://{QDRANT_BASE_URL}:{QDRANT_PORT}",
             "transcription_service": (
                 f"Speech to Text ({transcription_provider.name})"
                 if transcription_provider
@@ -1024,3 +1125,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     application_logger.info("Starting Omi unified service at ws://%s:%s/ws", host, port)
     uvicorn.run("main:app", host=host, port=port, reload=False)
+

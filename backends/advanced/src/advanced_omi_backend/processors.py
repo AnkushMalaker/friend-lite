@@ -808,7 +808,7 @@ class ProcessorManager:
                                 "client_id": item.client_id,
                                 "audio_uuid": item.audio_uuid,
                                 "type": "memory",
-                                "timeout": 300.0,  # 5 minutes
+                                "timeout": 3600,  # 60 minutes
                             },
                         )
 
@@ -891,20 +891,34 @@ class ProcessorManager:
                     item.audio_uuid,
                     item.user_id,
                     item.user_email,
+                    allow_update=True,
                     db_helper=None,  # Using ConversationRepository now
                 ),
-                timeout=300.0,  # 5 minutes
+                timeout=3600,  # 60 minutes
             )
 
             if memory_result:
                 # Check if this was a successful result with actual memories created
                 success, created_memory_ids = memory_result
+                logger.info(f"Memory result: {memory_result}")
 
                 if success and created_memory_ids:
                     # Memories were actually created
                     audio_logger.info(
                         f"✅ Successfully processed memory for {item.audio_uuid} - created {len(created_memory_ids)} memories"
                     )
+
+                    # Add memory references to MongoDB conversation document
+                    try:
+                        for memory_id in created_memory_ids:
+                            await conversation_repo.add_memory_reference(
+                                item.audio_uuid, memory_id, "created"
+                            )
+                        audio_logger.info(
+                            f"📝 Added {len(created_memory_ids)} memory references to MongoDB for {item.audio_uuid}"
+                        )
+                    except Exception as e:
+                        audio_logger.warning(f"Failed to add memory references to MongoDB: {e}")
 
                     # Update database memory processing status to completed
                     try:
