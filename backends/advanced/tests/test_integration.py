@@ -1579,7 +1579,7 @@ Generated Transcript ({len(transcription)} chars):
         logger.info(f"  📤 Audio Upload:           {phase_times['audio_upload']:>6.2f}s")
         logger.info(f"  🎤 Transcription:          {phase_times['transcription_processing']:>6.2f}s")
         logger.info(f"  🧠 Memory Extraction:      {phase_times['memory_extraction']:>6.2f}s")
-        logger.info(f"  💬 Chat Integration:       {phase_times['chat_integration']:>6.2f}s")
+        # logger.info(f"  💬 Chat Integration:       {phase_times['chat_integration']:>6.2f}s")
         logger.info(f"  {'─' * 35}")
         logger.info(f"  🏁 TOTAL TEST TIME:        {total_test_time:>6.2f}s ({total_test_time/60:.1f}m)")
         logger.info("")
