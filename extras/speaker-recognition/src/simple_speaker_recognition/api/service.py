@@ -87,6 +87,10 @@ async def lifespan(app: FastAPI):
     auth.enrollment_audio_dir.mkdir(parents=True, exist_ok=True)
     log.info("Enrollment audio directory ready: %s", auth.enrollment_audio_dir)
     
+    # Ensure admin user exists
+    admin_user_id = speaker_db.ensure_admin_user()
+    log.info("Admin user ready ✔ – user_id=%s", admin_user_id)
+    
     # Yield control to the application
     yield
     
