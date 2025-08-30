@@ -159,6 +159,69 @@ class ProcessorManager:
 
         logger.info("All processors started successfully")
 
+    async def _should_process_memory(self, user_id: str, audio_uuid: str) -> tuple[bool, str]:
+        """
+        Determine if memory processing should proceed based on primary speakers configuration.
+        
+        Implements graceful degradation:
+        - No primary speakers configured → Process all (True)
+        - Speaker service unavailable → Process all (True) 
+        - No speakers identified → Process all (True)
+        - Primary speakers found → Process (True)
+        - Only non-primary speakers → Skip (False)
+        
+        Args:
+            user_id: User ID to check primary speakers configuration
+            audio_uuid: Audio UUID to check transcript speakers
+            
+        Returns:
+            Tuple of (should_process: bool, reason: str)
+        """
+        try:
+            # Get user's primary speaker configuration
+            from advanced_omi_backend.users import get_user_by_id
+            
+            user = await get_user_by_id(user_id)
+            if not user or not user.primary_speakers:
+                return True, "No primary speakers configured - processing all conversations"
+            
+            audio_logger.info(f"🔍 Checking primary speakers filter for {audio_uuid} - user has {len(user.primary_speakers)} primary speakers configured")
+            
+            # Get transcript with speaker identification
+            chunk = await self.repository.get_chunk_by_audio_uuid(audio_uuid)
+            if not chunk or not chunk.get('transcript'):
+                return True, "No transcript data available - processing conversation"
+            
+            # Extract speakers from transcript segments
+            transcript_speakers = set()
+            total_segments = 0
+            identified_segments = 0
+            
+            for segment in chunk['transcript']:
+                total_segments += 1
+                if 'identified_as' in segment and segment['identified_as'] and segment['identified_as'] != 'Unknown':
+                    transcript_speakers.add(segment['identified_as'])
+                    identified_segments += 1
+            
+            if not transcript_speakers:
+                return True, f"No speakers identified in transcript ({identified_segments}/{total_segments} segments) - processing conversation"
+            
+            # Check if any primary speakers are present
+            primary_speaker_names = {ps['name'] for ps in user.primary_speakers}
+            found_primary_speakers = transcript_speakers.intersection(primary_speaker_names)
+            
+            if found_primary_speakers:
+                audio_logger.info(f"✅ Primary speakers found in conversation: {found_primary_speakers} - processing memory")
+                return True, f"Primary speakers detected: {', '.join(found_primary_speakers)}"
+            else:
+                audio_logger.info(f"❌ No primary speakers found - transcript speakers: {transcript_speakers}, primary speakers: {primary_speaker_names} - skipping memory processing")
+                return False, f"Only non-primary speakers found: {', '.join(transcript_speakers)}"
+                
+        except Exception as e:
+            # On any error, default to processing (fail-safe)
+            audio_logger.warning(f"Error checking primary speakers filter for {audio_uuid}: {e} - defaulting to process conversation")
+            return True, f"Error in speaker filtering: {str(e)} - processing conversation as fallback"
+
     async def shutdown(self):
         """Shutdown all processors gracefully."""
         logger.info("Shutting down processors...")
@@ -875,6 +938,31 @@ class ProcessorManager:
                 return None
 
             # Debug tracking removed for cleaner architecture
+
+            # Check if memory processing should proceed based on primary speakers configuration
+            should_process, filter_reason = await self._should_process_memory(item.user_id, item.audio_uuid)
+            audio_logger.info(f"🎯 Speaker filter decision for {item.audio_uuid}: {filter_reason}")
+            
+            if not should_process:
+                # Update memory processing status to skipped
+                await self.repository.update_memory_processing_status(
+                    item.audio_uuid, "SKIPPED", error_message=filter_reason
+                )
+                
+                # Track completion
+                self.track_processing_stage(
+                    item.client_id,
+                    "memory",
+                    "completed",
+                    {
+                        "audio_uuid": item.audio_uuid,
+                        "status": "skipped",
+                        "reason": filter_reason,
+                        "completed_at": time.time(),
+                    },
+                )
+                audio_logger.info(f"⏭️ Skipped memory processing for {item.audio_uuid}: {filter_reason}")
+                return None
 
             # Lazy import memory service
             if self.memory_service is None:

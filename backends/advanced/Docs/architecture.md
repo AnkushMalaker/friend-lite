@@ -4,7 +4,7 @@
 
 ## System Overview
 
-Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, and extracts memories. The system features a FastAPI backend with WebSocket audio streaming, a Streamlit web dashboard for management, and complete user authentication with role-based access control.
+Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, and extracts memories. The system features a FastAPI backend with WebSocket audio streaming, a modern React web dashboard with advanced search capabilities, and complete user authentication with role-based access control.
 
 **Core Implementation**: The complete system is implemented in `src/advanced_omi_backend/main.py` with supporting services in dedicated modules, using a modular router/controller architecture pattern.
 
@@ -189,11 +189,14 @@ graph TB
 
 > 📖 **Read more**: [Authentication Architecture](./auth.md) for complete authentication system details
 
-#### Streamlit Dashboard (`webui/streamlit_app.py`)
-- **User-Friendly Interface**: Complete web-based management interface
-- **Authentication Integration**: Login with backend JWT tokens or Google OAuth
+#### React Dashboard (`webui/`)
+- **Modern Interface**: Complete React/TypeScript web-based management interface
+- **Advanced Memory Search**: Semantic search with relevance threshold filtering and live results
+- **Memory Count Display**: Total count tracking with dual-layer filtering capabilities
+- **Authentication Integration**: Login with backend JWT tokens and user management
 - **Real-Time Monitoring**: Live client status and conversation management
-- **Data Management**: User, conversation, and memory interfaces
+- **Live Recording**: Real-time audio recording with WebSocket streaming (HTTPS)
+- **Data Management**: User, conversation, and memory interfaces with enhanced UX
 - **Audio Playback**: Smart audio player with original/cropped audio options
 - **System Health**: Visual service status and configuration display
 

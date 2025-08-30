@@ -2,13 +2,18 @@
 
 ## Quick Start
 
-**Quick start:**
+**Interactive setup (recommended):**
 1. Go to `backends/advanced/` for the main application
-2. Copy `.env.template` to `.env` and configure your API keys
-3. Run `docker compose up --build -d`
-4. Visit `http://localhost:3000` for the web interface
+2. Run `./init.sh` to configure all services with guided prompts
+3. Run `docker compose up --build -d` to start the system
+4. Visit `http://localhost:5173` for the React web dashboard
 
-**Documentation:** See `CLAUDE.md` and `backends/advanced/Docs/`
+**Manual setup (alternative):**
+1. Copy `.env.template` to `.env` and configure your API keys manually
+2. Set up transcription provider (Deepgram/Mistral/Offline), LLM provider (OpenAI/Ollama), and memory provider
+3. Start services and optional extras as needed
+
+**Documentation:** See `CLAUDE.md` and `backends/advanced/Docs/quickstart.md` for detailed setup
 
 ## Overview
 Friend-Lite provides essential components for developers working with OMI-compatible audio devices:
@@ -41,6 +46,9 @@ Friend-Lite supports AI-powered personal systems through multiple OMI-compatible
 **Core Features:**
 - **Advanced memory system** with pluggable providers (Friend-Lite native or OpenMemory MCP)
 - **Memory extraction** from conversations with individual fact storage
+- **Semantic memory search** with relevance threshold filtering and live results
+- **Memory count display** with total count tracking from native providers
+- **Speaker-based memory filtering** to control processing based on participant presence
 - **Action item detection** and tracking  
 - **Home automation** integration
 - **Multi-device support** for comprehensive audio capture
@@ -70,6 +78,7 @@ DevKit2 streams audio via Bluetooth using OPUS codec. The processing pipeline in
 - LLM-based conversation analysis (OpenAI or local Ollama)
 - **Dual memory system**: Friend-Lite native or OpenMemory MCP integration
 - Enhanced memory extraction with individual fact storage
+- **Semantic search** with relevance scoring and threshold filtering
 - Smart deduplication and memory updates (ADD/UPDATE/DELETE)
 - Action item detection
 
@@ -119,12 +128,14 @@ Choose one based on your needs:
 - Audio processing pipeline with real-time WebSocket support
 - **Pluggable memory system**: Choose between Friend-Lite native or OpenMemory MCP
 - Enhanced memory extraction with individual fact storage (no generic fallbacks)
+- **Semantic memory search** with relevance threshold filtering and total count display
+- **Speaker-based memory filtering**: Optional control over processing based on participant presence
 - Smart memory updates with LLM-driven action proposals (ADD/UPDATE/DELETE)
 - Speaker recognition and enrollment
 - Action items extraction from conversations
 - Audio cropping (removes silence, keeps speech)
 - Conversation management with session timeouts
-- Web UI for management and monitoring
+- Modern React web UI with live recording and advanced search
 - Multiple ASR options (Deepgram API + offline ASR)
 - MongoDB for structured data storage
 - RESTful API for all operations

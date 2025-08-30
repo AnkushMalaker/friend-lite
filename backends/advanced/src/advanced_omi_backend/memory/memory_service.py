@@ -272,6 +272,28 @@ class MemoryService(MemoryServiceBase):
             memory_logger.error(f"Get all memories failed: {e}")
             return []
 
+    async def count_memories(self, user_id: str) -> Optional[int]:
+        """Count total number of memories for a user.
+        
+        Uses the vector store's native count capabilities.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Total count of memories for the user, or None if not supported
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            count = await self.vector_store.count_memories(user_id)
+            memory_logger.info(f"🔢 Total {count} memories for user {user_id}")
+            return count
+        except Exception as e:
+            memory_logger.error(f"Count memories failed: {e}")
+            return None
+
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a specific memory by ID.
         

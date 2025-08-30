@@ -79,6 +79,10 @@ export const conversationsApi = {
 export const memoriesApi = {
   getAll: (userId?: string) => api.get('/api/memories', { params: userId ? { user_id: userId } : {} }),
   getUnfiltered: (userId?: string) => api.get('/api/memories/unfiltered', { params: userId ? { user_id: userId } : {} }),
+  search: (query: string, userId?: string, limit: number = 20) => 
+    api.get('/api/memories/search', { 
+      params: { query, ...(userId && { user_id: userId }), limit } 
+    }),
   delete: (id: string) => api.delete(`/api/memories/${id}`),
 }
 
@@ -150,4 +154,19 @@ export const chatApi = {
       body: JSON.stringify(requestBody)
     })
   }
+}
+
+export const speakerApi = {
+  // Get current user's speaker configuration
+  getSpeakerConfiguration: () => api.get('/api/speaker-configuration'),
+  
+  // Update current user's speaker configuration
+  updateSpeakerConfiguration: (primarySpeakers: Array<{speaker_id: string, name: string, user_id: number}>) => 
+    api.post('/api/speaker-configuration', primarySpeakers),
+    
+  // Get enrolled speakers from speaker recognition service  
+  getEnrolledSpeakers: () => api.get('/api/enrolled-speakers'),
+  
+  // Check speaker service status (admin only)
+  getSpeakerServiceStatus: () => api.get('/api/speaker-service-status'),
 }

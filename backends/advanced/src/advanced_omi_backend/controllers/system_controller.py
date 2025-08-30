@@ -912,3 +912,142 @@ async def save_diarization_settings(settings: dict):
         return JSONResponse(
             status_code=500, content={"error": f"Failed to save settings: {str(e)}"}
         )
+
+
+async def get_speaker_configuration(user: User):
+    """Get current user's primary speakers configuration."""
+    try:
+        return {
+            "primary_speakers": user.primary_speakers,
+            "user_id": user.user_id,
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Error getting speaker configuration for user {user.user_id}: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get speaker configuration: {str(e)}"}
+        )
+
+
+async def update_speaker_configuration(user: User, primary_speakers: list[dict]):
+    """Update current user's primary speakers configuration."""
+    try:
+        # Validate speaker data format
+        for speaker in primary_speakers:
+            if not isinstance(speaker, dict):
+                return JSONResponse(
+                    status_code=400, content={"error": "Each speaker must be a dictionary"}
+                )
+            
+            required_fields = ["speaker_id", "name", "user_id"]
+            for field in required_fields:
+                if field not in speaker:
+                    return JSONResponse(
+                        status_code=400, content={"error": f"Missing required field: {field}"}
+                    )
+        
+        # Add timestamp to each speaker
+        from datetime import UTC, datetime
+        for speaker in primary_speakers:
+            speaker["selected_at"] = datetime.now(UTC).isoformat()
+        
+        # Update user model
+        user.primary_speakers = primary_speakers
+        await user.save()
+        
+        logger.info(f"Updated primary speakers configuration for user {user.user_id}: {len(primary_speakers)} speakers")
+        
+        return {
+            "message": "Primary speakers configuration updated successfully",
+            "primary_speakers": primary_speakers,
+            "count": len(primary_speakers),
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error updating speaker configuration for user {user.user_id}: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to update speaker configuration: {str(e)}"}
+        )
+
+
+async def get_enrolled_speakers(user: User):
+    """Get enrolled speakers from speaker recognition service."""
+    try:
+        from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
+        
+        # Initialize speaker recognition client
+        speaker_client = SpeakerRecognitionClient()
+        
+        if not speaker_client.enabled:
+            return {
+                "speakers": [],
+                "service_available": False,
+                "message": "Speaker recognition service is not configured or disabled",
+                "status": "success"
+            }
+        
+        # Get enrolled speakers - using hardcoded user_id=1 for now (as noted in speaker_recognition_client.py)
+        speakers = await speaker_client.get_enrolled_speakers(user_id="1")
+        
+        return {
+            "speakers": speakers.get("speakers", []) if speakers else [],
+            "service_available": True,
+            "message": "Successfully retrieved enrolled speakers",
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting enrolled speakers for user {user.user_id}: {e}")
+        return {
+            "speakers": [],
+            "service_available": False,
+            "message": f"Failed to retrieve speakers: {str(e)}",
+            "status": "error"
+        }
+
+
+async def get_speaker_service_status():
+    """Check speaker recognition service health status."""
+    try:
+        from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
+        
+        # Initialize speaker recognition client
+        speaker_client = SpeakerRecognitionClient()
+        
+        if not speaker_client.enabled:
+            return {
+                "service_available": False,
+                "healthy": False,
+                "message": "Speaker recognition service is not configured or disabled",
+                "status": "disabled"
+            }
+        
+        # Perform health check
+        health_result = await speaker_client.health_check()
+        
+        if health_result:
+            return {
+                "service_available": True,
+                "healthy": True,
+                "message": "Speaker recognition service is healthy",
+                "service_url": speaker_client.service_url,
+                "status": "healthy"
+            }
+        else:
+            return {
+                "service_available": False,
+                "healthy": False,
+                "message": "Speaker recognition service is not responding",
+                "service_url": speaker_client.service_url,
+                "status": "unhealthy"
+            }
+        
+    except Exception as e:
+        logger.error(f"Error checking speaker service status: {e}")
+        return {
+            "service_available": False,
+            "healthy": False,
+            "message": f"Health check failed: {str(e)}",
+            "status": "error"
+        }

@@ -27,8 +27,21 @@ async def get_memories(user: User, limit: int, user_id: Optional[str] = None):
 
         # Execute memory retrieval directly (now async)
         memories = await memory_service.get_all_memories(target_user_id, limit)
+        
+        # Get total count if supported (graceful fallback)
+        total_count = None
+        try:
+            if hasattr(memory_service, 'count_memories'):
+                total_count = await memory_service.count_memories(target_user_id)
+        except Exception as e:
+            audio_logger.warning(f"Count memories not supported or failed: {e}")
 
-        return {"memories": memories, "count": len(memories), "user_id": target_user_id}
+        return {
+            "memories": memories, 
+            "count": len(memories), 
+            "total_count": total_count,
+            "user_id": target_user_id
+        }
 
     except Exception as e:
         audio_logger.error(f"Error fetching memories: {e}", exc_info=True)

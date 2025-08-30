@@ -6,12 +6,19 @@ This module provides concrete implementations of vector stores for:
 Vector stores handle storage, retrieval, and similarity search of memory embeddings.
 """
 
-import time
 import logging
+import time
 import uuid
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-from ..base import VectorStoreBase, MemoryEntry
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    FilterSelector,
+    MatchValue,
+)
+
+from ..base import MemoryEntry, VectorStoreBase
 
 memory_logger = logging.getLogger("memory_service")
 
@@ -144,8 +151,6 @@ class QdrantVectorStore(VectorStoreBase):
     async def search_memories(self, query_embedding: List[float], user_id: str, limit: int) -> List[MemoryEntry]:
         """Search memories in Qdrant."""
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-            
             # Filter by user_id
             search_filter = Filter(
                 must=[
@@ -169,8 +174,8 @@ class QdrantVectorStore(VectorStoreBase):
                     id=str(result.id),
                     content=result.payload.get("content", ""),
                     metadata=result.payload.get("metadata", {}),
-                    # Convert Qdrant cosine distance to similarity [0..1]
-                    score=(1.0 - result.score) if result.score is not None else None,
+                    # Qdrant returns similarity scores directly (higher = more similar)
+                    score=result.score if result.score is not None else None,
                     created_at=result.payload.get("created_at")
                 )
                 memories.append(memory)
@@ -184,8 +189,6 @@ class QdrantVectorStore(VectorStoreBase):
     async def get_memories(self, user_id: str, limit: int) -> List[MemoryEntry]:
         """Get all memories for a user from Qdrant."""
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-            
             # Filter by user_id
             search_filter = Filter(
                 must=[
@@ -248,8 +251,6 @@ class QdrantVectorStore(VectorStoreBase):
     async def delete_user_memories(self, user_id: str) -> int:
         """Delete all memories for a user from Qdrant."""
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
-            
             # First count memories to delete
             memories = await self.get_memories(user_id, limit=10000)
             count = len(memories)
@@ -334,6 +335,32 @@ class QdrantVectorStore(VectorStoreBase):
         except Exception as e:
             memory_logger.error(f"Qdrant update memory failed: {e}")
             return False
+
+    async def count_memories(self, user_id: str) -> int:
+        """Count total number of memories for a user in Qdrant using native count API."""
+        try:
+            
+            search_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.user_id", 
+                        match=MatchValue(value=user_id)
+                    )
+                ]
+            )
+            
+            # Use Qdrant's native count API (documented in qdrant/qdrant/docs)
+            # Count operation: CountPoints -> CountResponse with count result
+            result = await self.client.count(
+                collection_name=self.collection_name,
+                count_filter=search_filter
+            )
+            
+            return result.count
+            
+        except Exception as e:
+            memory_logger.error(f"Qdrant count memories failed: {e}")
+            return 0
 
 
 

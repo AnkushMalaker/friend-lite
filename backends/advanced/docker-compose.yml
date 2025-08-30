@@ -112,8 +112,6 @@ services:
         condition: service_healthy
       webui:
         condition: service_started
-    profiles:
-      - https
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "-k", "https://localhost/health"]

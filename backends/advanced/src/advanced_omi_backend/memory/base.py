@@ -133,6 +133,20 @@ class MemoryServiceBase(ABC):
         """
         pass
     
+    async def count_memories(self, user_id: str) -> Optional[int]:
+        """Count total number of memories for a user.
+        
+        This is an optional method that providers can implement for efficient
+        counting. Returns None if the provider doesn't support counting.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Total count of memories for the user, or None if not supported
+        """
+        return None
+    
     @abstractmethod
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a specific memory by ID.
@@ -305,6 +319,20 @@ class VectorStoreBase(ABC):
             List of MemoryEntry objects for the user
         """
         pass
+    
+    async def count_memories(self, user_id: str) -> int:
+        """Count total number of memories for a user.
+        
+        Default implementation returns 0. Vector stores should override
+        this method to provide efficient counting if supported.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Total count of memories for the user
+        """
+        return 0
     
     @abstractmethod
     async def update_memory(

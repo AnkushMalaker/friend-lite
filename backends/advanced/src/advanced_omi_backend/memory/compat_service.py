@@ -134,6 +134,21 @@ class MemoryService:
             for memory in memories
         ]
     
+    async def count_memories(self, user_id: str) -> Optional[int]:
+        """Count total number of memories for a user.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Total count of memories for the user, or None if not supported
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        # Delegate to the core service
+        return await self._service.count_memories(user_id)
+    
     async def get_all_memories_unfiltered(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Get all memories without filtering - same as get_all_memories in new implementation.
         

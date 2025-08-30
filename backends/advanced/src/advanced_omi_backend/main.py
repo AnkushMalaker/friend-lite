@@ -906,6 +906,11 @@ async def health_check():
 
     overall_healthy = True
     critical_services_healthy = True
+    
+    # Get configuration once at the start
+    memory_provider = os.getenv("MEMORY_PROVIDER", "friend_lite")
+    speaker_service_url = os.getenv("SPEAKER_SERVICE_URL")
+    openmemory_mcp_url = os.getenv("OPENMEMORY_MCP_URL")
 
     # Check MongoDB (critical service)
     try:
@@ -961,34 +966,55 @@ async def health_check():
         }
         overall_healthy = False
 
-    # Check mem0 (depends on Ollama and Qdrant)
-    try:
-        # Test memory service connection with timeout
-        test_success = await memory_service.test_connection()
-        if test_success:
-            health_status["services"]["mem0"] = {
-                "status": "✅ Connected",
-                "healthy": True,
-                "critical": False,
-            }
-        else:
-            health_status["services"]["mem0"] = {
-                "status": "⚠️ Connection Test Failed",
+    # Check memory service (provider-dependent)
+    if memory_provider == "friend_lite":
+        try:
+            # Test Friend-Lite memory service connection with timeout
+            test_success = await memory_service.test_connection()
+            if test_success:
+                health_status["services"]["memory_service"] = {
+                    "status": "✅ Friend-Lite Memory Connected",
+                    "healthy": True,
+                    "provider": "friend_lite",
+                    "critical": False,
+                }
+            else:
+                health_status["services"]["memory_service"] = {
+                    "status": "⚠️ Friend-Lite Memory Test Failed",
+                    "healthy": False,
+                    "provider": "friend_lite",
+                    "critical": False,
+                }
+                overall_healthy = False
+        except asyncio.TimeoutError:
+            health_status["services"]["memory_service"] = {
+                "status": "⚠️ Friend-Lite Memory Timeout (60s) - Check Qdrant",
                 "healthy": False,
+                "provider": "friend_lite",
                 "critical": False,
             }
             overall_healthy = False
-    except asyncio.TimeoutError:
-        health_status["services"]["mem0"] = {
-            "status": "⚠️ Connection Test Timeout (60s) - Depends on Ollama/Qdrant",
-            "healthy": False,
+        except Exception as e:
+            health_status["services"]["memory_service"] = {
+                "status": f"⚠️ Friend-Lite Memory Failed: {str(e)}",
+                "healthy": False,
+                "provider": "friend_lite",
+                "critical": False,
+            }
+            overall_healthy = False
+    elif memory_provider == "openmemory_mcp":
+        # OpenMemory MCP check is handled separately above
+        health_status["services"]["memory_service"] = {
+            "status": "✅ Using OpenMemory MCP",
+            "healthy": True,
+            "provider": "openmemory_mcp",
             "critical": False,
         }
-        overall_healthy = False
-    except Exception as e:
-        health_status["services"]["mem0"] = {
-            "status": f"⚠️ Connection Test Failed: {str(e)} - Check Ollama/Qdrant services",
+    else:
+        health_status["services"]["memory_service"] = {
+            "status": f"❌ Unknown memory provider: {memory_provider}",
             "healthy": False,
+            "provider": memory_provider,
             "critical": False,
         }
         overall_healthy = False
@@ -1033,7 +1059,6 @@ async def health_check():
         overall_healthy = False
 
     # Check Speaker Recognition service (non-critical - optional feature)
-    speaker_service_url = os.getenv("SPEAKER_SERVICE_URL")
     if speaker_service_url:
         try:
             # Make a health check request to the speaker service
@@ -1069,6 +1094,50 @@ async def health_check():
                 "status": f"⚠️ Connection Failed: {str(e)}",
                 "healthy": False,
                 "url": speaker_service_url,
+                "critical": False,
+            }
+            overall_healthy = False
+
+    # Check OpenMemory MCP service (if configured)
+    if memory_provider == "openmemory_mcp" and openmemory_mcp_url:
+        try:
+            # Make a health check request to the OpenMemory MCP service
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{openmemory_mcp_url}/docs", timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status == 200:
+                        health_status["services"]["openmemory_mcp"] = {
+                            "status": "✅ Connected",
+                            "healthy": True,
+                            "url": openmemory_mcp_url,
+                            "provider": "openmemory_mcp",
+                            "critical": False,
+                        }
+                    else:
+                        health_status["services"]["openmemory_mcp"] = {
+                            "status": f"⚠️ Unhealthy: HTTP {response.status}",
+                            "healthy": False,
+                            "url": openmemory_mcp_url,
+                            "provider": "openmemory_mcp",
+                            "critical": False,
+                        }
+                        overall_healthy = False
+        except asyncio.TimeoutError:
+            health_status["services"]["openmemory_mcp"] = {
+                "status": "⚠️ Connection Timeout (5s)",
+                "healthy": False,
+                "url": openmemory_mcp_url,
+                "provider": "openmemory_mcp",
+                "critical": False,
+            }
+            overall_healthy = False
+        except Exception as e:
+            health_status["services"]["openmemory_mcp"] = {
+                "status": f"⚠️ Connection Failed: {str(e)}",
+                "healthy": False,
+                "url": openmemory_mcp_url,
+                "provider": "openmemory_mcp",
                 "critical": False,
             }
             overall_healthy = False
