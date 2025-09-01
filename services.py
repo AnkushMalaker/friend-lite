@@ -79,19 +79,52 @@ def run_compose_command(service_name, command, build=False):
         cmd.extend(['ps'])
     
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=service_path,
-            capture_output=True,
-            text=True,
-            check=False
-        )
-        
-        if result.returncode == 0:
-            return True
+        # For commands that need real-time output (build), stream to console
+        if build and command == 'up':
+            console.print(f"[dim]Building {service_name} containers...[/dim]")
+            process = subprocess.Popen(
+                cmd,
+                cwd=service_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Stream output line by line
+            assert process.stdout is not None
+            for line in process.stdout:
+                line = line.rstrip()
+                # Add some basic formatting for Docker output
+                if 'Building' in line or 'Creating' in line:
+                    console.print(f"  [cyan]{line}[/cyan]")
+                elif 'error' in line.lower() or 'failed' in line.lower():
+                    console.print(f"  [red]{line}[/red]")
+                elif 'warning' in line.lower():
+                    console.print(f"  [yellow]{line}[/yellow]")
+                elif 'Successfully' in line or 'Started' in line:
+                    console.print(f"  [green]{line}[/green]")
+                else:
+                    console.print(f"  [dim]{line}[/dim]")
+            
+            # Wait for process to complete
+            process.wait()
+            return process.returncode == 0
         else:
-            console.print(f"[red]❌ Command failed: {result.stderr}[/red]")
-            return False
+            # For non-build commands, run silently unless there's an error
+            result = subprocess.run(
+                cmd,
+                cwd=service_path,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                return True
+            else:
+                console.print(f"[red]❌ Command failed: {result.stderr}[/red]")
+                return False
             
     except Exception as e:
         console.print(f"[red]❌ Error running command: {e}[/red]")
