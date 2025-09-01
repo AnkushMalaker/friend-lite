@@ -269,7 +269,6 @@ class FriendLiteSetup:
         """Configure network settings"""
         self.print_section("Network Configuration")
 
-        self.config["HOST_IP"] = self.prompt_value("Host IP for services", "localhost")
         self.config["BACKEND_PUBLIC_PORT"] = self.prompt_value("Backend port", "8000")
         self.config["WEBUI_PORT"] = self.prompt_value("Web UI port", "5173")
 
@@ -364,7 +363,6 @@ SPEAKER_SERVICE_URL={self.config.get('SPEAKER_SERVICE_URL', '')}
 PARAKEET_ASR_URL={self.config.get('PARAKEET_ASR_URL', '')}
 
 # Network Configuration
-HOST_IP={self.config.get('HOST_IP', 'localhost')}
 BACKEND_PUBLIC_PORT={self.config.get('BACKEND_PUBLIC_PORT', '8000')}
 WEBUI_PORT={self.config.get('WEBUI_PORT', '5173')}
 
@@ -403,26 +401,42 @@ LOG_LEVEL=INFO
         self.console.print(f"✅ Transcription: {self.config.get('TRANSCRIPTION_PROVIDER', 'Not configured')}")
         self.console.print(f"✅ LLM Provider: {self.config.get('LLM_PROVIDER', 'Not configured')}")
         self.console.print(f"✅ Memory Provider: {self.config.get('MEMORY_PROVIDER', 'friend_lite')}")
-        self.console.print(f"✅ Backend URL: http://{self.config.get('HOST_IP', 'localhost')}:{self.config.get('BACKEND_PUBLIC_PORT', '8000')}")
-        self.console.print(f"✅ Dashboard URL: http://{self.config.get('HOST_IP', 'localhost')}:{self.config.get('WEBUI_PORT', '5173')}")
+        # Auto-determine URLs based on HTTPS configuration
+        if self.config.get('HTTPS_ENABLED') == 'true':
+            server_ip = self.config.get('SERVER_IP', 'localhost')
+            self.console.print(f"✅ Backend URL: https://{server_ip}/")
+            self.console.print(f"✅ Dashboard URL: https://{server_ip}/")
+        else:
+            backend_port = self.config.get('BACKEND_PUBLIC_PORT', '8000')
+            webui_port = self.config.get('WEBUI_PORT', '5173')
+            self.console.print(f"✅ Backend URL: http://localhost:{backend_port}")
+            self.console.print(f"✅ Dashboard URL: http://localhost:{webui_port}")
 
     def show_next_steps(self):
         """Show next steps"""
         self.print_section("Next Steps")
         self.console.print()
         
-        host_ip = self.config.get('HOST_IP', 'localhost')
-        webui_port = self.config.get('WEBUI_PORT', '5173')
-        backend_port = self.config.get('BACKEND_PUBLIC_PORT', '8000')
-        
         self.console.print("1. Start the main services:")
         self.console.print("   [cyan]docker compose up --build -d[/cyan]")
         self.console.print()
-        self.console.print("2. Access the dashboard:")
-        self.console.print(f"   [cyan]http://{host_ip}:{webui_port}[/cyan]")
-        self.console.print()
-        self.console.print("3. Check service health:")
-        self.console.print(f"   [cyan]curl http://{host_ip}:{backend_port}/health[/cyan]")
+        
+        # Auto-determine URLs for next steps
+        if self.config.get('HTTPS_ENABLED') == 'true':
+            server_ip = self.config.get('SERVER_IP', 'localhost')
+            self.console.print("2. Access the dashboard:")
+            self.console.print(f"   [cyan]https://{server_ip}/[/cyan]")
+            self.console.print()
+            self.console.print("3. Check service health:")
+            self.console.print(f"   [cyan]curl -k https://{server_ip}/health[/cyan]")
+        else:
+            webui_port = self.config.get('WEBUI_PORT', '5173')
+            backend_port = self.config.get('BACKEND_PUBLIC_PORT', '8000')
+            self.console.print("2. Access the dashboard:")
+            self.console.print(f"   [cyan]http://localhost:{webui_port}[/cyan]")
+            self.console.print()
+            self.console.print("3. Check service health:")
+            self.console.print(f"   [cyan]curl http://localhost:{backend_port}/health[/cyan]")
 
         if self.config.get("MEMORY_PROVIDER") == "openmemory_mcp":
             self.console.print()
