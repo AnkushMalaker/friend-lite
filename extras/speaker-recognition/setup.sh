@@ -21,17 +21,29 @@ read -p "HF Token: " HF_TOKEN
 
 echo ""
 echo "🖥️ Compute Mode"
-echo "  cpu - CPU-only (works everywhere)"  
-echo "  gpu - GPU acceleration (requires NVIDIA+CUDA)"
-read -p "Compute Mode [cpu/gpu]: " COMPUTE_MODE
-COMPUTE_MODE=${COMPUTE_MODE:-cpu}
+echo "  1) CPU-only (works everywhere)"  
+echo "  2) GPU acceleration (requires NVIDIA+CUDA)"
+read -p "Enter choice [1-2] (1): " COMPUTE_CHOICE
+COMPUTE_CHOICE=${COMPUTE_CHOICE:-1}
+
+if [ "$COMPUTE_CHOICE" = "2" ]; then
+    COMPUTE_MODE="gpu"
+else
+    COMPUTE_MODE="cpu"
+fi
 
 echo ""
 echo "🔒 HTTPS Configuration (required for microphone access)"
-echo "  http  - Simple HTTP mode (development, localhost only)"
-echo "  https - HTTPS mode with SSL (production, remote access, microphone access)"
-read -p "Mode [http/https]: " HTTPS_MODE
-HTTPS_MODE=${HTTPS_MODE:-http}
+echo "  1) HTTP mode (development, localhost only)"
+echo "  2) HTTPS mode with SSL (production, remote access, microphone access)"
+read -p "Enter choice [1-2] (1): " HTTPS_CHOICE
+HTTPS_CHOICE=${HTTPS_CHOICE:-1}
+
+if [ "$HTTPS_CHOICE" = "2" ]; then
+    HTTPS_MODE="https"
+else
+    HTTPS_MODE="http"
+fi
 
 # Update .env file
 sed -i "s|HF_TOKEN=.*|HF_TOKEN=$HF_TOKEN|" .env

@@ -285,7 +285,9 @@ class FriendLiteSetup:
         
         if enable_https:
             self.console.print("[blue][INFO][/blue] HTTPS enables microphone access in browsers")
-            server_ip = self.prompt_value("Server IP/Domain for SSL certificate", "localhost")
+            self.console.print("[blue][INFO][/blue] For distributed deployments, use your Tailscale IP (e.g., 100.64.1.2)")
+            self.console.print("[blue][INFO][/blue] For local-only access, use 'localhost'")
+            server_ip = self.prompt_value("Server IP/Domain for SSL certificate (Tailscale IP or localhost)", "localhost")
             
             # Generate SSL certificates
             self.console.print("[blue][INFO][/blue] Generating SSL certificates...")
