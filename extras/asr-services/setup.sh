@@ -13,13 +13,10 @@ else
     echo "ℹ️  .env file already exists, using existing configuration"
 fi
 
-echo "Starting Parakeet ASR service..."
+echo "✅ Parakeet ASR configured!"
+echo "📁 Configuration saved to .env"
 echo ""
-
-# Start Parakeet ASR service
-docker compose up parakeet-asr -d
-
-echo "✅ Parakeet ASR running:"
-echo "  📝 Service URL: http://host.docker.internal:8767"
+echo "🚀 To start: docker compose up --build -d parakeet-asr"
+echo "  📝 Service will be available at: http://host.docker.internal:8767"
 echo ""
-echo "💡 Configure PARAKEET_ASR_URL in your backend's transcription settings"
+echo "💡 Only start if you want to use offline ASR instead of cloud providers"

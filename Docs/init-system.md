@@ -2,7 +2,12 @@
 
 ## Overview
 
-Friend-Lite uses a unified initialization system that allows you to set up services either individually or together through a root orchestrator. The system uses pure delegation - the root orchestrator handles service selection and startup coordination, while each service manages its own configuration.
+Friend-Lite uses a unified initialization system with clean separation of concerns:
+
+- **Configuration** (`init.py`) - Set up service configurations, API keys, and .env files
+- **Service Management** (`services.py`) - Start, stop, and manage running services
+
+The root orchestrator handles service selection and delegates configuration to individual service scripts. **Setup scripts only configure - they don't start services automatically.** This prevents unnecessary resource usage and gives you control over when services actually run.
 
 ## Architecture
 
@@ -91,6 +96,14 @@ When using the orchestrated setup, service URLs are automatically configured:
 
 This eliminates the need to manually configure service URLs when running services on the same machine.
 
+## Key Benefits
+
+✅ **No Unnecessary Building** - Services are only started when you explicitly request them  
+✅ **Resource Efficient** - Parakeet ASR won't start if you're using cloud transcription  
+✅ **Clean Separation** - Configuration vs service management are separate concerns  
+✅ **Unified Control** - Single command to start/stop all services  
+✅ **Selective Starting** - Choose which services to run based on your current needs
+
 ## Service URLs
 
 ### Default Service Endpoints
@@ -107,26 +120,45 @@ Services use `host.docker.internal` for inter-container communication:
 - `http://host.docker.internal:8767` - Parakeet ASR  
 - `http://host.docker.internal:8765` - OpenMemory MCP
 
-## Starting Services
+## Service Management
 
-After running setup, start services with Docker Compose:
+Friend-Lite now separates **configuration** from **service lifecycle management**:
+
+### Unified Service Management
+Use the `services.py` script for all service operations:
 
 ```bash
-# Start Advanced Backend
-cd backends/advanced
-docker compose up --build -d
+# Start all configured services
+python services.py start --all --build
 
-# Start Speaker Recognition  
-cd extras/speaker-recognition
-docker compose up --build -d
+# Start specific services
+python services.py start backend speaker-recognition
 
-# Start ASR Services
-cd extras/asr-services
-docker compose up parakeet -d
+# Check service status
+python services.py status
 
-# Start OpenMemory MCP
-cd extras/openmemory-mcp  
-docker compose up -d
+# Stop all services
+python services.py stop --all
+
+# Stop specific services  
+python services.py stop asr-services openmemory-mcp
+```
+
+### Manual Service Management
+You can also manage services individually:
+
+```bash
+# Advanced Backend
+cd backends/advanced && docker compose up --build -d
+
+# Speaker Recognition  
+cd extras/speaker-recognition && docker compose up --build -d
+
+# ASR Services (only if using offline transcription)
+cd extras/asr-services && docker compose up --build -d
+
+# OpenMemory MCP (only if using openmemory_mcp provider)
+cd extras/openmemory-mcp && docker compose up --build -d
 ```
 
 ## Configuration Files

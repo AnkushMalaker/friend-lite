@@ -3,17 +3,16 @@
 ## Quick Start
 
 **Interactive setup (recommended):**
-1. Go to `backends/advanced/` for the main application
-2. Run `./init.sh` to configure all services with guided prompts
-3. Run `docker compose up --build -d` to start the system
-4. Visit `http://localhost:5173` for the React web dashboard
+1. From the project root, run `uv run --with-requirements setup-requirements.txt python init.py` to configure all services with guided prompts
+2. Run `python services.py start --all --build` to start all configured services
+3. Visit `http://localhost:5173` for the React web dashboard
 
 **Manual setup (alternative):**
-1. Copy `.env.template` to `.env` and configure your API keys manually
-2. Set up transcription provider (Deepgram/Mistral/Offline), LLM provider (OpenAI/Ollama), and memory provider
-3. Start services and optional extras as needed
+1. Go to `backends/advanced/` and copy `.env.template` to `.env`
+2. Configure your API keys and service settings manually
+3. Start with `docker compose up --build -d`
 
-**Documentation:** See `CLAUDE.md` and `backends/advanced/Docs/quickstart.md` for detailed setup
+**Documentation:** See `CLAUDE.md` and `Docs/init-system.md` for detailed setup guide
 
 ## Overview
 Friend-Lite provides essential components for developers working with OMI-compatible audio devices:
@@ -121,7 +120,7 @@ Choose one based on your needs:
 
 ---
 
-#### **Advanced Backend** (`backends/advanced-backend/`) **RECOMMENDED**
+#### **Advanced Backend** (`backends/advanced/`) **RECOMMENDED**
 **Use case:** Production use, full feature set
 
 **Features:**
@@ -215,9 +214,9 @@ Backends and ASR services use standardized audio streaming:
 
 ## For Production Use
 1. Use **Advanced Backend** for full features
-2. Set up the complete stack: MongoDB + Qdrant + Ollama
-3. Access the Web UI for conversation management
-4. Configure speaker enrollment for multi-user scenarios
+2. Run the orchestrated setup: `uv run --with-requirements setup-requirements.txt python init.py`
+3. Start all services: `python services.py start --all --build`
+4. Access the Web UI at http://localhost:5173 for conversation management
 
 ## For OMI Users
 1. Use **OMI-Webhook-Compatible Backend** for easy migration

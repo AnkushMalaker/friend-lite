@@ -186,24 +186,34 @@ def main():
     
     # Next Steps
     console.print("\n📖 [bold]Next Steps:[/bold]")
+    
+    # Service Management Commands
+    console.print("1. Start all configured services:")
+    console.print("   [cyan]uv run --with-requirements setup-requirements.txt python services.py start --all --build[/cyan]")
+    console.print("")
+    console.print("2. Or start individual services:")
+    
+    configured_services = []
     if 'advanced' in selected_services and 'advanced' not in failed_services:
-        console.print("1. Start Advanced Backend:")
-        console.print("   [cyan]cd backends/advanced && docker compose up --build -d[/cyan]")
-        console.print("2. Access dashboard:")
-        console.print("   [cyan]http://localhost:5173[/cyan]")
-    
+        configured_services.append("backend")
     if 'speaker-recognition' in selected_services and 'speaker-recognition' not in failed_services:
-        console.print("3. Start Speaker Recognition:")
-        console.print("   [cyan]cd extras/speaker-recognition && docker compose up -d[/cyan]")
-        console.print("   Service will be available at: http://localhost:8085")
-    
+        configured_services.append("speaker-recognition") 
     if 'asr-services' in selected_services and 'asr-services' not in failed_services:
-        console.print("4. Parakeet ASR service is running:")
-        console.print("   Service available at: http://localhost:8767")
-    
+        configured_services.append("asr-services")
     if 'openmemory-mcp' in selected_services and 'openmemory-mcp' not in failed_services:
-        console.print("5. OpenMemory MCP server is running:")
-        console.print("   [cyan]Web UI: http://localhost:8765[/cyan]")
+        configured_services.append("openmemory-mcp")
+        
+    if configured_services:
+        service_list = " ".join(configured_services)
+        console.print(f"   [cyan]python services.py start {service_list}[/cyan]")
+    
+    console.print("")
+    console.print("3. Check service status:")
+    console.print("   [cyan]python services.py status[/cyan]")
+    
+    console.print("")
+    console.print("4. Stop services when done:")
+    console.print("   [cyan]python services.py stop --all[/cyan]")
     
     console.print(f"\n🚀 [bold]Enjoy Friend-Lite![/bold]")
     

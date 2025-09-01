@@ -13,14 +13,11 @@ else
     echo "ℹ️  .env file already exists, using existing configuration"
 fi
 
-echo "Starting OpenMemory MCP server..."
+echo "✅ OpenMemory MCP configured!"
+echo "📁 Configuration saved to .env"
 echo ""
-
-# Start external server
-docker compose up -d
-
-echo "✅ OpenMemory MCP running!"
+echo "🚀 To start: docker compose up --build -d"
 echo "  🌐 Server: http://host.docker.internal:8765"
 echo "  📱 Web UI: http://localhost:8765"
 echo ""
-echo "💡 Set MEMORY_PROVIDER=openmemory_mcp in your backend configuration"
+echo "💡 Only start if you selected openmemory_mcp as memory provider"
