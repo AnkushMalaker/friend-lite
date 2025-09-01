@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""
+Friend-Lite Root Setup Orchestrator
+Handles service selection and delegation only - no configuration duplication
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+from rich.console import Console
+from rich.prompt import Confirm
+from rich import print as rprint
+
+console = Console()
+
+SERVICES = {
+    'backend': {
+        'advanced': {
+            'path': 'backends/advanced',
+            'cmd': ['uv', 'run', '--with-requirements', 'setup-requirements.txt', 'python', 'init.py'],
+            'description': 'Advanced AI backend with full feature set',
+            'required': True
+        }
+    },
+    'extras': {
+        'speaker-recognition': {
+            'path': 'extras/speaker-recognition',
+            'cmd': ['./setup.sh'],
+            'description': 'Speaker identification and enrollment'
+        },
+        'asr-services': {
+            'path': 'extras/asr-services', 
+            'cmd': ['./setup.sh'],
+            'description': 'Offline speech-to-text (Parakeet)'
+        },
+        'openmemory-mcp': {
+            'path': 'extras/openmemory-mcp',
+            'cmd': ['./setup.sh'], 
+            'description': 'OpenMemory MCP server'
+        }
+    }
+}
+
+def check_service_exists(service_name, service_config):
+    """Check if service directory and script exist"""
+    service_path = Path(service_config['path'])
+    if not service_path.exists():
+        return False, f"Directory {service_path} does not exist"
+    
+    # For advanced backend, check if init.py exists
+    if service_name == 'advanced':
+        script_path = service_path / 'init.py'
+        if not script_path.exists():
+            return False, f"Script {script_path} does not exist"
+    else:
+        # For extras, check if setup.sh exists
+        script_path = service_path / 'setup.sh'
+        if not script_path.exists():
+            return False, f"Script {script_path} does not exist (will be created in Phase 2)"
+    
+    return True, "OK"
+
+def select_services():
+    """Let user select which services to setup"""
+    console.print("🚀 [bold cyan]Friend-Lite Service Setup[/bold cyan]")
+    console.print("Select which services to configure:\n")
+    
+    selected = []
+    
+    # Backend is required
+    console.print("📱 [bold]Backend (Required):[/bold]")
+    console.print("  ✅ Advanced Backend - Full AI features")
+    selected.append('advanced')
+    
+    # Optional extras
+    console.print("\n🔧 [bold]Optional Services:[/bold]")
+    for service_name, service_config in SERVICES['extras'].items():
+        # Check if service exists
+        exists, msg = check_service_exists(service_name, service_config)
+        if not exists:
+            console.print(f"  ⏸️  {service_config['description']} - [dim]{msg}[/dim]")
+            continue
+        
+        try:
+            enable_service = Confirm.ask(f"  Setup {service_config['description']}?", default=False)
+        except EOFError:
+            console.print("Using default: No")
+            enable_service = False
+            
+        if enable_service:
+            selected.append(service_name)
+    
+    return selected
+
+def run_service_setup(service_name, selected_services):
+    """Execute individual service setup script"""
+    if service_name == 'advanced':
+        service = SERVICES['backend'][service_name]
+        
+        # For advanced backend, pass URLs of other selected services
+        cmd = service['cmd'].copy()
+        if 'speaker-recognition' in selected_services:
+            cmd.extend(['--speaker-service-url', 'http://host.docker.internal:8085'])
+        if 'asr-services' in selected_services:
+            cmd.extend(['--parakeet-asr-url', 'http://host.docker.internal:8767'])
+    else:
+        service = SERVICES['extras'][service_name]
+        cmd = service['cmd']
+    
+    console.print(f"\n🔧 [bold]Setting up {service_name}...[/bold]")
+    
+    # Check if service exists before running
+    exists, msg = check_service_exists(service_name, service)
+    if not exists:
+        console.print(f"❌ {service_name} setup failed: {msg}")
+        return False
+    
+    try:
+        result = subprocess.run(
+            cmd, 
+            cwd=service['path'],
+            check=False
+        )
+        
+        if result.returncode == 0:
+            console.print(f"✅ {service_name} setup completed")
+            return True
+        else:
+            console.print(f"❌ {service_name} setup failed (exit code: {result.returncode})")
+            return False
+            
+    except FileNotFoundError as e:
+        console.print(f"❌ {service_name} setup failed: {e}")
+        return False
+    except Exception as e:
+        console.print(f"❌ {service_name} setup failed: {e}")
+        return False
+
+def show_service_status():
+    """Show which services are available"""
+    console.print("\n📋 [bold]Service Status:[/bold]")
+    
+    # Check backend
+    exists, msg = check_service_exists('advanced', SERVICES['backend']['advanced'])
+    status = "✅" if exists else "❌"
+    console.print(f"  {status} Advanced Backend - {msg}")
+    
+    # Check extras
+    for service_name, service_config in SERVICES['extras'].items():
+        exists, msg = check_service_exists(service_name, service_config)
+        status = "✅" if exists else "⏸️"
+        console.print(f"  {status} {service_config['description']} - {msg}")
+
+def main():
+    """Main orchestration logic"""
+    console.print("🎉 [bold green]Welcome to Friend-Lite![/bold green]\n")
+    
+    # Show what's available
+    show_service_status()
+    
+    # Service Selection
+    selected_services = select_services()
+    
+    if not selected_services:
+        console.print("\n[yellow]No services selected. Exiting.[/yellow]")
+        return
+    
+    # Pure Delegation - Run Each Service Setup
+    console.print(f"\n📋 [bold]Setting up {len(selected_services)} services...[/bold]")
+    
+    success_count = 0
+    failed_services = []
+    
+    for service in selected_services:
+        if run_service_setup(service, selected_services):
+            success_count += 1
+        else:
+            failed_services.append(service)
+    
+    # Final Summary
+    console.print(f"\n🎊 [bold green]Setup Complete![/bold green]")
+    console.print(f"✅ {success_count}/{len(selected_services)} services configured successfully")
+    
+    if failed_services:
+        console.print(f"❌ Failed services: {', '.join(failed_services)}")
+    
+    # Next Steps
+    console.print("\n📖 [bold]Next Steps:[/bold]")
+    if 'advanced' in selected_services and 'advanced' not in failed_services:
+        console.print("1. Start Advanced Backend:")
+        console.print("   [cyan]cd backends/advanced && docker compose up --build -d[/cyan]")
+        console.print("2. Access dashboard:")
+        console.print("   [cyan]http://localhost:5173[/cyan]")
+    
+    if 'speaker-recognition' in selected_services and 'speaker-recognition' not in failed_services:
+        console.print("3. Start Speaker Recognition:")
+        console.print("   [cyan]cd extras/speaker-recognition && docker compose up -d[/cyan]")
+        console.print("   Service will be available at: http://localhost:8085")
+    
+    if 'asr-services' in selected_services and 'asr-services' not in failed_services:
+        console.print("4. Parakeet ASR service is running:")
+        console.print("   Service available at: http://localhost:8767")
+    
+    if 'openmemory-mcp' in selected_services and 'openmemory-mcp' not in failed_services:
+        console.print("5. OpenMemory MCP server is running:")
+        console.print("   [cyan]Web UI: http://localhost:8765[/cyan]")
+    
+    console.print(f"\n🚀 [bold]Enjoy Friend-Lite![/bold]")
+    
+    # Show individual service usage
+    console.print(f"\n💡 [dim]Tip: You can also setup services individually:[/dim]")
+    console.print(f"[dim]   cd backends/advanced && uv run --with-requirements setup-requirements.txt python init.py[/dim]")
+
+if __name__ == "__main__":
+    main()

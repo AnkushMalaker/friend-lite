@@ -9,6 +9,7 @@ import sys
 import getpass
 import secrets
 import shutil
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Any
@@ -21,9 +22,10 @@ from rich import print as rprint
 
 
 class FriendLiteSetup:
-    def __init__(self):
+    def __init__(self, args=None):
         self.console = Console()
         self.config: Dict[str, Any] = {}
+        self.args = args or argparse.Namespace()
         
         # Check if we're in the right directory
         if not Path("pyproject.toml").exists() or not Path("src").exists():
@@ -240,17 +242,27 @@ class FriendLiteSetup:
         """Configure optional services"""
         self.print_section("Optional Services")
 
-        try:
-            enable_speaker = Confirm.ask("Enable Speaker Recognition?", default=False)
-        except EOFError:
-            self.console.print("Using default: No")
-            enable_speaker = False
-            
-        if enable_speaker:
-            speaker_url = self.prompt_value("Speaker Recognition service URL", "http://host.docker.internal:8001")
-            self.config["SPEAKER_SERVICE_URL"] = speaker_url
-            self.console.print("[green][SUCCESS][/green] Speaker Recognition configured")
-            self.console.print("[blue][INFO][/blue] Start with: cd ../../extras/speaker-recognition && docker compose up -d")
+        # Check if speaker service URL provided via args
+        if hasattr(self.args, 'speaker_service_url') and self.args.speaker_service_url:
+            self.config["SPEAKER_SERVICE_URL"] = self.args.speaker_service_url
+            self.console.print(f"[green][SUCCESS][/green] Speaker Recognition configured via args: {self.args.speaker_service_url}")
+        else:
+            try:
+                enable_speaker = Confirm.ask("Enable Speaker Recognition?", default=False)
+            except EOFError:
+                self.console.print("Using default: No")
+                enable_speaker = False
+                
+            if enable_speaker:
+                speaker_url = self.prompt_value("Speaker Recognition service URL", "http://host.docker.internal:8001")
+                self.config["SPEAKER_SERVICE_URL"] = speaker_url
+                self.console.print("[green][SUCCESS][/green] Speaker Recognition configured")
+                self.console.print("[blue][INFO][/blue] Start with: cd ../../extras/speaker-recognition && docker compose up -d")
+        
+        # Check if ASR service URL provided via args  
+        if hasattr(self.args, 'parakeet_asr_url') and self.args.parakeet_asr_url:
+            self.config["PARAKEET_ASR_URL"] = self.args.parakeet_asr_url
+            self.console.print(f"[green][SUCCESS][/green] Parakeet ASR configured via args: {self.args.parakeet_asr_url}")
 
     def setup_network(self):
         """Configure network settings"""
@@ -415,7 +427,15 @@ LOG_LEVEL=INFO
 
 def main():
     """Main entry point"""
-    setup = FriendLiteSetup()
+    parser = argparse.ArgumentParser(description="Friend-Lite Advanced Backend Setup")
+    parser.add_argument("--speaker-service-url", 
+                       help="Speaker Recognition service URL (default: prompt user)")
+    parser.add_argument("--parakeet-asr-url", 
+                       help="Parakeet ASR service URL (default: prompt user)")
+    
+    args = parser.parse_args()
+    
+    setup = FriendLiteSetup(args)
     setup.run()
 
 
