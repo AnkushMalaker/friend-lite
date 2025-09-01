@@ -4,21 +4,22 @@ Friend-Lite Advanced Backend Interactive Setup Script
 Interactive configuration for all services and API keys
 """
 
-import os
-import sys
+import argparse
 import getpass
+import os
 import secrets
 import shutil
-import argparse
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
-from rich.console import Console
-from rich.prompt import Prompt, Confirm
-from rich.panel import Panel
-from rich.text import Text
 from rich import print as rprint
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
+from rich.text import Text
 
 
 class FriendLiteSetup:
@@ -272,6 +273,57 @@ class FriendLiteSetup:
         self.config["BACKEND_PUBLIC_PORT"] = self.prompt_value("Backend port", "8000")
         self.config["WEBUI_PORT"] = self.prompt_value("Web UI port", "5173")
 
+    def setup_https(self):
+        """Configure HTTPS settings for microphone access"""
+        self.print_section("HTTPS Configuration (Optional)")
+        
+        try:
+            enable_https = Confirm.ask("Enable HTTPS for microphone access?", default=False)
+        except EOFError:
+            self.console.print("Using default: No")
+            enable_https = False
+        
+        if enable_https:
+            self.console.print("[blue][INFO][/blue] HTTPS enables microphone access in browsers")
+            server_ip = self.prompt_value("Server IP/Domain for SSL certificate", "localhost")
+            
+            # Generate SSL certificates
+            self.console.print("[blue][INFO][/blue] Generating SSL certificates...")
+            ssl_script = Path("ssl/generate-ssl.sh")
+            if ssl_script.exists():
+                try:
+                    subprocess.run([str(ssl_script), server_ip], check=True, cwd=".")
+                    self.console.print("[green][SUCCESS][/green] SSL certificates generated")
+                except subprocess.CalledProcessError:
+                    self.console.print("[yellow][WARNING][/yellow] SSL certificate generation failed")
+            else:
+                self.console.print("[yellow][WARNING][/yellow] ssl/generate-ssl.sh not found")
+            
+            # Generate nginx.conf from template
+            self.console.print("[blue][INFO][/blue] Creating nginx configuration...")
+            nginx_template = Path("nginx.conf.template")
+            if nginx_template.exists():
+                try:
+                    with open(nginx_template, 'r') as f:
+                        nginx_content = f.read()
+                    
+                    # Replace TAILSCALE_IP with server_ip
+                    nginx_content = nginx_content.replace('TAILSCALE_IP', server_ip)
+                    
+                    with open('nginx.conf', 'w') as f:
+                        f.write(nginx_content)
+                    
+                    self.console.print(f"[green][SUCCESS][/green] nginx.conf created for: {server_ip}")
+                    self.config["HTTPS_ENABLED"] = "true"
+                    self.config["SERVER_IP"] = server_ip
+                    
+                except Exception as e:
+                    self.console.print(f"[yellow][WARNING][/yellow] nginx.conf generation failed: {e}")
+            else:
+                self.console.print("[yellow][WARNING][/yellow] nginx.conf.template not found")
+        else:
+            self.config["HTTPS_ENABLED"] = "false"
+
     def generate_env_file(self):
         """Generate the .env file from configuration"""
         env_content = f"""# =============================================================================
@@ -398,6 +450,7 @@ LOG_LEVEL=INFO
             self.setup_memory()
             self.setup_optional_services()
             self.setup_network()
+            self.setup_https()
 
             # Generate files
             self.print_header("Configuration Complete!")

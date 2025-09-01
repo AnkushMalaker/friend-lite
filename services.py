@@ -25,7 +25,7 @@ SERVICES = {
         'path': 'extras/speaker-recognition', 
         'compose_file': 'docker-compose.yml',
         'description': 'Speaker Recognition Service',
-        'ports': ['8085', '5173']
+        'ports': ['8085', '5174/8444']
     },
     'asr-services': {
         'path': 'extras/asr-services',
@@ -169,15 +169,15 @@ def main():
     
     # Start command
     start_parser = subparsers.add_parser('start', help='Start services')
-    start_parser.add_argument('services', nargs='*', choices=list(SERVICES.keys()), 
-                            help='Services to start')
+    start_parser.add_argument('services', nargs='*', 
+                            help='Services to start: backend, speaker-recognition, asr-services, openmemory-mcp (or use --all)')
     start_parser.add_argument('--all', action='store_true', help='Start all configured services')
     start_parser.add_argument('--build', action='store_true', help='Build images before starting')
     
     # Stop command  
     stop_parser = subparsers.add_parser('stop', help='Stop services')
-    stop_parser.add_argument('services', nargs='*', choices=list(SERVICES.keys()),
-                           help='Services to stop')
+    stop_parser.add_argument('services', nargs='*',
+                           help='Services to stop: backend, speaker-recognition, asr-services, openmemory-mcp (or use --all)')
     stop_parser.add_argument('--all', action='store_true', help='Stop all services')
     
     # Status command
@@ -196,6 +196,12 @@ def main():
         if args.all:
             services = [s for s in SERVICES.keys() if check_service_configured(s)]
         elif args.services:
+            # Validate service names
+            invalid_services = [s for s in args.services if s not in SERVICES]
+            if invalid_services:
+                console.print(f"[red]❌ Invalid service names: {', '.join(invalid_services)}[/red]")
+                console.print(f"Available services: {', '.join(SERVICES.keys())}")
+                return
             services = args.services
         else:
             console.print("[red]❌ No services specified. Use --all or specify service names.[/red]")
@@ -207,6 +213,12 @@ def main():
         if args.all:
             services = list(SERVICES.keys())
         elif args.services:
+            # Validate service names
+            invalid_services = [s for s in args.services if s not in SERVICES]
+            if invalid_services:
+                console.print(f"[red]❌ Invalid service names: {', '.join(invalid_services)}[/red]")
+                console.print(f"Available services: {', '.join(SERVICES.keys())}")
+                return
             services = args.services
         else:
             console.print("[red]❌ No services specified. Use --all or specify service names.[/red]")
