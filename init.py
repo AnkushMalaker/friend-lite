@@ -92,6 +92,27 @@ def select_services():
     
     return selected
 
+def cleanup_unselected_services(selected_services):
+    """Backup and remove .env files from services that weren't selected"""
+    from datetime import datetime
+    
+    all_services = list(SERVICES['backend'].keys()) + list(SERVICES['extras'].keys())
+    
+    for service_name in all_services:
+        if service_name not in selected_services:
+            if service_name == 'advanced':
+                service_path = Path(SERVICES['backend'][service_name]['path'])
+            else:
+                service_path = Path(SERVICES['extras'][service_name]['path'])
+            
+            env_file = service_path / '.env'
+            if env_file.exists():
+                # Create backup with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_file = service_path / f'.env.backup.{timestamp}.unselected'
+                env_file.rename(backup_file)
+                console.print(f"🧹 [dim]Backed up {service_name} configuration to {backup_file.name} (service not selected)[/dim]")
+
 def run_service_setup(service_name, selected_services):
     """Execute individual service setup script"""
     if service_name == 'advanced':
@@ -167,6 +188,9 @@ def main():
     
     # Pure Delegation - Run Each Service Setup
     console.print(f"\n📋 [bold]Setting up {len(selected_services)} services...[/bold]")
+    
+    # Clean up .env files from unselected services (creates backups)
+    cleanup_unselected_services(selected_services)
     
     success_count = 0
     failed_services = []
