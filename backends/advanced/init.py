@@ -290,19 +290,22 @@ class FriendLiteSetup:
             
             # Generate SSL certificates
             self.console.print("[blue][INFO][/blue] Generating SSL certificates...")
-            ssl_script = Path("ssl/generate-ssl.sh")
+            # Use path relative to this script's directory
+            script_dir = Path(__file__).parent
+            ssl_script = script_dir / "ssl" / "generate-ssl.sh"
             if ssl_script.exists():
                 try:
-                    subprocess.run([str(ssl_script), server_ip], check=True, cwd=".")
+                    # Run from the backend directory so paths work correctly
+                    subprocess.run([str(ssl_script), server_ip], check=True, cwd=str(script_dir))
                     self.console.print("[green][SUCCESS][/green] SSL certificates generated")
                 except subprocess.CalledProcessError:
                     self.console.print("[yellow][WARNING][/yellow] SSL certificate generation failed")
             else:
-                self.console.print("[yellow][WARNING][/yellow] ssl/generate-ssl.sh not found")
+                self.console.print(f"[yellow][WARNING][/yellow] SSL script not found at {ssl_script}")
             
             # Generate nginx.conf from template
             self.console.print("[blue][INFO][/blue] Creating nginx configuration...")
-            nginx_template = Path("nginx.conf.template")
+            nginx_template = script_dir / "nginx.conf.template"
             if nginx_template.exists():
                 try:
                     with open(nginx_template, 'r') as f:
