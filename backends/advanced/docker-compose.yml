@@ -42,8 +42,9 @@ services:
       - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
       - OPENMEMORY_TIMEOUT=${OPENMEMORY_TIMEOUT:-30}
     depends_on:
-      qdrant:
-        condition: service_started
+      # You may not want qdrant if you are using openmemory_mcp
+      # qdrant:
+      #   condition: service_started
       mongo:
         condition: service_started
       # neo4j-mem0:
