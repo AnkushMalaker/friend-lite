@@ -113,20 +113,29 @@ def cleanup_unselected_services(selected_services):
                 env_file.rename(backup_file)
                 console.print(f"🧹 [dim]Backed up {service_name} configuration to {backup_file.name} (service not selected)[/dim]")
 
-def run_service_setup(service_name, selected_services):
+def run_service_setup(service_name, selected_services, https_enabled=False, server_ip=None):
     """Execute individual service setup script"""
     if service_name == 'advanced':
         service = SERVICES['backend'][service_name]
         
-        # For advanced backend, pass URLs of other selected services
+        # For advanced backend, pass URLs of other selected services and HTTPS config
         cmd = service['cmd'].copy()
         if 'speaker-recognition' in selected_services:
             cmd.extend(['--speaker-service-url', 'http://host.docker.internal:8085'])
         if 'asr-services' in selected_services:
             cmd.extend(['--parakeet-asr-url', 'http://host.docker.internal:8767'])
+        
+        # Add HTTPS configuration
+        if https_enabled and server_ip:
+            cmd.extend(['--enable-https', '--server-ip', server_ip])
+            
     else:
         service = SERVICES['extras'][service_name]
-        cmd = service['cmd']
+        cmd = service['cmd'].copy()
+        
+        # Add HTTPS configuration for services that support it
+        if service_name == 'speaker-recognition' and https_enabled and server_ip:
+            cmd.extend(['--enable-https', '--server-ip', server_ip])
     
     console.print(f"\n🔧 [bold]Setting up {service_name}...[/bold]")
     
@@ -186,6 +195,41 @@ def main():
         console.print("\n[yellow]No services selected. Exiting.[/yellow]")
         return
     
+    # HTTPS Configuration (for services that need it)
+    https_enabled = False
+    server_ip = None
+    
+    # Check if we have services that benefit from HTTPS
+    https_services = {'advanced', 'speaker-recognition'}
+    needs_https = bool(https_services.intersection(selected_services))
+    
+    if needs_https:
+        console.print("\n🔒 [bold cyan]HTTPS Configuration[/bold cyan]")
+        console.print("HTTPS enables microphone access in browsers and secure connections")
+        
+        try:
+            https_enabled = Confirm.ask("Enable HTTPS for selected services?", default=False)
+        except EOFError:
+            console.print("Using default: No")
+            https_enabled = False
+        
+        if https_enabled:
+            console.print("\n[blue][INFO][/blue] For distributed deployments, use your Tailscale IP")
+            console.print("[blue][INFO][/blue] For local-only access, use 'localhost'")
+            console.print("Examples: localhost, 100.64.1.2, your-domain.com")
+            
+            while True:
+                try:
+                    server_ip = console.input("Server IP/Domain for SSL certificates [localhost]: ").strip()
+                    if not server_ip:
+                        server_ip = "localhost"
+                    break
+                except EOFError:
+                    server_ip = "localhost"
+                    break
+            
+            console.print(f"[green]✅[/green] HTTPS configured for: {server_ip}")
+    
     # Pure Delegation - Run Each Service Setup
     console.print(f"\n📋 [bold]Setting up {len(selected_services)} services...[/bold]")
     
@@ -196,7 +240,7 @@ def main():
     failed_services = []
     
     for service in selected_services:
-        if run_service_setup(service, selected_services):
+        if run_service_setup(service, selected_services, https_enabled, server_ip):
             success_count += 1
         else:
             failed_services.append(service)

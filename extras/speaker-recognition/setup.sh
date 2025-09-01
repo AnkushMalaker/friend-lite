@@ -1,6 +1,27 @@
 #!/bin/bash
 set -e
 
+# Parse command line arguments
+ENABLE_HTTPS=false
+SERVER_IP=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --enable-https)
+            ENABLE_HTTPS=true
+            shift
+            ;;
+        --server-ip)
+            SERVER_IP="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+
 echo "🗣️ Speaker Recognition Setup"
 echo "=============================="
 
@@ -32,17 +53,28 @@ else
     COMPUTE_MODE="cpu"
 fi
 
-echo ""
-echo "🔒 HTTPS Configuration (required for microphone access)"
-echo "  1) HTTP mode (development, localhost only)"
-echo "  2) HTTPS mode with SSL (production, remote access, microphone access)"
-read -p "Enter choice [1-2] (1): " HTTPS_CHOICE
-HTTPS_CHOICE=${HTTPS_CHOICE:-1}
-
-if [ "$HTTPS_CHOICE" = "2" ]; then
+# HTTPS Configuration
+if [ "$ENABLE_HTTPS" = true ]; then
+    # Use command line arguments
     HTTPS_MODE="https"
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP="localhost"
+    fi
+    echo "✅ HTTPS configured via command line: $SERVER_IP"
 else
-    HTTPS_MODE="http"
+    # Interactive configuration
+    echo ""
+    echo "🔒 HTTPS Configuration (required for microphone access)"
+    echo "  1) HTTP mode (development, localhost only)"
+    echo "  2) HTTPS mode with SSL (production, remote access, microphone access)"
+    read -p "Enter choice [1-2] (1): " HTTPS_CHOICE
+    HTTPS_CHOICE=${HTTPS_CHOICE:-1}
+
+    if [ "$HTTPS_CHOICE" = "2" ]; then
+        HTTPS_MODE="https"
+    else
+        HTTPS_MODE="http"
+    fi
 fi
 
 # Update .env file
@@ -50,13 +82,15 @@ sed -i "s|HF_TOKEN=.*|HF_TOKEN=$HF_TOKEN|" .env
 sed -i "s|COMPUTE_MODE=.*|COMPUTE_MODE=$COMPUTE_MODE|" .env
 
 if [ "$HTTPS_MODE" = "https" ]; then
-    # HTTPS Configuration
-    echo ""
-    echo "🌐 Server Configuration for HTTPS"
-    echo "Enter your server IP/domain for SSL certificate"
-    echo "Examples: localhost, 192.168.1.100, your-domain.com"
-    read -p "Server IP/Domain (localhost): " SERVER_IP
-    SERVER_IP=${SERVER_IP:-localhost}
+    # Get SERVER_IP if not already set (from command line)
+    if [ -z "$SERVER_IP" ]; then
+        echo ""
+        echo "🌐 Server Configuration for HTTPS"
+        echo "Enter your server IP/domain for SSL certificate"
+        echo "Examples: localhost, 192.168.1.100, your-domain.com"
+        read -p "Server IP/Domain (localhost): " SERVER_IP
+        SERVER_IP=${SERVER_IP:-localhost}
+    fi
     
     # Update .env for HTTPS mode
     sed -i "s|REACT_UI_HTTPS=.*|REACT_UI_HTTPS=true|" .env

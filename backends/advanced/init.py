@@ -274,19 +274,28 @@ class FriendLiteSetup:
 
     def setup_https(self):
         """Configure HTTPS settings for microphone access"""
-        self.print_section("HTTPS Configuration (Optional)")
-        
-        try:
-            enable_https = Confirm.ask("Enable HTTPS for microphone access?", default=False)
-        except EOFError:
-            self.console.print("Using default: No")
-            enable_https = False
+        # Check if HTTPS configuration provided via command line
+        if hasattr(self.args, 'enable_https') and self.args.enable_https:
+            enable_https = True
+            server_ip = getattr(self.args, 'server_ip', 'localhost')
+            self.console.print(f"[green][SUCCESS][/green] HTTPS configured via command line: {server_ip}")
+        else:
+            # Interactive configuration
+            self.print_section("HTTPS Configuration (Optional)")
+            
+            try:
+                enable_https = Confirm.ask("Enable HTTPS for microphone access?", default=False)
+            except EOFError:
+                self.console.print("Using default: No")
+                enable_https = False
+            
+            if enable_https:
+                self.console.print("[blue][INFO][/blue] HTTPS enables microphone access in browsers")
+                self.console.print("[blue][INFO][/blue] For distributed deployments, use your Tailscale IP (e.g., 100.64.1.2)")
+                self.console.print("[blue][INFO][/blue] For local-only access, use 'localhost'")
+                server_ip = self.prompt_value("Server IP/Domain for SSL certificate (Tailscale IP or localhost)", "localhost")
         
         if enable_https:
-            self.console.print("[blue][INFO][/blue] HTTPS enables microphone access in browsers")
-            self.console.print("[blue][INFO][/blue] For distributed deployments, use your Tailscale IP (e.g., 100.64.1.2)")
-            self.console.print("[blue][INFO][/blue] For local-only access, use 'localhost'")
-            server_ip = self.prompt_value("Server IP/Domain for SSL certificate (Tailscale IP or localhost)", "localhost")
             
             # Generate SSL certificates
             self.console.print("[blue][INFO][/blue] Generating SSL certificates...")
@@ -504,6 +513,10 @@ def main():
                        help="Speaker Recognition service URL (default: prompt user)")
     parser.add_argument("--parakeet-asr-url", 
                        help="Parakeet ASR service URL (default: prompt user)")
+    parser.add_argument("--enable-https", action="store_true",
+                       help="Enable HTTPS configuration (default: prompt user)")
+    parser.add_argument("--server-ip", 
+                       help="Server IP/domain for SSL certificate (default: prompt user)")
     
     args = parser.parse_args()
     
