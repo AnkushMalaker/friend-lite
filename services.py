@@ -122,11 +122,6 @@ def run_compose_command(service_name, command, build=False):
             # If build failed, show error summary
             if process.returncode != 0:
                 console.print(f"\n[red]❌ Build failed for {service_name}[/red]")
-                # Show last few lines as context if we have a lot of output
-                if len(all_output) > 50:
-                    console.print("[red]Last 20 lines of output:[/red]")
-                    for line in all_output[-20:]:
-                        console.print(f"  [dim]{line}[/dim]")
                 return False
             
             return True
@@ -146,8 +141,8 @@ def run_compose_command(service_name, command, build=False):
                 console.print(f"[red]❌ Command failed[/red]")
                 if result.stderr:
                     console.print("[red]Error output:[/red]")
-                    # Show error output line by line for better readability
-                    for line in result.stderr.splitlines()[-20:]:  # Last 20 lines
+                    # Show all error output
+                    for line in result.stderr.splitlines():
                         console.print(f"  [dim]{line}[/dim]")
                 return False
             
