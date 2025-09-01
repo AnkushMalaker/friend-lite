@@ -266,6 +266,118 @@ CORS_ORIGINS="http://${HOST_IP}:${WEBUI_PORT},http://localhost:${WEBUI_PORT},htt
 print_success "Network configured for access at http://${HOST_IP}:${WEBUI_PORT}"
 echo
 
+# Speaker Recognition Service Configuration
+print_header "🗣️ Speaker Recognition Service (Optional)"
+echo "Speaker recognition enables speaker identification for conversations."
+echo "1. Set up speaker recognition service"
+echo "2. Skip - Configure later"
+echo
+
+while true; do
+    read -p "Configure speaker recognition? [1-2] (default: 2): " speaker_choice
+    speaker_choice=${speaker_choice:-2}
+    
+    case $speaker_choice in
+        1)
+            SETUP_SPEAKER_RECOGNITION="yes"
+            
+            print_info "Speaker recognition requires a Hugging Face token for pyannote models"
+            while true; do
+                read -p "Enter your Hugging Face token (sets HF_TOKEN): " hf_token
+                if [[ ${#hf_token} -ge 10 ]]; then
+                    HF_TOKEN="$hf_token"
+                    break
+                else
+                    print_error "Please enter a valid Hugging Face token"
+                fi
+            done
+            
+            echo "Choose compute mode for speaker recognition:"
+            echo "1. CPU (Recommended for development)"
+            echo "2. GPU (Requires NVIDIA GPU with CUDA)"
+            echo
+            
+            while true; do
+                read -p "Select compute mode [1-2] (default: 1): " compute_choice
+                compute_choice=${compute_choice:-1}
+                
+                case $compute_choice in
+                    1)
+                        SPEAKER_COMPUTE_MODE="cpu"
+                        break
+                        ;;
+                    2)
+                        SPEAKER_COMPUTE_MODE="gpu"
+                        print_warning "GPU mode requires NVIDIA GPU with CUDA drivers"
+                        break
+                        ;;
+                    *)
+                        print_error "Please select 1 or 2"
+                        ;;
+                esac
+            done
+            
+            read -p "Speaker similarity threshold (0.0-1.0, higher=more strict) [0.15]: " similarity_threshold
+            SIMILARITY_THRESHOLD=${similarity_threshold:-0.15}
+            
+            print_success "Speaker recognition configured with $SPEAKER_COMPUTE_MODE mode"
+            break
+            ;;
+        2)
+            print_warning "Speaker recognition setup skipped - can be configured later"
+            break
+            ;;
+        *)
+            print_error "Please select 1 or 2"
+            ;;
+    esac
+done
+
+echo
+
+# HTTPS Configuration
+print_header "🔒 HTTPS Configuration (Optional)"
+echo "HTTPS setup provides secure access and works well with Tailscale networks."
+echo "1. Set up HTTPS with Tailscale IP"
+echo "2. Set up HTTPS with localhost only"
+echo "3. Skip - Use HTTP only"
+echo
+
+while true; do
+    read -p "Configure HTTPS? [1-3] (default: 3): " https_choice
+    https_choice=${https_choice:-3}
+    
+    case $https_choice in
+        1)
+            SETUP_HTTPS="yes"
+            read -p "Enter your Tailscale IP address: " tailscale_ip
+            if [[ $tailscale_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                TAILSCALE_IP="$tailscale_ip"
+                print_success "HTTPS will be configured for localhost and $TAILSCALE_IP"
+            else
+                print_error "Invalid IP format, using localhost only"
+                TAILSCALE_IP="127.0.0.1"
+            fi
+            break
+            ;;
+        2)
+            SETUP_HTTPS="yes"
+            TAILSCALE_IP="127.0.0.1"
+            print_success "HTTPS will be configured for localhost only"
+            break
+            ;;
+        3)
+            print_warning "HTTPS setup skipped - using HTTP only"
+            break
+            ;;
+        *)
+            print_error "Please select 1, 2, or 3"
+            ;;
+    esac
+done
+
+echo
+
 # Configuration Summary
 print_header "📋 Configuration Summary"
 echo "Backend: $BACKEND_NAME"
@@ -277,8 +389,19 @@ elif [[ -n $PARAKEET_ASR_URL ]]; then
 else
     echo "Speech-to-Text: Not configured"
 fi
+if [[ $SETUP_SPEAKER_RECOGNITION == "yes" ]]; then
+    echo "Speaker Recognition: Enabled ($SPEAKER_COMPUTE_MODE mode)"
+else
+    echo "Speaker Recognition: Not configured"
+fi
+if [[ $SETUP_HTTPS == "yes" ]]; then
+    echo "HTTPS: Enabled (localhost + $TAILSCALE_IP)"
+    echo "Access URL: https://${HOST_IP} (or https://${TAILSCALE_IP})"
+else
+    echo "HTTPS: Not configured"
+    echo "Access URL: http://${HOST_IP}:${WEBUI_PORT}"
+fi
 echo "Admin Email: $ADMIN_EMAIL"
-echo "Access URL: http://${HOST_IP}:${WEBUI_PORT}"
 echo
 
 read -p "Continue with setup? [Y/n]: " confirm
@@ -342,6 +465,15 @@ WEBUI_PORT=$WEBUI_PORT
 CORS_ORIGINS=$CORS_ORIGINS
 EOF
 
+# Add speaker recognition config if configured
+if [[ $SETUP_SPEAKER_RECOGNITION == "yes" ]]; then
+    cat >> .env << EOF
+# Speaker Recognition Configuration (sets HF_TOKEN, SPEAKER_SERVICE_URL)
+HF_TOKEN=$HF_TOKEN
+SPEAKER_SERVICE_URL=http://host.docker.internal:8085
+EOF
+fi
+
 print_success ".env file created"
 
 # Copy memory config for advanced backend
@@ -378,19 +510,164 @@ else
     exit 1
 fi
 
+# Additional Service Setup
+cd ..  # Back to project root
+
+# Set up speaker recognition service if requested
+if [[ $SETUP_SPEAKER_RECOGNITION == "yes" ]]; then
+    print_header "🗣️ Setting up Speaker Recognition Service"
+    
+    if [[ -d "extras/speaker-recognition" ]]; then
+        cd extras/speaker-recognition
+        
+        # Create .env file for speaker recognition
+        print_info "Creating speaker recognition .env file..."
+        cat > .env << EOF
+# Speaker Recognition Service Environment Configuration
+# Generated by init.sh on $(date)
+
+# Required: Hugging Face token for pyannote models
+HF_TOKEN=$HF_TOKEN
+
+# Docker build configuration
+COMPUTE_MODE=$SPEAKER_COMPUTE_MODE
+
+# Speaker recognition similarity threshold
+SIMILARITY_THRESHOLD=$SIMILARITY_THRESHOLD
+
+# Service Configuration
+SPEAKER_SERVICE_HOST=speaker-service
+SPEAKER_SERVICE_PORT=8085
+SPEAKER_SERVICE_URL=http://speaker-service:8085
+
+# React Web UI Configuration
+REACT_UI_HOST=0.0.0.0
+REACT_UI_PORT=5173
+REACT_UI_HTTPS=false
+
+# Optional: External Services
+DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
+
+# Test Configuration
+SPEAKER_SERVICE_TEST_PORT=8086
+EOF
+        
+        # Set up HTTPS for speaker recognition if requested
+        if [[ $SETUP_HTTPS == "yes" ]]; then
+            print_info "Setting up HTTPS for speaker recognition..."
+            
+            # Generate SSL certificates for speaker recognition
+            if [[ -f "ssl/generate-ssl.sh" ]]; then
+                chmod +x ssl/generate-ssl.sh
+                ./ssl/generate-ssl.sh "$TAILSCALE_IP"
+                print_success "SSL certificates generated for speaker recognition"
+            else
+                print_warning "SSL generation script not found for speaker recognition"
+            fi
+            
+            # Configure nginx.conf with Tailscale IP
+            if [[ -f "nginx.conf.template" ]]; then
+                sed "s/TAILSCALE_IP/$TAILSCALE_IP/g" nginx.conf.template > nginx.conf
+                print_success "nginx.conf configured for speaker recognition with Tailscale IP: $TAILSCALE_IP"
+            else
+                print_warning "nginx.conf.template not found for speaker recognition"
+            fi
+        fi
+        
+        print_info "Starting speaker recognition services..."
+        if docker compose up --build -d; then
+            print_success "Speaker recognition service started!"
+        else
+            print_warning "Failed to start speaker recognition service - check logs with 'docker compose logs'"
+        fi
+        
+        cd ../..  # Back to project root
+    else
+        print_error "Speaker recognition directory not found at extras/speaker-recognition"
+    fi
+fi
+
+# Set up HTTPS if requested
+if [[ $SETUP_HTTPS == "yes" ]]; then
+    print_header "🔒 Setting up HTTPS"
+    
+    cd "$BACKEND_DIR"
+    
+    # Generate SSL certificates
+    print_info "Generating SSL certificates..."
+    if [[ -f "ssl/generate-ssl.sh" ]]; then
+        chmod +x ssl/generate-ssl.sh
+        ./ssl/generate-ssl.sh "$TAILSCALE_IP"
+        print_success "SSL certificates generated"
+    else
+        print_error "SSL generation script not found"
+    fi
+    
+    # Configure nginx.conf with Tailscale IP
+    print_info "Configuring nginx for HTTPS..."
+    if [[ -f "nginx.conf.template" ]]; then
+        sed "s/TAILSCALE_IP/$TAILSCALE_IP/g" nginx.conf.template > nginx.conf
+        print_success "nginx.conf configured with Tailscale IP: $TAILSCALE_IP"
+    else
+        print_error "nginx.conf.template not found"
+    fi
+    
+    # Restart services to enable nginx
+    print_info "Restarting services to enable HTTPS..."
+    docker compose restart
+    
+    # Wait for services to be ready
+    sleep 5
+    
+    cd ..  # Back to project root
+fi
+
 # Final Success Message
 print_header "🎉 Setup Complete!"
 
 cat << EOF
 Friend-Lite is now running! Here's how to access it:
 
+EOF
+
+if [[ $SETUP_HTTPS == "yes" ]]; then
+    cat << EOF
+🌐 Web Interface: https://${HOST_IP} or https://${TAILSCALE_IP}
+🔧 API Endpoint: https://${HOST_IP}/api or https://${TAILSCALE_IP}/api
+
+EOF
+else
+    cat << EOF
 🌐 Web Interface: http://${HOST_IP}:${WEBUI_PORT}
 🔧 API Endpoint: http://${HOST_IP}:${BACKEND_PORT}
 
+EOF
+fi
+
+cat << EOF
 👤 Admin Login:
    Email: ${ADMIN_EMAIL}
    Password: ${ADMIN_PASSWORD}
 
+EOF
+
+if [[ $SETUP_SPEAKER_RECOGNITION == "yes" ]]; then
+    if [[ $SETUP_HTTPS == "yes" ]]; then
+        cat << EOF
+🗣️ Speaker Recognition: https://${HOST_IP}:8444 or https://${TAILSCALE_IP}:8444 (Web UI)
+   Service API: https://${HOST_IP}:8444/api or https://${TAILSCALE_IP}:8444/api
+
+EOF
+    else
+        cat << EOF
+🗣️ Speaker Recognition: http://localhost:5173 (Web UI)
+   Service API: http://localhost:8085
+
+EOF
+    fi
+fi
+
+cat << EOF
 📖 Next Steps:
    1. Open the web interface and log in
    2. Connect your OMI device via the mobile app
@@ -404,7 +681,7 @@ Friend-Lite is now running! Here's how to access it:
    Run './run-test.sh' to test the full pipeline
 
 🔧 Configuration:
-   - Edit .env to modify settings
+   - Edit .env files to modify settings
    - Run 'docker compose restart' after changes
    - Use 'docker compose logs' to view service logs
 
