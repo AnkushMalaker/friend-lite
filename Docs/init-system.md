@@ -129,19 +129,19 @@ Use the `services.py` script for all service operations:
 
 ```bash
 # Start all configured services
-python services.py start --all --build
+uv run --with-requirements setup-requirements.txt python services.py start --all --build
 
 # Start specific services
-python services.py start backend speaker-recognition
+uv run --with-requirements setup-requirements.txt python services.py start backend speaker-recognition
 
 # Check service status
-python services.py status
+uv run --with-requirements setup-requirements.txt python services.py status
 
 # Stop all services
-python services.py stop --all
+uv run --with-requirements setup-requirements.txt python services.py stop --all
 
 # Stop specific services  
-python services.py stop asr-services openmemory-mcp
+uv run --with-requirements setup-requirements.txt python services.py stop asr-services openmemory-mcp
 ```
 
 ### Manual Service Management

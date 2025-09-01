@@ -241,10 +241,9 @@ Backends and ASR services use standardized audio streaming:
 
 ### Single Machine (Recommended for beginners)
 1. **Clone the repository**
-2. **Use Advanced Backend**: `cd backends/advanced-backend`
-3. **Configure .env**: Copy `.env.template` to `.env` and set required values
-4. **Start services**: `docker compose up --build -d`
-5. **Access WebUI**: `http://localhost:3000` (React) or `http://localhost:8501` (Streamlit)
+2. **Run interactive setup**: `uv run --with-requirements setup-requirements.txt python init.py`
+3. **Start all services**: `python services.py start --all --build`
+4. **Access WebUI**: `http://localhost:5173` for the React web dashboard
 
 ### Distributed Setup (Advanced users with multiple machines)
 1. **GPU Machine**: Deploy LLM services (Ollama, ASR, Speaker Recognition)
@@ -261,7 +260,7 @@ Backends and ASR services use standardized audio streaming:
 
 2. **Backend Machine**: Deploy lightweight services
    ```bash
-   cd backends/advanced-backend
+   cd backends/advanced
    
    # Configure distributed services in .env
    OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434

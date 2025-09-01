@@ -205,15 +205,15 @@ def main():
         
     if configured_services:
         service_list = " ".join(configured_services)
-        console.print(f"   [cyan]python services.py start {service_list}[/cyan]")
+        console.print(f"   [cyan]uv run --with-requirements setup-requirements.txt python services.py start {service_list}[/cyan]")
     
     console.print("")
     console.print("3. Check service status:")
-    console.print("   [cyan]python services.py status[/cyan]")
+    console.print("   [cyan]uv run --with-requirements setup-requirements.txt python services.py status[/cyan]")
     
     console.print("")
     console.print("4. Stop services when done:")
-    console.print("   [cyan]python services.py stop --all[/cyan]")
+    console.print("   [cyan]uv run --with-requirements setup-requirements.txt python services.py stop --all[/cyan]")
     
     console.print(f"\n🚀 [bold]Enjoy Friend-Lite![/bold]")
     
