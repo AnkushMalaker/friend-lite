@@ -4,13 +4,14 @@ Friend-Lite Service Management
 Start, stop, and manage configured services
 """
 
+import argparse
 import subprocess
 import sys
-import argparse
 from pathlib import Path
+
+from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
-from rich import print as rprint
 
 console = Console()
 
@@ -91,25 +92,57 @@ def run_compose_command(service_name, command, build=False):
                 bufsize=1
             )
             
-            # Stream output line by line
+            # Collect all output for potential error display
+            all_output = []
+            line_count = 0
+            max_display = 20
+            
             assert process.stdout is not None
             for line in process.stdout:
                 line = line.rstrip()
-                # Add some basic formatting for Docker output
-                if 'Building' in line or 'Creating' in line:
-                    console.print(f"  [cyan]{line}[/cyan]")
-                elif 'error' in line.lower() or 'failed' in line.lower():
-                    console.print(f"  [red]{line}[/red]")
-                elif 'warning' in line.lower():
-                    console.print(f"  [yellow]{line}[/yellow]")
-                elif 'Successfully' in line or 'Started' in line:
-                    console.print(f"  [green]{line}[/green]")
-                else:
-                    console.print(f"  [dim]{line}[/dim]")
+                if not line:
+                    continue
+                
+                # Store all output
+                all_output.append(line)
+                line_count += 1
+                
+                # Show only last 20 lines worth of output
+                if line_count <= max_display:
+                    # Just print the line with simple coloring
+                    if 'error' in line.lower() or 'failed' in line.lower():
+                        console.print(f"  [red]{line}[/red]")
+                    elif 'Successfully' in line or 'Started' in line or 'Created' in line:
+                        console.print(f"  [green]{line}[/green]")
+                    elif 'Building' in line or 'Creating' in line:
+                        console.print(f"  [cyan]{line}[/cyan]")
+                    else:
+                        console.print(f"  [dim]{line}[/dim]")
             
             # Wait for process to complete
             process.wait()
-            return process.returncode == 0
+            
+            # If we had more than 20 lines, show the last few
+            if line_count > max_display:
+                console.print(f"  [dim]... ({line_count - max_display} lines omitted) ...[/dim]")
+                for line in all_output[-5:]:  # Show last 5 lines if we truncated
+                    if 'error' in line.lower() or 'failed' in line.lower():
+                        console.print(f"  [red]{line}[/red]")
+                    elif 'Successfully' in line or 'Started' in line or 'Created' in line:
+                        console.print(f"  [green]{line}[/green]")
+                    else:
+                        console.print(f"  [dim]{line}[/dim]")
+            
+            # If build failed, show more context
+            if process.returncode != 0:
+                console.print(f"\n[red]❌ Build failed for {service_name}[/red]")
+                if len(all_output) > max_display:
+                    console.print("[red]Full error context (last 30 lines):[/red]")
+                    for line in all_output[-30:]:
+                        console.print(f"  [dim]{line}[/dim]")
+                return False
+            
+            return True
         else:
             # For non-build commands, run silently unless there's an error
             result = subprocess.run(
@@ -123,7 +156,12 @@ def run_compose_command(service_name, command, build=False):
             if result.returncode == 0:
                 return True
             else:
-                console.print(f"[red]❌ Command failed: {result.stderr}[/red]")
+                console.print(f"[red]❌ Command failed[/red]")
+                if result.stderr:
+                    console.print("[red]Error output:[/red]")
+                    # Show error output line by line for better readability
+                    for line in result.stderr.splitlines()[-20:]:  # Last 20 lines
+                        console.print(f"  [dim]{line}[/dim]")
                 return False
             
     except Exception as e:
