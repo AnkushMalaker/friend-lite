@@ -67,3 +67,4 @@ backends/advanced-backend/data/speaker_model_cache/
 *checkpoints
 
 extras/openmemory-mcp/data/*
+.env.backup.*
