@@ -43,10 +43,11 @@ async def search_memories(
     query: str = Query(..., description="Search query"),
     current_user: User = Depends(current_active_user),
     limit: int = Query(default=20, ge=1, le=100),
+    score_threshold: float = Query(default=0.0, ge=0.0, le=1.0, description="Minimum similarity score (0.0 = no threshold)"),
     user_id: Optional[str] = Query(default=None, description="User ID filter (admin only)"),
 ):
-    """Search memories by text query. Users can only search their own memories, admins can search all or filter by user."""
-    return await memory_controller.search_memories(query, current_user, limit, user_id)
+    """Search memories by text query with configurable similarity threshold. Users can only search their own memories, admins can search all or filter by user."""
+    return await memory_controller.search_memories(query, current_user, limit, score_threshold, user_id)
 
 
 @router.delete("/{memory_id}")

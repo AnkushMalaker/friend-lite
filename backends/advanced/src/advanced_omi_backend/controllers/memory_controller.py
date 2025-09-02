@@ -79,7 +79,7 @@ async def get_memories_with_transcripts(user: User, limit: int, user_id: Optiona
         )
 
 
-async def search_memories(query: str, user: User, limit: int, user_id: Optional[str] = None):
+async def search_memories(query: str, user: User, limit: int, score_threshold: float = 0.0, user_id: Optional[str] = None):
     """Search memories by text query. Users can only search their own memories, admins can search all or filter by user."""
     try:
         memory_service = get_memory_service()
@@ -90,7 +90,7 @@ async def search_memories(query: str, user: User, limit: int, user_id: Optional[
             target_user_id = user_id
 
         # Execute search directly (now async)
-        search_results = await memory_service.search_memories(query, target_user_id, limit)
+        search_results = await memory_service.search_memories(query, target_user_id, limit, score_threshold)
 
         return {
             "query": query,

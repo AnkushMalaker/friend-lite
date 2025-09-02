@@ -102,7 +102,8 @@ class MemoryServiceBase(ABC):
         self, 
         query: str, 
         user_id: str, 
-        limit: int = 10
+        limit: int = 10,
+        score_threshold: float = 0.0
     ) -> List[MemoryEntry]:
         """Search memories using semantic similarity.
         
@@ -110,6 +111,7 @@ class MemoryServiceBase(ABC):
             query: Search query text
             user_id: User identifier to filter memories
             limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold)
             
         Returns:
             List of matching MemoryEntry objects ordered by relevance
@@ -293,7 +295,8 @@ class VectorStoreBase(ABC):
         self, 
         query_embedding: List[float], 
         user_id: str, 
-        limit: int
+        limit: int,
+        score_threshold: float = 0.0
     ) -> List[MemoryEntry]:
         """Search memories using vector similarity.
         
@@ -301,6 +304,7 @@ class VectorStoreBase(ABC):
             query_embedding: Query vector for similarity search
             user_id: User identifier to filter results
             limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold)
             
         Returns:
             List of matching MemoryEntry objects with similarity scores

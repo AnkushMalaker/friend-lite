@@ -79,9 +79,14 @@ export const conversationsApi = {
 export const memoriesApi = {
   getAll: (userId?: string) => api.get('/api/memories', { params: userId ? { user_id: userId } : {} }),
   getUnfiltered: (userId?: string) => api.get('/api/memories/unfiltered', { params: userId ? { user_id: userId } : {} }),
-  search: (query: string, userId?: string, limit: number = 20) => 
+  search: (query: string, userId?: string, limit: number = 20, scoreThreshold?: number) => 
     api.get('/api/memories/search', { 
-      params: { query, ...(userId && { user_id: userId }), limit } 
+      params: { 
+        query, 
+        ...(userId && { user_id: userId }), 
+        limit,
+        ...(scoreThreshold !== undefined && { score_threshold: scoreThreshold / 100 }) // Convert percentage to decimal
+      } 
     }),
   delete: (id: string) => api.delete(`/api/memories/${id}`),
 }

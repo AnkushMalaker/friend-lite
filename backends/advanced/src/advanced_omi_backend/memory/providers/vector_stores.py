@@ -148,8 +148,15 @@ class QdrantVectorStore(VectorStoreBase):
             memory_logger.error(f"Qdrant add memories failed: {e}")
             return []
 
-    async def search_memories(self, query_embedding: List[float], user_id: str, limit: int) -> List[MemoryEntry]:
-        """Search memories in Qdrant."""
+    async def search_memories(self, query_embedding: List[float], user_id: str, limit: int, score_threshold: float = 0.0) -> List[MemoryEntry]:
+        """Search memories in Qdrant with configurable similarity threshold filtering.
+        
+        Args:
+            query_embedding: Query vector for similarity search
+            user_id: User identifier to filter results
+            limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold, 1.0 = exact match)
+        """
         try:
             # Filter by user_id
             search_filter = Filter(
@@ -161,12 +168,20 @@ class QdrantVectorStore(VectorStoreBase):
                 ]
             )
             
-            results = await self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_embedding,
-                query_filter=search_filter,
-                limit=limit
-            )
+            # Apply similarity threshold if provided
+            # For cosine similarity, scores range from -1 to 1, where 1 is most similar
+            search_params = {
+                "collection_name": self.collection_name,
+                "query_vector": query_embedding,
+                "query_filter": search_filter,
+                "limit": limit
+            }
+            
+            if score_threshold > 0.0:
+                search_params["score_threshold"] = score_threshold
+                memory_logger.debug(f"Using similarity threshold: {score_threshold}")
+            
+            results = await self.client.search(**search_params)
             
             memories = []
             for result in results:
@@ -179,7 +194,11 @@ class QdrantVectorStore(VectorStoreBase):
                     created_at=result.payload.get("created_at")
                 )
                 memories.append(memory)
+                # Log similarity scores for debugging
+                memory_logger.debug(f"Retrieved memory with score {result.score:.3f}: {result.payload.get('content', '')[:50]}...")
             
+            threshold_msg = f"threshold {score_threshold}" if score_threshold > 0.0 else "no threshold"
+            memory_logger.info(f"Found {len(memories)} memories with {threshold_msg} for user {user_id}")
             return memories
             
         except Exception as e:

@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 import shutil
 import time
 import wave
@@ -30,9 +31,14 @@ audio_logger = logging.getLogger("audio_processing")
 async def get_current_metrics():
     """Get current system metrics."""
     try:
+        # Get memory provider configuration
+        memory_provider = os.getenv("MEMORY_PROVIDER", "friend_lite").lower()
+        
         # Get basic system metrics
         metrics = {
             "timestamp": int(time.time()),
+            "memory_provider": memory_provider,
+            "memory_provider_supports_threshold": memory_provider == "friend_lite",
         }
 
         return metrics

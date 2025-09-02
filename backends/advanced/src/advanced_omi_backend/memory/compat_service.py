@@ -161,13 +161,14 @@ class MemoryService:
         """
         return await self.get_all_memories(user_id, limit)
     
-    async def search_memories(self, query: str, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def search_memories(self, query: str, user_id: str, limit: int = 10, score_threshold: float = 0.0) -> List[Dict[str, Any]]:
         """Search memories using semantic similarity - returns dict format for compatibility.
         
         Args:
             query: Search query text
             user_id: User identifier to filter memories
             limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold)
             
         Returns:
             List of memory dictionaries in legacy format ordered by relevance
@@ -175,7 +176,7 @@ class MemoryService:
         if not self._initialized:
             await self.initialize()
         
-        memories = await self._service.search_memories(query, user_id, limit)
+        memories = await self._service.search_memories(query, user_id, limit, score_threshold)
         
         # Convert MemoryEntry objects to dict format for compatibility with normalized content
         return [
