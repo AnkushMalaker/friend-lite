@@ -609,7 +609,7 @@ function SpeakerConfiguration() {
     setMessage('')
     
     try {
-      const response = await speakerApi.updateSpeakerConfiguration(primarySpeakers)
+      await speakerApi.updateSpeakerConfiguration(primarySpeakers)
       setMessage(`✅ Saved! ${primarySpeakers.length} primary speakers configured.`)
       
       // Auto-hide success message after 3 seconds

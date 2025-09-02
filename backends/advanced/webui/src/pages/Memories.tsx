@@ -34,13 +34,11 @@ export default function Memories() {
   
   // System configuration state
   const [memoryProviderSupportsThreshold, setMemoryProviderSupportsThreshold] = useState(false)
-  const [systemLoading, setSystemLoading] = useState(true)
   
   const { user } = useAuth()
 
   const loadSystemConfig = async () => {
     try {
-      setSystemLoading(true)
       const response = await systemApi.getMetrics()
       const supports = response.data.memory_provider_supports_threshold || false
       setMemoryProviderSupportsThreshold(supports)
@@ -49,8 +47,6 @@ export default function Memories() {
       console.error('❌ Failed to load system config:', err)
       // Default to false if we can't determine
       setMemoryProviderSupportsThreshold(false)
-    } finally {
-      setSystemLoading(false)
     }
   }
 
