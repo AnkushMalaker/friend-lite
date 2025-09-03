@@ -119,13 +119,12 @@ profiles:
               # Override specific Kubernetes-specific values
               env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend"
               env.QDRANT_BASE_URL: "qdrant.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local"
-              env.CORS_ORIGINS: "http://localhost:3010\\,http://localhost:3001\\,http://127.0.0.1:3010\\,http://{{.BACKEND_IP}}:{{.WEBUI_NODEPORT}}\\,https://friend-lite.192-168-1-42.nip.io"
               persistence.storageClass: "openebs-hostpath"
               persistence.size: "10Gi"
               service.nodePort: "{{.BACKEND_NODEPORT}}"
             setValues:
               image.repository: "advanced-backend"
-              
+
           - name: webui
             chartPath: backends/charts/webui
             namespace: "{{.APPLICATION_NAMESPACE}}"

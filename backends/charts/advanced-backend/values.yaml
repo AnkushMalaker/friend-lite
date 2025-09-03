@@ -18,11 +18,11 @@ ingress:
   enabled: true
   className: "nginx"
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-    cert-manager.io/cluster-issuer: "selfsigned-issuer"
+    # cert-manager.io/cluster-issuer: "selfsigned-issuer"
     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
     nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
     nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
@@ -53,10 +53,10 @@ ingress:
           pathType: Prefix
         - path: /audio
           pathType: Prefix
-  tls:
-    - secretName: friend-lite-tls
-      hosts:
-        - friend-lite.192-168-1-42.nip.io
+  # tls:
+  #   - secretName: friend-lite-tls
+  #     hosts:
+  #       - friend-lite.192-168-1-42.nip.io
 
 resources:
   limits:
