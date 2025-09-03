@@ -147,20 +147,35 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
       throw new Error('No authentication token found')
     }
     
-    // Build WebSocket URL
-    const { protocol, hostname, port } = window.location
-    const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) || 
-                           (protocol === 'http:' && (port === '' || port === '80'))
-    
+    // Build WebSocket URL using same logic as API service
     let wsUrl: string
-    if (isStandardPort) {
+    const { protocol, port } = window.location
+    
+    // Check if we have a backend URL from environment
+    if (import.meta.env.VITE_BACKEND_URL) {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL
+      const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
+      // Fallback logic based on current location
+      const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) || 
+                             (protocol === 'http:' && (port === '' || port === '80'))
+      
+      if (isStandardPort || backendUrl === '') {
+        // Use same origin for Ingress access
+        wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-simple-recorder`
+      } else if (backendUrl != undefined && backendUrl != '') {
+        wsUrl = `${wsProtocol}//${backendUrl}/ws_pcm?token=${token}&device_name=webui-simple-recorder`
+      }    
+      else if (port === '5173') {
+        // Development mode
+        wsUrl = `ws://localhost:8000/ws_pcm?token=${token}&device_name=webui-simple-recorder`
+      } else {
+        // Fallback - use same origin instead of hardcoded port 8000
+        wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-simple-recorder`
+      }
+    } else {
+      // No environment variable set, use same origin as fallback
       const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
       wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-simple-recorder`
-    } else if (port === '5173') {
-      wsUrl = `ws://localhost:8000/ws_pcm?token=${token}&device_name=webui-simple-recorder`
-    } else {
-      const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
-      wsUrl = `${wsProtocol}//${hostname}:8000/ws_pcm?token=${token}&device_name=webui-simple-recorder`
     }
     
     return new Promise<WebSocket>((resolve, reject) => {
