@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -c
+    kompose.version: 1.36.0 (HEAD)
+  labels:
+    io.kompose.service: parakeet
+  name: parakeet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: parakeet
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -c
+        kompose.version: 1.36.0 (HEAD)
+      labels:
+        io.kompose.service: parakeet
+    spec:
+      containers:
+        - env:
+            - name: HF_HOME
+              value: /models
+          image: babel:32000/parakeet
+          name: parakeet-asr
+          ports:
+            - containerPort: 8765
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /models
+              name: parakeet-claim0
+            - mountPath: /app/debug
+              name: parakeet-claim1
+            - mountPath: /app/results
+              name: parakeet-claim2
+      restartPolicy: Always
+      volumes:
+        - name: parakeet-claim0
+          persistentVolumeClaim:
+            claimName: parakeet-claim0
+        - name: parakeet-claim1
+          persistentVolumeClaim:
+            claimName: parakeet-claim1
+        - name: parakeet-claim2
+          persistentVolumeClaim:
+            claimName: parakeet-claim2
+      tolerations:
+        - key: "gpu"
+          operator: "Equal"
+          value: "only"
+          effect: "NoSchedule"
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
