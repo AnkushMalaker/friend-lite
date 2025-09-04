@@ -26,7 +26,7 @@ spec:
         - env:
             - name: HF_HOME
               value: /models
-          image: babel:32000/parakeet
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           name: parakeet-asr
           ports:
             - containerPort: 8765
@@ -34,21 +34,11 @@ spec:
           volumeMounts:
             - mountPath: /models
               name: parakeet-claim0
-            - mountPath: /app/debug
-              name: parakeet-claim1
-            - mountPath: /app/results
-              name: parakeet-claim2
       restartPolicy: Always
       volumes:
         - name: parakeet-claim0
           persistentVolumeClaim:
             claimName: parakeet-claim0
-        - name: parakeet-claim1
-          persistentVolumeClaim:
-            claimName: parakeet-claim1
-        - name: parakeet-claim2
-          persistentVolumeClaim:
-            claimName: parakeet-claim2
       tolerations:
         - key: "gpu"
           operator: "Equal"
