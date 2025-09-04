@@ -9,7 +9,11 @@ export default defineConfig({
     host: process.env.REACT_UI_HOST || '0.0.0.0',
     port: parseInt(process.env.REACT_UI_PORT || '5173'),
     https: process.env.REACT_UI_HTTPS === 'true' ? true : false,
-    allowedHosts: ['speaker-recognition.local', 'localhost', '127.0.0.1'],
+    allowedHosts: [
+      ...(process.env.REACT_UI_HOST && process.env.REACT_UI_HOST !== '0.0.0.0' ? [process.env.REACT_UI_HOST] : []),
+      'localhost', 
+      '127.0.0.1'
+    ],
     proxy: {
       '/api': {
         target: `http://${process.env.SPEAKER_SERVICE_HOST || 'localhost'}:${process.env.SPEAKER_SERVICE_PORT || '8085'}`,
