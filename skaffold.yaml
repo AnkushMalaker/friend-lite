@@ -25,6 +25,23 @@ profiles:
               image.repository: "{{.IMAGE_REPO_moonshine_asr}}"
               image.tag: "{{.IMAGE_TAG_moonshine_asr}}"
 
+  - name: parakeet-asr
+    build:
+      artifacts:
+        - image: parakeet-asr
+          context: extras/asr-services
+          docker:
+            dockerfile: Dockerfile_Parakeet
+    deploy:
+      helm:
+        releases:
+          - name: parakeet-asr
+            chartPath: extras/asr-services/charts/parakeet
+            namespace: speech
+            setValueTemplates:
+              image.repository: "{{.IMAGE_REPO_parakeet_asr}}"
+              image.tag: "{{.IMAGE_TAG_parakeet_asr}}"
+
   - name: speaker-recognition
     build:
       local:
@@ -34,7 +51,7 @@ profiles:
         - image: speaker-recognition
           context: extras/speaker-recognition
           docker:
-            dockerfile: Dockerfile
+            dockerfile: Dockerfile-k8s
             buildArgs:
               COMPUTE_MODE: "{{.COMPUTE_MODE}}"
         - image: speaker-recognition-ui
@@ -61,7 +78,7 @@ profiles:
               webui.env.REACT_UI_HOST: "{{.REACT_UI_HOST}}"
               webui.env.REACT_UI_PORT: "{{.REACT_UI_PORT}}"
               webui.env.REACT_UI_HTTPS: "{{.REACT_UI_HTTPS}}"
-              ingress.hosts[0].host: "{{.INGRESS_HOST}}"
+              ingress.hosts[0].host: "{{.REACT_UI_HOST}}"
 
   # Infrastructure profile - deploy once, rarely updated
   - name: infrastructure
