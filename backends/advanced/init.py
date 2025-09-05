@@ -358,11 +358,10 @@ MISTRAL_MODEL={self.config.get('MISTRAL_MODEL', '')}
 # LLM Provider  
 LLM_PROVIDER={self.config.get('LLM_PROVIDER', '')}
 OPENAI_API_KEY={self.config.get('OPENAI_API_KEY', '')}
-OPENAI_MODEL={self.config.get('OPENAI_MODEL', 'gpt-4o-mini')}
-OPENAI_BASE_URL={self.config.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')}
+OPENAI_MODEL={self.config.get('OPENAI_MODEL', '')}
+OPENAI_BASE_URL={self.config.get('OPENAI_BASE_URL', '')}
 OLLAMA_BASE_URL={self.config.get('OLLAMA_BASE_URL', '')}
 OLLAMA_MODEL={self.config.get('OLLAMA_MODEL', '')}
-
 # Memory Provider
 MEMORY_PROVIDER={self.config.get('MEMORY_PROVIDER', 'friend_lite')}
 QDRANT_BASE_URL={self.config.get('QDRANT_BASE_URL', 'qdrant')}
