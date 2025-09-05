@@ -132,7 +132,8 @@ def run_compose_command(service_name, command, build=False):
                 cwd=service_path,
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
+                timeout=120  # 2 minute timeout for service status checks
             )
             
             if result.returncode == 0:
@@ -146,6 +147,9 @@ def run_compose_command(service_name, command, build=False):
                         console.print(f"  [dim]{line}[/dim]")
                 return False
             
+    except subprocess.TimeoutExpired:
+        console.print(f"[red]❌ Command timed out after 2 minutes for {service_name}[/red]")
+        return False
     except Exception as e:
         console.print(f"[red]❌ Error running command: {e}[/red]")
         return False

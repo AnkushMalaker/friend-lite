@@ -28,12 +28,13 @@ import aiohttp
 # Import Beanie for user management
 from beanie import init_beanie
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from friend_lite.decoder import OmiOpusDecoder
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import ConnectionFailure, PyMongoError
 from wyoming.audio import AudioChunk
 from wyoming.client import AsyncTcpClient
 
@@ -378,6 +379,103 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+###############################################################################
+# GLOBAL EXCEPTION HANDLERS
+###############################################################################
+
+@app.exception_handler(ConnectionFailure)
+@app.exception_handler(PyMongoError)
+async def database_exception_handler(request: Request, exc: Exception):
+    """Handle database connection failures and return structured error response."""
+    logger.error(f"Database connection error: {type(exc).__name__}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Unable to connect to server. Please check your connection and try again.",
+            "error_type": "connection_failure",
+            "error_category": "database"
+        }
+    )
+
+
+@app.exception_handler(ConnectionError)
+async def connection_exception_handler(request: Request, exc: ConnectionError):
+    """Handle general connection errors and return structured error response."""
+    logger.error(f"Connection error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Unable to connect to server. Please check your connection and try again.",
+            "error_type": "connection_failure",
+            "error_category": "network"
+        }
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTP exceptions with structured error response."""
+    # For authentication failures (401), add error_type
+    if exc.status_code == 401:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "detail": exc.detail,
+                "error_type": "authentication_failure"
+            },
+            headers=getattr(exc, "headers", None),
+        )
+    
+    # For other HTTP exceptions, return as-is
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+###############################################################################
+# HEALTH CHECK ENDPOINTS  
+###############################################################################
+
+@app.get("/api/auth/health")
+async def auth_health_check():
+    """Pre-flight health check for authentication service connectivity."""
+    try:
+        # Test database connectivity
+        await mongo_client.admin.command("ping")
+        
+        # Test memory service if available
+        if memory_service:
+            try:
+                await asyncio.wait_for(memory_service.test_connection(), timeout=2.0)
+                memory_status = "ok"
+            except Exception as e:
+                logger.warning(f"Memory service health check failed: {e}")
+                memory_status = "degraded"
+        else:
+            memory_status = "unavailable"
+        
+        return {
+            "status": "ok",
+            "database": "ok", 
+            "memory_service": memory_status,
+            "timestamp": int(time.time())
+        }
+    except Exception as e:
+        logger.error(f"Auth health check failed: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "detail": "Service connectivity check failed",
+                "error_type": "connection_failure",
+                "timestamp": int(time.time())
+            }
+        )
+
 
 app.mount("/audio", StaticFiles(directory=CHUNK_DIR), name="audio")
 

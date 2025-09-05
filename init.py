@@ -149,15 +149,14 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
         result = subprocess.run(
             cmd, 
             cwd=service['path'],
-            check=False
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout for service setup
         )
         
-        if result.returncode == 0:
-            console.print(f"✅ {service_name} setup completed")
-            return True
-        else:
-            console.print(f"❌ {service_name} setup failed (exit code: {result.returncode})")
-            return False
+        console.print(f"✅ {service_name} setup completed")
+        return True
             
     except FileNotFoundError as e:
         console.print(f"❌ {service_name} setup failed: {e}")

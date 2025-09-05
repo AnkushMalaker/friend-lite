@@ -1,5 +1,7 @@
 #!/bin/bash
-set -e
+
+# Enable strict error handling
+set -euo pipefail
 
 echo "🧠 OpenMemory MCP Setup"
 echo "======================"
@@ -10,8 +12,20 @@ if [ -f ".env" ]; then
     cp .env .env.backup.$(date +%Y%m%d_%H%M%S)
 fi
 
-# Start from template
-cp .env.template .env
+# Start from template - check existence first
+if [ ! -r ".env.template" ]; then
+    echo "Error: .env.template not found or not readable" >&2
+    exit 1
+fi
+
+# Copy template and set secure permissions
+if ! cp .env.template .env; then
+    echo "Error: Failed to copy .env.template to .env" >&2
+    exit 1
+fi
+
+# Set restrictive permissions (owner read/write only)
+chmod 600 .env
 
 # Clone the custom fork of mem0 with OpenMemory fixes
 echo ""
@@ -31,14 +45,27 @@ cd ../..
 
 echo "✅ Custom mem0 fork ready with OpenMemory improvements"
 
-# Prompt for OpenAI API key
+# Prompt for OpenAI API key with validation
 echo ""
 echo "🔑 OpenAI API Key (required for memory extraction)"
 echo "Get yours from: https://platform.openai.com/api-keys"
-read -p "OpenAI API Key: " OPENAI_API_KEY
+while true; do
+    read -s -r -p "OpenAI API Key: " OPENAI_API_KEY
+    echo  # Print newline after silent input
+    if [ -n "$OPENAI_API_KEY" ]; then
+        break
+    fi
+    echo "Error: OpenAI API Key cannot be empty. Please try again."
+done
 
-# Update .env file
-sed -i "s|OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_API_KEY|" .env
+# Update .env file safely using awk - replace existing line or append if missing
+temp_file=$(mktemp)
+awk -v key="$OPENAI_API_KEY" '
+    /^OPENAI_API_KEY=/ { print "OPENAI_API_KEY=" key; found=1; next }
+    { print }
+    END { if (!found) print "OPENAI_API_KEY=" key }
+' .env > "$temp_file"
+mv "$temp_file" .env
 
 echo ""
 echo "✅ OpenMemory MCP configured!"

@@ -305,8 +305,10 @@ class FriendLiteSetup:
             if ssl_script.exists():
                 try:
                     # Run from the backend directory so paths work correctly
-                    subprocess.run([str(ssl_script), server_ip], check=True, cwd=str(script_dir))
+                    subprocess.run([str(ssl_script), server_ip], check=True, cwd=str(script_dir), timeout=180)
                     self.console.print("[green][SUCCESS][/green] SSL certificates generated")
+                except subprocess.TimeoutExpired:
+                    self.console.print("[yellow][WARNING][/yellow] SSL certificate generation timed out after 3 minutes")
                 except subprocess.CalledProcessError:
                     self.console.print("[yellow][WARNING][/yellow] SSL certificate generation failed")
             else:

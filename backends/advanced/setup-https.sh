@@ -36,6 +36,37 @@ print_header() {
     echo ""
 }
 
+# Reusable backup helper function
+backup_with_timestamp() {
+    local filepath="$1"
+    
+    # Verify the file exists
+    if [ ! -f "$filepath" ]; then
+        print_error "Cannot backup '$filepath': file does not exist"
+        return 1
+    fi
+    
+    # Generate timestamp (POSIX-safe fallback if needed)
+    local timestamp
+    if command -v date >/dev/null 2>&1; then
+        timestamp=$(date +%Y%m%d_%H%M%S 2>/dev/null) || timestamp=$(date +%Y%m%d_%H%M%S)
+    else
+        # POSIX fallback - use current time in seconds since epoch
+        timestamp="$(date +%s)"
+    fi
+    
+    local backup_path="${filepath}.${timestamp}.backup"
+    
+    # Create the backup
+    if cp "$filepath" "$backup_path"; then
+        echo "$backup_path"
+        return 0
+    else
+        print_error "Failed to create backup of '$filepath'"
+        return 1
+    fi
+}
+
 # Check if we're in the right directory
 if [ ! -f "pyproject.toml" ] || [ ! -d "src" ]; then
     print_error "Please run this script from the backends/advanced directory"
@@ -73,11 +104,15 @@ print_header "Step 1: Environment Configuration"
 if [ -f ".env" ]; then
     print_info ".env file already exists"
     if prompt_yes_no "Do you want to update it from template?" "n"; then
-        cp .env .env.backup
-        print_info "Backed up existing .env to .env.backup"
-        cp .env.template .env
-        print_success ".env created from template"
-        print_warning "Please edit .env to add your API keys and configuration"
+        backup_path=$(backup_with_timestamp ".env")
+        if [ $? -eq 0 ]; then
+            print_info "Backed up existing .env to $backup_path"
+            cp .env.template .env
+            print_success ".env created from template"
+            print_warning "Please edit .env to add your API keys and configuration"
+        else
+            print_error "Failed to backup .env file, aborting update"
+        fi
     fi
 else
     if [ -f ".env.template" ]; then
@@ -102,10 +137,14 @@ print_header "Step 2: Memory Configuration"
 if [ -f "memory_config.yaml" ]; then
     print_info "memory_config.yaml already exists"
     if prompt_yes_no "Do you want to reset it from template?" "n"; then
-        cp memory_config.yaml memory_config.yaml.backup
-        print_info "Backed up existing memory_config.yaml to memory_config.yaml.backup"
-        cp memory_config.yaml.template memory_config.yaml
-        print_success "memory_config.yaml reset from template"
+        backup_path=$(backup_with_timestamp "memory_config.yaml")
+        if [ $? -eq 0 ]; then
+            print_info "Backed up existing memory_config.yaml to $backup_path"
+            cp memory_config.yaml.template memory_config.yaml
+            print_success "memory_config.yaml reset from template"
+        else
+            print_error "Failed to backup memory_config.yaml file, aborting reset"
+        fi
     fi
 else
     if [ -f "memory_config.yaml.template" ]; then
@@ -122,10 +161,14 @@ print_header "Step 3: Diarization Configuration"
 if [ -f "diarization_config.json" ]; then
     print_info "diarization_config.json already exists"
     if prompt_yes_no "Do you want to reset it from template?" "n"; then
-        cp diarization_config.json diarization_config.json.backup
-        print_info "Backed up existing diarization_config.json to diarization_config.json.backup"
-        cp diarization_config.json.template diarization_config.json
-        print_success "diarization_config.json reset from template"
+        backup_path=$(backup_with_timestamp "diarization_config.json")
+        if [ $? -eq 0 ]; then
+            print_info "Backed up existing diarization_config.json to $backup_path"
+            cp diarization_config.json.template diarization_config.json
+            print_success "diarization_config.json reset from template"
+        else
+            print_error "Failed to backup diarization_config.json file, aborting reset"
+        fi
     fi
 else
     if [ -f "diarization_config.json.template" ]; then
