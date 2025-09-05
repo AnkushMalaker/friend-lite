@@ -131,24 +131,44 @@ export const useAudioRecording = (): UseAudioRecordingReturn => {
         throw new Error('No authentication token found')
       }
 
-      // Use appropriate WebSocket protocol and host based on page access
-      const { protocol, hostname, port } = window.location
-      const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) || 
-                             (protocol === 'http:' && (port === '' || port === '80'))
-      
-      let wsUrl: string
-      if (isStandardPort) {
-        // Accessed through nginx proxy - use same host with secure WebSocket
-        const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
-        wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-recorder`
-      } else if (port === '5173') {
-        // Development mode - direct connection to backend
-        wsUrl = `ws://localhost:8000/ws_pcm?token=${token}&device_name=webui-recorder`
-      } else {
-        // Fallback
-        const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
-        wsUrl = `${wsProtocol}//${hostname}:8000/ws_pcm?token=${token}&device_name=webui-recorder`
-      }
+      // Build WebSocket URL using same logic as API service
+              let wsUrl: string
+        const { protocol, port } = window.location
+                 // Check if we have a backend URL from environment
+        if (import.meta.env.VITE_BACKEND_URL) {
+          const backendUrl = import.meta.env.VITE_BACKEND_URL
+          const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
+          // Fallback logic based on current location
+          const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) || 
+                                 (protocol === 'http:' && (port === '' || port === '80'))
+          
+          if (isStandardPort || backendUrl === '') {
+            // Use same origin for Ingress access
+            wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-recorder`
+          } else if (backendUrl != undefined && backendUrl != '') {
+            wsUrl = `${wsProtocol}//${backendUrl}/ws_pcm?token=${token}&device_name=webui-recorder`
+          }    
+          else if (port === '5173') {
+            // Development mode
+            wsUrl = `ws://localhost:8000/ws_pcm?token=${token}&device_name=webui-recorder`
+          } else {
+            // Fallback - use same origin instead of hardcoded port 8000
+            wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-recorder`
+          }
+        } else {
+          // No environment variable set, use fallback logic
+          const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
+          const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) || 
+                                 (protocol === 'http:' && (port === '' || port === '80'))
+          
+          if (isStandardPort) {
+            wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-recorder`
+          } else if (port === '5173') {
+            wsUrl = `ws://localhost:8000/ws_pcm?token=${token}&device_name=webui-recorder`
+          } else {
+            wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-recorder`
+          }
+        }
       const ws = new WebSocket(wsUrl)
       // Note: Don't set binaryType yet - will cause protocol violations with text messages
 

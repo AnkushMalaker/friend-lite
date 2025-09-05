@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-speaker
+  labels:
+    app: {{ .Release.Name }}-speaker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-speaker
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-speaker
+    spec:
+      tolerations:
+        - key: "gpu"
+          operator: "Equal"
+          value: "required"
+          effect: "NoSchedule"
+      containers:
+        - name: speaker
+          image: "{{ .Values.speaker.image.repository }}:{{ .Values.speaker.image.tag }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.speaker.service.port }}
+              protocol: TCP
+          env:
+            - name: HF_HOME
+              value: /models
+            {{- if .Values.secrets.hfToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: HF_TOKEN
+            {{- end }}
+            {{- if .Values.secrets.deepgramApiKey }}
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: DEEPGRAM_API_KEY
+            {{- end }}
+            {{- range $key, $value := .Values.speaker.env }}
+            {{- if and (ne $key "HF_TOKEN") (ne $key "DEEPGRAM_API_KEY") }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+          resources:
+            {{- if .Values.speaker.resources.requests }}
+            requests:
+              {{- toYaml .Values.speaker.resources.requests | nindent 14 }}
+            {{- end }}
+            limits:
+              {{- if .Values.speaker.resources.limits }}
+              {{- toYaml .Values.speaker.resources.limits | nindent 14 }}
+              {{- end }}
+              {{- if .Values.speaker.nvidia.enabled }}
+              nvidia.com/gpu: 1
+              {{- end }}
+          volumeMounts:
+            {{- if .Values.global.sharedModels.enabled }}
+            - name: model-cache
+              mountPath: /models
+            {{- else if .Values.speaker.persistence.modelCache.enabled }}
+            - name: model-cache
+              mountPath: /models
+            {{- end }}
+            {{- if .Values.speaker.persistence.audioChunks.enabled }}
+            - name: audio-chunks
+              mountPath: /app/audio_chunks
+            {{- end }}
+            {{- if .Values.speaker.persistence.debug.enabled }}
+            - name: debug
+              mountPath: /app/debug
+            {{- end }}
+            {{- if .Values.speaker.persistence.speakerData.enabled }}
+            - name: speaker-data
+              mountPath: /app/data
+            {{- end }}
+      volumes:
+        {{- if .Values.global.sharedModels.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: shared-models-cache
+        {{- else if .Values.speaker.persistence.modelCache.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-model-cache
+        {{- end }}
+        {{- if .Values.speaker.persistence.audioChunks.enabled }}
+        - name: audio-chunks
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-audio-chunks
+        {{- end }}
+        {{- if .Values.speaker.persistence.debug.enabled }}
+        - name: debug
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-debug
+        {{- end }}
+        {{- if .Values.speaker.persistence.speakerData.enabled }}
+        - name: speaker-data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-speaker-data
+        {{- end }}

@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import cast
+from typing import cast, Optional, Union
 
 import torch
 import uvicorn
@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default_factory=get_data_directory, description="Directory for storing speaker data")
     enrollment_audio_dir: Path = Field(default_factory=lambda: get_data_directory() / "enrollment_audio", description="Directory for storing enrollment audio files")
     max_file_seconds: int = Field(default=180, description="Maximum file duration in seconds")
-    deepgram_api_key: str | None = Field(default=None, description="Deepgram API key for wrapper service")
+    deepgram_api_key: Optional[str] = Field(default=None, description="Deepgram API key for wrapper service")
     deepgram_base_url: str = Field(default="https://api.deepgram.com", description="Deepgram API base URL")
-    hf_token: str | None = Field(default=None, description="Hugging Face token for Pyannote models")
+    hf_token: Optional[str] = Field(default=None, description="Hugging Face token for Pyannote models")
 
     class Config:
         case_sensitive = True
@@ -58,7 +58,22 @@ auth.hf_token = hf_token
 # Global variables for storing initialized resources
 audio_backend: AudioBackend
 speaker_db: UnifiedSpeakerDB
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Device selection with environment override
+log.info(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    log.info(f"CUDA device count: {torch.cuda.device_count()}")
+    log.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+    log.info(f"CUDA version: {torch.version.cuda}")
+
+compute_mode = os.getenv("COMPUTE_MODE", "cpu").lower()
+if compute_mode == "gpu" and torch.cuda.is_available():
+    device = torch.device("cuda")
+    log.info("Using GPU mode via COMPUTE_MODE=gpu environment variable")
+elif compute_mode == "gpu" and not torch.cuda.is_available():
+    device = torch.device("cpu")
+    log.warning("COMPUTE_MODE=gpu requested but CUDA not available, falling back to CPU")
+else:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @asynccontextmanager
@@ -100,10 +115,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Simple Speaker Recognition Service", version="0.2.0", lifespan=lifespan)
 
+react_ui_host = os.getenv("REACT_UI_HOST", "localhost") + ":" + os.getenv("REACT_UI_PORT", "5173")
 # Add CORS middleware for direct WebSocket connections from HTTPS frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://100.83.66.30", "https://localhost:5173"],
+    allow_origins=[react_ui_host, "https://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

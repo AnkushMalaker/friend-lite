@@ -1,0 +1,13 @@
+apiVersion: v2
+name: advanced-backend
+description: Friend-lite Advanced Backend Service
+version: 0.1.0
+appVersion: "1.0"
+keywords:
+  - friend-lite
+  - backend
+  - ai
+sources:
+  - https://github.com/BasedHardware/Friend
+home: https://github.com/BasedHardware/Friend
+

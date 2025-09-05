@@ -1,0 +1,92 @@
+# Default values for advanced-backend
+replicaCount: 1
+
+image:
+  repository: advanced-backend
+  pullPolicy: Always
+  tag: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: NodePort
+  port: 8000
+  nodePort: 30270
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # cert-manager.io/cluster-issuer: "selfsigned-issuer"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+  hosts:
+    - host: friend-lite.192-168-1-42.nip.io
+      paths:
+        - path: /api
+          pathType: Prefix
+        - path: /auth
+          pathType: Prefix
+        - path: /users
+          pathType: Prefix
+        - path: /ws_pcm
+          pathType: Prefix
+        - path: /ws_omi
+          pathType: Prefix
+        - path: /ws
+          pathType: Prefix
+        - path: /health
+          pathType: Prefix
+        - path: /readiness
+          pathType: Prefix
+        - path: /audio
+          pathType: Prefix
+  # tls:
+  #   - secretName: friend-lite-tls
+  #     hosts:
+  #       - friend-lite.192-168-1-42.nip.io
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 2Gi
+
+# Environment variables
+# Most environment variables come from the ConfigMap created from .env file
+# Only override specific Kubernetes values here
+env:
+  # These are set by Skaffold setValueTemplates for Kubernetes-specific URLs
+  # MONGODB_URI: set by Skaffold
+  # QDRANT_BASE_URL: set by Skaffold
+  
+  # Override only specific values if needed
+  ENVIRONMENT: "dev"
+  AUTH_ENABLED: "false"
+  # Don't override OPENAI_API_KEY - it comes from ConfigMap
+
+# Volume mounts for persistent data
+persistence:
+  enabled: true
+  storageClass: "openebs-hostpath"
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  mountPath: /app/data
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

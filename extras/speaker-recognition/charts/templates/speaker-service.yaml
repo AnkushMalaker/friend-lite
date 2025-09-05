@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-speaker
+  labels:
+    app: {{ .Release.Name }}
+    component: speaker
+spec:
+  type: {{ .Values.speaker.service.type }}
+  ports:
+    - port: {{ .Values.speaker.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: {{ .Release.Name }}-speaker

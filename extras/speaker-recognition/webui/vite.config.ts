@@ -9,6 +9,12 @@ export default defineConfig({
     host: process.env.REACT_UI_HOST || '0.0.0.0',
     port: parseInt(process.env.REACT_UI_PORT || '5173'),
     https: process.env.REACT_UI_HTTPS === 'true' ? true : false,
+    allowedHosts: [
+      'localhost',
+      '127.0.0.1',
+      'speaker.friend-lite.192-168-1-42.nip.io',
+      '.nip.io'
+    ],
   },
   define: {
     global: 'globalThis',
