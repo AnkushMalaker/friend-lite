@@ -7,7 +7,7 @@ Friend-Lite uses a unified initialization system with clean separation of concer
 - **Configuration** (`init.py`) - Set up service configurations, API keys, and .env files
 - **Service Management** (`services.py`) - Start, stop, and manage running services
 
-The root orchestrator handles service selection and delegates configuration to individual service scripts. **Setup scripts only configure - they don't start services automatically.** This prevents unnecessary resource usage and gives you control over when services actually run.
+The root orchestrator handles service selection and delegates configuration to individual service scripts. In general, setup scripts only configure and do not start services automatically. Exceptions: `extras/asr-services` and `extras/openmemory-mcp` are startup scripts. This prevents unnecessary resource usage and gives you control over when services actually run.
 
 ## Architecture
 
