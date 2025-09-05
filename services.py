@@ -95,7 +95,8 @@ def run_compose_command(service_name, command, build=False):
             # Simply stream all output with coloring
             all_output = []
             
-            assert process.stdout is not None
+            if process.stdout is None:
+                raise RuntimeError("Process stdout is None - unable to read command output")
             for line in process.stdout:
                 line = line.rstrip()
                 if not line:

@@ -472,13 +472,13 @@ export default function Memories() {
                         </span>
                       </div>
                     )}
-                    {memory.score && isSemanticFilterActive && (
+                    {memory.score != null && isSemanticFilterActive && (
                       <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
                         <Target className="h-3 w-3" />
                         <span>Relevance: {(memory.score * 100).toFixed(1)}%</span>
                       </div>
                     )}
-                    {memory.score && !isSemanticFilterActive && (
+                    {memory.score != null && !isSemanticFilterActive && (
                       <span className="text-xs text-gray-500 dark:text-gray-400">
                         Score: {memory.score.toFixed(3)}
                       </span>

@@ -6,10 +6,12 @@ Handles service selection and delegation only - no configuration duplication
 
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
+
+from rich import print as rprint
 from rich.console import Console
 from rich.prompt import Confirm
-from rich import print as rprint
 
 console = Console()
 
@@ -94,7 +96,6 @@ def select_services():
 
 def cleanup_unselected_services(selected_services):
     """Backup and remove .env files from services that weren't selected"""
-    from datetime import datetime
     
     all_services = list(SERVICES['backend'].keys()) + list(SERVICES['extras'].keys())
     

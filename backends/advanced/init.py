@@ -126,12 +126,12 @@ class FriendLiteSetup:
         choice = self.prompt_choice("Choose your transcription provider:", choices, "1")
 
         if choice == "1":
-            self.config["TRANSCRIPTION_PROVIDER"] = "deepgram"
             self.console.print("[blue][INFO][/blue] Deepgram selected")
             self.console.print("Get your API key from: https://console.deepgram.com/")
             
             api_key = self.prompt_value("Deepgram API key (leave empty to skip)", "")
             if api_key:
+                self.config["TRANSCRIPTION_PROVIDER"] = "deepgram"
                 self.config["DEEPGRAM_API_KEY"] = api_key
                 self.console.print("[green][SUCCESS][/green] Deepgram configured")
             else:

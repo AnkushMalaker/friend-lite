@@ -194,7 +194,8 @@ class QdrantVectorStore(VectorStoreBase):
                 )
                 memories.append(memory)
                 # Log similarity scores for debugging
-                memory_logger.debug(f"Retrieved memory with score {result.score:.3f}: {result.payload.get('content', '')[:50]}...")
+                score_str = f"{result.score:.3f}" if result.score is not None else "None"
+                memory_logger.debug(f"Retrieved memory with score {score_str}: {result.payload.get('content', '')[:50]}...")
             
             threshold_msg = f"threshold {score_threshold}" if score_threshold > 0.0 else "no threshold"
             memory_logger.info(f"Found {len(memories)} memories with {threshold_msg} for user {user_id}")
