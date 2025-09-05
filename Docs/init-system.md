@@ -89,12 +89,13 @@ cd extras/openmemory-mcp
 
 When using the orchestrated setup, service URLs are automatically configured:
 
-| Service Selected | Backend Gets Configured With |
-|------------------|------------------------------|
-| Speaker Recognition | `SPEAKER_SERVICE_URL=http://host.docker.internal:8085` |
-| ASR Services | `PARAKEET_ASR_URL=http://host.docker.internal:8767` |
+| Service Selected     | Backend Gets Configured With                                     |
+|----------------------|-------------------------------------------------------------------|
+| Speaker Recognition  | `SPEAKER_SERVICE_URL=http://host.docker.internal:8085`           |
+| ASR Services         | `PARAKEET_ASR_URL=http://host.docker.internal:8767`              |
 
 This eliminates the need to manually configure service URLs when running services on the same machine.
+Note (Linux): If `host.docker.internal` is unavailable, add `extra_hosts: - "host.docker.internal:host-gateway"` to the relevant services in `docker-compose.yml`.
 
 ## Key Benefits
 
