@@ -324,19 +324,19 @@ class VectorStoreBase(ABC):
         """
         pass
     
-    async def count_memories(self, user_id: str) -> int:
+    async def count_memories(self, user_id: str) -> Optional[int]:
         """Count total number of memories for a user.
         
-        Default implementation returns 0. Vector stores should override
-        this method to provide efficient counting if supported.
+        Default implementation returns None to indicate counting is unsupported.
+        Vector stores should override this method to provide efficient counting if supported.
         
         Args:
             user_id: User identifier
             
         Returns:
-            Total count of memories for the user
+            Total count of memories for the user, or None if counting is not supported by this store
         """
-        return 0
+        return None
     
     @abstractmethod
     async def update_memory(

@@ -455,7 +455,7 @@ The `close_conversation()` method in ClientState now delegates to ConversationMa
 3. **Manual API Call**
    - `/api/conversations/{client_id}/close` endpoint
    - User-initiated closure
-   - UI button in Streamlit dashboard
+   - UI button in React dashboard
 
 4. **Conversation Timeout** (Not shown in diagram)
    - 1.5 minute silence detection
@@ -583,7 +583,7 @@ stateDiagram-v2
 graph LR
     subgraph "Docker Network"
         Backend[friend-backend<br/>uv + FastAPI]
-        Streamlit[streamlit<br/>Dashboard UI]
+        WebUI[webui<br/>React Dashboard]
         Proxy[nginx<br/>Load Balancer]
         Mongo[mongo:4.4.18<br/>Primary Database]
         Qdrant[qdrant<br/>Vector Store]
@@ -599,12 +599,12 @@ graph LR
         AudioClient[Audio Client<br/>Mobile/Desktop]
     end
     
-    WebBrowser -->|Port 8501| Streamlit
-    WebBrowser -->|Port 80| Proxy
+    WebBrowser -->|Port 5173 (dev)| WebUI
+    WebBrowser -->|Port 80 (prod)| Proxy
     AudioClient -->|Port 8000| Backend
     
     Proxy --> Backend
-    Proxy --> Streamlit
+    Proxy --> WebUI
     Backend --> Mongo
     Backend --> Qdrant
     Backend -.->|Optional| Ollama
@@ -620,17 +620,19 @@ graph LR
 - **Health Checks**: Automated readiness and liveness probes
 - **Environment**: All configuration via environment variables
 
-#### Streamlit Container (`streamlit`)
-- **Purpose**: Web dashboard interface
-- **Dependencies**: Streamlit, requests, pandas for data visualization
-- **Backend Integration**: HTTP API client with authentication
+#### React WebUI Container (`webui`)
+- **Purpose**: Modern React-based web dashboard interface
+- **Dependencies**: React, TypeScript, Vite for development, Nginx for production
+- **Backend Integration**: HTTP API client with JWT authentication
 - **Configuration**: Backend URL configuration for API calls
+- **Development**: Vite dev server on port 5173
+- **Production**: Nginx serving built React app on port 80
 
 #### Infrastructure Containers
 - **MongoDB 4.4.18**: Primary data storage with persistence
 - **Qdrant Latest**: Vector database for memory embeddings
 - **Neo4j 5.15**: Graph database for memory relationships and entity connections
-- **Nginx Alpine**: Reverse proxy and load balancing
+- **Nginx Alpine**: Reverse proxy and load balancing (serves React app in production, proxies API calls to backend)
 
 ## Detailed Data Flow Architecture
 
@@ -643,7 +645,7 @@ graph LR
 flowchart TB
     %% External Clients
     Client[📱 Audio Client<br/>Mobile/Desktop/HAVPE]
-    WebUI[🌐 Web Dashboard<br/>Streamlit Interface]
+    WebUI[🌐 Web Dashboard<br/>React Web UI]
 
     %% Authentication Gateway
     subgraph "🔐 Authentication Layer"

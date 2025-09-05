@@ -1,5 +1,10 @@
 #!/bin/bash
-set -e
+
+# Enable strict error handling
+set -euo pipefail
+
+# Error trap for better diagnostics
+trap 'echo "Error on line $LINENO"; exit 1' ERR
 
 # Parse command line arguments
 ENABLE_HTTPS=false
@@ -28,17 +33,36 @@ echo "=============================="
 # Check if already configured
 if [ -f ".env" ]; then
     echo "⚠️  .env already exists. Backing up..."
-    cp .env .env.backup.$(date +%Y%m%d_%H%M%S)
+    cp .env ".env.backup.$(date +%Y%m%d_%H%M%S)"
 fi
 
-# Start from template
-cp .env.template .env
+# Start from template - check existence first
+if [ ! -r ".env.template" ]; then
+    echo "Error: .env.template not found or not readable" >&2
+    exit 1
+fi
+
+# Copy template and set secure permissions
+if ! cp .env.template .env; then
+    echo "Error: Failed to copy .env.template to .env" >&2
+    exit 1
+fi
+
+# Set restrictive permissions (owner read/write only)
+chmod 600 .env
 
 # Prompt for required settings
 echo ""
 echo "🔑 Hugging Face Token (required for pyannote models)"
 echo "Get yours from: https://huggingface.co/settings/tokens"
-read -p "HF Token: " HF_TOKEN
+read -s -r -p "HF Token: " HF_TOKEN
+echo  # Print newline after silent input
+
+# Validate token is not empty
+if [ -z "$HF_TOKEN" ]; then
+    echo "Error: HF token is required" >&2
+    exit 1
+fi
 
 echo ""
 echo "🖥️ Compute Mode"

@@ -19,6 +19,7 @@ from wyoming.audio import AudioChunk
 from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
+from advanced_omi_backend.users import get_user_by_id
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.memory import get_memory_service
@@ -179,8 +180,6 @@ class ProcessorManager:
         """
         try:
             # Get user's primary speaker configuration
-            from advanced_omi_backend.users import get_user_by_id
-            
             user = await get_user_by_id(user_id)
             if not user or not user.primary_speakers:
                 return True, "No primary speakers configured - processing all conversations"
@@ -192,30 +191,40 @@ class ProcessorManager:
             if not chunk or not chunk.get('transcript'):
                 return True, "No transcript data available - processing conversation"
             
-            # Extract speakers from transcript segments
+            # Extract speakers from transcript segments (normalized for comparison)
             transcript_speakers = set()
+            transcript_speaker_originals = {}  # Keep original names for logging
             total_segments = 0
             identified_segments = 0
             
             for segment in chunk['transcript']:
                 total_segments += 1
                 if 'identified_as' in segment and segment['identified_as'] and segment['identified_as'] != 'Unknown':
-                    transcript_speakers.add(segment['identified_as'])
+                    original_name = segment['identified_as']
+                    normalized_name = original_name.strip().lower()
+                    transcript_speakers.add(normalized_name)
+                    transcript_speaker_originals[normalized_name] = original_name
                     identified_segments += 1
             
             if not transcript_speakers:
                 return True, f"No speakers identified in transcript ({identified_segments}/{total_segments} segments) - processing conversation"
             
-            # Check if any primary speakers are present
-            primary_speaker_names = {ps['name'] for ps in user.primary_speakers}
-            found_primary_speakers = transcript_speakers.intersection(primary_speaker_names)
+            # Check if any primary speakers are present (normalized comparison)
+            primary_speaker_names = {ps['name'].strip().lower() for ps in user.primary_speakers}
+            primary_speaker_originals = {ps['name'].strip().lower(): ps['name'] for ps in user.primary_speakers}
+            found_primary_speakers_normalized = transcript_speakers.intersection(primary_speaker_names)
             
-            if found_primary_speakers:
-                audio_logger.info(f"✅ Primary speakers found in conversation: {found_primary_speakers} - processing memory")
-                return True, f"Primary speakers detected: {', '.join(found_primary_speakers)}"
+            if found_primary_speakers_normalized:
+                # Convert back to original names for display
+                found_primary_originals = [primary_speaker_originals[name] for name in found_primary_speakers_normalized]
+                audio_logger.info(f"✅ Primary speakers found in conversation: {found_primary_originals} - processing memory")
+                return True, f"Primary speakers detected: {', '.join(found_primary_originals)}"
             else:
-                audio_logger.info(f"❌ No primary speakers found - transcript speakers: {transcript_speakers}, primary speakers: {primary_speaker_names} - skipping memory processing")
-                return False, f"Only non-primary speakers found: {', '.join(transcript_speakers)}"
+                # Show original names in logs
+                transcript_originals = [transcript_speaker_originals[name] for name in transcript_speakers]
+                primary_originals = [primary_speaker_originals[name] for name in primary_speaker_names]
+                audio_logger.info(f"❌ No primary speakers found - transcript speakers: {transcript_originals}, primary speakers: {primary_originals} - skipping memory processing")
+                return False, f"Only non-primary speakers found: {', '.join(transcript_originals)}"
                 
         except Exception as e:
             # On any error, default to processing (fail-safe)

@@ -6,10 +6,10 @@ This document explains the different setup scripts available in Friend-Lite and 
 
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
-| `init.sh` | **Main interactive setup wizard** | **Recommended for all users** - First time setup with guided configuration |
+| `init.py` | **Main interactive setup wizard** | **Recommended for all users** - First time setup with guided configuration (located at repo root) |
 | `setup-https.sh` | HTTPS certificate generation | **Optional** - When you need secure connections for microphone access |
 
-## Main Setup Script: `init.sh`
+## Main Setup Script: `init.py`
 
 **Purpose**: Interactive wizard that configures all services with guided prompts.
 
@@ -24,8 +24,8 @@ This document explains the different setup scripts available in Friend-Lite and 
 
 ### Usage:
 ```bash
-cd backends/advanced
-./init.sh
+# From repository root
+python backends/advanced/init.py
 ```
 
 ### Example Flow:
@@ -118,22 +118,11 @@ https://localhost/
 https://100.83.66.30/  # Your configured IP
 ```
 
-## Migration from Old Scripts
-
-### Old vs New Script Names:
-
-| Old Name | New Name | Purpose |
-|----------|----------|---------|
-| `init.sh` (old) | `setup-https.sh` | HTTPS setup only |
-| `setup.sh` (created) | `init.sh` (new) | Main interactive setup |
-
-### If you have old scripts:
-The old `init.sh` has been renamed to `setup-https.sh` to avoid confusion. The new `init.sh` is the main setup wizard.
 
 ## Recommended Setup Flow
 
 ### New Users (Recommended):
-1. **Run main setup**: `./init.sh`
+1. **Run main setup**: `python backends/advanced/init.py`
 2. **Start services**: `docker compose up --build -d`
 3. **Optional HTTPS**: `./setup-https.sh your-ip` (if needed)
 
@@ -144,13 +133,14 @@ The old `init.sh` has been renamed to `setup-https.sh` to avoid confusion. The n
 
 ## Script Locations
 
-All setup scripts are located in:
+Setup scripts are located as follows:
 ```
-backends/advanced/
-├── init.sh           # Main interactive setup wizard
-├── setup-https.sh    # HTTPS certificate generation  
-├── .env.template     # Environment template
-└── docker-compose.yml
+.                     # Project root
+├── init.py           # Main interactive setup wizard (repo root)
+└── backends/advanced/
+    ├── setup-https.sh    # HTTPS certificate generation  
+    ├── .env.template     # Environment template
+    └── docker-compose.yml
 ```
 
 ## Getting Help

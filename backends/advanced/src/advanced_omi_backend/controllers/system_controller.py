@@ -10,6 +10,7 @@ import os
 import shutil
 import time
 import wave
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -952,9 +953,9 @@ async def update_speaker_configuration(user: User, primary_speakers: list[dict])
                         status_code=400, content={"error": f"Missing required field: {field}"}
                     )
         
-        # Add timestamp to each speaker
-        from datetime import UTC, datetime
+        # Enforce server-side user_id and add timestamp to each speaker
         for speaker in primary_speakers:
+            speaker["user_id"] = user.user_id  # Override client-supplied user_id
             speaker["selected_at"] = datetime.now(UTC).isoformat()
         
         # Update user model

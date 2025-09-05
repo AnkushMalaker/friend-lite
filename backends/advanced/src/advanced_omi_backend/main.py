@@ -970,7 +970,7 @@ async def health_check():
     if memory_provider == "friend_lite":
         try:
             # Test Friend-Lite memory service connection with timeout
-            test_success = await memory_service.test_connection()
+            test_success = await asyncio.wait_for(memory_service.test_connection(), timeout=8.0)
             if test_success:
                 health_status["services"]["memory_service"] = {
                     "status": "✅ Friend-Lite Memory Connected",
@@ -988,7 +988,7 @@ async def health_check():
                 overall_healthy = False
         except asyncio.TimeoutError:
             health_status["services"]["memory_service"] = {
-                "status": "⚠️ Friend-Lite Memory Timeout (60s) - Check Qdrant",
+                "status": "⚠️ Friend-Lite Memory Timeout (8s) - Check Qdrant",
                 "healthy": False,
                 "provider": "friend_lite",
                 "critical": False,

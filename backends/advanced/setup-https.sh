@@ -174,9 +174,54 @@ print_header "Step 5: Optional Services (extras/)"
 echo "Configure additional services from extras/:"
 echo ""
 
+# Helper function to update or add environment variable in .env file
+update_env_var() {
+    local key=$1
+    local value=$2
+    
+    # Use Python to safely update the .env file
+    python3 -c "
+import sys
+import re
+
+key = '$key'
+value = '$value'
+env_file = '.env'
+
+# Read existing .env file
+try:
+    with open(env_file, 'r') as f:
+        lines = f.readlines()
+except FileNotFoundError:
+    lines = []
+
+# Check if key exists (uncommented)
+updated = False
+for i, line in enumerate(lines):
+    # Skip comments
+    if line.strip().startswith('#'):
+        continue
+    # Check for existing key
+    if re.match(f'^\\s*{re.escape(key)}=', line):
+        lines[i] = f'{key}={value}\\n'
+        updated = True
+        break
+
+# If not found, append to end
+if not updated:
+    if lines and not lines[-1].endswith('\\n'):
+        lines.append('\\n')
+    lines.append(f'{key}={value}\\n')
+
+# Write back to file
+with open(env_file, 'w') as f:
+    f.writelines(lines)
+"
+}
+
 # OpenMemory MCP (Memory Provider)
 if prompt_yes_no "Use OpenMemory MCP for memory management? (cross-client compatible)" "n"; then
-    sed -i 's/MEMORY_PROVIDER=.*/MEMORY_PROVIDER=openmemory_mcp/' .env
+    update_env_var "MEMORY_PROVIDER" "openmemory_mcp"
     print_success "Configured for OpenMemory MCP"
     OPENMEMORY_ENABLED=true
 else
@@ -185,9 +230,7 @@ fi
 
 # Parakeet ASR (Offline Transcription)
 if prompt_yes_no "Use Parakeet for offline transcription? (requires GPU)" "n"; then
-    if ! grep -q "PARAKEET_ASR_URL" .env; then
-        echo "PARAKEET_ASR_URL=http://host.docker.internal:8767" >> .env
-    fi
+    update_env_var "PARAKEET_ASR_URL" "http://host.docker.internal:8767"
     print_success "Configured for Parakeet ASR"
     PARAKEET_ENABLED=true
 else
@@ -196,9 +239,7 @@ fi
 
 # Speaker Recognition
 if prompt_yes_no "Enable Speaker Recognition service?" "n"; then
-    if ! grep -q "SPEAKER_SERVICE_URL" .env; then
-        echo "SPEAKER_SERVICE_URL=http://host.docker.internal:8001" >> .env
-    fi
+    update_env_var "SPEAKER_SERVICE_URL" "http://host.docker.internal:8001"
     print_success "Configured for Speaker Recognition"
     SPEAKER_ENABLED=true
 else

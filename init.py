@@ -162,6 +162,20 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
     except FileNotFoundError as e:
         console.print(f"❌ {service_name} setup failed: {e}")
         return False
+    except subprocess.TimeoutExpired as e:
+        console.print(f"❌ {service_name} setup timed out after {e.timeout} seconds")
+        if e.stdout:
+            console.print(f"   stdout: {e.stdout.decode()}")
+        if e.stderr:
+            console.print(f"   stderr: {e.stderr.decode()}")
+        return False
+    except subprocess.CalledProcessError as e:
+        console.print(f"❌ {service_name} setup failed with exit code {e.returncode}")
+        if e.stdout:
+            console.print(f"   stdout: {e.stdout.decode()}")
+        if e.stderr:
+            console.print(f"   stderr: {e.stderr.decode()}")
+        return False
     except Exception as e:
         console.print(f"❌ {service_name} setup failed: {e}")
         return False

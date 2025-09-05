@@ -11,11 +11,15 @@ import time
 import uuid
 from typing import Any, Dict, List
 
+from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
+    Distance,
     FieldCondition,
     Filter,
     FilterSelector,
     MatchValue,
+    PointStruct,
+    VectorParams,
 )
 
 from ..base import MemoryEntry, VectorStoreBase
@@ -58,9 +62,6 @@ class QdrantVectorStore(VectorStoreBase):
             RuntimeError: If initialization fails
         """
         try:
-            from qdrant_client import AsyncQdrantClient
-            from qdrant_client.models import Distance, VectorParams
-            
             self.client = AsyncQdrantClient(host=self.host, port=self.port)
             
             # Check if collection exists and get its info
@@ -119,8 +120,6 @@ class QdrantVectorStore(VectorStoreBase):
     async def add_memories(self, memories: List[MemoryEntry]) -> List[str]:
         """Add memories to Qdrant."""
         try:
-            from qdrant_client.models import PointStruct
-            
             points = []
             for memory in memories:
                 if memory.embedding:
@@ -317,8 +316,6 @@ class QdrantVectorStore(VectorStoreBase):
     ) -> bool:
         """Update (upsert) an existing memory in Qdrant."""
         try:
-            from qdrant_client.models import PointStruct
-
             payload = {
                 "content": new_content,
                 "metadata": new_metadata,

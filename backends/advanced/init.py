@@ -388,10 +388,13 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 LOG_LEVEL=INFO
 """
         
-        with open(".env", "w") as f:
+        # Create .env file with secure permissions (owner read/write only)
+        env_path = ".env"
+        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
+        with os.fdopen(fd, 'w') as f:
             f.write(env_content)
         
-        self.console.print("[green][SUCCESS][/green] .env file created successfully")
+        self.console.print("[green][SUCCESS][/green] .env file created successfully with secure permissions")
 
     def copy_config_templates(self):
         """Copy other configuration files"""
