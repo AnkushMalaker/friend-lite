@@ -1,5 +1,6 @@
 #!/bin/bash
-
+set -Eeuo pipefail
+IFS=$'\n\t'
 # Generate ConfigMap data from .env file for Helm template
 ENV_FILE="backends/advanced/.env"
 OUTPUT_FILE="backends/charts/advanced-backend/templates/env-configmap.yaml"
