@@ -26,7 +26,7 @@ export default function LoginPage() {
     // Pre-flight connection check
     try {
       const healthUrl = BACKEND_URL ? `${BACKEND_URL}/api/auth/health` : '/api/auth/health'
-      const healthResponse = await fetch(healthUrl, { timeout: 5000 })
+      const healthResponse = await fetch(healthUrl)
       if (!healthResponse.ok) {
         throw new Error('Health check failed')
       }
