@@ -773,5 +773,14 @@ def get_transcription_provider(
             )
         logger.info(f"Using Parakeet transcription provider in {mode} mode")
         return ParakeetProvider(parakeet_url)
+    
+    elif provider_name == "offline":
+        # "offline" is an alias for Parakeet ASR
+        if not parakeet_url:
+            raise RuntimeError(
+                "Offline transcription provider requested but PARAKEET_ASR_URL not configured"
+            )
+        logger.info(f"Using offline Parakeet transcription provider in {mode} mode")
+        return ParakeetProvider(parakeet_url)
     else:
         return None

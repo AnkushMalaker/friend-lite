@@ -1,5 +1,6 @@
 #!/bin/bash
-
+set -Eeuo pipefail
+IFS=$'\n\t'
 # Generate ConfigMap data from .env file for Helm template
 ENV_FILE="backends/advanced/.env"
 OUTPUT_FILE="backends/charts/advanced-backend/templates/env-configmap.yaml"
@@ -34,25 +35,48 @@ metadata:
 data:
 EOF
 
-# Process .env file and convert to YAML format
-while IFS= read -r line || [ -n "$line" ]; do
-    # Skip empty lines and comments
-    if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
-        # Split on first = sign
-        key="${line%%=*}"
-        value="${line#*=}"
-        # Remove any trailing comments from value
-        value="${value%% #*}"
-        # Skip Kubernetes-specific values that will be set by Skaffold
-        if [[ "$key" =~ ^(MONGODB_URI|QDRANT_BASE_URL|CORS_ORIGINS)$ ]]; then
-            # Don't add anything for these - they'll be set by Skaffold
-            continue
-        else
-            # Clean up trailing spaces and put the actual value from .env directly into the ConfigMap
-            value=$(echo "$value" | sed 's/[[:space:]]*$//')
-            echo "  $key: \"$value\"" >> "$OUTPUT_FILE"
-        fi
-    fi
+# Process .env file and convert to YAML format (robust)
+SECRET_KEY_PATTERN='(SECRET|PASSWORD|TOKEN|API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET)'
+valid_key_re='^[A-Za-z_][A-Za-z0-9_]*$'
+while IFS= read -r line || [[ -n "$line" ]]; do
+  # strip CR from CRLF
+  line="${line%$'\r'}"
+  # skip empty/comment lines
+  [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
+  # allow leading 'export '
+  line="${line#export }"
+  # must contain '='
+  [[ "$line" != *"="* ]] && continue
+
+  key="${line%%=*}"
+  value="${line#*=}"
+  # trim key/value whitespace
+  key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+  value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+
+  # strip surrounding quotes if present (single or double)
+  if [[ "$value" =~ ^\".*\"$ ]]; then value="${value:1:${#value}-2}"; fi
+  if [[ "$value" =~ ^\'.*\'$ ]]; then value="${value:1:${#value}-2}"; fi
+  # remove trailing inline comment only if preceded by space
+  value="${value%% #*}"
+
+  # Skip values injected via Helm values
+  if [[ "$key" =~ ^(MONGODB_URI|QDRANT_BASE_URL|CORS_ORIGINS)$ ]]; then
+    continue
+  fi
+  # Guard against leaking secrets into a ConfigMap
+  if [[ "$key" =~ $SECRET_KEY_PATTERN ]]; then
+    echo "WARN: Skipping potential secret key '$key'. Manage via Kubernetes Secret instead." >&2
+    continue
+  fi
+  # Validate key
+  if ! [[ "$key" =~ $valid_key_re ]]; then
+    echo "WARN: Skipping invalid env key '$key' (must match $valid_key_re)" >&2
+    continue
+  fi
+  # YAML-escape value for double-quoted string
+  value="${value//\\/\\\\}"; value="${value//\"/\\\"}"
+  printf '  %s: "%s"\n' "$key" "$value" >> "$OUTPUT_FILE"
 done < "$ENV_FILE"
 
 # Add Kubernetes-specific values section

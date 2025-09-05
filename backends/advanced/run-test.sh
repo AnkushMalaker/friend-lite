@@ -67,6 +67,20 @@ fi
 print_info "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
 print_info "OPENAI_API_KEY length: ${#OPENAI_API_KEY}"
 
+# Ensure memory_config.yaml exists
+if [ ! -f "memory_config.yaml" ] && [ -f "memory_config.yaml.template" ]; then
+    print_info "Creating memory_config.yaml from template..."
+    cp memory_config.yaml.template memory_config.yaml
+    print_success "memory_config.yaml created"
+fi
+
+# Ensure diarization_config.json exists
+if [ ! -f "diarization_config.json" ] && [ -f "diarization_config.json.template" ]; then
+    print_info "Creating diarization_config.json from template..."
+    cp diarization_config.json.template diarization_config.json
+    print_success "diarization_config.json created"
+fi
+
 # Install dependencies with uv
 print_info "Installing dependencies with uv..."
 uv sync --dev --group test

@@ -193,7 +193,7 @@ def download_youtube_audio(url: str, start: Optional[float] = None, end: Optiona
                     '-c', 'copy', segment_path,
                     '-y'
                 ]
-                subprocess.run(cmd, capture_output=True)
+                subprocess.run(cmd, capture_output=True, check=True, timeout=60)
                 os.unlink(output_path)
                 return segment_path
             

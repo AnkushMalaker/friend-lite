@@ -481,7 +481,9 @@ The sophisticated in-house memory implementation with full control and customiza
 - Individual fact storage (no JSON blobs)
 - Smart deduplication algorithms
 - Intelligent memory updates (ADD/UPDATE/DELETE decisions)
-- Direct Qdrant vector storage
+- **Semantic search** with relevance threshold filtering
+- **Memory count API** with total count tracking from native Qdrant
+- Direct Qdrant vector storage with accurate similarity scoring
 - Custom memory prompts and processing
 - No external dependencies
 
@@ -518,10 +520,12 @@ Thin client that delegates all memory processing to external OpenMemory MCP serv
 | **Processing** | Custom LLM extraction | Delegates to OpenMemory |
 | **Deduplication** | Custom algorithms | OpenMemory handles |
 | **Vector Storage** | Direct Qdrant | OpenMemory handles |
+| **Search Features** | Semantic search with threshold filtering | Semantic search with relevance scoring |
+| **Memory Count** | Native Qdrant count API | Varies by OpenMemory support |
 | **Dependencies** | Qdrant + MongoDB | External OpenMemory server |
 | **Customization** | Full control | Limited to OpenMemory features |
 | **Cross-client** | Friend-Lite only | Works with Claude Desktop, Cursor, etc |
-| **Web UI** | Friend-Lite WebUI | OpenMemory UI + Friend-Lite WebUI |
+| **Web UI** | Friend-Lite WebUI with advanced search | OpenMemory UI + Friend-Lite WebUI |
 | **Memory Format** | Individual facts | OpenMemory format |
 | **Setup Complexity** | Medium | High (external server required) |
 
@@ -640,6 +644,7 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 ### Memory & Conversation Debugging
 - **GET /api/admin/memories**: All memories across all users with debug stats (Admin only)
 - **GET /api/memories/unfiltered**: User's memories without filtering
+- **GET /api/memories/search**: Semantic memory search with relevance scoring
 - **GET /api/conversations**: User's conversations with transcripts
 - **GET /api/conversations/{audio_uuid}**: Specific conversation details
 

@@ -10,8 +10,9 @@ At the moment, the basic functionalities are:
 - Audio transcription
 - **Advanced memory system** with pluggable providers (Friend-Lite native or OpenMemory MCP)
 - **Enhanced memory extraction** with individual fact storage and smart updates
+- **Semantic memory search** with relevance threshold filtering and live results
 - Action item extraction
-- Modern React web dashboard with live recording
+- Modern React web dashboard with live recording and advanced search features
 - Comprehensive user management with JWT authentication
 
 **Core Implementation**: See `src/advanced_omi_backend/main.py` for the complete FastAPI application and WebSocket handling.
@@ -19,27 +20,99 @@ At the moment, the basic functionalities are:
 ## Prerequisites
 
 - Docker and Docker Compose
-- (Optional) Deepgram API key for high-quality cloud transcription
-- (Optional) Ollama for local LLM processing (memory extraction)
-- (Optional) Wyoming ASR for offline speech-to-text processing
+- API keys for your chosen providers (see setup script)
 
 ## Quick Start
 
-### 0. Quick Testing (Optional)
-To verify your setup, run the integration test suite:
+### Step 1: Interactive Setup (Recommended)
+
+Run the interactive setup wizard to configure all services with guided prompts:
 ```bash
-# Ensure .env file has DEEPGRAM_API_KEY and OPENAI_API_KEY configured
-./run-test.sh
-
-# Alternative: Manual test with detailed logging
-source .env && export DEEPGRAM_API_KEY OPENAI_API_KEY && uv run pytest tests/test_integration.py -vv -s --log-cli-level=INFO --log-cli-format='%(asctime)s - %(levelname)s - %(message)s'
+cd backends/advanced
+./init.sh
 ```
-This end-to-end test demonstrates the complete audio processing pipeline.   
 
+**The setup wizard will guide you through:**
+- **Authentication**: Admin email/password setup
+- **Transcription Provider**: Choose Deepgram, Mistral, or Offline (Parakeet)
+- **LLM Provider**: Choose OpenAI or Ollama for memory extraction
+- **Memory Provider**: Choose Friend-Lite Native or OpenMemory MCP
+- **Optional Services**: Speaker Recognition and other extras
+- **Network Configuration**: Ports and host settings
 
-### 1. Environment Setup
+**Example flow:**
+```
+🚀 Friend-Lite Interactive Setup
+===============================================
 
-Copy the `.env.template` file to `.env` and configure the required values:
+► Authentication Setup
+----------------------
+Admin email [admin@example.com]: john@company.com
+Admin password (min 8 chars): ********
+
+► Speech-to-Text Configuration  
+-------------------------------
+Choose your transcription provider:
+  1) Deepgram (recommended - high quality, requires API key)
+  2) Mistral (Voxtral models - requires API key) 
+  3) Offline (Parakeet ASR - requires GPU, runs locally)
+  4) None (skip transcription setup)
+Enter choice (1-4) [1]: 1
+
+Get your API key from: https://console.deepgram.com/
+Deepgram API key: dg_xxxxxxxxxxxxx
+
+► LLM Provider Configuration
+----------------------------
+Choose your LLM provider for memory extraction:
+  1) OpenAI (GPT-4, GPT-3.5 - requires API key)
+  2) Ollama (local models - requires Ollama server)
+  3) Skip (no memory extraction)
+Enter choice (1-3) [1]: 1
+```
+
+### Step 2: HTTPS Setup (Optional)
+
+For microphone access and secure connections, set up HTTPS:
+```bash
+cd backends/advanced
+./setup-https.sh 100.83.66.30  # Your Tailscale/network IP
+```
+
+This creates SSL certificates and configures nginx for secure access.
+
+### Step 3: Start the System
+
+**Start all services:**
+```bash
+cd backends/advanced
+docker compose up --build -d
+```
+
+This starts:
+- **Backend API**: `http://localhost:8000`  
+- **Web Dashboard**: `http://localhost:5173`
+- **MongoDB**: `localhost:27017`
+- **Qdrant**: `localhost:6333`
+
+### Step 4: Optional Services
+
+**If you configured optional services during setup, start them:**
+
+```bash
+# OpenMemory MCP (if selected)
+cd ../../extras/openmemory-mcp && docker compose up -d
+
+# Parakeet ASR (if selected for offline transcription)  
+cd ../../extras/asr-services && docker compose up parakeet -d
+
+# Speaker Recognition (if enabled)
+cd ../../extras/speaker-recognition && docker compose up --build -d
+```
+
+### Manual Configuration (Alternative)
+
+If you prefer manual configuration, copy the `.env.template` file to `.env` and configure the required values:
 
 **Required Environment Variables:**
 ```bash
@@ -96,26 +169,17 @@ PARAKEET_ASR_URL=http://host.docker.internal:8080
   - If not set, system falls back to offline ASR service
 - The system requires either online API keys or offline ASR service configuration
 
-### 2. Start the System
+### Testing Your Setup (Optional)
 
-**Recommended: Docker Compose**
+After configuration, verify everything works with the integration test suite:
 ```bash
-cd backends/advanced
-docker compose up --build -d
+./run-test.sh
+
+# Alternative: Manual test with detailed logging
+source .env && export DEEPGRAM_API_KEY OPENAI_API_KEY && \
+  uv run pytest tests/test_integration.py -vv -s --log-cli-level=INFO
 ```
-
-This starts:
-- **Backend API**: `http://localhost:8000`
-- **Web Dashboard**: `http://localhost:3000`
-- **MongoDB**: `localhost:27017`
-- **Qdrant**: `localhost:6333`
-- (optional) **Ollama**: # commented out
-
-**Implementation**: See `docker-compose.yml` for complete service configuration and `src/advanced_omi_backend/main.py` for FastAPI application setup.
-
-### 3. Optional: Start ASR Service
-
-For self-hosted speech recognition, see instructions in `extras/asr-services/`:
+This end-to-end test validates the complete audio processing pipeline.
 
 ## Using the System
 
@@ -129,9 +193,11 @@ For self-hosted speech recognition, see instructions in `extras/asr-services/`:
 ### Dashboard Features
 
 - **Conversations**: View audio recordings, transcripts, and cropped audio
-- **Memories**: Search extracted conversation memories
+- **Memories**: Advanced memory search with semantic search, relevance threshold filtering, and memory count display
+- **Live Recording**: Real-time audio recording with WebSocket streaming (HTTPS required)
 - **User Management**: Create/delete users and their data
 - **Client Management**: View active connections and close conversations
+- **System Monitoring**: Debug tools and system health monitoring
 
 ### Audio Client Connection
 

@@ -12,3 +12,6 @@
 !diarization_config.json
 !uv.lock
 !webui
+!ssl
+!nginx.conf
+!nginx.conf.template

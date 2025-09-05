@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Brain, Search, RefreshCw, Trash2, Calendar, Tag } from 'lucide-react'
-import { memoriesApi } from '../services/api'
+import { Brain, Search, RefreshCw, Trash2, Calendar, Tag, X, Target } from 'lucide-react'
+import { memoriesApi, systemApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import '../styles/slider.css'
 
 interface Memory {
   id: string
@@ -22,8 +23,32 @@ export default function Memories() {
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showUnfiltered, setShowUnfiltered] = useState(false)
+  const [totalCount, setTotalCount] = useState<number | null>(null)
+  
+  // Semantic search state
+  const [semanticResults, setSemanticResults] = useState<Memory[]>([])
+  const [isSemanticFilterActive, setIsSemanticFilterActive] = useState(false)
+  const [semanticQuery, setSemanticQuery] = useState('')
+  const [semanticLoading, setSemanticLoading] = useState(false)
+  const [relevanceThreshold, setRelevanceThreshold] = useState(0) // 0-100 percentage
+  
+  // System configuration state
+  const [memoryProviderSupportsThreshold, setMemoryProviderSupportsThreshold] = useState(false)
   
   const { user } = useAuth()
+
+  const loadSystemConfig = async () => {
+    try {
+      const response = await systemApi.getMetrics()
+      const supports = response.data.memory_provider_supports_threshold || false
+      setMemoryProviderSupportsThreshold(supports)
+      console.log('🔧 Memory provider supports threshold:', supports)
+    } catch (err: any) {
+      console.error('❌ Failed to load system config:', err)
+      // Default to false if we can't determine
+      setMemoryProviderSupportsThreshold(false)
+    }
+  }
 
   const loadMemories = async () => {
     if (!user?.id) return
@@ -38,7 +63,9 @@ export default function Memories() {
       
       // Handle the API response structure
       const memoriesData = response.data.memories || response.data || []
+      const totalCount = response.data.total_count
       console.log('🧠 Processed memories data:', memoriesData)
+      console.log('🧠 Total count:', totalCount)
       
       // Log first few memories to inspect structure
       if (memoriesData.length > 0) {
@@ -47,6 +74,8 @@ export default function Memories() {
       }
       
       setMemories(Array.isArray(memoriesData) ? memoriesData : [])
+      // Store total count in state for display
+      setTotalCount(totalCount)
       setError(null)
     } catch (err: any) {
       console.error('❌ Memory loading error:', err)
@@ -57,21 +86,84 @@ export default function Memories() {
   }
 
   useEffect(() => {
+    loadSystemConfig()
+  }, [])
+
+  useEffect(() => {
     loadMemories()
   }, [user?.id, showUnfiltered])
+
+  // Semantic search handlers
+  const handleSemanticSearch = async () => {
+    if (!searchQuery.trim() || !user?.id) return
+    
+    try {
+      setSemanticLoading(true)
+      
+      // Use current threshold for server-side filtering if memory provider supports it
+      const thresholdToUse = memoryProviderSupportsThreshold 
+        ? relevanceThreshold 
+        : undefined
+      
+      const response = await memoriesApi.search(
+        searchQuery.trim(), 
+        user.id, 
+        50, 
+        thresholdToUse
+      )
+      
+      console.log('🔍 Search response:', response.data)
+      console.log('🎯 Used threshold:', thresholdToUse)
+      
+      setSemanticResults(response.data.results || [])
+      setSemanticQuery(searchQuery.trim())
+      setIsSemanticFilterActive(true)
+      setSearchQuery('') // Clear search box
+      setError(null)
+    } catch (err: any) {
+      setError(err.message || 'Semantic search failed')
+    } finally {
+      setSemanticLoading(false)
+    }
+  }
+
+  const clearSemanticFilter = () => {
+    setIsSemanticFilterActive(false)
+    setSemanticResults([])
+    setSemanticQuery('')
+    setSearchQuery('')
+    setRelevanceThreshold(0) // Reset threshold
+  }
 
   const handleDeleteMemory = async (memoryId: string) => {
     if (!confirm('Are you sure you want to delete this memory?')) return
 
     try {
       await memoriesApi.delete(memoryId)
+      // Remove from both regular memories and semantic results if present
       setMemories(memories.filter(m => m.id !== memoryId))
+      if (isSemanticFilterActive) {
+        setSemanticResults(semanticResults.filter(m => m.id !== memoryId))
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to delete memory')
     }
   }
 
-  const filteredMemories = memories.filter(memory =>
+  // Update filtering logic with client-side threshold filtering after search
+  const currentMemories = isSemanticFilterActive ? semanticResults : memories
+  
+  // Apply relevance threshold filter (client-side for all providers after search)
+  const thresholdFilteredMemories = isSemanticFilterActive && relevanceThreshold > 0
+    ? currentMemories.filter(memory => {
+        if (!memory.score) return true // If no score, show it
+        const relevancePercentage = memory.score * 100
+        return relevancePercentage >= relevanceThreshold
+      })
+    : currentMemories
+  
+  // Apply text search filter
+  const filteredMemories = thresholdFilteredMemories.filter(memory =>
     memory.memory.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (memory.category?.toLowerCase() || '').includes(searchQuery.toLowerCase())
   )
@@ -184,25 +276,130 @@ export default function Memories() {
 
         {/* Search */}
         {memories.length > 0 && (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search memories..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+          <div className="space-y-4">
+            <div className="relative flex items-center">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 z-10" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search memories..."
+                className="w-full pl-10 pr-32 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onKeyPress={(e) => e.key === 'Enter' && handleSemanticSearch()}
+              />
+              <button
+                onClick={handleSemanticSearch}
+                disabled={!searchQuery.trim() || semanticLoading || !user}
+                className="absolute right-2 flex items-center space-x-1 px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Semantic search using AI"
+              >
+                <Brain className={`h-3 w-3 ${semanticLoading ? 'animate-pulse' : ''}`} />
+                <span>{semanticLoading ? 'Searching...' : 'Semantic'}</span>
+              </button>
+            </div>
+
+            {/* Initial Search Threshold Slider - Show for Friend-Lite provider */}
+            {memoryProviderSupportsThreshold && (
+              <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {isSemanticFilterActive ? 'Result Filtering (Client-side)' : 'Initial Search Threshold (Server-side)'}
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
+                      {relevanceThreshold}%
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={relevanceThreshold}
+                    onChange={(e) => setRelevanceThreshold(Number(e.target.value))}
+                    className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                    style={{
+                      ['--progress' as any]: `${relevanceThreshold}%`,
+                      background: `linear-gradient(to right, #3B82F6 0%, #3B82F6 ${relevanceThreshold}%, #E5E7EB ${relevanceThreshold}%, #E5E7EB 100%)`
+                    }}
+                    disabled={semanticLoading}
+                  />
+                  <button
+                    onClick={() => setRelevanceThreshold(0)}
+                    className="text-xs px-2 py-1 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50"
+                    title="Reset threshold"
+                    disabled={semanticLoading}
+                  >
+                    Reset
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {isSemanticFilterActive ? (
+                    relevanceThreshold > 0 ? 
+                      `Filtering loaded results: showing memories with ≥ ${relevanceThreshold}% relevance` :
+                      'Showing all loaded results'
+                  ) : (
+                    relevanceThreshold > 0 ? 
+                      `Next search will filter server-side: memories with ≥ ${relevanceThreshold}% relevance` :
+                      'Next search will return all results (no server-side filtering)'
+                  )}
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
 
+      {/* Semantic Filter Indicator */}
+      {isSemanticFilterActive && (
+        <div className="mb-4">
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Brain className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <span className="text-sm text-blue-700 dark:text-blue-300">
+                  Semantic search active: "{semanticQuery}"
+                </span>
+              </div>
+              <button
+                onClick={clearSemanticFilter}
+                className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 transition-colors"
+                title="Clear semantic filter"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Status Messages */}
-      {user && memories.length > 0 && (
+      {user && (memories.length > 0 || isSemanticFilterActive) && (
         <div className="mb-4">
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-4">
             <p className="text-sm text-blue-700 dark:text-blue-300">
-              Showing {showUnfiltered ? 'unfiltered' : 'filtered'} memories ({memories.length} found)
+              {isSemanticFilterActive ? (
+                relevanceThreshold > 0 ? (
+                  searchQuery ? (
+                    `Showing ${filteredMemories.length} of ${semanticResults.length} semantic matches (filtered by ≥${relevanceThreshold}% relevance + "${searchQuery}")`
+                  ) : (
+                    `Showing ${thresholdFilteredMemories.length} of ${semanticResults.length} semantic matches (filtered by ≥${relevanceThreshold}% relevance)`
+                  )
+                ) : (
+                  searchQuery ? (
+                    `Showing ${filteredMemories.length} of ${semanticResults.length} semantic matches (filtered by "${searchQuery}")`
+                  ) : (
+                    `Showing all ${semanticResults.length} semantic matches for "${semanticQuery}"`
+                  )
+                )
+              ) : (
+                totalCount !== null ? (
+                  `Showing ${memories.length} of ${totalCount} ${showUnfiltered ? 'unfiltered' : 'filtered'} memories`
+                ) : (
+                  `Showing ${showUnfiltered ? 'unfiltered' : 'filtered'} memories (${memories.length} found)`
+                )
+              )}
             </p>
           </div>
         </div>
@@ -228,8 +425,29 @@ export default function Memories() {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Found {filteredMemories.length} memories
-              {searchQuery && ` matching "${searchQuery}"`}
+              {isSemanticFilterActive ? (
+                relevanceThreshold > 0 ? (
+                  searchQuery ? (
+                    `Relevance filtered (≥${relevanceThreshold}%) + text filtered: ${filteredMemories.length} results`
+                  ) : (
+                    `Relevance filtered (≥${relevanceThreshold}%): ${thresholdFilteredMemories.length} results`
+                  )
+                ) : (
+                  searchQuery ? (
+                    `Found ${filteredMemories.length} semantic results matching "${searchQuery}"`
+                  ) : (
+                    `Found ${filteredMemories.length} semantic matches`
+                  )
+                )
+              ) : (
+                searchQuery ? (
+                  `Found ${filteredMemories.length} memories matching "${searchQuery}"`
+                ) : totalCount !== null ? (
+                  `Showing ${filteredMemories.length} of ${totalCount} memories`
+                ) : (
+                  `Found ${filteredMemories.length} memories`
+                )
+              )}
             </p>
           </div>
 
@@ -254,8 +472,14 @@ export default function Memories() {
                         </span>
                       </div>
                     )}
-                    {memory.score && (
-                      <span className="text-xs text-gray-500">
+                    {memory.score != null && isSemanticFilterActive && (
+                      <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
+                        <Target className="h-3 w-3" />
+                        <span>Relevance: {(memory.score * 100).toFixed(1)}%</span>
+                      </div>
+                    )}
+                    {memory.score != null && !isSemanticFilterActive && (
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
                         Score: {memory.score.toFixed(3)}
                       </span>
                     )}
@@ -306,11 +530,26 @@ export default function Memories() {
         <div className="text-center text-gray-500 dark:text-gray-400 py-12">
           <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
           <p>
-            {searchQuery 
-              ? `No memories found matching "${searchQuery}"`
-              : `No memories found`
-            }
+            {isSemanticFilterActive ? (
+              searchQuery ? (
+                `No semantic results found matching "${searchQuery}"`
+              ) : (
+                `No semantic matches found for "${semanticQuery}"`
+              )
+            ) : (
+              searchQuery 
+                ? `No memories found matching "${searchQuery}"`
+                : `No memories found`
+            )}
           </p>
+          {isSemanticFilterActive && (
+            <button
+              onClick={clearSemanticFilter}
+              className="mt-4 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 text-sm underline"
+            >
+              Clear semantic filter and view all memories
+            </button>
+          )}
         </div>
       )}
     </div>
