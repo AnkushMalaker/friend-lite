@@ -1,0 +1,11 @@
+apiVersion: v2
+name: speaker-recognition
+description: Helm chart for Speaker Recognition Service
+version: 0.1.0
+type: application
+keywords:
+  - speaker-recognition
+  - fastapi
+  - react
+maintainers:
+  - name: DevOps Team

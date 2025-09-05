@@ -1,0 +1,45 @@
+FROM python:3.11-bookworm
+
+# Install system dependencies including PortAudio for pyaudio
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+    # portaudio19-dev \
+    # libasound2-dev \
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# Copy dependency files first (for better caching)
+# Copy dependency files first (for better caching)
+COPY pyproject.toml uv.lock ./
+
+# Copy source code
+COPY src/ src/
+
+# Install dependencies
+ARG COMPUTE_MODE=cpu
+RUN uv pip install --system setuptools wheel && \
+    if [ "$COMPUTE_MODE" = "gpu" ]; then \
+        uv pip install --system --group gpu; \
+    else \
+        uv pip install --system --group cpu; \
+    fi
+
+# Create directories
+RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
+
+# Set environment variables
+ENV HF_HOME=/models
+ENV PYTHONPATH=/app
+
+# Expose port
+EXPOSE 8085
+
+# Run the module directly
+CMD ["python", "-m", "simple_speaker_recognition.api.service"]

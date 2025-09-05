@@ -26,7 +26,7 @@ spec:
         - env:
             - name: HF_HOME
               value: /models
-          image: babel:32000/moonshine-asr
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           name: moonshine-asr
           ports:
             - containerPort: 8765

@@ -9,7 +9,7 @@ metadata:
   name: parakeet
 spec:
   ports:
-    - name: "8765"
+    - name: http
       port: 8765
       targetPort: 8765
   selector:

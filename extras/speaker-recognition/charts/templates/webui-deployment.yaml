@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-webui
+  labels:
+    app: {{ .Release.Name }}-webui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-webui
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-webui
+    spec:
+      containers:
+        - name: webui
+          image: "{{ .Values.webui.image.repository }}:{{ .Values.webui.image.tag }}"
+          ports:
+            - containerPort: {{ .Values.webui.service.port }}
+              protocol: TCP
+          env:
+            {{- range $key, $value := .Values.webui.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            - name: SPEAKER_SERVICE_HOST
+              value: {{ .Release.Name }}-speaker
+            - name: SPEAKER_SERVICE_PORT
+              value: {{ .Values.speaker.service.port | quote }}
+      restartPolicy: Always
