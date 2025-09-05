@@ -212,7 +212,7 @@ class MemoryService(MemoryServiceBase):
             memory_logger.error(f"❌ Add memory failed for {source_id}: {e}")
             raise e
 
-    async def search_memories(self, query: str, user_id: str, limit: int = 10) -> List[MemoryEntry]:
+    async def search_memories(self, query: str, user_id: str, limit: int = 10, score_threshold: float = 0.0) -> List[MemoryEntry]:
         """Search memories using semantic similarity.
         
         Generates an embedding for the query and searches the vector store
@@ -222,6 +222,7 @@ class MemoryService(MemoryServiceBase):
             query: Search query text
             user_id: User identifier to filter memories
             limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold)
             
         Returns:
             List of matching MemoryEntry objects ordered by relevance
@@ -238,7 +239,7 @@ class MemoryService(MemoryServiceBase):
 
             # Search in vector store
             results = await self.vector_store.search_memories(
-                query_embeddings[0], user_id, limit
+                query_embeddings[0], user_id, limit, score_threshold
             )
 
             memory_logger.info(f"🔍 Found {len(results)} memories for query '{query}' (user: {user_id})")
@@ -271,6 +272,28 @@ class MemoryService(MemoryServiceBase):
         except Exception as e:
             memory_logger.error(f"Get all memories failed: {e}")
             return []
+
+    async def count_memories(self, user_id: str) -> Optional[int]:
+        """Count total number of memories for a user.
+        
+        Uses the vector store's native count capabilities.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Total count of memories for the user, or None if not supported
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            count = await self.vector_store.count_memories(user_id)
+            memory_logger.info(f"🔢 Total {count} memories for user {user_id}")
+            return count
+        except Exception as e:
+            memory_logger.error(f"Count memories failed: {e}")
+            return None
 
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a specific memory by ID.

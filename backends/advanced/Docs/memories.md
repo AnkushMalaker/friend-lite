@@ -566,12 +566,26 @@ def consolidate_memories(self, user_id: str, time_window_hours: int = 24):
 
 ## API Endpoints
 
-The memory service exposes these endpoints:
+The memory service exposes these endpoints with enhanced search capabilities:
 
-- `GET /api/memories` - Get user memories (keyed by database user_id)
-- `GET /api/memories/search?query={query}` - Search memories (user-scoped)  
+- `GET /api/memories` - Get user memories with total count support (keyed by database user_id)
+- `GET /api/memories/search?query={query}&limit={limit}` - **Semantic memory search** with relevance scoring (user-scoped)  
+- `GET /api/memories/unfiltered` - User's memories without filtering for debugging
 - `DELETE /api/memories/{memory_id}` - Delete specific memory (requires authentication)
 - `GET /api/memories/admin` - Admin view of all memories across all users (superuser only)
+
+### Enhanced Search Features
+
+**Semantic Search (`/api/memories/search`)**:
+- **Relevance Scoring**: Returns similarity scores from vector database (0.0-1.0 range)
+- **Configurable Limits**: Supports `limit` parameter for result count control  
+- **User Scoped**: Results automatically filtered by authenticated user
+- **Vector-based**: Uses embeddings for contextual understanding beyond keyword matching
+
+**Memory Count API**: 
+- **Friend-Lite Provider**: Native Qdrant count API provides accurate total counts
+- **OpenMemory MCP Provider**: Count support varies by OpenMemory implementation
+- **Response Format**: `{"memories": [...], "total_count": 42}` when supported
 
 ### Admin Endpoints
 

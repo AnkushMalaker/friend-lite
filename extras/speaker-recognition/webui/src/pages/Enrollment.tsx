@@ -90,12 +90,13 @@ export default function Enrollment() {
   const calculateSessionQuality = useCallback((audioFiles: EnrollmentAudio[]): 'excellent' | 'good' | 'fair' | 'poor' => {
     if (audioFiles.length === 0) return 'poor'
     
-    const totalDuration = audioFiles.reduce((sum, audio) => sum + audio.duration, 0)
+    const totalDurationMs = audioFiles.reduce((sum, audio) => sum + audio.duration, 0)
+    const totalDurationSeconds = totalDurationMs / 1000 // Convert to seconds for quality thresholds
     const avgSNR = audioFiles.reduce((sum, audio) => sum + audio.snr, 0) / audioFiles.length
     
-    if (totalDuration >= 60 && avgSNR >= 30 && audioFiles.length >= 5) return 'excellent'
-    if (totalDuration >= 30 && avgSNR >= 20 && audioFiles.length >= 3) return 'good'
-    if (totalDuration >= 15 && avgSNR >= 15 && audioFiles.length >= 2) return 'fair'
+    if (totalDurationSeconds >= 60 && avgSNR >= 30 && audioFiles.length >= 5) return 'excellent'
+    if (totalDurationSeconds >= 30 && avgSNR >= 20 && audioFiles.length >= 3) return 'good'
+    if (totalDurationSeconds >= 15 && avgSNR >= 15 && audioFiles.length >= 2) return 'fair'
     return 'poor'
   }, [])
 
@@ -113,7 +114,15 @@ export default function Enrollment() {
     }))
     
     if (currentSession?.id === sessionId) {
-      setCurrentSession(prev => prev ? { ...prev, ...updates } : null)
+      setCurrentSession(prev => {
+        if (!prev) return null
+        const updatedSession = { ...prev, ...updates }
+        if (updates.audioFiles) {
+          updatedSession.totalDuration = updates.audioFiles.reduce((sum, audio) => sum + audio.duration, 0)
+          updatedSession.quality = calculateSessionQuality(updates.audioFiles)
+        }
+        return updatedSession
+      })
     }
   }, [currentSession, calculateSessionQuality])
 
@@ -175,9 +184,9 @@ export default function Enrollment() {
       setIsRecording(true)
       setRecordingTime(0)
       
-      // Start timer immediately
+      // Start timer immediately (track milliseconds for formatDuration compatibility)
       recordingIntervalRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1)
+        setRecordingTime(prev => prev + 1000)
       }, 1000)
       
       mediaRecorder.start(250) // Increased interval for better stability
@@ -274,7 +283,7 @@ export default function Enrollment() {
         id: Math.random().toString(36),
         name: `Recording ${new Date().toLocaleTimeString()}`,
         blob: processedBlob, // Use the converted blob for backend submission
-        duration: audioBuffer.duration,
+        duration: audioBuffer.duration * 1000, // Convert seconds to milliseconds
         snr,
         quality,
         source: 'recording'
@@ -325,7 +334,7 @@ export default function Enrollment() {
           id: Math.random().toString(36),
           name: file.name,
           blob: file,
-          duration: audioBuffer.duration,
+          duration: audioBuffer.duration * 1000, // Convert seconds to milliseconds
           snr,
           quality,
           source: 'upload'
