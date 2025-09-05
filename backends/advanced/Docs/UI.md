@@ -1,14 +1,18 @@
-# Streamlit Web Dashboard Documentation
+# React Web Dashboard Documentation
 
 ## Overview
 
-The Friend-Lite web dashboard provides a comprehensive interface for managing conversations, memories, users, and system debugging. Built with Streamlit, it offers real-time access to audio processing pipelines and administrative functions.
+The Friend-Lite web dashboard provides a comprehensive interface for managing conversations, memories, users, and system debugging. Built with modern React and TypeScript, it offers real-time access to audio processing pipelines, advanced memory search, and administrative functions.
+
+> **Note**: This documentation covers the modern React interface located in `./webui/`. The legacy Streamlit interface has been moved to `src/_webui_original/` for reference.
 
 ## Access & Authentication
 
 ### Dashboard URL
-- **Local**: `http://localhost:8501`
-- **Audio**: Configure `BACKEND_PUBLIC_URL` environment variable to point to some public URL of your server. Your BROWSER must be able to access this URL.
+- **HTTP**: `http://localhost:5173` (development) or `http://localhost:3000` (production)
+- **HTTPS**: `https://localhost/` (with HTTPS configuration via `init-https.sh`)
+- **Live Recording**: Available at `/live-record` page for real-time audio streaming
+- **Network Access**: Configure `BACKEND_PUBLIC_URL` for remote device access via Tailscale/LAN
 
 ### Authentication Methods
 1. **Email/Password Login**: Standard authentication via backend API
@@ -36,14 +40,28 @@ The Friend-Lite web dashboard provides a comprehensive interface for managing co
 - Advanced filtering and search capabilities
 
 ### 2. Memories Tab  
-**Purpose**: Browse and search extracted conversation memories
+**Purpose**: Browse and search extracted conversation memories with advanced filtering
 
-**Features**:
-- Semantic search across all memories
+**Core Search Features**:
+- **Text Search**: Traditional keyword-based memory filtering
+- **Semantic Search Button**: AI-powered contextual memory search with relevance scoring
+- **Dual-layer Filtering**: Combine semantic results with text search for precise filtering
+- **Relevance Threshold Slider**: 0-100% threshold to filter semantic results by confidence
+- **Active Filter Indicators**: Visual feedback showing active semantic filters with clear buttons
+- **Memory Count Display**: Shows "X of Y memories" with total count from native providers
+
+**Advanced Features**:
+- **Live Filtering**: Real-time results as threshold slider moves
+- **Reset Functionality**: Clear all filters and return to full memory list
 - Memory categorization and tagging
 - Temporal filtering and sorting
 - Memory source tracking (which conversation)
 - Export capabilities
+
+**UI Improvements**:
+- **Search Input Enhancement**: Semantic search button integrated into search field
+- **Visual Feedback**: Loading states, relevance scores, and filter status indicators
+- **Responsive Design**: Works across desktop and mobile devices
 
 **Admin Features**:
 - **Admin Debug Section**: Load and view all user memories for debugging

@@ -11,7 +11,7 @@ interface User {
 interface AuthContextType {
   user: User | null
   token: string | null
-  login: (email: string, password: string) => Promise<boolean>
+  login: (email: string, password: string) => Promise<{success: boolean, error?: string, errorType?: string}>
   logout: () => void
   isLoading: boolean
   isAdmin: boolean
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initAuth()
   }, [])
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  const login = async (email: string, password: string): Promise<{success: boolean, error?: string, errorType?: string}> => {
     try {
       const response = await authApi.login(email, password)
 
@@ -70,10 +70,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const userResponse = await authApi.getMe()
       setUser(userResponse.data)
 
-      return true
-    } catch (error) {
+      return { success: true }
+    } catch (error: any) {
       console.error('Login failed:', error)
-      return false
+      
+      // Parse structured error response from backend
+      let errorMessage = 'Login failed. Please try again.'
+      let errorType = 'unknown'
+      
+      if (error.response?.data) {
+        const errorData = error.response.data
+        errorMessage = errorData.detail || errorMessage
+        errorType = errorData.error_type || errorType
+      } else if (error.code === 'ERR_NETWORK') {
+        errorMessage = 'Unable to connect to server. Please check your connection and try again.'
+        errorType = 'connection_failure'
+      }
+      
+      return { 
+        success: false, 
+        error: errorMessage,
+        errorType: errorType
+      }
     }
   }
 

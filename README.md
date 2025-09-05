@@ -2,13 +2,17 @@
 
 ## Quick Start
 
-**Quick start:**
-1. Go to `backends/advanced/` for the main application
-2. Copy `.env.template` to `.env` and configure your API keys
-3. Run `docker compose up --build -d`
-4. Visit `http://localhost:3000` for the web interface
+**Interactive setup (recommended):**
+1. From the project root, run `uv run --with-requirements setup-requirements.txt python init.py` to configure all services with guided prompts
+2. Run `python services.py start --all --build` to start all configured services
+3. Visit `http://localhost:5173` for the React web dashboard
 
-**Documentation:** See `CLAUDE.md` and `backends/advanced/Docs/`
+**Manual setup (alternative):**
+1. Go to `backends/advanced/` and copy `.env.template` to `.env`
+2. Configure your API keys and service settings manually
+3. Start with `docker compose up --build -d`
+
+**Documentation:** See `CLAUDE.md` and `Docs/init-system.md` for detailed setup guide
 
 ## Overview
 Friend-Lite provides essential components for developers working with OMI-compatible audio devices:
@@ -41,6 +45,9 @@ Friend-Lite supports AI-powered personal systems through multiple OMI-compatible
 **Core Features:**
 - **Advanced memory system** with pluggable providers (Friend-Lite native or OpenMemory MCP)
 - **Memory extraction** from conversations with individual fact storage
+- **Semantic memory search** with relevance threshold filtering and live results
+- **Memory count display** with total count tracking from native providers
+- **Speaker-based memory filtering** to control processing based on participant presence
 - **Action item detection** and tracking  
 - **Home automation** integration
 - **Multi-device support** for comprehensive audio capture
@@ -70,6 +77,7 @@ DevKit2 streams audio via Bluetooth using OPUS codec. The processing pipeline in
 - LLM-based conversation analysis (OpenAI or local Ollama)
 - **Dual memory system**: Friend-Lite native or OpenMemory MCP integration
 - Enhanced memory extraction with individual fact storage
+- **Semantic search** with relevance scoring and threshold filtering
 - Smart deduplication and memory updates (ADD/UPDATE/DELETE)
 - Action item detection
 
@@ -112,19 +120,21 @@ Choose one based on your needs:
 
 ---
 
-#### **Advanced Backend** (`backends/advanced-backend/`) **RECOMMENDED**
+#### **Advanced Backend** (`backends/advanced/`) **RECOMMENDED**
 **Use case:** Production use, full feature set
 
 **Features:**
 - Audio processing pipeline with real-time WebSocket support
 - **Pluggable memory system**: Choose between Friend-Lite native or OpenMemory MCP
 - Enhanced memory extraction with individual fact storage (no generic fallbacks)
+- **Semantic memory search** with relevance threshold filtering and total count display
+- **Speaker-based memory filtering**: Optional control over processing based on participant presence
 - Smart memory updates with LLM-driven action proposals (ADD/UPDATE/DELETE)
 - Speaker recognition and enrollment
 - Action items extraction from conversations
 - Audio cropping (removes silence, keeps speech)
 - Conversation management with session timeouts
-- Web UI for management and monitoring
+- Modern React web UI with live recording and advanced search
 - Multiple ASR options (Deepgram API + offline ASR)
 - MongoDB for structured data storage
 - RESTful API for all operations
@@ -204,9 +214,9 @@ Backends and ASR services use standardized audio streaming:
 
 ## For Production Use
 1. Use **Advanced Backend** for full features
-2. Set up the complete stack: MongoDB + Qdrant + Ollama
-3. Access the Web UI for conversation management
-4. Configure speaker enrollment for multi-user scenarios
+2. Run the orchestrated setup: `uv run --with-requirements setup-requirements.txt python init.py`
+3. Start all services: `python services.py start --all --build`
+4. Access the Web UI at http://localhost:5173 for conversation management
 
 ## For OMI Users
 1. Use **OMI-Webhook-Compatible Backend** for easy migration
@@ -231,10 +241,9 @@ Backends and ASR services use standardized audio streaming:
 
 ### Single Machine (Recommended for beginners)
 1. **Clone the repository**
-2. **Use Advanced Backend**: `cd backends/advanced-backend`
-3. **Configure .env**: Copy `.env.template` to `.env` and set required values
-4. **Start services**: `docker compose up --build -d`
-5. **Access WebUI**: `http://localhost:3000` (React) or `http://localhost:8501` (Streamlit)
+2. **Run interactive setup**: `uv run --with-requirements setup-requirements.txt python init.py`
+3. **Start all services**: `python services.py start --all --build`
+4. **Access WebUI**: `http://localhost:5173` for the React web dashboard
 
 ### Distributed Setup (Advanced users with multiple machines)
 1. **GPU Machine**: Deploy LLM services (Ollama, ASR, Speaker Recognition)
@@ -251,7 +260,7 @@ Backends and ASR services use standardized audio streaming:
 
 2. **Backend Machine**: Deploy lightweight services
    ```bash
-   cd backends/advanced-backend
+   cd backends/advanced
    
    # Configure distributed services in .env
    OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434

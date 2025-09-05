@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile_Parakeet
     image: parakeet-asr:latest
     ports:
-      - "8080:8765"  # Host port 8080 -> Container port 8765
+      - "${PARAKEET_HOST_PORT:-8767}:${PARAKEET_CONTAINER_PORT:-8765}"
     volumes:
       # Persist Hugging Face cache (models + tokenizer) between restarts
       - ./model_cache:/models

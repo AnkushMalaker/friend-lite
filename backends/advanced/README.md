@@ -16,10 +16,34 @@ A FastAPI backend with pluggable memory providers, real-time audio processing, a
 Modern React-based web dashboard located in `./webui/` with:
 - Live audio recording and real-time streaming
 - Chat interface with conversation management
-- Memory search and management
+- **Advanced memory search** with semantic search and relevance threshold filtering
+- **Memory count display** showing total memories with live filtering
+- **Dual-layer filtering** combining semantic and text search
 - System monitoring and debugging tools
 
-### Quick Start (HTTP)
+### Quick Start
+
+#### 1. Interactive Setup (Recommended)
+```bash
+# Run interactive setup wizard
+./init.sh
+```
+
+**The setup wizard guides you through:**
+- **Authentication**: Admin email/password setup with secure keys
+- **Transcription Provider**: Choose between Deepgram, Mistral, or Offline (Parakeet)
+- **LLM Provider**: Choose between OpenAI (recommended) or Ollama for memory extraction
+- **Memory Provider**: Choose between Friend-Lite Native or OpenMemory MCP
+- **Optional Services**: Speaker Recognition, network configuration
+- **API Keys**: Prompts for all required keys with helpful links
+
+**HTTPS Setup (Optional):**
+```bash
+# For microphone access and secure connections
+./setup-https.sh your-tailscale-ip
+```
+
+#### 2. Start Services (HTTP)
 ```bash
 # Start with hot reload development server
 docker compose up --build -d
@@ -27,13 +51,13 @@ docker compose up --build -d
 
 - **Web Dashboard**: http://localhost:5173
 
-### HTTPS Setup (Required for Microphone Access)
+#### 3. HTTPS Setup (Optional - For Microphone Access)
 
-For network access and microphone features, set up HTTPS:
+For network access and microphone features, HTTPS can be configured during initialization or separately:
 
 ```bash
-# Initialize HTTPS with your Tailscale/network IP
-./init.sh 100.83.66.30  # Replace with your IP
+# If not done during init.sh, run HTTPS setup
+./init-https.sh 100.83.66.30  # Replace with your IP
 
 # Start with HTTPS proxy
 docker compose --profile https up --build -d
