@@ -23,6 +23,7 @@ class UserRead(BaseUser[PydanticObjectId]):
     
     display_name: Optional[str] = None
     registered_clients: dict[str, dict] = Field(default_factory=dict)
+    primary_speakers: list[dict] = Field(default_factory=list)
 
 
 class UserUpdate(BaseUserUpdate):
@@ -37,6 +38,8 @@ class User(BeanieBaseUser, Document):
     display_name: Optional[str] = None
     # Client tracking for audio devices
     registered_clients: dict[str, dict] = Field(default_factory=dict)
+    # Speaker processing filter configuration
+    primary_speakers: list[dict] = Field(default_factory=list)
 
     @property
     def user_id(self) -> str:

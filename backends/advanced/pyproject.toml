@@ -51,6 +51,11 @@ line-length = 100
 [tool.uv.sources]
 mem0ai = { git = "https://github.com/AnkushMalaker/mem0.git", rev = "async-client-unbound-var-fix" }
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests",
+]
+
 [dependency-groups]
 dev = [
     "black>=25.1.0",

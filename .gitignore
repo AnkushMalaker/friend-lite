@@ -65,3 +65,6 @@ backends/advanced-backend/data/speaker_model_cache/
 *.bin
 *.sqlite3
 *checkpoints
+
+extras/openmemory-mcp/data/*
+.env.backup.*

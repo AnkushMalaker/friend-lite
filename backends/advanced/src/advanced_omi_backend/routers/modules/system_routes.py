@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
 
-from advanced_omi_backend.auth import current_superuser
+from advanced_omi_backend.auth import current_active_user, current_superuser
 from advanced_omi_backend.controllers import system_controller
 from advanced_omi_backend.users import User
 
@@ -101,3 +101,30 @@ async def save_diarization_settings(
 ):
     """Save diarization settings. Admin only."""
     return await system_controller.save_diarization_settings(settings)
+
+
+@router.get("/speaker-configuration")
+async def get_speaker_configuration(current_user: User = Depends(current_active_user)):
+    """Get current user's primary speakers configuration."""
+    return await system_controller.get_speaker_configuration(current_user)
+
+
+@router.post("/speaker-configuration")
+async def update_speaker_configuration(
+    primary_speakers: list[dict],
+    current_user: User = Depends(current_active_user)
+):
+    """Update current user's primary speakers configuration."""
+    return await system_controller.update_speaker_configuration(current_user, primary_speakers)
+
+
+@router.get("/enrolled-speakers")
+async def get_enrolled_speakers(current_user: User = Depends(current_active_user)):
+    """Get enrolled speakers from speaker recognition service."""
+    return await system_controller.get_enrolled_speakers(current_user)
+
+
+@router.get("/speaker-service-status")
+async def get_speaker_service_status(current_user: User = Depends(current_superuser)):
+    """Check speaker recognition service health status. Admin only."""
+    return await system_controller.get_speaker_service_status()

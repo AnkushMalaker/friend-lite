@@ -181,7 +181,8 @@ class OpenMemoryMCPService(MemoryServiceBase):
         self, 
         query: str, 
         user_id: str, 
-        limit: int = 10
+        limit: int = 10,
+        score_threshold: float = 0.0
     ) -> List[MemoryEntry]:
         """Search memories using semantic similarity.
         
@@ -192,6 +193,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
             query: Search query text
             user_id: User identifier to filter memories
             limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (ignored - OpenMemory MCP server controls filtering)
             
         Returns:
             List of matching MemoryEntry objects ordered by relevance

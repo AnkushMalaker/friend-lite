@@ -6,12 +6,23 @@ This module provides concrete implementations of vector stores for:
 Vector stores handle storage, retrieval, and similarity search of memory embeddings.
 """
 
-import time
 import logging
+import time
 import uuid
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-from ..base import VectorStoreBase, MemoryEntry
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    FilterSelector,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
+
+from ..base import MemoryEntry, VectorStoreBase
 
 memory_logger = logging.getLogger("memory_service")
 
@@ -51,9 +62,6 @@ class QdrantVectorStore(VectorStoreBase):
             RuntimeError: If initialization fails
         """
         try:
-            from qdrant_client import AsyncQdrantClient
-            from qdrant_client.models import Distance, VectorParams
-            
             self.client = AsyncQdrantClient(host=self.host, port=self.port)
             
             # Check if collection exists and get its info
@@ -112,8 +120,6 @@ class QdrantVectorStore(VectorStoreBase):
     async def add_memories(self, memories: List[MemoryEntry]) -> List[str]:
         """Add memories to Qdrant."""
         try:
-            from qdrant_client.models import PointStruct
-            
             points = []
             for memory in memories:
                 if memory.embedding:
@@ -141,11 +147,16 @@ class QdrantVectorStore(VectorStoreBase):
             memory_logger.error(f"Qdrant add memories failed: {e}")
             return []
 
-    async def search_memories(self, query_embedding: List[float], user_id: str, limit: int) -> List[MemoryEntry]:
-        """Search memories in Qdrant."""
+    async def search_memories(self, query_embedding: List[float], user_id: str, limit: int, score_threshold: float = 0.0) -> List[MemoryEntry]:
+        """Search memories in Qdrant with configurable similarity threshold filtering.
+        
+        Args:
+            query_embedding: Query vector for similarity search
+            user_id: User identifier to filter results
+            limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold, 1.0 = exact match)
+        """
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-            
             # Filter by user_id
             search_filter = Filter(
                 must=[
@@ -156,12 +167,20 @@ class QdrantVectorStore(VectorStoreBase):
                 ]
             )
             
-            results = await self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_embedding,
-                query_filter=search_filter,
-                limit=limit
-            )
+            # Apply similarity threshold if provided
+            # For cosine similarity, scores range from -1 to 1, where 1 is most similar
+            search_params = {
+                "collection_name": self.collection_name,
+                "query_vector": query_embedding,
+                "query_filter": search_filter,
+                "limit": limit
+            }
+            
+            if score_threshold > 0.0:
+                search_params["score_threshold"] = score_threshold
+                memory_logger.debug(f"Using similarity threshold: {score_threshold}")
+            
+            results = await self.client.search(**search_params)
             
             memories = []
             for result in results:
@@ -169,12 +188,17 @@ class QdrantVectorStore(VectorStoreBase):
                     id=str(result.id),
                     content=result.payload.get("content", ""),
                     metadata=result.payload.get("metadata", {}),
-                    # Convert Qdrant cosine distance to similarity [0..1]
-                    score=(1.0 - result.score) if result.score is not None else None,
+                    # Qdrant returns similarity scores directly (higher = more similar)
+                    score=result.score if result.score is not None else None,
                     created_at=result.payload.get("created_at")
                 )
                 memories.append(memory)
+                # Log similarity scores for debugging
+                score_str = f"{result.score:.3f}" if result.score is not None else "None"
+                memory_logger.debug(f"Retrieved memory with score {score_str}: {result.payload.get('content', '')[:50]}...")
             
+            threshold_msg = f"threshold {score_threshold}" if score_threshold > 0.0 else "no threshold"
+            memory_logger.info(f"Found {len(memories)} memories with {threshold_msg} for user {user_id}")
             return memories
             
         except Exception as e:
@@ -184,8 +208,6 @@ class QdrantVectorStore(VectorStoreBase):
     async def get_memories(self, user_id: str, limit: int) -> List[MemoryEntry]:
         """Get all memories for a user from Qdrant."""
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-            
             # Filter by user_id
             search_filter = Filter(
                 must=[
@@ -248,8 +270,6 @@ class QdrantVectorStore(VectorStoreBase):
     async def delete_user_memories(self, user_id: str) -> int:
         """Delete all memories for a user from Qdrant."""
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
-            
             # First count memories to delete
             memories = await self.get_memories(user_id, limit=10000)
             count = len(memories)
@@ -297,8 +317,6 @@ class QdrantVectorStore(VectorStoreBase):
     ) -> bool:
         """Update (upsert) an existing memory in Qdrant."""
         try:
-            from qdrant_client.models import PointStruct
-
             payload = {
                 "content": new_content,
                 "metadata": new_metadata,
@@ -334,6 +352,32 @@ class QdrantVectorStore(VectorStoreBase):
         except Exception as e:
             memory_logger.error(f"Qdrant update memory failed: {e}")
             return False
+
+    async def count_memories(self, user_id: str) -> int:
+        """Count total number of memories for a user in Qdrant using native count API."""
+        try:
+            
+            search_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.user_id", 
+                        match=MatchValue(value=user_id)
+                    )
+                ]
+            )
+            
+            # Use Qdrant's native count API (documented in qdrant/qdrant/docs)
+            # Count operation: CountPoints -> CountResponse with count result
+            result = await self.client.count(
+                collection_name=self.collection_name,
+                count_filter=search_filter
+            )
+            
+            return result.count
+            
+        except Exception as e:
+            memory_logger.error(f"Qdrant count memories failed: {e}")
+            return 0
 
 
 

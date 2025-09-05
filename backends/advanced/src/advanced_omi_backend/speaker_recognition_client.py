@@ -319,3 +319,82 @@ class SpeakerRecognitionClient:
         except Exception as e:
             logger.error(f"Error processing diarization result: {e}")
             return {}
+
+    async def get_enrolled_speakers(self, user_id: Optional[str] = None) -> Dict:
+        """
+        Get enrolled speakers from the speaker recognition service.
+
+        Args:
+            user_id: Optional user ID to filter speakers (for future user isolation)
+
+        Returns:
+            Dictionary containing speakers list and metadata
+        """
+        if not self.enabled:
+            return {"speakers": []}
+
+        try:
+            logger.info(f"Getting enrolled speakers from service: {self.service_url}")
+
+            async with aiohttp.ClientSession() as session:
+                # Use the /speakers endpoint - currently no user filtering in speaker service
+                async with session.get(
+                    f"{self.service_url}/speakers",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            f"Speaker service returned status {response.status}: {await response.text()}"
+                        )
+                        return {"speakers": []}
+
+                    result = await response.json()
+                    speakers = result.get("speakers", [])
+                    logger.info(f"Retrieved {len(speakers)} enrolled speakers from service")
+                    return result
+
+        except aiohttp.ClientError as e:
+            logger.warning(f"Failed to connect to speaker recognition service: {e}")
+            return {"speakers": []}
+        except Exception as e:
+            logger.error(f"Error getting enrolled speakers: {e}")
+            return {"speakers": []}
+
+    async def health_check(self) -> bool:
+        """
+        Check if the speaker recognition service is healthy and responding.
+
+        Returns:
+            True if service is healthy, False otherwise
+        """
+        if not self.enabled:
+            return False
+
+        try:
+            logger.debug(f"Performing health check on speaker service: {self.service_url}")
+
+            async with aiohttp.ClientSession() as session:
+                # Use the /health endpoint if available, otherwise try a simple endpoint
+                health_endpoints = ["/health", "/speakers"]
+                
+                for endpoint in health_endpoints:
+                    try:
+                        async with session.get(
+                            f"{self.service_url}{endpoint}",
+                            timeout=aiohttp.ClientTimeout(total=5),
+                        ) as response:
+                            if response.status == 200:
+                                logger.debug(f"Speaker service health check passed via {endpoint}")
+                                return True
+                            else:
+                                logger.debug(f"Health check endpoint {endpoint} returned {response.status}")
+                    except Exception as endpoint_error:
+                        logger.debug(f"Health check failed for {endpoint}: {endpoint_error}")
+                        continue
+
+                logger.warning("All health check endpoints failed")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error during speaker service health check: {e}")
+            return False
