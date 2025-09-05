@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { BACKEND_URL } from '../services/api'
 import { Music, Eye, EyeOff } from 'lucide-react'
 
 export default function LoginPage() {
@@ -22,9 +23,29 @@ export default function LoginPage() {
     setIsLoading(true)
     setError('')
 
-    const success = await login(email, password)
-    if (!success) {
-      setError('Invalid email or password')
+    // Pre-flight connection check
+    try {
+      const healthUrl = BACKEND_URL ? `${BACKEND_URL}/api/auth/health` : '/api/auth/health'
+      const healthResponse = await fetch(healthUrl)
+      if (!healthResponse.ok) {
+        throw new Error('Health check failed')
+      }
+    } catch (healthError) {
+      setError('Unable to connect to server. Please check your connection and try again.')
+      setIsLoading(false)
+      return
+    }
+
+    const result = await login(email, password)
+    if (!result.success) {
+      // Show specific error message based on error type
+      if (result.errorType === 'connection_failure') {
+        setError('Unable to connect to server. Please check your connection and try again.')
+      } else if (result.errorType === 'authentication_failure') {
+        setError('Invalid email or password')
+      } else {
+        setError(result.error || 'Login failed. Please try again.')
+      }
     }
     setIsLoading(false)
   }

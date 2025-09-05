@@ -102,7 +102,8 @@ class MemoryServiceBase(ABC):
         self, 
         query: str, 
         user_id: str, 
-        limit: int = 10
+        limit: int = 10,
+        score_threshold: float = 0.0
     ) -> List[MemoryEntry]:
         """Search memories using semantic similarity.
         
@@ -110,6 +111,7 @@ class MemoryServiceBase(ABC):
             query: Search query text
             user_id: User identifier to filter memories
             limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold)
             
         Returns:
             List of matching MemoryEntry objects ordered by relevance
@@ -132,6 +134,20 @@ class MemoryServiceBase(ABC):
             List of MemoryEntry objects for the user
         """
         pass
+    
+    async def count_memories(self, user_id: str) -> Optional[int]:
+        """Count total number of memories for a user.
+        
+        This is an optional method that providers can implement for efficient
+        counting. Returns None if the provider doesn't support counting.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Total count of memories for the user, or None if not supported
+        """
+        return None
     
     @abstractmethod
     async def delete_memory(self, memory_id: str) -> bool:
@@ -279,7 +295,8 @@ class VectorStoreBase(ABC):
         self, 
         query_embedding: List[float], 
         user_id: str, 
-        limit: int
+        limit: int,
+        score_threshold: float = 0.0
     ) -> List[MemoryEntry]:
         """Search memories using vector similarity.
         
@@ -287,6 +304,7 @@ class VectorStoreBase(ABC):
             query_embedding: Query vector for similarity search
             user_id: User identifier to filter results
             limit: Maximum number of results to return
+            score_threshold: Minimum similarity score (0.0 = no threshold)
             
         Returns:
             List of matching MemoryEntry objects with similarity scores
@@ -305,6 +323,20 @@ class VectorStoreBase(ABC):
             List of MemoryEntry objects for the user
         """
         pass
+    
+    async def count_memories(self, user_id: str) -> Optional[int]:
+        """Count total number of memories for a user.
+        
+        Default implementation returns None to indicate counting is unsupported.
+        Vector stores should override this method to provide efficient counting if supported.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Total count of memories for the user, or None if counting is not supported by this store
+        """
+        return None
     
     @abstractmethod
     async def update_memory(
