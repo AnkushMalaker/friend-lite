@@ -1,6 +1,8 @@
+// useAudioStreamer.ts
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Alert } from 'react-native';
-import NetInfo from "@react-native-community/netinfo";
+import { PermissionsAndroid, Platform } from 'react-native';
+import notifee, { AndroidImportance } from '@notifee/react-native';
+import NetInfo from '@react-native-community/netinfo';
 
 interface UseAudioStreamer {
   isStreaming: boolean;
@@ -22,280 +24,354 @@ interface WyomingEvent {
 
 // Audio format constants (matching OMI device format)
 const AUDIO_FORMAT = {
-  rate: 16000,  // 16kHz sample rate
-  width: 2,     // 16-bit samples (2 bytes)
-  channels: 1   // Mono audio
+  rate: 16000,
+  width: 2,
+  channels: 1,
 };
+
+/** -------------------- Foreground Service helpers (NEW) -------------------- */
+
+const FGS_CHANNEL_ID = 'ws_channel';
+const FGS_NOTIFICATION_ID = 'ws_foreground';
+
+// Notifee requires registering the foreground service task once.
+let _fgsRegistered = false;
+function ensureFgsRegistered() {
+  if (_fgsRegistered) return;
+  notifee.registerForegroundService(async () => {
+    // Keep this task alive as long as any foreground notification is active.
+    return new Promise(() => {});
+  });
+  _fgsRegistered = true;
+}
+
+async function ensureNotificationPermission() {
+  if (Platform.OS === 'android' && Platform.Version >= 33) {
+    await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+    );
+  }
+}
+
+async function startForegroundServiceNotification(title: string, body: string) {
+  ensureFgsRegistered();
+  await ensureNotificationPermission();
+
+  // Create channel if needed
+  await notifee.createChannel({
+    id: FGS_CHANNEL_ID,
+    name: 'Streaming',
+    importance: AndroidImportance.LOW,
+  });
+
+  // Start (or update) the foreground notification
+  await notifee.displayNotification({
+    id: FGS_NOTIFICATION_ID,
+    title,
+    body,
+    android: {
+      channelId: FGS_CHANNEL_ID,
+      asForegroundService: true,
+      ongoing: true,
+      pressAction: { id: 'default' },
+    },
+  });
+}
+
+async function stopForegroundServiceNotification() {
+  try {
+    await notifee.stopForegroundService();
+  } catch {}
+  try {
+    await notifee.cancelNotification(FGS_NOTIFICATION_ID);
+  } catch {}
+}
+
+/** -------------------- Hook -------------------- */
 
 export const useAudioStreamer = (): UseAudioStreamer => {
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
   const websocketRef = useRef<WebSocket | null>(null);
   const manuallyStoppedRef = useRef<boolean>(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const currentUrlRef = useRef<string>('');
-  const reconnectAttemptsRef = useRef<number>(0);
-  const MAX_RECONNECT_ATTEMPTS = 5;
-  const RECONNECT_DELAY = 3000; // 3 seconds between reconnects
 
-  // Helper function to send Wyoming protocol events
+  // backoff: 3s, 6s, 12s, ... capped at 30s; up to 10 attempts before showing an error notification
+  const reconnectAttemptsRef = useRef<number>(0);
+  const MAX_RECONNECT_ATTEMPTS = 10;
+  const BASE_RECONNECT_MS = 3000;
+  const MAX_RECONNECT_MS = 30000;
+  const HEARTBEAT_MS = 25000;
+
+  // Guard state updates after unmount
+  const mountedRef = useRef<boolean>(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const setStateSafe = useCallback(<T,>(setter: (v: T) => void, val: T) => {
+    if (mountedRef.current) setter(val);
+  }, []);
+
+  // Helper: background-safe, optional notification for errors/info (NEW)
+  const notifyInfo = useCallback(async (title: string, body: string) => {
+    try {
+      await notifee.displayNotification({
+        title,
+        body,
+        android: { channelId: FGS_CHANNEL_ID },
+      });
+    } catch {
+      // ignore if not available
+    }
+  }, []);
+
+  // Helper: send Wyoming protocol events (UNCHANGED logic)
   const sendWyomingEvent = useCallback(async (event: WyomingEvent, payload?: Uint8Array) => {
     if (!websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
       console.log('[AudioStreamer] WebSocket not ready for Wyoming event');
       return;
     }
-
     try {
-      // Add version to event
-      event.version = "1.0.0";
-      
-      // Add payload_length if payload exists
-      if (payload) {
-        event.payload_length = payload.length;
-      } else {
-        event.payload_length = null;
-      }
+      event.version = '1.0.0';
+      event.payload_length = payload ? payload.length : null;
 
-      // Send JSON header with newline
       const jsonHeader = JSON.stringify(event) + '\n';
       websocketRef.current.send(jsonHeader);
-      console.debug(`[AudioStreamer] Sent Wyoming event: ${event.type} (payload_length: ${event.payload_length})`);
-
-      // Send binary payload if exists
-      if (payload && payload.length > 0) {
-        websocketRef.current.send(payload);
-        console.debug(`[AudioStreamer] Sent audio payload: ${payload.length} bytes`);
-      }
+      if (payload?.length) websocketRef.current.send(payload);
     } catch (e) {
       const errorMessage = (e as any).message || 'Error sending Wyoming event.';
       console.error('[AudioStreamer] Error sending Wyoming event:', errorMessage);
-      setError(errorMessage);
+      setStateSafe(setError, errorMessage);
     }
-  }, []);
+  }, [setStateSafe]);
 
+  // Stop (CHANGED): use explicit close code & reason; clear heartbeat; stop FGS
   const stopStreaming = useCallback(async () => {
-    if (websocketRef.current) {
-      console.log('[AudioStreamer] Closing WebSocket connection.');
-      // Mark that we're manually stopping the connection
-      manuallyStoppedRef.current = true;
-      
-      // Clear any pending reconnect timeout
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      
-      // Send audio-stop event before closing
-      if (websocketRef.current.readyState === WebSocket.OPEN) {
-        try {
-          const audioStopEvent: WyomingEvent = {
-            type: 'audio-stop',
-            data: { timestamp: Date.now() }
-          };
-          await sendWyomingEvent(audioStopEvent);
-          console.log('[AudioStreamer] Sent audio-stop event');
-        } catch (e) {
-          console.error('[AudioStreamer] Error sending audio-stop:', e);
-        }
-      }
-      
-      websocketRef.current.close();
-      websocketRef.current = null;
-    }
-    setIsStreaming(false);
-    setIsConnecting(false);
-  }, [sendWyomingEvent]);
+    manuallyStoppedRef.current = true;
 
-  const attemptReconnect = useCallback(() => {
-    if (manuallyStoppedRef.current || !currentUrlRef.current) {
-      console.log('[AudioStreamer] Not reconnecting: connection was manually stopped or no URL available');
-      return;
-    }
-
-    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
-      console.log(`[AudioStreamer] Maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
-      Alert.alert("Connection Failed", "Failed to reconnect to the server after multiple attempts.");
-      manuallyStoppedRef.current = true; // Stop trying to reconnect
-      return;
-    }
-
-    console.log(`[AudioStreamer] Attempting to reconnect (attempt ${reconnectAttemptsRef.current + 1}/${MAX_RECONNECT_ATTEMPTS})...`);
-    reconnectAttemptsRef.current += 1;
-    setIsConnecting(true);
-    
-    // Clear any previous reconnect timeout
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
-    
-    // Use the stored URL to reconnect
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    }
+
+    if (websocketRef.current) {
+      try {
+        // Send audio-stop best-effort
+        if (websocketRef.current.readyState === WebSocket.OPEN) {
+          const audioStopEvent: WyomingEvent = { type: 'audio-stop', data: { timestamp: Date.now() } };
+          await sendWyomingEvent(audioStopEvent);
+        }
+      } catch {}
+      try {
+        websocketRef.current.close(1000, 'manual-stop'); // <— explicit manual reason
+      } catch {}
+      websocketRef.current = null;
+    }
+
+    setStateSafe(setIsStreaming, false);
+    setStateSafe(setIsConnecting, false);
+    await stopForegroundServiceNotification();
+  }, [sendWyomingEvent, setStateSafe]);
+
+  // Reconnect (CHANGED): exponential backoff + no Alerts + optional notification on max attempts
+  const attemptReconnect = useCallback(() => {
+    if (manuallyStoppedRef.current || !currentUrlRef.current) {
+      console.log('[AudioStreamer] Not reconnecting: manually stopped or missing URL');
+      return;
+    }
+    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      console.log('[AudioStreamer] Reconnect attempts exhausted');
+      notifyInfo('Connection lost', 'Failed to reconnect after multiple attempts.');
+      manuallyStoppedRef.current = true;
+      setStateSafe(setIsStreaming, false);
+      setStateSafe(setIsConnecting, false);
+      return;
+    }
+
+    const attempt = reconnectAttemptsRef.current + 1;
+    const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * Math.pow(2, reconnectAttemptsRef.current));
+    reconnectAttemptsRef.current = attempt;
+
+    console.log(`[AudioStreamer] Reconnect attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
+
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    setStateSafe(setIsConnecting, true);
+
     reconnectTimeoutRef.current = setTimeout(() => {
       if (!manuallyStoppedRef.current) {
         startStreaming(currentUrlRef.current)
-          .catch(error => {
-            console.error('[AudioStreamer] Reconnection attempt failed:', error);
-            // Schedule next reconnect attempt
-            reconnectTimeoutRef.current = setTimeout(attemptReconnect, RECONNECT_DELAY);
+          .catch(err => {
+            console.error('[AudioStreamer] Reconnection failed:', err?.message || err);
+            attemptReconnect();
           });
       }
-    }, RECONNECT_DELAY);
-  }, []);
+    }, delay);
+  }, [notifyInfo, setStateSafe]);
 
+  // Start (CHANGED): start/refresh FGS before connecting; remove Alerts; set heartbeat
   const startStreaming = useCallback(async (url: string): Promise<void> => {
-    if (!url || url.trim() === '') {
-      Alert.alert('WebSocket URL Missing', 'Please provide a valid WebSocket URL.');
+    const trimmed = (url || '').trim();
+    if (!trimmed) {
       const errorMsg = 'WebSocket URL is required.';
-      setError(errorMsg);
+      setStateSafe(setError, errorMsg);
       return Promise.reject(new Error(errorMsg));
     }
 
-    // Store the URL for reconnection attempts
-    currentUrlRef.current = url.trim();
-    
-    // Reset the manually stopped flag when starting a new connection
+    currentUrlRef.current = trimmed;
     manuallyStoppedRef.current = false;
-    
+
+    // Network gate
     const netState = await NetInfo.fetch();
     if (!netState.isConnected || !netState.isInternetReachable) {
-      Alert.alert("No Internet", "Please check your internet connection to stream audio.");
       const errorMsg = 'No internet connection.';
-      setError(errorMsg);
+      setStateSafe(setError, errorMsg);
       return Promise.reject(new Error(errorMsg));
     }
 
-    console.log(`[AudioStreamer] Initializing WebSocket connection to: ${url}`);
-    if (websocketRef.current) {
-      console.log('[AudioStreamer] Found existing WebSocket. Closing it before creating a new one.');
-      stopStreaming(); // Close any existing connection
-    }
+    // Ensure Foreground Service is up so the JS VM isn’t killed when backgrounded
+    await startForegroundServiceNotification('Streaming active', 'Keeping WebSocket connection alive');
 
-    setIsConnecting(true);
-    setError(null);
+    console.log(`[AudioStreamer] Initializing WebSocket: ${trimmed}`);
+    if (websocketRef.current) await stopStreaming(); // close any existing
+
+    setStateSafe(setIsConnecting, true);
+    setStateSafe(setError, null);
 
     return new Promise<void>((resolve, reject) => {
       try {
-        const ws = new WebSocket(url.trim());
+        const ws = new WebSocket(trimmed);
 
         ws.onopen = async () => {
-          console.log('[AudioStreamer] WebSocket connection established.');
-          setIsConnecting(false);
-          setIsStreaming(true);
-          setError(null);
-          websocketRef.current = ws; // Assign ref only on successful open
-          // Reset reconnect attempts on successful connection
+          console.log('[AudioStreamer] WebSocket open');
+          websocketRef.current = ws;
           reconnectAttemptsRef.current = 0;
-          
-          // Send audio-start event to begin session
+          setStateSafe(setIsConnecting, false);
+          setStateSafe(setIsStreaming, true);
+          setStateSafe(setError, null);
+
+          // Start heartbeat
+          if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+          heartbeatRef.current = setInterval(() => {
+            try {
+              if (websocketRef.current?.readyState === WebSocket.OPEN) {
+                websocketRef.current.send(JSON.stringify({ type: 'ping', t: Date.now() }));
+              }
+            } catch {}
+          }, HEARTBEAT_MS);
+
           try {
-            const audioStartEvent: WyomingEvent = {
-              type: 'audio-start',
-              data: AUDIO_FORMAT
-            };
+            const audioStartEvent: WyomingEvent = { type: 'audio-start', data: AUDIO_FORMAT };
             await sendWyomingEvent(audioStartEvent);
-            console.log(`[AudioStreamer] Sent audio-start event (rate=${AUDIO_FORMAT.rate}, width=${AUDIO_FORMAT.width}, channels=${AUDIO_FORMAT.channels})`);
           } catch (e) {
-            console.error('[AudioStreamer] Error sending audio-start:', e);
+            console.error('[AudioStreamer] audio-start failed:', e);
           }
-          
+
           resolve();
         };
 
         ws.onmessage = (event) => {
-          console.log('[AudioStreamer] Received message:', event.data);
+          // Handle server messages if needed
+          console.log('[AudioStreamer] Message:', event.data);
         };
 
         ws.onerror = (e) => {
-          const errorMessage = (e as any).message || 'WebSocket connection error.';
-          console.error('[AudioStreamer] WebSocket error:', errorMessage);
-          Alert.alert("Streaming Error", `WebSocket error: ${errorMessage}`);
-          setError(errorMessage);
-          setIsConnecting(false);
-          setIsStreaming(false);
-          if (websocketRef.current === ws) { // Ensure we only nullify if it's this instance
-            websocketRef.current = null;
-          }
-          reject(new Error(errorMessage));
+          const msg = (e as any).message || 'WebSocket connection error.';
+          console.error('[AudioStreamer] Error:', msg);
+          setStateSafe(setError, msg);
+          setStateSafe(setIsConnecting, false);
+          setStateSafe(setIsStreaming, false);
+          if (websocketRef.current === ws) websocketRef.current = null;
+          reject(new Error(msg));
         };
 
         ws.onclose = (event) => {
-          console.log('[AudioStreamer] WebSocket connection closed. Code:', event.code, 'Reason:', event.reason);
-          const wasSuccessfullyOpened = websocketRef.current === ws;
+          console.log('[AudioStreamer] Closed. Code:', event.code, 'Reason:', event.reason);
+          const isManual = event.code === 1000 && event.reason === 'manual-stop';
 
-          setIsConnecting(false); // Always ensure connecting is false
-          setIsStreaming(false); // Always ensure streaming is false
+          setStateSafe(setIsConnecting, false);
+          setStateSafe(setIsStreaming, false);
 
-          if (websocketRef.current === ws) { // If this is the instance that was active
-            websocketRef.current = null;
-          }
+          if (websocketRef.current === ws) websocketRef.current = null;
 
-          if (!wasSuccessfullyOpened) {
-            // If onopen never fired for this instance, it's a failure of startStreaming.
-            const closeErrorMsg = `WebSocket closed before opening. Code: ${event.code}, Reason: ${event.reason || 'Unknown'}`;
-            // Only set error if not already set by ws.onerror
-            if (error === null) setError(closeErrorMsg);
-            reject(new Error(closeErrorMsg));
-          } else {
-            // If it was open and then closed.
-            if (!event.wasClean && error === null) { // And it was not a clean closure and no prior error.
-              setError('WebSocket connection closed unexpectedly.');
-              
-              // If not manually stopped, try to reconnect
-              if (!manuallyStoppedRef.current) {
-                console.log('[AudioStreamer] Connection closed unexpectedly. Attempting to reconnect...');
-                attemptReconnect();
-              }
-            }
+          if (!isManual && !manuallyStoppedRef.current) {
+            setStateSafe(setError, 'Connection closed; attempting to reconnect.');
+            attemptReconnect();
           }
         };
       } catch (e) {
-        const errorMessage = (e as any).message || 'Failed to create WebSocket.';
-        console.error('[AudioStreamer] Error creating WebSocket:', errorMessage);
-        Alert.alert("WebSocket Error", `Could not establish connection: ${errorMessage}`);
-        setError(errorMessage);
-        setIsConnecting(false);
-        setIsStreaming(false);
-        reject(new Error(errorMessage));
+        const msg = (e as any).message || 'Failed to create WebSocket.';
+        console.error('[AudioStreamer] Create WS error:', msg);
+        setStateSafe(setError, msg);
+        setStateSafe(setIsConnecting, false);
+        setStateSafe(setIsStreaming, false);
+        reject(new Error(msg));
       }
     });
-  }, [stopStreaming, attemptReconnect, sendWyomingEvent]);
+  }, [attemptReconnect, sendWyomingEvent, setStateSafe, stopStreaming]);
 
   const sendAudio = useCallback(async (audioBytes: Uint8Array) => {
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
       try {
-        // Create Wyoming AudioChunk event
-        const audioChunkEvent: WyomingEvent = {
-          type: 'audio-chunk',
-          data: AUDIO_FORMAT
-        };
-        
-        // Send Wyoming event with audio payload
+        const audioChunkEvent: WyomingEvent = { type: 'audio-chunk', data: AUDIO_FORMAT };
         await sendWyomingEvent(audioChunkEvent, audioBytes);
       } catch (e) {
-        const errorMessage = (e as any).message || 'Error sending audio data.';
-        console.error('[AudioStreamer] Error sending audio:', errorMessage);
-        // Optionally set error state or attempt to stop/restart streaming if send fails repeatedly
-        setError(errorMessage);
+        const msg = (e as any).message || 'Error sending audio data.';
+        console.error('[AudioStreamer] sendAudio error:', msg);
+        setStateSafe(setError, msg);
       }
     } else {
-      // Log why it didn't send
-      console.log(`[AudioStreamer] NOT sending audio. Conditions check: websocketRef.current exists: ${!!websocketRef.current}, readyState === OPEN: ${websocketRef.current?.readyState === WebSocket.OPEN}, audioBytes.length > 0: ${audioBytes.length > 0}. Actual readyState: ${websocketRef.current?.readyState}`);
+      console.log(
+        `[AudioStreamer] NOT sending audio. hasWS=${!!websocketRef.current
+        } ready=${websocketRef.current?.readyState === WebSocket.OPEN
+        } bytes=${audioBytes.length} actualReady=${websocketRef.current?.readyState}`
+      );
     }
-  }, [sendWyomingEvent]);
+  }, [sendWyomingEvent, setStateSafe]);
 
-  const getWebSocketReadyState = useCallback(() => {
-    return websocketRef.current?.readyState;
-  }, []);
+  const getWebSocketReadyState = useCallback(() => websocketRef.current?.readyState, []);
 
-  // Cleanup on unmount
+  /** Connectivity-triggered reconnect (NEW) */
+  useEffect(() => {
+    const sub = NetInfo.addEventListener(state => {
+      const online = !!state.isConnected && !!state.isInternetReachable;
+      if (online && !manuallyStoppedRef.current) {
+        // If socket isn’t open, try to reconnect with backoff
+        const ready = websocketRef.current?.readyState;
+        if (ready !== WebSocket.OPEN && currentUrlRef.current) {
+          console.log('[AudioStreamer] Network back; scheduling reconnect');
+          attemptReconnect();
+        }
+      }
+    });
+    return () => sub();
+  }, [attemptReconnect]);
+
+  /** Cleanup on unmount (CHANGED): don’t auto-stop streaming; just clear timers */
   useEffect(() => {
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
-      stopStreaming();
+      if (heartbeatRef.current) {
+        clearInterval(heartbeatRef.current);
+        heartbeatRef.current = null;
+      }
+      // Intentionally NOT calling stopStreaming() to allow background persistence.
+      // The owner (screen/app) should call stopStreaming() explicitly when the session ends.
     };
-  }, [stopStreaming]);
+  }, []);
 
   return {
     isStreaming,
@@ -306,4 +382,4 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     stopStreaming,
     sendAudio,
   };
-}; 
+};
