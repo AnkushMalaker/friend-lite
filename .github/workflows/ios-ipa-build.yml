@@ -43,8 +43,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Initialize EAS
-        run: eas init --force --non-interactive
+      # - name: Initialize EAS
+      #   run: eas init --force --non-interactive
 
       - name: Build iOS IPA
         run: eas build --platform ios --profile local --local --non-interactive --output ${{ github.workspace }}/app-release.ipa
