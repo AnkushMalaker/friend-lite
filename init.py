@@ -15,6 +15,29 @@ from rich.prompt import Confirm
 
 console = Console()
 
+def read_env_value(env_file_path, key):
+    """Read a value from an .env file"""
+    try:
+        env_path = Path(env_file_path)
+        if not env_path.exists():
+            return None
+        
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f'{key}=') and not line.startswith('#'):
+                    # Extract value after = sign
+                    value = line.split('=', 1)[1]
+                    # Remove quotes if present
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    elif value.startswith("'") and value.endswith("'"):
+                        value = value[1:-1]
+                    return value if value else None
+        return None
+    except Exception:
+        return None
+
 SERVICES = {
     'backend': {
         'advanced': {
@@ -137,6 +160,32 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
         # Add HTTPS configuration for services that support it
         if service_name == 'speaker-recognition' and https_enabled and server_ip:
             cmd.extend(['--enable-https', '--server-ip', server_ip])
+        
+        # For speaker-recognition, try to pass API keys if available
+        if service_name == 'speaker-recognition':
+            # Pass Deepgram API key from backend if available
+            backend_env_path = 'backends/advanced/.env'
+            deepgram_key = read_env_value(backend_env_path, 'DEEPGRAM_API_KEY')
+            if deepgram_key and deepgram_key != 'your_deepgram_api_key_here':
+                cmd.extend(['--deepgram-api-key', deepgram_key])
+            
+            # Pass HF Token from existing speaker recognition .env if available
+            speaker_env_path = 'extras/speaker-recognition/.env'
+            hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
+            if hf_token and hf_token != 'your_huggingface_token_here':
+                cmd.extend(['--hf-token', hf_token])
+            
+            # Pass compute mode from existing config if available
+            compute_mode = read_env_value(speaker_env_path, 'COMPUTE_MODE')
+            if compute_mode and compute_mode in ['cpu', 'gpu']:
+                cmd.extend(['--compute-mode', compute_mode])
+        
+        # For openmemory-mcp, try to pass OpenAI API key from backend if available
+        if service_name == 'openmemory-mcp':
+            backend_env_path = 'backends/advanced/.env'
+            openai_key = read_env_value(backend_env_path, 'OPENAI_API_KEY')
+            if openai_key and openai_key != 'your-openai-key-here':
+                cmd.extend(['--openai-api-key', openai_key])
     
     console.print(f"\n🔧 [bold]Setting up {service_name}...[/bold]")
     

@@ -284,3 +284,46 @@ Each backend directory contains detailed setup instructions and docker-compose f
 
 **Choosing a backend:** Start with **Advanced Backend** for complete functionality. See feature comparison above for specific requirements.
 
+## 🔌 Service Ports & Access Reference
+
+### Advanced Backend (Primary)
+
+**HTTP Mode (Default):**
+```
+Web Dashboard: http://localhost:5173
+Backend API:   http://localhost:8000
+MongoDB:       localhost:27017
+Qdrant:        localhost:6333 (HTTP), 6334 (gRPC)
+```
+
+**HTTPS Mode:**
+```
+Web Dashboard: https://localhost/ or https://your-ip/
+Backend API:   https://localhost/api/ or https://your-ip/api/
+(Internal services same as HTTP mode)
+```
+
+### Speaker Recognition Service
+
+**HTTP Mode:**
+```
+Web UI:  http://localhost:5174
+API:     http://localhost:8085
+```
+
+**HTTPS Mode (nginx proxy):**
+```
+Web UI:  https://localhost:8444/ or https://your-ip:8444/
+API:     https://localhost:8444/api/
+HTTP:    http://localhost:8081/ (redirects to HTTPS)
+```
+
+### Additional Services
+
+```
+Parakeet ASR:     http://localhost:8767
+OpenMemory MCP:   http://localhost:8765 (API + WebUI)
+```
+
+**Note:** HTTPS mode requires SSL certificate setup. See individual service documentation for SSL configuration details.
+

@@ -3,6 +3,22 @@
 # Enable strict error handling
 set -euo pipefail
 
+# Parse command line arguments
+OPENAI_API_KEY=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --openai-api-key)
+            OPENAI_API_KEY="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+
 echo "🧠 OpenMemory MCP Setup"
 echo "======================"
 
@@ -45,18 +61,22 @@ cd ../..
 
 echo "✅ Custom mem0 fork ready with OpenMemory improvements"
 
-# Prompt for OpenAI API key with validation
-echo ""
-echo "🔑 OpenAI API Key (required for memory extraction)"
-echo "Get yours from: https://platform.openai.com/api-keys"
-while true; do
-    read -s -r -p "OpenAI API Key: " OPENAI_API_KEY
-    echo  # Print newline after silent input
-    if [ -n "$OPENAI_API_KEY" ]; then
-        break
-    fi
-    echo "Error: OpenAI API Key cannot be empty. Please try again."
-done
+# Get OpenAI API Key (prompt only if not provided via command line)
+if [ -z "$OPENAI_API_KEY" ]; then
+    echo ""
+    echo "🔑 OpenAI API Key (required for memory extraction)"
+    echo "Get yours from: https://platform.openai.com/api-keys"
+    while true; do
+        read -s -r -p "OpenAI API Key: " OPENAI_API_KEY
+        echo  # Print newline after silent input
+        if [ -n "$OPENAI_API_KEY" ]; then
+            break
+        fi
+        echo "Error: OpenAI API Key cannot be empty. Please try again."
+    done
+else
+    echo "✅ OpenAI API key configured from command line"
+fi
 
 # Update .env file safely using awk - replace existing line or append if missing
 temp_file=$(mktemp)
