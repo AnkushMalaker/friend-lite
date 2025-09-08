@@ -564,7 +564,7 @@ async def ws_endpoint_omi(
                 total_bytes += len(payload)
 
                 # OMI devices stream continuously - always process audio chunks
-                if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
+                if packet_count <= 5 or packet_count % 1000 == 0:  # Log first 5 and every 1000th
                     application_logger.info(
                         f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes"
                     )
@@ -576,8 +576,8 @@ async def ws_endpoint_omi(
                 decode_time = time.time() - start_time
 
                 if pcm_data:
-                    if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
-                        application_logger.info(
+                    if packet_count <= 5 or packet_count % 1000 == 0:  # Log first 5 and every 1000th
+                        application_logger.debug(
                             f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
                         )
 
@@ -595,7 +595,7 @@ async def ws_endpoint_omi(
 
                     # Queue to application-level processor
                     if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
-                        application_logger.info(
+                        application_logger.debug(
                             f"🚀 About to queue audio chunk #{packet_count} for client {client_id}"
                         )
                     await processor_manager.queue_audio(
@@ -1202,7 +1202,7 @@ async def health_check():
             # Make a health check request to the OpenMemory MCP service
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{openmemory_mcp_url}/docs", timeout=aiohttp.ClientTimeout(total=5)
+                    f"{openmemory_mcp_url}/api/v1/apps", timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     if response.status == 200:
                         health_status["services"]["openmemory_mcp"] = {
