@@ -93,9 +93,9 @@ def _compose_up():
     
     if REBUILD:
         compose_args.append("--build")
-        print(f"🔨 Rebuilding containers (REBUILD=True)")
+        print(f"🔨 Rebuilding images from source (REBUILD=True)")
     else:
-        print(f"🔄 Using existing containers (REBUILD=False)")
+        print(f"🏗️ Using existing images (REBUILD=False)")
     
     # Service name varies by compose file
     compose_args.append(
@@ -139,10 +139,10 @@ def _compose_down():
 def speaker_service():
     try:
         if FRESH_RUN:
-            print(f"🔄 Fresh run: starting with clean containers (FRESH_RUN=True)")
+            print(f"🔄 Fresh run: starting with clean containers and data (FRESH_RUN=True)")
             _compose_down()  # Ensure clean state
         else:
-            print(f"♻️ Reuse mode: using existing data/containers if available (FRESH_RUN=False)")
+            print(f"♻️ Reuse mode: keeping existing containers and data if available (FRESH_RUN=False)")
         
         _compose_up()
         _wait_for_health(SPEAKER_SERVICE_URL, timeout_seconds=600)
