@@ -190,12 +190,6 @@ AUTH_SECRET_KEY=your-secret-key
 ADMIN_PASSWORD=your-admin-password
 ```
 
-### Streamlit Configuration
-- **Port**: Default 8501
-- **Logs**: Stored in `./logs/streamlit.log`
-- **Session State**: Manages authentication and UI state
-- **Caching**: 5-minute cache for API responses
-
 ## Usage Patterns
 
 ### Admin Workflow

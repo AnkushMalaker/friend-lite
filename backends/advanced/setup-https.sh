@@ -308,7 +308,7 @@ echo "-----------"
 
 if [ "$HTTPS_ENABLED" = true ]; then
     echo "1. Start the services with HTTPS:"
-    echo "   ${CYAN}docker compose --profile https up --build -d${NC}"
+    echo "   ${CYAN}docker compose up --build -d${NC}"
     echo ""
     echo "2. Access the dashboard:"
     echo "   🌐 https://localhost/"

@@ -1,5 +1,6 @@
 """Deepgram API wrapper endpoints with speaker enhancement."""
 
+import json
 import logging
 import os
 import tempfile
@@ -7,13 +8,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiohttp
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 
 from simple_speaker_recognition.api.core.utils import (
     safe_format_confidence,
     validate_confidence
 )
-from simple_speaker_recognition.core.models import SpeakerStatus
+from simple_speaker_recognition.core.models import SpeakerStatus, DiarizationConfig
 from simple_speaker_recognition.core.unified_speaker_db import UnifiedSpeakerDB
 from simple_speaker_recognition.utils.audio_processing import get_audio_info
 
@@ -107,6 +108,149 @@ async def forward_to_deepgram(
             result = await response.json()
             log.info("Successfully received Deepgram response")
             return result
+
+
+def parse_and_validate_diarization_config(diarization_config_str: Optional[str] = None) -> Dict[str, Any]:
+    """Parse and validate the diarization config parameter with parameter filtering warnings."""
+    if not diarization_config_str:
+        # Default to Deepgram diarization (as per plan requirement)
+        return {
+            "provider": "deepgram",
+            "validated_config": {"diarization": {"provider": "deepgram"}},
+            "warnings": []
+        }
+    
+    try:
+        # Parse JSON config
+        config_data = json.loads(diarization_config_str)
+        
+        # Validate using Pydantic model
+        diarization_config = DiarizationConfig(**config_data)
+        diarization_provider = diarization_config.diarization
+        
+        warnings = []
+        
+        # Check for parameter conflicts and generate warnings
+        if diarization_provider.provider == "deepgram":
+            # Check if any pyannote-specific parameters were provided
+            pyannote_params = ["min_speakers", "max_speakers", "collar", "min_duration_off"]
+            if hasattr(diarization_provider, 'min_speakers') or \
+               hasattr(diarization_provider, 'max_speakers') or \
+               hasattr(diarization_provider, 'collar') or \
+               hasattr(diarization_provider, 'min_duration_off'):
+                warnings.append("Ignoring pyannote-specific parameters for Deepgram diarization")
+        
+        return {
+            "provider": diarization_provider.provider,
+            "validated_config": diarization_config.dict(),
+            "warnings": warnings
+        }
+    
+    except json.JSONDecodeError as e:
+        log.error(f"Invalid JSON in diarization_config: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON in diarization_config: {str(e)}")
+    except Exception as e:
+        log.error(f"Invalid diarization_config format: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid diarization_config format: {str(e)}")
+
+
+async def process_with_pyannote_diarization(
+    audio_data: bytes,
+    deepgram_response: Dict[str, Any],
+    diarization_params: Dict[str, Any],
+    user_id: Optional[int],
+    confidence_threshold: float
+) -> Dict[str, Any]:
+    """Process audio using Pyannote diarization + speaker identification."""
+    log.info("Using Pyannote diarization path")
+    
+    # Create temporary file for processing
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+        tmp_file.write(audio_data)
+        tmp_path = Path(tmp_file.name)
+    
+    try:
+        # Get audio backend for diarization
+        audio_backend = get_audio_backend()
+        
+        # Extract diarization parameters
+        min_speakers = diarization_params.get("min_speakers")
+        max_speakers = diarization_params.get("max_speakers")
+        collar = diarization_params.get("collar", 2.0)
+        min_duration_off = diarization_params.get("min_duration_off", 1.5)
+        
+        # Perform diarization with parameters
+        segments = await audio_backend.async_diarize(
+            tmp_path,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            collar=collar,
+            min_duration_off=min_duration_off
+        )
+        
+        # Apply speaker identification if user_id provided
+        enhanced_response = deepgram_response.copy()
+        
+        if user_id:
+            # Process segments for speaker identification
+            speaker_db = get_speaker_db()
+            identified_speakers = {}
+            
+            for segment in segments:
+                try:
+                    start_time = segment["start"] 
+                    end_time = segment["end"]
+                    
+                    # Load audio segment
+                    wav = audio_backend.load_wave(tmp_path, start_time, end_time)
+                    
+                    # Generate embedding and identify
+                    emb = await audio_backend.async_embed(wav)
+                    found, speaker_info, confidence = await speaker_db.identify(emb, user_id=user_id)
+                    
+                    # Store identification result
+                    if found and confidence >= confidence_threshold:
+                        speaker_key = str(segment["speaker"])
+                        if speaker_key not in identified_speakers:
+                            identified_speakers[speaker_key] = {
+                                "speaker_id": speaker_info["id"],
+                                "speaker_name": speaker_info["name"],
+                                "confidence": confidence,
+                                "status": SpeakerStatus.IDENTIFIED.value
+                            }
+                
+                except Exception as e:
+                    log.warning(f"Error identifying segment: {e}")
+                    continue
+            
+            # Add enhancement metadata
+            enhanced_response["speaker_enhancement"] = {
+                "enabled": True,
+                "method": "pyannote",
+                "user_id": user_id,
+                "confidence_threshold": confidence_threshold,
+                "identified_speakers": identified_speakers,
+                "total_segments": len(segments),
+                "identified_segments": len(identified_speakers),
+                "diarization_parameters": {
+                    "min_speakers": min_speakers,
+                    "max_speakers": max_speakers,
+                    "collar": collar,
+                    "min_duration_off": min_duration_off
+                }
+            }
+        else:
+            enhanced_response["speaker_enhancement"] = {
+                "enabled": False,
+                "method": "pyannote", 
+                "reason": "No user_id provided for speaker identification"
+            }
+        
+        return enhanced_response
+    
+    finally:
+        # Clean up temporary file
+        tmp_path.unlink(missing_ok=True)
 
 
 async def enhance_deepgram_response_with_speaker_id(
@@ -355,6 +499,8 @@ async def deepgram_compatible_transcription(
     detect_language: bool = Query(default=False, description="Detect language automatically"),
     summarize: bool = Query(default=False, description="Generate summary"),
     sentiment: bool = Query(default=False, description="Analyze sentiment"),
+    # NEW: Structured diarization configuration
+    diarization_config: Optional[str] = Form(default=None, description="JSON config for diarization"),
     # Speaker enhancement parameters
     enhance_speakers: bool = Query(default=True, description="Enable speaker identification enhancement"),
     user_id: Optional[int] = Query(default=None, description="User ID for speaker identification"),
@@ -367,134 +513,18 @@ async def deepgram_compatible_transcription(
     
     log.info("Processing /v1/listen request")
     log.info(f"Parameters - user_id: {user_id}, enhance_speakers: {enhance_speakers}, speaker_confidence_threshold: {speaker_confidence_threshold}")
+    log.info(f"Diarization config: {diarization_config}")
     log.info(f"File - name: {file.filename}, content_type: {file.content_type}, size: {file.size if hasattr(file, 'size') else 'unknown'}")
     
-    # Extract API key from authorization header
-    api_key = None
-    if authorization:
-        if authorization.startswith("Token "):
-            api_key = authorization[6:]
-        elif authorization.startswith("Bearer "):
-            api_key = authorization[7:]
-        else:
-            api_key = authorization
+    # Parse and validate diarization configuration
+    config_result = parse_and_validate_diarization_config(diarization_config)
+    diarization_provider = config_result["provider"]
+    validated_config = config_result["validated_config"]
+    warnings = config_result["warnings"]
     
-    # Use provided API key or fall back to service default
-    auth = get_auth()
-    deepgram_key = api_key or auth.deepgram_api_key
-    if not deepgram_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Deepgram API key required. Provide via Authorization header or DEEPGRAM_API_KEY environment variable."
-        )
-    
-    log.info(f"Processing Deepgram-compatible transcription request: {file.filename}")
-    
-    try:
-        # Read audio file
-        audio_data = await file.read()
-        content_type = file.content_type or "audio/wav"
-        
-        # Prepare parameters for Deepgram API
-        deepgram_params = {
-            "model": model,
-            "language": language,
-            "version": version,
-            "punctuate": punctuate,
-            "profanity_filter": profanity_filter,
-            "diarize": diarize,
-            "diarize_version": diarize_version,
-            "multichannel": multichannel,
-            "alternatives": alternatives,
-            "numerals": numerals,
-            "smart_format": smart_format,
-            "paragraphs": paragraphs,
-            "utterances": utterances,
-            "detect_language": detect_language,
-            "summarize": summarize,
-            "sentiment": sentiment,
-        }
-        
-        # Remove None values and custom parameters not for Deepgram
-        deepgram_params = {k: v for k, v in deepgram_params.items() if v is not None}
-        
-        # Remove our custom parameters that shouldn't go to Deepgram
-        custom_params = ['enhance_speakers', 'user_id', 'speaker_confidence_threshold']
-        for param in custom_params:
-            deepgram_params.pop(param, None)
-        
-        log.info(f"Forwarding request to Deepgram API with params: {deepgram_params}")
-        
-        # Forward to Deepgram
-        deepgram_response = await forward_to_deepgram(
-            audio_data=audio_data,
-            content_type=content_type,
-            params=deepgram_params,
-            deepgram_api_key=deepgram_key
-        )
-        
-        # Enhance with speaker identification if enabled
-        if enhance_speakers and diarize:
-            log.info("Enhancing transcription with speaker identification")
-            enhanced_response = await enhance_deepgram_response_with_speaker_id(
-                audio_data=audio_data,
-                deepgram_response=deepgram_response,
-                user_id=user_id,
-                confidence_threshold=speaker_confidence_threshold
-            )
-            return enhanced_response
-        else:
-            log.info("Returning original Deepgram response (speaker enhancement disabled)")
-            return deepgram_response
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.error(f"Error in Deepgram-compatible transcription: {e}")
-        raise HTTPException(500, f"Transcription failed: {str(e)}")
-
-
-@router.post("/v1/transcribe-and-diarize")
-async def deepgram_transcribe_and_diarize(
-    file: UploadFile = File(..., description="Audio file to transcribe and diarize"),
-    # Deepgram-compatible query parameters
-    model: str = Query(default="nova-3", description="Model to use for transcription"),
-    language: str = Query(default="multi", description="Language code"),
-    version: str = Query(default="latest", description="Model version"),
-    punctuate: bool = Query(default=True, description="Add punctuation"),
-    profanity_filter: bool = Query(default=False, description="Filter profanity"),
-    diarize: bool = Query(default=True, description="Enable speaker diarization"),
-    diarize_version: str = Query(default="latest", description="Diarization model version"),
-    multichannel: bool = Query(default=False, description="Process multiple channels"),
-    alternatives: int = Query(default=1, description="Number of alternative transcripts"),
-    numerals: bool = Query(default=True, description="Convert numbers to numerals"),
-    smart_format: bool = Query(default=True, description="Enable smart formatting"),
-    paragraphs: bool = Query(default=True, description="Organize into paragraphs"),
-    utterances: bool = Query(default=True, description="Organize into utterances"),
-    detect_language: bool = Query(default=False, description="Detect language automatically"),
-    summarize: bool = Query(default=False, description="Generate summary"),
-    sentiment: bool = Query(default=False, description="Analyze sentiment"),
-    # Hybrid mode parameters  
-    enhance_speakers: bool = Query(default=True, description="Enable speaker identification enhancement"),
-    user_id: Optional[int] = Query(default=None, description="User ID for speaker identification"),
-    speaker_confidence_threshold: float = Query(default=0.15, description="Minimum confidence for speaker identification"),
-    similarity_threshold: float = Query(default=0.15, description="Similarity threshold for internal speaker matching"),
-    min_duration: float = Query(default=1.0, description="Minimum segment duration for processing"),
-    # Authentication
-    authorization: Optional[str] = Header(default=None, description="Authorization header"),
-    db: UnifiedSpeakerDB = Depends(get_db),
-):
-    """
-    Hybrid transcription endpoint: Deepgram transcription + internal diarization + speaker identification.
-    
-    This endpoint provides hybrid mode processing:
-    1. Uses Deepgram for high-quality transcription only
-    2. Uses internal pyannote system for speaker diarization 
-    3. Applies internal speaker identification to segments
-    4. Returns transcribed text with identified speakers
-    
-    This is different from /v1/listen which uses Deepgram for both transcription and diarization.
-    """
+    # Log any parameter warnings
+    for warning in warnings:
+        log.warning(warning)
     
     # Extract API key from authorization header
     api_key = None
@@ -515,21 +545,20 @@ async def deepgram_transcribe_and_diarize(
             detail="Deepgram API key required. Provide via Authorization header or DEEPGRAM_API_KEY environment variable."
         )
     
-    log.info(f"Processing hybrid transcribe-and-diarize request: {file.filename}")
+    log.info(f"Processing with diarization provider: {diarization_provider}")
     
     try:
         # Read audio file
         audio_data = await file.read()
         content_type = file.content_type or "audio/wav"
         
-        # Step 1: Get transcription from Deepgram (no diarization)
-        deepgram_params = {
+        # Prepare base parameters for transcription
+        base_params = {
             "model": model,
             "language": language,
             "version": version,
             "punctuate": punctuate,
             "profanity_filter": profanity_filter,
-            "diarize": False,  # Disable Deepgram diarization for hybrid mode
             "multichannel": multichannel,
             "alternatives": alternatives,
             "numerals": numerals,
@@ -542,140 +571,97 @@ async def deepgram_transcribe_and_diarize(
         }
         
         # Remove None values
-        deepgram_params = {k: v for k, v in deepgram_params.items() if v is not None}
+        base_params = {k: v for k, v in base_params.items() if v is not None}
         
-        log.info(f"Getting Deepgram transcription with params: {deepgram_params}")
-        
-        # Get transcription from Deepgram
-        deepgram_response = await forward_to_deepgram(
-            audio_data=audio_data,
-            content_type=content_type,
-            params=deepgram_params,
-            deepgram_api_key=deepgram_key
-        )
-        
-        # Step 2: Perform internal diarization and speaker identification
-        if enhance_speakers and user_id:
-            log.info("Performing internal diarization and speaker identification")
+        if diarization_provider == "deepgram":
+            # DEEPGRAM PATH: Use Deepgram for both transcription and diarization
+            log.info("Using Deepgram diarization path")
             
-            # Save audio to temporary file for processing
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                tmp_file.write(audio_data)
-                tmp_path = Path(tmp_file.name)
+            # Add Deepgram diarization parameters
+            deepgram_params = base_params.copy()
+            deepgram_params.update({
+                "diarize": diarize,
+                "diarize_version": diarize_version,
+            })
             
-            try:
-                # Get audio backend for diarization
-                audio_backend = get_audio_backend()
-                
-                # Perform diarization using internal system
-                segments = await audio_backend.async_diarize(tmp_path)
-                
-                # Apply minimum duration filter
-                if min_duration > 0:
-                    original_count = len(segments)
-                    segments = [s for s in segments if s["duration"] >= min_duration]
-                    if len(segments) < original_count:
-                        log.info(f"Filtered out {original_count - len(segments)} segments shorter than {min_duration}s")
-                
-                # Identify speakers for each segment
-                speaker_mappings = {}  # Map diarization speaker -> identified speaker
-                enhanced_segments = []
-                
-                for i, segment in enumerate(segments):
-                    try:
-                        speaker_label = segment["speaker"]
-                        start_time = segment["start"]
-                        end_time = segment["end"]
-                        
-                        # Load audio segment
-                        wav = audio_backend.load_wave(tmp_path, start_time, end_time)
-                        
-                        # Generate embedding
-                        emb = await audio_backend.async_embed(wav)
-                        
-                        # Identify speaker
-                        found, speaker_info, confidence = await db.identify(emb, user_id=user_id)
-                        
-                        # Store mapping for this diarization speaker
-                        if found and confidence >= speaker_confidence_threshold:
-                            if speaker_label not in speaker_mappings:
-                                speaker_mappings[speaker_label] = {
-                                    "speaker_id": speaker_info["id"],
-                                    "speaker_name": speaker_info["name"],
-                                    "confidence": confidence
-                                }
-                            
-                            enhanced_segments.append({
-                                "speaker": speaker_label,
-                                "start": round(start_time, 3),
-                                "end": round(end_time, 3),
-                                "duration": round(end_time - start_time, 3),
-                                "identified_speaker_id": speaker_info["id"],
-                                "identified_speaker_name": speaker_info["name"],
-                                "speaker_identification_confidence": round(float(confidence), 3),
-                                "speaker_status": "identified"
-                            })
-                        else:
-                            enhanced_segments.append({
-                                "speaker": speaker_label,
-                                "start": round(start_time, 3),
-                                "end": round(end_time, 3),
-                                "duration": round(end_time - start_time, 3),
-                                "identified_speaker_id": None,
-                                "identified_speaker_name": None,
-                                "speaker_identification_confidence": round(float(confidence), 3) if confidence else 0.0,
-                                "speaker_status": "unknown"
-                            })
-                            
-                    except Exception as e:
-                        log.warning(f"Error processing segment {i+1}: {str(e)}")
-                        continue
-                
-                # Enhance Deepgram response with speaker identification
-                # Create a hybrid response that combines Deepgram transcription with internal speaker mapping
-                enhanced_response = deepgram_response.copy()
-                
-                # Add speaker enhancement metadata
-                enhanced_response["speaker_enhancement"] = {
-                    "enabled": True,
-                    "method": "hybrid",
-                    "user_id": user_id,
-                    "confidence_threshold": speaker_confidence_threshold,
-                    "similarity_threshold": similarity_threshold,
-                    "identified_speakers": speaker_mappings,
-                    "total_segments": len(enhanced_segments),
-                    "identified_segments": len([s for s in enhanced_segments if s["speaker_status"] == "identified"]),
-                    "diarization_speakers": list(set(s["speaker"] for s in enhanced_segments)),
-                    "processing_mode": "hybrid"
-                }
-                
-                # Add segment information for reference
-                enhanced_response["internal_diarization"] = {
-                    "segments": enhanced_segments,
-                    "speaker_mappings": speaker_mappings
-                }
-                
-                log.info(f"Hybrid processing complete: {len(enhanced_segments)} segments, {len(speaker_mappings)} identified speakers")
+            log.info(f"Forwarding to Deepgram with diarization: {deepgram_params}")
+            
+            # Forward to Deepgram with diarization enabled
+            deepgram_response = await forward_to_deepgram(
+                audio_data=audio_data,
+                content_type=content_type,
+                params=deepgram_params,
+                deepgram_api_key=deepgram_key
+            )
+            
+            # Enhance with speaker identification if enabled
+            if enhance_speakers and user_id:
+                log.info("Enhancing Deepgram diarization with speaker identification")
+                enhanced_response = await enhance_deepgram_response_with_speaker_id(
+                    audio_data=audio_data,
+                    deepgram_response=deepgram_response,
+                    user_id=user_id,
+                    confidence_threshold=speaker_confidence_threshold
+                )
                 return enhanced_response
+            else:
+                log.info("Returning Deepgram response without speaker enhancement")
+                return deepgram_response
+        
+        elif diarization_provider == "pyannote":
+            # PYANNOTE PATH: Use Deepgram for transcription only, then Pyannote diarization + identification
+            log.info("Using Pyannote diarization path")
+            
+            # Get transcription from Deepgram (no diarization)
+            transcription_params = base_params.copy()
+            transcription_params["diarize"] = False  # Always disable Deepgram diarization for Pyannote path
+            
+            log.info(f"Getting transcription from Deepgram: {transcription_params}")
+            
+            # Get transcription from Deepgram
+            deepgram_response = await forward_to_deepgram(
+                audio_data=audio_data,
+                content_type=content_type,
+                params=transcription_params,
+                deepgram_api_key=deepgram_key
+            )
+            
+            # Enhance with Pyannote diarization and speaker identification if enabled
+            if enhance_speakers:
+                log.info("Processing with Pyannote diarization and speaker identification")
                 
-            finally:
-                # Clean up temporary file
-                tmp_path.unlink(missing_ok=True)
+                # Extract diarization parameters from structured config
+                diarization_params = validated_config.get("diarization", {})
+                
+                enhanced_response = await process_with_pyannote_diarization(
+                    audio_data=audio_data,
+                    deepgram_response=deepgram_response,
+                    diarization_params=diarization_params,
+                    user_id=user_id,
+                    confidence_threshold=speaker_confidence_threshold
+                )
+                
+                # Add config metadata to response
+                if "speaker_enhancement" not in enhanced_response:
+                    enhanced_response["speaker_enhancement"] = {}
+                enhanced_response["speaker_enhancement"]["diarization_config"] = validated_config
+                enhanced_response["speaker_enhancement"]["warnings"] = warnings
+                
+                return enhanced_response
+            else:
+                log.info("Returning transcription only (speaker enhancement disabled)")
+                return deepgram_response
+        
         else:
-            log.info("Returning Deepgram transcription only (speaker enhancement disabled)")
-            # Add metadata to indicate no speaker enhancement
-            deepgram_response["speaker_enhancement"] = {
-                "enabled": False,
-                "method": "hybrid",
-                "reason": "No user_id provided or enhance_speakers disabled"
-            }
-            return deepgram_response
+            raise HTTPException(400, f"Unsupported diarization provider: {diarization_provider}")
     
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"Error in hybrid transcribe-and-diarize: {e}")
-        raise HTTPException(500, f"Hybrid processing failed: {str(e)}")
+        log.error(f"Error in /v1/listen endpoint: {e}")
+        raise HTTPException(500, f"Transcription failed: {str(e)}")
+
+
 
 
 @router.post("/v1/diarize-only")
