@@ -7,6 +7,7 @@ OpenMemory's standardized memory management capabilities.
 """
 
 import logging
+import os
 import time
 import uuid
 from typing import Optional, List, Tuple, Any, Dict
@@ -41,10 +42,10 @@ class OpenMemoryMCPService(MemoryServiceBase):
     
     def __init__(
         self, 
-        server_url: str = "http://localhost:8765", 
-        client_name: str = "friend_lite",
-        user_id: str = "default",
-        timeout: int = 30
+        server_url: str = os.getenv("OPENMEMORY_MCP_URL", "http://localhost:8765"),
+        client_name: str =  os.getenv("OPENMEMORY_CLIENT_NAME", "friend_lite"),
+        user_id: str = os.getenv("OPENMEMORY_USER_ID", "default"),
+        timeout: int = int(os.getenv("OPENMEMORY_TIMEOUT", "30"))
     ):
         """Initialize OpenMemory MCP service as a thin client.
         
