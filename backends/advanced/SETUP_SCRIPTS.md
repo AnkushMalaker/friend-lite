@@ -105,13 +105,13 @@ cd backends/advanced
 ### What it does:
 - Generates self-signed SSL certificates for your IP
 - Configures nginx proxy for HTTPS access
-- Sets up docker-compose HTTPS profile
+- Configures nginx for automatic HTTPS access
 - Provides HTTPS URLs for dashboard access
 
 ### After HTTPS setup:
 ```bash
-# Start with HTTPS profile
-docker compose --profile https up --build -d
+# Start services with HTTPS
+docker compose up --build -d
 
 # Access via HTTPS
 https://localhost/

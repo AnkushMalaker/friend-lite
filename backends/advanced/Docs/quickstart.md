@@ -185,7 +185,7 @@ This end-to-end test validates the complete audio processing pipeline.
 
 ### Web Dashboard
 
-1. Open `http://localhost:3000`
+1. Open `http://localhost:5173`
 2. **Login** using the sidebar:
    - **Admin**: `admin@example.com` / `your-admin-password`
    - **Create new users** via admin interface
@@ -450,7 +450,7 @@ docker run -d --gpus=all -p 11434:11434 \
 ```bash
 # .env configuration for distributed services
 OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434
-SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8001
+SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8085
 PARAKEET_ASR_URL=http://[gpu-machine-tailscale-ip]:8080
 
 # Start lightweight backend services

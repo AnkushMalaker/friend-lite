@@ -35,6 +35,7 @@ interface ActiveClient {
 }
 
 interface DiarizationSettings {
+  diarization_source: 'deepgram' | 'pyannote'
   similarity_threshold: number
   min_duration: number
   collar: number
@@ -53,6 +54,7 @@ export default function System() {
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [diarizationSettings, setDiarizationSettings] = useState<DiarizationSettings>({
+    diarization_source: 'pyannote',
     similarity_threshold: 0.15,
     min_duration: 0.5,
     collar: 2.0,
@@ -323,7 +325,72 @@ export default function System() {
           </h3>
           
           <div className="space-y-4">
-            {/* Similarity Threshold */}
+            {/* Diarization Source Selector */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                Diarization Source
+              </label>
+              <div className="space-y-2">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="diarization_source"
+                    value="deepgram"
+                    checked={diarizationSettings.diarization_source === 'deepgram'}
+                    onChange={(e) => setDiarizationSettings(prev => ({
+                      ...prev,
+                      diarization_source: e.target.value as 'deepgram' | 'pyannote'
+                    }))}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    <strong>Deepgram</strong> - Use cloud-based diarization (requires API key)
+                  </span>
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="diarization_source"
+                    value="pyannote"
+                    checked={diarizationSettings.diarization_source === 'pyannote'}
+                    onChange={(e) => setDiarizationSettings(prev => ({
+                      ...prev,
+                      diarization_source: e.target.value as 'deepgram' | 'pyannote'
+                    }))}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    <strong>Pyannote</strong> - Use local diarization with configurable parameters
+                  </span>
+                </label>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                {diarizationSettings.diarization_source === 'deepgram' 
+                  ? 'Deepgram handles diarization automatically. The parameters below apply only to speaker identification.'
+                  : 'Pyannote provides local diarization with full parameter control.'
+                }
+              </div>
+            </div>
+
+            {/* Warning for Deepgram with Pyannote params */}
+            {diarizationSettings.diarization_source === 'deepgram' && (
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-md p-3">
+                <div className="flex">
+                  <AlertCircle className="h-5 w-5 text-yellow-400 mr-2 flex-shrink-0" />
+                  <div>
+                    <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
+                      Note: Deepgram Diarization Mode
+                    </h4>
+                    <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
+                      Ignored parameters hidden: speaker count, collar, timing settings. 
+                      Only similarity threshold applies to speaker identification.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Similarity Threshold (always shown) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Similarity Threshold: {diarizationSettings.similarity_threshold}
@@ -341,113 +408,118 @@ export default function System() {
                 className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
               />
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Lower values = more sensitive speaker detection
+                Lower values = more sensitive speaker identification
               </div>
             </div>
 
-            {/* Min Duration */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Min Duration: {diarizationSettings.min_duration}s
-              </label>
-              <input
-                type="range"
-                min="0.1"
-                max="2.0"
-                step="0.1"
-                value={diarizationSettings.min_duration}
-                onChange={(e) => setDiarizationSettings(prev => ({
-                  ...prev,
-                  min_duration: parseFloat(e.target.value)
-                }))}
-                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
-              />
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Minimum speech segment duration
-              </div>
-            </div>
+            {/* Pyannote-specific parameters (conditionally shown) */}
+            {diarizationSettings.diarization_source === 'pyannote' && (
+              <>
+                {/* Min Duration */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Min Duration: {diarizationSettings.min_duration}s
+                  </label>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="2.0"
+                    step="0.1"
+                    value={diarizationSettings.min_duration}
+                    onChange={(e) => setDiarizationSettings(prev => ({
+                      ...prev,
+                      min_duration: parseFloat(e.target.value)
+                    }))}
+                    className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Minimum speech segment duration
+                  </div>
+                </div>
 
-            {/* Collar */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Collar: {diarizationSettings.collar}s
-              </label>
-              <input
-                type="range"
-                min="0.5"
-                max="5.0"
-                step="0.1"
-                value={diarizationSettings.collar}
-                onChange={(e) => setDiarizationSettings(prev => ({
-                  ...prev,
-                  collar: parseFloat(e.target.value)
-                }))}
-                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
-              />
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Buffer around speaker segments
-              </div>
-            </div>
+                {/* Collar */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Collar: {diarizationSettings.collar}s
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="5.0"
+                    step="0.1"
+                    value={diarizationSettings.collar}
+                    onChange={(e) => setDiarizationSettings(prev => ({
+                      ...prev,
+                      collar: parseFloat(e.target.value)
+                    }))}
+                    className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Buffer around speaker segments
+                  </div>
+                </div>
 
-            {/* Min Duration Off */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Min Duration Off: {diarizationSettings.min_duration_off}s
-              </label>
-              <input
-                type="range"
-                min="0.5"
-                max="3.0"
-                step="0.1"
-                value={diarizationSettings.min_duration_off}
-                onChange={(e) => setDiarizationSettings(prev => ({
-                  ...prev,
-                  min_duration_off: parseFloat(e.target.value)
-                }))}
-                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
-              />
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Minimum silence between speakers
-              </div>
-            </div>
+                {/* Min Duration Off */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Min Duration Off: {diarizationSettings.min_duration_off}s
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3.0"
+                    step="0.1"
+                    value={diarizationSettings.min_duration_off}
+                    onChange={(e) => setDiarizationSettings(prev => ({
+                      ...prev,
+                      min_duration_off: parseFloat(e.target.value)
+                    }))}
+                    className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Minimum silence between speakers
+                  </div>
+                </div>
 
-            {/* Speaker Count Range */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Min Speakers: {diarizationSettings.min_speakers}
-                </label>
-                <input
-                  type="range"
-                  min="1"
-                  max="6"
-                  step="1"
-                  value={diarizationSettings.min_speakers}
-                  onChange={(e) => setDiarizationSettings(prev => ({
-                    ...prev,
-                    min_speakers: parseInt(e.target.value)
-                  }))}
-                  className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Max Speakers: {diarizationSettings.max_speakers}
-                </label>
-                <input
-                  type="range"
-                  min="2"
-                  max="10"
-                  step="1"
-                  value={diarizationSettings.max_speakers}
-                  onChange={(e) => setDiarizationSettings(prev => ({
-                    ...prev,
-                    max_speakers: parseInt(e.target.value)
-                  }))}
-                  className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-            </div>
+                {/* Speaker Count Range */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Min Speakers: {diarizationSettings.min_speakers}
+                    </label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="6"
+                      step="1"
+                      value={diarizationSettings.min_speakers}
+                      onChange={(e) => setDiarizationSettings(prev => ({
+                        ...prev,
+                        min_speakers: parseInt(e.target.value)
+                      }))}
+                      className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Max Speakers: {diarizationSettings.max_speakers}
+                    </label>
+                    <input
+                      type="range"
+                      min="2"
+                      max="10"
+                      step="1"
+                      value={diarizationSettings.max_speakers}
+                      onChange={(e) => setDiarizationSettings(prev => ({
+                        ...prev,
+                        max_speakers: parseInt(e.target.value)
+                      }))}
+                      className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Save Button */}
             <div className="pt-4 border-t border-gray-200 dark:border-gray-600">

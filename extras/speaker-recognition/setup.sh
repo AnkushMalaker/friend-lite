@@ -9,6 +9,9 @@ trap 'echo "Error on line $LINENO"; exit 1' ERR
 # Parse command line arguments
 ENABLE_HTTPS=false
 SERVER_IP=""
+DEEPGRAM_API_KEY=""
+HF_TOKEN=""
+COMPUTE_MODE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -18,6 +21,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --server-ip)
             SERVER_IP="$2"
+            shift 2
+            ;;
+        --deepgram-api-key)
+            DEEPGRAM_API_KEY="$2"
+            shift 2
+            ;;
+        --hf-token)
+            HF_TOKEN="$2"
+            shift 2
+            ;;
+        --compute-mode)
+            COMPUTE_MODE="$2"
             shift 2
             ;;
         *)
@@ -51,12 +66,16 @@ fi
 # Set restrictive permissions (owner read/write only)
 chmod 600 .env
 
-# Prompt for required settings
-echo ""
-echo "🔑 Hugging Face Token (required for pyannote models)"
-echo "Get yours from: https://huggingface.co/settings/tokens"
-read -s -r -p "HF Token: " HF_TOKEN
-echo  # Print newline after silent input
+# Get HF Token (prompt only if not provided via command line)
+if [ -z "$HF_TOKEN" ]; then
+    echo ""
+    echo "🔑 Hugging Face Token (required for pyannote models)"
+    echo "Get yours from: https://huggingface.co/settings/tokens"
+    read -s -r -p "HF Token: " HF_TOKEN
+    echo  # Print newline after silent input
+else
+    echo "✅ HF Token configured from command line"
+fi
 
 # Validate token is not empty
 if [ -z "$HF_TOKEN" ]; then
@@ -64,17 +83,28 @@ if [ -z "$HF_TOKEN" ]; then
     exit 1
 fi
 
-echo ""
-echo "🖥️ Compute Mode"
-echo "  1) CPU-only (works everywhere)"  
-echo "  2) GPU acceleration (requires NVIDIA+CUDA)"
-read -p "Enter choice [1-2] (1): " COMPUTE_CHOICE
-COMPUTE_CHOICE=${COMPUTE_CHOICE:-1}
+# Get Compute Mode (prompt only if not provided via command line)
+if [ -z "$COMPUTE_MODE" ]; then
+    echo ""
+    echo "🖥️ Compute Mode"
+    echo "  1) CPU-only (works everywhere)"  
+    echo "  2) GPU acceleration (requires NVIDIA+CUDA)"
+    read -p "Enter choice [1-2] (1): " COMPUTE_CHOICE
+    COMPUTE_CHOICE=${COMPUTE_CHOICE:-1}
 
-if [ "$COMPUTE_CHOICE" = "2" ]; then
-    COMPUTE_MODE="gpu"
+    if [ "$COMPUTE_CHOICE" = "2" ]; then
+        COMPUTE_MODE="gpu"
+    else
+        COMPUTE_MODE="cpu"
+    fi
 else
-    COMPUTE_MODE="cpu"
+    echo "✅ Compute mode configured from command line: $COMPUTE_MODE"
+fi
+
+# Validate compute mode
+if [ "$COMPUTE_MODE" != "cpu" ] && [ "$COMPUTE_MODE" != "gpu" ]; then
+    echo "Error: Invalid compute mode '$COMPUTE_MODE'. Must be 'cpu' or 'gpu'" >&2
+    exit 1
 fi
 
 # HTTPS Configuration
@@ -104,6 +134,12 @@ fi
 # Update .env file
 sed -i "s|HF_TOKEN=.*|HF_TOKEN=$HF_TOKEN|" .env
 sed -i "s|COMPUTE_MODE=.*|COMPUTE_MODE=$COMPUTE_MODE|" .env
+
+# Update Deepgram API key if provided via command line
+if [ -n "$DEEPGRAM_API_KEY" ]; then
+    sed -i "s|DEEPGRAM_API_KEY=.*|DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY|" .env
+    echo "✅ Deepgram API key configured from command line"
+fi
 
 if [ "$HTTPS_MODE" = "https" ]; then
     # Get SERVER_IP if not already set (from command line)

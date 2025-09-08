@@ -750,6 +750,7 @@ async def process_files_with_content(
 
 # Default diarization settings
 DEFAULT_DIARIZATION_SETTINGS = {
+    "diarization_source": "pyannote",
     "similarity_threshold": 0.15,
     "min_duration": 0.5,
     "collar": 2.0,
@@ -867,7 +868,7 @@ async def save_diarization_settings(settings: dict):
     try:
         # Validate settings
         valid_keys = {
-            "similarity_threshold", "min_duration", "collar", 
+            "diarization_source", "similarity_threshold", "min_duration", "collar", 
             "min_duration_off", "min_speakers", "max_speakers"
         }
         

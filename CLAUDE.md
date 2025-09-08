@@ -366,7 +366,7 @@ PARAKEET_ASR_URL=http://host.docker.internal:8767
 OLLAMA_BASE_URL=http://ollama:11434
 
 # Speaker Recognition
-SPEAKER_SERVICE_URL=http://speaker-recognition:8001
+SPEAKER_SERVICE_URL=http://speaker-recognition:8085
 ```
 
 ## Transcription Architecture
@@ -794,7 +794,7 @@ sudo tailscale up
 ```bash
 # .env on GPU machine
 OLLAMA_BASE_URL=http://0.0.0.0:11434  # Expose to Tailscale network
-SPEAKER_SERVICE_URL=http://0.0.0.0:8001
+SPEAKER_SERVICE_URL=http://0.0.0.0:8085
 
 # Enable GPU acceleration for Ollama
 docker run -d --gpus=all -p 11434:11434 ollama/ollama:latest
@@ -804,7 +804,7 @@ docker run -d --gpus=all -p 11434:11434 ollama/ollama:latest
 ```bash
 # .env on backend machine  
 OLLAMA_BASE_URL=http://100.x.x.x:11434  # GPU machine Tailscale IP
-SPEAKER_SERVICE_URL=http://100.x.x.x:8001  # GPU machine Tailscale IP
+SPEAKER_SERVICE_URL=http://100.x.x.x:8085  # GPU machine Tailscale IP
 
 # Parakeet ASR services can also be distributed (if using offline ASR)
 # PARAKEET_ASR_URL=http://100.x.x.x:8767
@@ -822,7 +822,7 @@ OPENAI_BASE_URL=http://100.64.1.100:8080  # For vLLM/OpenAI-compatible APIs
 
 # Speech Recognition (GPU machine)
 # PARAKEET_ASR_URL=http://100.64.1.100:8767  # If using Parakeet ASR
-SPEAKER_SERVICE_URL=http://100.64.1.100:8001
+SPEAKER_SERVICE_URL=http://100.64.1.100:8085
 
 # Database services (can be on separate machine)
 MONGODB_URI=mongodb://100.64.1.200:27017
@@ -854,7 +854,7 @@ docker run -d --gpus=all -p 11434:11434 \
 ```bash
 # Update .env with Tailscale IPs of GPU machine
 OLLAMA_BASE_URL=http://[gpu-machine-tailscale-ip]:11434
-SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8001
+SPEAKER_SERVICE_URL=http://[gpu-machine-tailscale-ip]:8085
 
 # Start lightweight backend services
 docker compose up --build -d
@@ -864,7 +864,7 @@ docker compose up --build -d
 ```bash
 # Test service connectivity from backend machine
 curl http://[gpu-machine-ip]:11434/api/tags  # Ollama
-curl http://[gpu-machine-ip]:8001/health     # Speaker recognition
+curl http://[gpu-machine-ip]:8085/health     # Speaker recognition
 ```
 
 ### Performance Considerations
@@ -895,7 +895,7 @@ curl http://[gpu-machine-ip]:8001/health     # Speaker recognition
     {
       "action": "accept",
       "src": ["tag:backend"],
-      "dst": ["tag:gpu:11434", "tag:gpu:8001", "tag:gpu:8767"]
+      "dst": ["tag:gpu:11434", "tag:gpu:8085", "tag:gpu:8767"]
     }
   ],
   "tagOwners": {
@@ -926,7 +926,7 @@ tailscale status
 
 # Test service endpoints
 curl http://[tailscale-ip]:11434/api/tags
-curl http://[tailscale-ip]:8001/health
+curl http://[tailscale-ip]:8085/health
 
 # Check Docker networks
 docker network ls

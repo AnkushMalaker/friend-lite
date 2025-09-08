@@ -46,6 +46,7 @@ class SpeakerRecognitionClient:
     ) -> Dict:
         """
         Perform diarization, speaker identification, and word-to-speaker matching.
+        Routes to appropriate endpoint based on diarization source configuration.
 
         Args:
             audio_path: Path to the audio file
@@ -61,7 +62,13 @@ class SpeakerRecognitionClient:
         try:
             logger.info(f"Diarizing, identifying, and matching words for {audio_path}")
 
-            # Call the new speaker recognition service endpoint
+            # Read diarization source from existing config system
+            from advanced_omi_backend.controllers.system_controller import load_diarization_settings_from_file
+            config = load_diarization_settings_from_file()
+            diarization_source = config.get("diarization_source", "pyannote")
+            
+            logger.info(f"Using diarization source: {diarization_source}")
+
             async with aiohttp.ClientSession() as session:
                 # Prepare the audio file for upload
                 with open(audio_path, "rb") as audio_file:
@@ -69,28 +76,60 @@ class SpeakerRecognitionClient:
                     form_data.add_field(
                         "file", audio_file, filename=Path(audio_path).name, content_type="audio/wav"
                     )
-                    # Add transcript data as JSON string
-                    form_data.add_field("transcript_data", json.dumps(transcript_data))
-                    # Get current diarization settings
-                    from advanced_omi_backend.controllers.system_controller import _diarization_settings
                     
-                    # Add configurable parameters
-                    form_data.add_field("min_duration", str(_diarization_settings["min_duration"]))
-                    form_data.add_field("similarity_threshold", str(_diarization_settings["similarity_threshold"]))
-                    form_data.add_field("collar", str(_diarization_settings["collar"]))
-                    form_data.add_field("min_duration_off", str(_diarization_settings["min_duration_off"]))
-                    if _diarization_settings.get("min_speakers"):
-                        form_data.add_field("min_speakers", str(_diarization_settings["min_speakers"]))
-                    if _diarization_settings.get("max_speakers"):
-                        form_data.add_field("max_speakers", str(_diarization_settings["max_speakers"]))
-                    
-                    # TODO: Implement proper user mapping between MongoDB ObjectIds and speaker service integer IDs
-                    # For now, hardcode to admin user (ID=1) since speaker service expects integer user_id
-                    form_data.add_field("user_id", "1")
+                    if diarization_source == "deepgram":
+                        # DEEPGRAM PATH: Use /v1/listen with structured config
+                        logger.info("Using Deepgram diarization path")
+                        
+                        # Structure config for Deepgram diarization
+                        diarization_config = {"diarization": {"provider": "deepgram"}}
+                        
+                        # Log warning if pyannote params provided
+                        pyannote_params = ["min_speakers", "max_speakers", "collar", "min_duration_off"]
+                        provided_params = [p for p in pyannote_params if config.get(p) is not None]
+                        if provided_params:
+                            logger.warning("Ignoring pyannote parameters for Deepgram diarization: %s", provided_params)
+                        
+                        # Add structured diarization config
+                        form_data.add_field("diarization_config", json.dumps(diarization_config))
+                        
+                        # Add speaker identification params
+                        form_data.add_field("enhance_speakers", "true")
+                        form_data.add_field("user_id", "1")  # TODO: Implement proper user mapping
+                        form_data.add_field("speaker_confidence_threshold", str(config.get("similarity_threshold", 0.15)))
+                        
+                        # Use /v1/listen endpoint
+                        endpoint = "/v1/listen"
+                        
+                    else:  # pyannote (default)
+                        # PYANNOTE PATH: Use /v1/listen with structured config including pyannote parameters
+                        logger.info("Using Pyannote diarization path")
+                        
+                        # Structure config for Pyannote diarization  
+                        diarization_config = {
+                            "diarization": {
+                                "provider": "pyannote",
+                                "min_speakers": config.get("min_speakers"),
+                                "max_speakers": config.get("max_speakers"),
+                                "collar": config.get("collar", 2.0),
+                                "min_duration_off": config.get("min_duration_off", 1.5)
+                            }
+                        }
+                        
+                        # Add structured diarization config
+                        form_data.add_field("diarization_config", json.dumps(diarization_config))
+                        
+                        # Add speaker identification params
+                        form_data.add_field("enhance_speakers", "true")
+                        form_data.add_field("user_id", "1")  # TODO: Implement proper user mapping
+                        form_data.add_field("speaker_confidence_threshold", str(config.get("similarity_threshold", 0.15)))
+                        
+                        # Use /v1/listen endpoint (now supports both providers)
+                        endpoint = "/v1/listen"
 
-                    # Make the request
+                    # Make the request to the consolidated endpoint
                     async with session.post(
-                        f"{self.service_url}/v1/diarize-identify-match",
+                        f"{self.service_url}{endpoint}",
                         data=form_data,
                         timeout=aiohttp.ClientTimeout(total=120),
                     ) as response:
@@ -102,7 +141,7 @@ class SpeakerRecognitionClient:
 
                         result = await response.json()
                         logger.info(
-                            f"Speaker service returned {len(result.get('segments', []))} segments with matched text"
+                            f"Speaker service ({diarization_source}) returned response with enhancement data"
                         )
                         return result
 
