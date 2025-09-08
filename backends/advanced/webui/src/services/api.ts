@@ -3,7 +3,7 @@ import axios from 'axios'
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
   // If explicitly set in environment, use that
-  if (import.meta.env.VITE_BACKEND_URL) {
+  if (import.meta.env.VITE_BACKEND_URL !== undefined) {
     return import.meta.env.VITE_BACKEND_URL
   }
   
@@ -13,7 +13,7 @@ const getBackendUrl = () => {
                          (protocol === 'http:' && (port === '' || port === '80'))
   
   if (isStandardPort) {
-    // We're being accessed through nginx proxy, use same origin
+    // We're being accessed through nginx proxy or Kubernetes Ingress, use same origin
     return ''  // Empty string means use relative URLs (same origin)
   }
   

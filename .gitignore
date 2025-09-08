@@ -66,5 +66,10 @@ backends/advanced-backend/data/speaker_model_cache/
 *.sqlite3
 *checkpoints
 
+
+# k8s config
+backends/charts/advanced-backend/env-configmap.yaml
+
 extras/openmemory-mcp/data/*
 .env.backup.*
+
