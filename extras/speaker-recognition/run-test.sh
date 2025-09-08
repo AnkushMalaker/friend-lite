@@ -37,6 +37,9 @@ fi
 
 print_info "Speaker Recognition Integration Test Runner"
 print_info "=========================================="
+print_info "HF_TOKEN length: ${#HF_TOKEN}"
+print_info "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
+print_info ".env file exists: $([ -f .env ] && echo 'yes' || echo 'no')"
 
 # Load environment variables (CI or local)
 if [ -f ".env" ] && [ -z "$HF_TOKEN" ]; then
