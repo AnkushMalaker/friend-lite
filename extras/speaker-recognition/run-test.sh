@@ -120,7 +120,7 @@ export DEEPGRAM_API_KEY="$DEEPGRAM_API_KEY"
 
 # Run the integration test with timeout (speaker recognition models need time)
 print_info "Starting speaker recognition test (timeout: 30 minutes)..."
-timeout 1800 uv run pytest tests/test_speaker_service_integration.py -v -s --tb=short
+timeout 1800 uv run pytest tests/test_speaker_service_integration.py -v -s --tb=short --log-cli-level=INFO
 
 print_success "Speaker recognition tests completed successfully!"
 
