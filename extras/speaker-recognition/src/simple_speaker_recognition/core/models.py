@@ -1,7 +1,7 @@
 """Pydantic models for speaker recognition API."""
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -170,6 +170,27 @@ class EnhancedWordInfo(BaseModel):
     identified_speaker_name: Optional[str] = None
     speaker_identification_confidence: Optional[float] = None
     speaker_status: Optional[SpeakerStatus] = None
+
+
+# Structured Diarization Configuration Models
+class DeepgramDiarization(BaseModel):
+    """Configuration for Deepgram-based diarization."""
+    provider: Literal["deepgram"]
+    # No extra options - Deepgram handles internally
+
+
+class PyannoteDiarization(BaseModel):
+    """Configuration for Pyannote-based diarization."""
+    provider: Literal["pyannote"]
+    min_speakers: Optional[int] = Field(default=None, description="Minimum number of speakers to detect")
+    max_speakers: Optional[int] = Field(default=None, description="Maximum number of speakers to detect") 
+    collar: float = Field(default=2.0, description="Collar duration (seconds) around speaker boundaries")
+    min_duration_off: float = Field(default=1.5, description="Minimum silence duration (seconds) before treating it as a segment boundary")
+
+
+class DiarizationConfig(BaseModel):
+    """Root configuration for diarization processing."""
+    diarization: Union[DeepgramDiarization, PyannoteDiarization] = Field(..., description="Diarization provider configuration")
 
 
 class EnhancedTranscriptionResponse(BaseModel):

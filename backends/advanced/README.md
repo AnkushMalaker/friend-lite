@@ -43,15 +43,25 @@ Modern React-based web dashboard located in `./webui/` with:
 ./setup-https.sh your-tailscale-ip
 ```
 
-#### 2. Start Services (HTTP)
+#### 2. Start Services 
+
+**HTTP Mode (Default - No SSL required):**
 ```bash
-# Start with hot reload development server
+# Direct service access without nginx proxy
 docker compose up --build -d
 ```
-
 - **Web Dashboard**: http://localhost:5173
+- **Backend API**: http://localhost:8000
 
-#### 3. HTTPS Setup (Optional - For Microphone Access)
+**HTTPS Mode (For network access and microphone features):**
+```bash
+# Start with nginx SSL proxy - requires SSL setup first (see below)
+docker compose up --build -d
+```
+- **Web Dashboard**: https://localhost/ or https://your-ip/
+- **Backend API**: https://localhost/api/ or https://your-ip/api/
+
+#### 3. HTTPS Setup (Optional - For Network Access & Microphone Features)
 
 For network access and microphone features, HTTPS can be configured during initialization or separately:
 
@@ -60,7 +70,7 @@ For network access and microphone features, HTTPS can be configured during initi
 ./init-https.sh 100.83.66.30  # Replace with your IP
 
 # Start with HTTPS proxy
-docker compose --profile https up --build -d
+docker compose up --build -d
 ```
 
 #### Access URLs
@@ -101,8 +111,3 @@ source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY && uv run pytest
 **Prerequisites:**
 - API keys configured in `.env` file
 - For debugging: Set `CACHED_MODE = True` in test file to keep containers running
-
-## Legacy Streamlit UI
-
-The original Streamlit interface has been moved to `src/_webui_original/` for reference.
-
