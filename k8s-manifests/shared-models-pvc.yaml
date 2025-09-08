@@ -1,0 +1,18 @@
+# Note: No PV needed - the shared-models StorageClass will dynamically provision
+# storage when the PVC is created and a pod tries to use it
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-models-cache
+  namespace: speech
+  labels:
+    app: shared-models
+    component: model-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: openebs-hostpath
