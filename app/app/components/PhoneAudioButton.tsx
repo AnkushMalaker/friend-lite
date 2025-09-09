@@ -6,7 +6,6 @@ import {
   View,
   StyleSheet,
   ActivityIndicator,
-  Animated,
 } from 'react-native';
 
 interface PhoneAudioButtonProps {
@@ -26,31 +25,6 @@ const PhoneAudioButton: React.FC<PhoneAudioButtonProps> = ({
   error,
   onPress,
 }) => {
-  // Animated value for pulsing effect when recording
-  const pulseAnim = React.useRef(new Animated.Value(1)).current;
-
-  React.useEffect(() => {
-    if (isRecording) {
-      // Create pulsing animation when recording
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.1,
-            duration: 500,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 500,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
-      // Stop animation when not recording
-      pulseAnim.setValue(1);
-    }
-  }, [isRecording, pulseAnim]);
 
   const getButtonStyle = () => {
     if (isDisabled && !isRecording) {
@@ -84,12 +58,7 @@ const PhoneAudioButton: React.FC<PhoneAudioButtonProps> = ({
 
   return (
     <View style={styles.container}>
-      <Animated.View
-        style={[
-          styles.buttonWrapper,
-          isRecording && { transform: [{ scale: pulseAnim }] },
-        ]}
-      >
+      <View style={styles.buttonWrapper}>
         <TouchableOpacity
           style={getButtonStyle()}
           onPress={onPress}
@@ -105,7 +74,7 @@ const PhoneAudioButton: React.FC<PhoneAudioButtonProps> = ({
             </View>
           )}
         </TouchableOpacity>
-      </Animated.View>
+      </View>
 
       {/* Audio Level Indicator */}
       {isRecording && (
