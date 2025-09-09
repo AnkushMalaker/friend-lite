@@ -12,6 +12,14 @@
 2. Configure your API keys and service settings manually
 3. Start with `docker compose up --build -d`
 
+**Mobile App + Phone Audio (Latest Feature):**
+1. **Setup Backend**: Follow Advanced Backend setup above
+2. **Install Mobile App**: Go to `app/` directory and run `npm install && npm start`
+3. **Configure Mobile App**: Point to your backend IP in app settings
+4. **Enable Phone Audio**: Tap "Stream Phone Audio" in app for direct microphone streaming
+5. **Grant Permissions**: Allow microphone access when prompted
+6. **Start Streaming**: Speak into phone for real-time processing with live audio visualization
+
 **Documentation:** See `CLAUDE.md` and `Docs/init-system.md` for detailed setup guide
 
 ## Overview
