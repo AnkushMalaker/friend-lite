@@ -137,41 +137,31 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
 
       console.log('[PhoneAudioRecorder] Starting audio recording...');
 
-      // EXACT config from 2025 guide
+      // EXACT config from 2025 guide + processing for audio levels
       const config = {
         interval: 100,
         sampleRate: 16000,
         channels: 1,
         encoding: "pcm_16bit" as const,
+        enableProcessing: true,        // Enable audio analysis for live RMS
+        intervalAnalysis: 500,         // Analysis every 500ms
         onAudioStream: async (event: AudioDataEvent) => {
-          console.log('[PhoneAudioRecorder] 🎵 Audio stream data received - GUIDE PATTERN');
-          
           // EXACT payload handling from guide
           const payload = typeof event.data === "string" 
             ? event.data 
             : Buffer.from(event.data as ArrayBuffer).toString("base64");
           
-          console.log('[PhoneAudioRecorder] ✅ Payload type:', typeof event.data, 'length:', payload.length);
-          
           // Convert to our expected format
-          console.log('[PhoneAudioRecorder] Check refs - onAudioDataRef:', !!onAudioDataRef.current, 'mountedRef:', mountedRef.current);
           if (onAudioDataRef.current && mountedRef.current) {
             const pcmBuffer = processAudioDataEvent(event);
             if (pcmBuffer && pcmBuffer.length > 0) {
-              console.log('[PhoneAudioRecorder] ⚡ Sending PCM buffer, size:', pcmBuffer.length);
               onAudioDataRef.current(pcmBuffer);
-            } else {
-              console.log('[PhoneAudioRecorder] ❌ PCM conversion failed or empty buffer');
             }
-          } else {
-            console.log('[PhoneAudioRecorder] ⚠️ Skipping - refs not ready');
           }
         }
       };
 
-      console.log('[PhoneAudioRecorder] Using EXACT guide config');
       const result = await startRecorderInternal(config);
-      console.log('[PhoneAudioRecorder] Start result:', result);
       
       if (!result) {
         throw new Error('Failed to start recording');
@@ -226,10 +216,10 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
 
   // Update audio level from analysis data
   useEffect(() => {
-    console.log('[PhoneAudioRecorder] analysisData:', analysisData);
-    if (analysisData?.features?.rms !== undefined && mountedRef.current) {
-      console.log('[PhoneAudioRecorder] Setting audio level:', analysisData.features.rms);
-      setStateSafe(setAudioLevel, analysisData.features.rms);
+    if (analysisData?.dataPoints && analysisData.dataPoints.length > 0 && mountedRef.current) {
+      const latestDataPoint = analysisData.dataPoints[analysisData.dataPoints.length - 1];
+      const liveRMS = latestDataPoint.rms;
+      setStateSafe(setAudioLevel, liveRMS);
     }
   }, [analysisData, setStateSafe]);
 
