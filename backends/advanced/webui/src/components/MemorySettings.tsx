@@ -47,7 +47,7 @@ export default function MemorySettings({ className }: MemorySettingsProps) {
     setMessage('')
     
     try {
-      const response = await systemApi.validateMemoryConfig(configYaml)
+      await systemApi.validateMemoryConfig(configYaml)
       setMessage('✅ Configuration is valid')
       setTimeout(() => setMessage(''), 3000)
     } catch (err: any) {
@@ -68,7 +68,7 @@ export default function MemorySettings({ className }: MemorySettingsProps) {
     setMessage('')
     
     try {
-      const response = await systemApi.updateMemoryConfigRaw(configYaml)
+      await systemApi.updateMemoryConfigRaw(configYaml)
       setMessage('✅ Configuration saved and reloaded successfully')
       setTimeout(() => setMessage(''), 5000)
     } catch (err: any) {
@@ -137,19 +137,19 @@ export default function MemorySettings({ className }: MemorySettingsProps) {
             <button
               onClick={reloadConfig}
               disabled={loading}
-              className="flex items-center space-x-1 px-3 py-1 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors disabled:opacity-50"
+              className="flex items-center space-x-1 px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors disabled:opacity-50"
               title="Reload configuration from file"
             >
-              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               <span>Reload</span>
             </button>
             <button
               onClick={deleteAllMemories}
               disabled={deleting}
-              className="flex items-center space-x-1 px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors disabled:opacity-50"
+              className="flex items-center space-x-1 px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors disabled:opacity-50"
               title="Delete all memories (cannot be undone)"
             >
-              <Trash2 className="h-3 w-3" />
+              <Trash2 className="h-4 w-4" />
               <span>{deleting ? 'Deleting...' : 'Delete All Memories'}</span>
             </button>
           </div>
@@ -187,20 +187,23 @@ export default function MemorySettings({ className }: MemorySettingsProps) {
               onChange={(e) => setConfigYaml(e.target.value)}
               placeholder="Loading configuration..."
               disabled={loading}
-              className="w-full h-96 p-3 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              className="w-full h-80 p-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 resize-y"
               style={{
                 fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
               }}
             />
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              Edit the YAML configuration directly. Changes will be validated before saving and hot-reloaded without service restart.
+            </p>
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center justify-between pt-4 border-t border-gray-200 dark:border-gray-600">
-            <div className="flex items-center space-x-2">
+          <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={validateConfig}
                 disabled={validating || !configYaml.trim()}
-                className="flex items-center space-x-1 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center justify-center space-x-2 px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[120px]"
               >
                 <CheckCircle className={`h-4 w-4 ${validating ? 'animate-pulse' : ''}`} />
                 <span>{validating ? 'Validating...' : 'Validate'}</span>
@@ -209,21 +212,21 @@ export default function MemorySettings({ className }: MemorySettingsProps) {
               <button
                 onClick={resetConfig}
                 disabled={loading}
-                className="flex items-center space-x-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center justify-center space-x-2 px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[120px]"
               >
                 <RotateCcw className="h-4 w-4" />
                 <span>Reset</span>
               </button>
-            </div>
 
-            <button
-              onClick={saveConfig}
-              disabled={saving || !configYaml.trim()}
-              className="flex items-center space-x-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Save className={`h-4 w-4 ${saving ? 'animate-pulse' : ''}`} />
-              <span>{saving ? 'Saving...' : 'Save Configuration'}</span>
-            </button>
+              <button
+                onClick={saveConfig}
+                disabled={saving || !configYaml.trim()}
+                className="flex items-center justify-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]"
+              >
+                <Save className={`h-4 w-4 ${saving ? 'animate-pulse' : ''}`} />
+                <span>{saving ? 'Saving...' : 'Save Configuration'}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

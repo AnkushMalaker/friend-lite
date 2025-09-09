@@ -538,9 +538,6 @@ export default function System() {
         {/* Speaker Configuration */}
         <SpeakerConfiguration />
 
-        {/* Memory Configuration */}
-        <MemorySettings />
-
         {/* Active Clients */}
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
@@ -603,6 +600,11 @@ export default function System() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Memory Configuration - Full Width Section */}
+      <div className="mt-6">
+        <MemorySettings />
       </div>
 
       {/* Raw Data (Debug) */}
