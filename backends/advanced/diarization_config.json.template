@@ -1,4 +1,5 @@
 {
+  "diarization_source": "pyannote",
   "similarity_threshold": 0.15,
   "min_duration": 0.5,
   "collar": 2.0,

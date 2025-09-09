@@ -1,29 +1,76 @@
 # Friend-Lite Advanced Backend
 
-[QuickStart](https://github.com/AnkushMalaker/friend-lite/blob/main/backends/advanced-backend/Docs/quickstart.md)
+A FastAPI backend with pluggable memory providers, real-time audio processing, and comprehensive conversation management.
 
-## Web Interface
+[QuickStart](https://github.com/AnkushMalaker/friend-lite/blob/main/backends/advanced-backend/Docs/quickstart.md) | [Memory Providers](./MEMORY_PROVIDERS.md) | [Configuration Guide](./Docs/memory-configuration-guide.md)
 
-The backend includes a modern React-based web dashboard located in `./webui/` with features including live audio recording, chat interface, conversation management, and system monitoring.
+## Key Features
 
-### Quick Start (HTTP)
+### Memory System
+- **Pluggable Memory Providers**: Choose between Friend-Lite native or OpenMemory MCP
+- **Enhanced Memory Extraction**: Individual facts instead of generic transcripts
+- **Smart Memory Updates**: LLM-driven ADD/UPDATE/DELETE actions
+- **Cross-client Compatibility**: Use OpenMemory with Claude Desktop, Cursor, etc.
+
+### Web Interface
+Modern React-based web dashboard located in `./webui/` with:
+- Live audio recording and real-time streaming
+- Chat interface with conversation management
+- **Advanced memory search** with semantic search and relevance threshold filtering
+- **Memory count display** showing total memories with live filtering
+- **Dual-layer filtering** combining semantic and text search
+- System monitoring and debugging tools
+
+### Quick Start
+
+#### 1. Interactive Setup (Recommended)
 ```bash
-# Start with hot reload development server
-docker compose up --build -d
+# Run interactive setup wizard
+./init.sh
 ```
 
+**The setup wizard guides you through:**
+- **Authentication**: Admin email/password setup with secure keys
+- **Transcription Provider**: Choose between Deepgram, Mistral, or Offline (Parakeet)
+- **LLM Provider**: Choose between OpenAI (recommended) or Ollama for memory extraction
+- **Memory Provider**: Choose between Friend-Lite Native or OpenMemory MCP
+- **Optional Services**: Speaker Recognition, network configuration
+- **API Keys**: Prompts for all required keys with helpful links
+
+**HTTPS Setup (Optional):**
+```bash
+# For microphone access and secure connections
+./setup-https.sh your-tailscale-ip
+```
+
+#### 2. Start Services 
+
+**HTTP Mode (Default - No SSL required):**
+```bash
+# Direct service access without nginx proxy
+docker compose up --build -d
+```
 - **Web Dashboard**: http://localhost:5173
+- **Backend API**: http://localhost:8000
 
-### HTTPS Setup (Required for Microphone Access)
+**HTTPS Mode (For network access and microphone features):**
+```bash
+# Start with nginx SSL proxy - requires SSL setup first (see below)
+docker compose up --build -d
+```
+- **Web Dashboard**: https://localhost/ or https://your-ip/
+- **Backend API**: https://localhost/api/ or https://your-ip/api/
 
-For network access and microphone features, set up HTTPS:
+#### 3. HTTPS Setup (Optional - For Network Access & Microphone Features)
+
+For network access and microphone features, HTTPS can be configured during initialization or separately:
 
 ```bash
-# Initialize HTTPS with your Tailscale/network IP
-./init.sh 100.83.66.30  # Replace with your IP
+# If not done during init.sh, run HTTPS setup
+./init-https.sh 100.83.66.30  # Replace with your IP
 
 # Start with HTTPS proxy
-docker compose --profile https up --build -d
+docker compose up --build -d
 ```
 
 #### Access URLs
@@ -64,8 +111,3 @@ source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY && uv run pytest
 **Prerequisites:**
 - API keys configured in `.env` file
 - For debugging: Set `CACHED_MODE = True` in test file to keep containers running
-
-## Legacy Streamlit UI
-
-The original Streamlit interface has been moved to `src/_webui_original/` for reference.
-

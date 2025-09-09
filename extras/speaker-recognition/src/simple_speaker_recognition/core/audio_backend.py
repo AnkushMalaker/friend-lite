@@ -112,7 +112,19 @@ class AudioBackend:
 
     def load_wave(self, path: Path, start: Optional[float] = None, end: Optional[float] = None) -> torch.Tensor:
         if start is not None and end is not None:
-            seg = Segment(start, end)
+            # Get audio file duration to validate segment bounds
+            file_info = self.loader.get_duration(str(path))
+            file_duration = float(file_info)
+            
+            # Clamp segment bounds to file duration
+            start_clamped = max(0.0, min(start, file_duration))
+            end_clamped = max(start_clamped, min(end, file_duration))
+            
+            # Log if we had to clamp the segment
+            if start != start_clamped or end != end_clamped:
+                logger.warning(f"Segment [{start:.6f}s, {end:.6f}s] clamped to [{start_clamped:.6f}s, {end_clamped:.6f}s] for file duration {file_duration:.6f}s")
+            
+            seg = Segment(start_clamped, end_clamped)
             wav, _ = self.loader.crop(str(path), seg)
         else:
             wav, _ = self.loader(str(path))

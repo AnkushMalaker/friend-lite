@@ -3,7 +3,7 @@ import axios from 'axios'
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
   // If explicitly set in environment, use that
-  if (import.meta.env.VITE_BACKEND_URL) {
+  if (import.meta.env.VITE_BACKEND_URL !== undefined) {
     return import.meta.env.VITE_BACKEND_URL
   }
   
@@ -13,7 +13,7 @@ const getBackendUrl = () => {
                          (protocol === 'http:' && (port === '' || port === '80'))
   
   if (isStandardPort) {
-    // We're being accessed through nginx proxy, use same origin
+    // We're being accessed through nginx proxy or Kubernetes Ingress, use same origin
     return ''  // Empty string means use relative URLs (same origin)
   }
   
@@ -79,6 +79,15 @@ export const conversationsApi = {
 export const memoriesApi = {
   getAll: (userId?: string) => api.get('/api/memories', { params: userId ? { user_id: userId } : {} }),
   getUnfiltered: (userId?: string) => api.get('/api/memories/unfiltered', { params: userId ? { user_id: userId } : {} }),
+  search: (query: string, userId?: string, limit: number = 20, scoreThreshold?: number) => 
+    api.get('/api/memories/search', { 
+      params: { 
+        query, 
+        ...(userId && { user_id: userId }), 
+        limit,
+        ...(scoreThreshold !== undefined && { score_threshold: scoreThreshold / 100 }) // Convert percentage to decimal
+      } 
+    }),
   delete: (id: string) => api.delete(`/api/memories/${id}`),
 }
 
@@ -125,6 +134,9 @@ export const chatApi = {
   // Messages
   getMessages: (sessionId: string, limit = 100) => api.get(`/api/chat/sessions/${sessionId}/messages`, { params: { limit } }),
   
+  // Memory extraction
+  extractMemories: (sessionId: string) => api.post(`/api/chat/sessions/${sessionId}/extract-memories`),
+  
   // Statistics
   getStatistics: () => api.get('/api/chat/statistics'),
   
@@ -147,4 +159,19 @@ export const chatApi = {
       body: JSON.stringify(requestBody)
     })
   }
+}
+
+export const speakerApi = {
+  // Get current user's speaker configuration
+  getSpeakerConfiguration: () => api.get('/api/speaker-configuration'),
+  
+  // Update current user's speaker configuration
+  updateSpeakerConfiguration: (primarySpeakers: Array<{speaker_id: string, name: string, user_id: number}>) => 
+    api.post('/api/speaker-configuration', primarySpeakers),
+    
+  // Get enrolled speakers from speaker recognition service  
+  getEnrolledSpeakers: () => api.get('/api/enrolled-speakers'),
+  
+  // Check speaker service status (admin only)
+  getSpeakerServiceStatus: () => api.get('/api/speaker-service-status'),
 }

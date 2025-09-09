@@ -1,0 +1,69 @@
+{{- if and .Values.speaker.persistence.modelCache.enabled (not .Values.global.sharedModels.enabled) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-model-cache
+  labels:
+    app: {{ .Release.Name }}
+    component: speaker
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.speaker.persistence.modelCache.size }}
+  storageClassName: openebs-hostpath
+
+
+---
+{{- end }}
+{{- if .Values.speaker.persistence.audioChunks.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-audio-chunks
+  labels:
+    app: {{ .Release.Name }}
+    component: speaker
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.speaker.persistence.audioChunks.size }}
+  storageClassName: openebs-hostpath
+---
+{{- end }}
+{{- if .Values.speaker.persistence.debug.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-debug
+  labels:
+    app: {{ .Release.Name }}
+    component: speaker
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.speaker.persistence.debug.size }}
+  storageClassName: openebs-hostpath
+---
+{{- end }}
+{{- if .Values.speaker.persistence.speakerData.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-speaker-data
+  labels:
+    app: {{ .Release.Name }}
+    component: speaker
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.speaker.persistence.speakerData.size }}
+  storageClassName: openebs-hostpath
+{{- end }}

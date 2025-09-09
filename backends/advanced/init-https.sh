@@ -70,12 +70,24 @@ else
     echo "   2. Add: CORS_ORIGINS=https://localhost,https://localhost:443,https://127.0.0.1,https://$TAILSCALE_IP"
 fi
 
+# Create memory_config.yaml from template if it doesn't exist
+echo ""
+echo "📄 Step 4: Checking memory configuration..."
+if [ ! -f "memory_config.yaml" ] && [ -f "memory_config.yaml.template" ]; then
+    cp memory_config.yaml.template memory_config.yaml
+    echo "✅ memory_config.yaml created from template"
+elif [ -f "memory_config.yaml" ]; then
+    echo "✅ memory_config.yaml already exists"
+else
+    echo "⚠️  Warning: memory_config.yaml.template not found"
+fi
+
 echo ""
 echo "🎉 Initialization complete!"
 echo ""
 echo "Next steps:"
 echo "  1. Start the services:"
-echo "     docker compose --profile https up --build -d"
+echo "     docker compose up --build -d"
 echo ""
 echo "  2. Access the dashboard:"
 echo "     🌐 https://localhost/ (accept SSL certificate)"

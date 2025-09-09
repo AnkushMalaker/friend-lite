@@ -1,0 +1,58 @@
+# Default values for webui
+replicaCount: 1
+
+image:
+  repository: webui
+  pullPolicy: Always
+  tag: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: NodePort
+  port: 80
+  nodePort: 31011  
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # cert-manager.io/cluster-issuer: "selfsigned-issuer"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header X-Content-Type-Options "nosniff" always;
+  hosts:
+    - host: friend-lite.192-168-1-42.nip.io
+      paths:
+        - path: /
+          pathType: Prefix
+  # tls:
+  #   - secretName: friend-lite-tls
+  #     hosts:
+  #       - friend-lite.192-168-1-42.nip.io
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Environment variables
+env:
+  # Backend connection (will be set by Skaffold)
+  REACT_APP_BACKEND_URL: ""
+  
+  # Other environment variables
+  NODE_ENV: "production"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

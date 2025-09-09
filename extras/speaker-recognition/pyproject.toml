@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.12",
     "uvicorn>=0.34.2",
-    "numpy>=1.26",
+    "numpy>=1.26,<2",
     "scipy>=1.10.0",
     "pyannote.audio>=3.3.2",
     "aiohttp>=3.8.0",
@@ -20,9 +20,6 @@ dependencies = [
     "pydub>=0.25.1",
     "yt-dlp>=2025.7.21",
     "websockets>=12.0",
-    # Web UI dependencies
-    "streamlit>=1.31.0",
-    "streamlit-webrtc>=0.47.0",
     # Audio processing and visualization
     "librosa>=0.10.0",
     "plotly>=5.18.0",
