@@ -31,7 +31,7 @@ Clone, run setup wizard, start services, access at http://localhost:5173
 
 - **📚 [Setup Guide](quickstart.md)** - Start here
 - **🔧 [Full Documentation](CLAUDE.md)** - Comprehensive reference
-- **🏗️ [Architecture Details](docs/features.md)** - Technical deep dive
+- **🏗️ [Architecture Details](Docs/features.md)** - Technical deep dive
 - **🐳 [Docker/K8s](README-K8S.md)** - Container deployment
 
 ## Vision
