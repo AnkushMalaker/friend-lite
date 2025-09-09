@@ -272,7 +272,9 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
           try {
             const audioStartEvent: WyomingEvent = { type: 'audio-start', data: AUDIO_FORMAT };
+            console.log('[AudioStreamer] Sending audio-start event');
             await sendWyomingEvent(audioStartEvent);
+            console.log('[AudioStreamer] ✅ audio-start sent successfully');
           } catch (e) {
             console.error('[AudioStreamer] audio-start failed:', e);
           }
@@ -323,6 +325,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const sendAudio = useCallback(async (audioBytes: Uint8Array) => {
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
       try {
+        console.log(`[AudioStreamer] 📤 Sending audio chunk: ${audioBytes.length} bytes`);
         const audioChunkEvent: WyomingEvent = { type: 'audio-chunk', data: AUDIO_FORMAT };
         await sendWyomingEvent(audioChunkEvent, audioBytes);
       } catch (e) {

@@ -17,7 +17,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.cupbearer5517.friendlite"
+      "bundleIdentifier": "com.cupbearer5517.friendlite",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Friend-Lite needs access to your microphone to stream audio to the backend for processing."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -32,12 +35,26 @@
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ],
       "usesCleartextTraffic": true
     },
     "newArchEnabled": true,
     "plugins": [
+      [
+        "@siteed/expo-audio-studio",
+        {
+          "enablePhoneStateHandling": true,
+          "enableNotifications": true,
+          "enableBackgroundAudio": true,
+          "enableDeviceDetection": true,
+          "iosBackgroundModes": { "useProcessing": true },
+          "iosConfig": {
+            "microphoneUsageDescription": "We use the mic for live audio streaming"
+          }
+        }
+      ],
       [
         "react-native-ble-plx",
         {
