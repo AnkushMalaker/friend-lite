@@ -4,7 +4,25 @@
 # Mirrors the GitHub CI speaker-recognition-tests.yml workflow for local development
 # Requires: .env file with HF_TOKEN and DEEPGRAM_API_KEY
 
-set -e
+set -euo pipefail  # Exit on error, undefined variables, and pipe failures
+
+# Cleanup function for proper signal handling
+cleanup_called=false
+cleanup() {
+    if [ "$cleanup_called" = true ]; then
+        return
+    fi
+    cleanup_called=true
+    
+    print_info "Cleaning up on exit..."
+    # Kill any background processes in this process group
+    pkill -P $$ 2>/dev/null || true
+    # Clean up test containers
+    docker compose -f docker-compose-test.yml down -v 2>/dev/null || true
+}
+
+# Set up signal traps for proper cleanup (but not EXIT to avoid double cleanup)
+trap 'cleanup; exit 130' SIGINT SIGTERM
 
 # Colors for output
 RED='\033[0;31m'
@@ -37,6 +55,9 @@ fi
 
 print_info "Speaker Recognition Integration Test Runner"
 print_info "=========================================="
+print_info "HF_TOKEN length: ${#HF_TOKEN}"
+print_info "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
+print_info ".env file exists: $([ -f .env ] && echo 'yes' || echo 'no')"
 
 # Load environment variables (CI or local)
 if [ -f ".env" ] && [ -z "$HF_TOKEN" ]; then
@@ -95,7 +116,7 @@ print_info "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
 
 # Install dependencies with uv
 print_info "Installing dependencies with uv..."
-uv sync --group cpu --group test
+uv sync --group cpu --group test --no-default-groups
 
 print_info "Environment variables configured for testing"
 
@@ -117,13 +138,28 @@ export DEEPGRAM_API_KEY="$DEEPGRAM_API_KEY"
 
 # Run the integration test with timeout (speaker recognition models need time)
 print_info "Starting speaker recognition test (timeout: 30 minutes)..."
-timeout 1800 uv run pytest tests/test_speaker_service_integration.py -v -s --tb=short
+
+# Run test with proper signal forwarding and output handling
+{
+    timeout --foreground --kill-after=60 1800 \
+        uv run pytest tests/test_speaker_service_integration.py -v -s --tb=short --log-cli-level=INFO
+} || {
+    exit_code=$?
+    if [ $exit_code -eq 124 ]; then
+        print_error "Test timed out after 30 minutes"
+    elif [ $exit_code -eq 130 ]; then
+        print_warning "Test interrupted by user (Ctrl+C)"
+    else
+        print_error "Test failed with exit code $exit_code"
+    fi
+    exit $exit_code
+}
 
 print_success "Speaker recognition tests completed successfully!"
 
 # Clean up test containers
 print_info "Cleaning up test containers..."
-docker compose -f docker-compose-test.yml down -v || true
+cleanup
 docker system prune -f || true
 
 print_success "Speaker Recognition integration tests completed!"

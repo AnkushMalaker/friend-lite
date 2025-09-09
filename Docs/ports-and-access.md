@@ -21,9 +21,11 @@ uv run --with-requirements setup-requirements.txt python services.py start --all
 | Service | API Port | Web UI Port | Access URL |
 |---------|----------|-------------|------------|
 | **Advanced Backend** | 8000 | 5173 | http://localhost:8000 (API)<br>http://localhost:5173 (Dashboard) |
-| **Speaker Recognition** | 8085 | 5174 | http://localhost:8085 (API)<br>http://localhost:5174 (WebUI) |
+| **Speaker Recognition** | 8085 | 5175* | http://localhost:8085 (API)<br>http://localhost:5175 (WebUI) |
 | **Parakeet ASR** | 8767 | - | http://localhost:8767 (API) |
 | **OpenMemory MCP** | 8765 | 8765 | http://localhost:8765 (API + WebUI) |
+
+*Note: Speaker Recognition WebUI port is configurable via REACT_UI_PORT (default varies by mode)
 
 **🌐 Main Dashboard**: http://localhost:5173  
 **🎤 Speaker Recognition**: http://localhost:5174  
@@ -37,6 +39,8 @@ uv run --with-requirements setup-requirements.txt python services.py start --all
 |---------|-----------|------------|------------|-------------------|
 | **Advanced Backend** | 80→443 | 443 | https://localhost/ (Main)<br>https://localhost/api/ (API) | ✅ Yes |
 | **Speaker Recognition** | 8081→8444 | 8444 | https://localhost:8444/ (Main)<br>https://localhost:8444/api/ (API) | ✅ Yes |
+
+**IMPORTANT**: nginx services start automatically with the standard docker compose command
 
 **🌐 Main Dashboard**: https://localhost/ (Advanced Backend with SSL)  
 **🎤 Speaker Recognition**: https://localhost:8444/ (Speaker Recognition with SSL)  
@@ -71,15 +75,16 @@ The speaker recognition service supports both modes via configuration:
 
 **HTTP Mode (.env)**:
 ```bash
-REACT_UI_PORT=5174
+REACT_UI_PORT=5174  # Direct HTTP access
 REACT_UI_HTTPS=false
 ```
 
 **HTTPS Mode (.env)**:
 ```bash
-REACT_UI_PORT=5175  # Internal HTTPS port
+REACT_UI_PORT=5175  # Internal HTTPS port (proxied through nginx)
 REACT_UI_HTTPS=true
-# nginx provides external access on ports 8081 (HTTP) and 8444 (HTTPS)
+# nginx provides external access on ports 8081 (HTTP redirect) and 8444 (HTTPS)
+# Start with: docker compose up -d
 ```
 
 ---

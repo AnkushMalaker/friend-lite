@@ -15,6 +15,10 @@ cp .env.template .env
 # Edit .env and add your Hugging Face token
 ```
 Get your HF token from https://huggingface.co/settings/tokens
+Accept the terms and conditions for 
+https://huggingface.co/pyannote/speaker-diarization-3.1
+https://huggingface.co/pyannote/segmentation-3.0
+
 
 ### 2. Choose CPU or GPU setup
 ```bash
@@ -24,6 +28,8 @@ uv sync --group cpu
 # For GPU acceleration (requires NVIDIA GPU + CUDA)
 uv sync --group gpu
 ```
+
+If you choose GPU, uncomment the deploy section with GPU requirements from docker-compose.yml
 
 ### 3. Initialize HTTPS (Required for Microphone Access)
 
@@ -40,13 +46,19 @@ docker-compose up --build -d
 ```
 
 This starts three services:
-- **FastAPI backend** on port 8085 (internal, proxied through nginx)
-- **React web UI** on port 5175 (internal, proxied through nginx) 
-- **Nginx proxy** on ports 8444/8081 (HTTPS/HTTP access)
+- **FastAPI backend** on port 8085 (internal API service)
+- **React web UI** on port configured by REACT_UI_PORT (defaults vary by mode)
+- **Nginx proxy** on ports 8444 (HTTPS) and 8081 (HTTP redirect)
 
 ### 5. Access the Web UI
-- **HTTPS (Secure)**: https://localhost:8444/ or https://your-ip:8444/
-- **HTTP (Redirect)**: http://localhost:8081/ → https://localhost:8444/
+
+**HTTPS Mode (Recommended for microphone access):**
+- **Secure Access**: https://localhost:8444/ or https://your-ip:8444/
+- **HTTP Redirect**: http://localhost:8081/ → https://localhost:8444/
+
+**HTTP Mode (Fallback, microphone limited to localhost):**
+- **Direct Access**: http://localhost:5174/ (or configured REACT_UI_PORT)
+- **API Access**: http://localhost:8085/
 
 **Microphone access requires HTTPS for network connections (not just localhost).**
 

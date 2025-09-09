@@ -30,13 +30,13 @@ This script will:
 
 ```bash
 # HTTPS with nginx proxy (REQUIRED for network microphone access)
-docker compose --profile https up --build -d
+docker compose up --build -d
 
 # HTTP only (no nginx, localhost microphone access only)
 docker compose up --build -d
 ```
 
-**Important**: The `--profile https` is **required** to start the nginx service. Without it, nginx won't start and you'll only have HTTP access.
+**NOTE**: The nginx service now starts automatically with the standard docker compose command, providing immediate HTTPS access when SSL certificates are configured.
 
 ### 3. Access the Services
 
@@ -85,7 +85,7 @@ CORS_ORIGINS=https://localhost,https://127.0.0.1,https://100.83.66.30
 
 ## Docker Compose Profiles
 
-### With `--profile https` (Network Access)
+### With HTTPS Configuration (Network Access)
 **Services started:**
 - ✅ nginx (ports 443/80) - SSL termination and proxy
 - ✅ webui (port 5173, internal) - Vite dev server  
@@ -95,9 +95,9 @@ CORS_ORIGINS=https://localhost,https://127.0.0.1,https://100.83.66.30
 **Access:** https://localhost/ or https://your-ip/  
 **Microphone:** Works over network with HTTPS
 
-### Without profile (Default - Localhost Only)
+### Without HTTPS Configuration (Default - Localhost Only)
 **Services started:**
-- ❌ nginx (not started - behind profile)
+- ✅ nginx (ports 443/80) - but without SSL certificates
 - ✅ webui (port 5173, direct access) - Vite dev server
 - ✅ friend-backend (port 8000)
 - ✅ mongo, qdrant (databases)
@@ -232,7 +232,7 @@ For production deployments:
 3. **Configure DNS** to point to your server
 4. **Use production docker compose profile**:
    ```bash
-   docker compose --profile https up -d
+   docker compose up -d
    ```
 
 ## Integration with Other Services
@@ -244,7 +244,7 @@ If using the speaker recognition service alongside Friend-Lite:
 # Use different HTTPS ports to avoid conflicts
 # Speaker Recognition: 443/80
 # Friend-Lite: 8443/8080
-docker compose --profile dev-https up -d
+docker compose up -d
 ```
 
 ### Tailscale Integration

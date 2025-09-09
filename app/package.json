@@ -9,23 +9,29 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@notifee/react-native": "^9.1.8",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-community/netinfo": "^11.4.1",
+    "@react-native/virtualized-lists": "^0.80.2",
+    "@siteed/expo-audio-studio": "^2.18.1",
     "deprecated-react-native-prop-types": "^5.0.0",
     "expo": "~53.0.9",
-    "expo-build-properties": "^0.14.8",
+    "expo-build-properties": "~0.14.8",
+    "expo-dev-client": "~5.2.4",
     "expo-status-bar": "~2.2.3",
     "friend-lite-react-native": "^1.0.2",
     "install": "^0.13.0",
     "promise": "^8.3.0",
     "react": "19.0.0",
-    "react-native": "0.79.2",
+    "react-native": "0.79.6",
+    "react-native-base64": "^0.2.1",
     "react-native-ble-plx": "^3.5.0",
     "setimmediate": "^1.0.5",
     "webidl-conversions": "^7.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
+    "@react-native-community/cli": "latest",
     "@types/react": "~19.0.10",
     "typescript": "~5.8.3"
   },
