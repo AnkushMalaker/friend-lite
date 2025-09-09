@@ -1,5 +1,13 @@
 # Friend-Lite Initialization System
 
+## Quick Links
+
+- **👉 [Start Here: Quick Start Guide](../quickstart.md)** - Main setup path for new users
+- **📚 [Full Documentation](../CLAUDE.md)** - Comprehensive reference  
+- **🏗️ [Architecture Details](features.md)** - Technical deep dive
+
+---
+
 ## Overview
 
 Friend-Lite uses a unified initialization system with clean separation of concerns:
@@ -8,6 +16,8 @@ Friend-Lite uses a unified initialization system with clean separation of concer
 - **Service Management** (`services.py`) - Start, stop, and manage running services
 
 The root orchestrator handles service selection and delegates configuration to individual service scripts. In general, setup scripts only configure and do not start services automatically. Exceptions: `extras/asr-services` and `extras/openmemory-mcp` are startup scripts. This prevents unnecessary resource usage and gives you control over when services actually run.
+
+> **New to Friend-Lite?** Most users should start with the [Quick Start Guide](../quickstart.md) instead of this detailed reference.
 
 ## Architecture
 
