@@ -1202,7 +1202,7 @@ async def health_check():
             # Make a health check request to the OpenMemory MCP service
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{openmemory_mcp_url}/api/v1/apps", timeout=aiohttp.ClientTimeout(total=5)
+                    f"{openmemory_mcp_url}/api/v1/apps/", timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     if response.status == 200:
                         health_status["services"]["openmemory_mcp"] = {
