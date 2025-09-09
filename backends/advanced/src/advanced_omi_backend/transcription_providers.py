@@ -45,13 +45,14 @@ class BaseTranscriptionProvider(abc.ABC):
     """Abstract base class for all transcription providers."""
 
     @abc.abstractmethod
-    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+    async def transcribe(self, audio_data: bytes, sample_rate: int, **kwargs) -> dict:
         """
         Transcribe audio data to text with word-level timestamps.
 
         Args:
             audio_data: Raw audio bytes (PCM format)
             sample_rate: Audio sample rate (Hz)
+            **kwargs: Additional parameters (e.g. diarize=True for speaker diarization)
 
         Returns:
             Dictionary containing:
@@ -90,8 +91,14 @@ class StreamingTranscriptionProvider(BaseTranscriptionProvider):
         return "streaming"
 
     @abc.abstractmethod
-    async def start_stream(self, client_id: str, sample_rate: int = 16000):
-        """Start a transcription stream for a client."""
+    async def start_stream(self, client_id: str, sample_rate: int = 16000, diarize: bool = False):
+        """Start a transcription stream for a client.
+        
+        Args:
+            client_id: Unique client identifier
+            sample_rate: Audio sample rate
+            diarize: Whether to enable speaker diarization (provider-dependent)
+        """
         pass
 
     @abc.abstractmethod
@@ -116,6 +123,17 @@ class BatchTranscriptionProvider(BaseTranscriptionProvider):
     @property
     def mode(self) -> str:
         return "batch"
+    
+    @abc.abstractmethod
+    async def transcribe(self, audio_data: bytes, sample_rate: int, diarize: bool = False) -> dict:
+        """Transcribe audio data.
+        
+        Args:
+            audio_data: Raw audio bytes
+            sample_rate: Audio sample rate
+            diarize: Whether to enable speaker diarization (provider-dependent)
+        """
+        pass
 
 
 class DeepgramProvider(BatchTranscriptionProvider):
@@ -129,15 +147,21 @@ class DeepgramProvider(BatchTranscriptionProvider):
     def name(self) -> str:
         return "Deepgram"
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
-        """Transcribe audio using Deepgram's REST API."""
+    async def transcribe(self, audio_data: bytes, sample_rate: int, diarize: bool = False) -> dict:
+        """Transcribe audio using Deepgram's REST API.
+        
+        Args:
+            audio_data: Raw audio bytes
+            sample_rate: Audio sample rate
+            diarize: Whether to enable speaker diarization
+        """
         try:
             params = {
                 "model": "nova-3",
                 "language": "multi",
                 "smart_format": "true",
                 "punctuate": "true",
-                "diarize": "false",
+                "diarize": "true" if diarize else "false",
                 "encoding": "linear16",
                 "sample_rate": str(sample_rate),
                 "channels": "1",
@@ -285,10 +309,16 @@ class DeepgramStreamingProvider(StreamingTranscriptionProvider):
     def name(self) -> str:
         return "Deepgram-Streaming"
 
-    async def start_stream(self, client_id: str, sample_rate: int = 16000):
-        """Start a WebSocket connection for streaming transcription."""
+    async def start_stream(self, client_id: str, sample_rate: int = 16000, diarize: bool = False):
+        """Start a WebSocket connection for streaming transcription.
+        
+        Args:
+            client_id: Unique client identifier
+            sample_rate: Audio sample rate
+            diarize: Whether to enable speaker diarization
+        """
         try:
-            logger.info(f"Starting Deepgram streaming for client {client_id}")
+            logger.info(f"Starting Deepgram streaming for client {client_id} (diarize={diarize})")
             
             # WebSocket connection parameters
             params = {
@@ -296,7 +326,7 @@ class DeepgramStreamingProvider(StreamingTranscriptionProvider):
                 "language": "multi",
                 "smart_format": "true",
                 "punctuate": "true",
-                "diarize": "false",
+                "diarize": "true" if diarize else "false",
                 "encoding": "linear16",
                 "sample_rate": str(sample_rate),
                 "channels": "1",
@@ -438,7 +468,7 @@ class DeepgramStreamingProvider(StreamingTranscriptionProvider):
                 del self._streams[client_id]
             return {"text": "", "words": [], "segments": []}
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+    async def transcribe(self, audio_data: bytes, sample_rate: int, **kwargs) -> dict:
         """For streaming provider, this method is not typically used."""
         logger.warning("transcribe() called on streaming provider - use streaming methods instead")
         return {"text": "", "words": [], "segments": []}
@@ -468,7 +498,7 @@ class ParakeetProvider(BatchTranscriptionProvider):
     def name(self) -> str:
         return "Parakeet"
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+    async def transcribe(self, audio_data: bytes, sample_rate: int, **kwargs) -> dict:
         """Transcribe audio using Parakeet HTTP service."""
         try:
             
@@ -539,8 +569,16 @@ class ParakeetStreamingProvider(StreamingTranscriptionProvider):
     def name(self) -> str:
         return "Parakeet-Streaming"
 
-    async def start_stream(self, client_id: str, sample_rate: int = 16000):
-        """Start a WebSocket connection for streaming transcription."""
+    async def start_stream(self, client_id: str, sample_rate: int = 16000, diarize: bool = False):
+        """Start a WebSocket connection for streaming transcription.
+        
+        Args:
+            client_id: Unique client identifier
+            sample_rate: Audio sample rate
+            diarize: Whether to enable speaker diarization (ignored - Parakeet doesn't support diarization)
+        """
+        if diarize:
+            logger.warning(f"Parakeet streaming provider does not support diarization, ignoring diarize=True for client {client_id}")
         try:
             logger.info(f"Starting Parakeet streaming for client {client_id}")
             
@@ -707,7 +745,7 @@ class ParakeetStreamingProvider(StreamingTranscriptionProvider):
                 del self._streams[client_id]
             return {"text": "", "words": [], "segments": []}
 
-    async def transcribe(self, audio_data: bytes, sample_rate: int) -> dict:
+    async def transcribe(self, audio_data: bytes, sample_rate: int, **kwargs) -> dict:
         """For streaming provider, this method is not typically used."""
         logger.warning("transcribe() called on streaming provider - use streaming methods instead")
         return {"text": "", "words": [], "segments": []}

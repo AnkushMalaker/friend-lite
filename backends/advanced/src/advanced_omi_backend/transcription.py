@@ -13,6 +13,7 @@ from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
     get_transcription_provider,
 )
+from advanced_omi_backend.config import load_diarization_settings_from_file
 
 # ASR Configuration
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")  # Optional: 'deepgram' or 'parakeet'
@@ -117,7 +118,18 @@ class TranscriptionManager:
                 logger.warning("No audio data or sample rate available for transcription")
                 return None
 
-            return await self.provider.transcribe(combined_audio, sample_rate)
+            # Check if we should request diarization based on configuration
+            config = load_diarization_settings_from_file()
+            diarization_source = config.get("diarization_source", "pyannote")
+            
+            # Request diarization if using Deepgram as diarization source
+            should_diarize = (diarization_source == "deepgram" and 
+                            self.provider.name in ["Deepgram", "Deepgram-Streaming"])
+            
+            if should_diarize:
+                logger.info(f"Requesting diarization from {self.provider.name} (diarization_source=deepgram)")
+            
+            return await self.provider.transcribe(combined_audio, sample_rate, diarize=should_diarize)
 
         except Exception as e:
             logger.error(f"Error getting transcript from {self.provider.name}: {e}")
