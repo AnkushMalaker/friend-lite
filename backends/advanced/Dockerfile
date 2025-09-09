@@ -33,8 +33,10 @@ RUN uv sync --extra deepgram
 # Copy all application code
 COPY . .
 
-# Copy memory config to the expected location
-COPY memory_config.yaml ./
+# Copy configuration files if they exist, otherwise they will be created from templates at runtime
+# The files are expected to exist, but we handle the case where they don't gracefully
+COPY memory_config.yaml* ./
+COPY diarization_config.json* ./
 
 
 # Run the application

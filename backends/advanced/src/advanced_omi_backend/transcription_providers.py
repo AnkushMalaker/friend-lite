@@ -771,35 +771,16 @@ def get_transcription_provider(
             raise RuntimeError(
                 "Parakeet ASR provider requested but PARAKEET_ASR_URL not configured"
             )
-        logger.info(f"Using Parakeet ASR transcription provider in {mode} mode")
-        if mode == "streaming":
-            return ParakeetStreamingProvider(parakeet_url)
-        else:
-            return ParakeetProvider(parakeet_url)
-
-    elif provider_name:
-        raise RuntimeError(
-            f"Unknown transcription provider '{provider_name}'. Supported: 'deepgram', 'parakeet'"
-        )
-
-    # Auto-select based on available configuration
-    if deepgram_key:
-        logger.info(f"Auto-selected Deepgram transcription provider in {mode} mode")
-        if mode == "streaming":
-            return DeepgramStreamingProvider(deepgram_key)
-        else:
-            return DeepgramProvider(deepgram_key)
-    elif parakeet_url:
-        logger.info(f"Auto-selected Parakeet ASR transcription provider in {mode} mode")
-        if mode == "streaming":
-            return ParakeetStreamingProvider(parakeet_url)
-        else:
-            return ParakeetProvider(parakeet_url)
-
-    # No provider configured
-    logger.warning(
-        "No transcription provider configured. Please set one of: "
-        "DEEPGRAM_API_KEY or PARAKEET_ASR_URL"
-    )
-    return None
-
+        logger.info(f"Using Parakeet transcription provider in {mode} mode")
+        return ParakeetProvider(parakeet_url)
+    
+    elif provider_name == "offline":
+        # "offline" is an alias for Parakeet ASR
+        if not parakeet_url:
+            raise RuntimeError(
+                "Offline transcription provider requested but PARAKEET_ASR_URL not configured"
+            )
+        logger.info(f"Using offline Parakeet transcription provider in {mode} mode")
+        return ParakeetProvider(parakeet_url)
+    else:
+        return None

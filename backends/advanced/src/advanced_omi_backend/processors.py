@@ -19,6 +19,7 @@ from wyoming.audio import AudioChunk
 from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
+from advanced_omi_backend.users import get_user_by_id
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.memory import get_memory_service
@@ -158,6 +159,77 @@ class ProcessorManager:
         )
 
         logger.info("All processors started successfully")
+
+    async def _should_process_memory(self, user_id: str, audio_uuid: str) -> tuple[bool, str]:
+        """
+        Determine if memory processing should proceed based on primary speakers configuration.
+        
+        Implements graceful degradation:
+        - No primary speakers configured → Process all (True)
+        - Speaker service unavailable → Process all (True) 
+        - No speakers identified → Process all (True)
+        - Primary speakers found → Process (True)
+        - Only non-primary speakers → Skip (False)
+        
+        Args:
+            user_id: User ID to check primary speakers configuration
+            audio_uuid: Audio UUID to check transcript speakers
+            
+        Returns:
+            Tuple of (should_process: bool, reason: str)
+        """
+        try:
+            # Get user's primary speaker configuration
+            user = await get_user_by_id(user_id)
+            if not user or not user.primary_speakers:
+                return True, "No primary speakers configured - processing all conversations"
+            
+            audio_logger.info(f"🔍 Checking primary speakers filter for {audio_uuid} - user has {len(user.primary_speakers)} primary speakers configured")
+            
+            # Get transcript with speaker identification
+            chunk = await self.repository.get_chunk_by_audio_uuid(audio_uuid)
+            if not chunk or not chunk.get('transcript'):
+                return True, "No transcript data available - processing conversation"
+            
+            # Extract speakers from transcript segments (normalized for comparison)
+            transcript_speakers = set()
+            transcript_speaker_originals = {}  # Keep original names for logging
+            total_segments = 0
+            identified_segments = 0
+            
+            for segment in chunk['transcript']:
+                total_segments += 1
+                if 'identified_as' in segment and segment['identified_as'] and segment['identified_as'] != 'Unknown':
+                    original_name = segment['identified_as']
+                    normalized_name = original_name.strip().lower()
+                    transcript_speakers.add(normalized_name)
+                    transcript_speaker_originals[normalized_name] = original_name
+                    identified_segments += 1
+            
+            if not transcript_speakers:
+                return True, f"No speakers identified in transcript ({identified_segments}/{total_segments} segments) - processing conversation"
+            
+            # Check if any primary speakers are present (normalized comparison)
+            primary_speaker_names = {ps['name'].strip().lower() for ps in user.primary_speakers}
+            primary_speaker_originals = {ps['name'].strip().lower(): ps['name'] for ps in user.primary_speakers}
+            found_primary_speakers_normalized = transcript_speakers.intersection(primary_speaker_names)
+            
+            if found_primary_speakers_normalized:
+                # Convert back to original names for display
+                found_primary_originals = [primary_speaker_originals[name] for name in found_primary_speakers_normalized]
+                audio_logger.info(f"✅ Primary speakers found in conversation: {found_primary_originals} - processing memory")
+                return True, f"Primary speakers detected: {', '.join(found_primary_originals)}"
+            else:
+                # Show original names in logs
+                transcript_originals = [transcript_speaker_originals[name] for name in transcript_speakers]
+                primary_originals = [primary_speaker_originals[name] for name in primary_speaker_names]
+                audio_logger.info(f"❌ No primary speakers found - transcript speakers: {transcript_originals}, primary speakers: {primary_originals} - skipping memory processing")
+                return False, f"Only non-primary speakers found: {', '.join(transcript_originals)}"
+                
+        except Exception as e:
+            # On any error, default to processing (fail-safe)
+            audio_logger.warning(f"Error checking primary speakers filter for {audio_uuid}: {e} - defaulting to process conversation")
+            return True, f"Error in speaker filtering: {str(e)} - processing conversation as fallback"
 
     async def shutdown(self):
         """Shutdown all processors gracefully."""
@@ -808,7 +880,7 @@ class ProcessorManager:
                                 "client_id": item.client_id,
                                 "audio_uuid": item.audio_uuid,
                                 "type": "memory",
-                                "timeout": 300.0,  # 5 minutes
+                                "timeout": 3600,  # 60 minutes
                             },
                         )
 
@@ -876,6 +948,31 @@ class ProcessorManager:
 
             # Debug tracking removed for cleaner architecture
 
+            # Check if memory processing should proceed based on primary speakers configuration
+            should_process, filter_reason = await self._should_process_memory(item.user_id, item.audio_uuid)
+            audio_logger.info(f"🎯 Speaker filter decision for {item.audio_uuid}: {filter_reason}")
+            
+            if not should_process:
+                # Update memory processing status to skipped
+                await self.repository.update_memory_processing_status(
+                    item.audio_uuid, "SKIPPED", error_message=filter_reason
+                )
+                
+                # Track completion
+                self.track_processing_stage(
+                    item.client_id,
+                    "memory",
+                    "completed",
+                    {
+                        "audio_uuid": item.audio_uuid,
+                        "status": "skipped",
+                        "reason": filter_reason,
+                        "completed_at": time.time(),
+                    },
+                )
+                audio_logger.info(f"⏭️ Skipped memory processing for {item.audio_uuid}: {filter_reason}")
+                return None
+
             # Lazy import memory service
             if self.memory_service is None:
                 audio_logger.info(f"🔧 Initializing memory service for {item.audio_uuid}...")
@@ -891,20 +988,34 @@ class ProcessorManager:
                     item.audio_uuid,
                     item.user_id,
                     item.user_email,
+                    allow_update=True,
                     db_helper=None,  # Using ConversationRepository now
                 ),
-                timeout=300.0,  # 5 minutes
+                timeout=3600,  # 60 minutes
             )
 
             if memory_result:
                 # Check if this was a successful result with actual memories created
                 success, created_memory_ids = memory_result
+                logger.info(f"Memory result: {memory_result}")
 
                 if success and created_memory_ids:
                     # Memories were actually created
                     audio_logger.info(
                         f"✅ Successfully processed memory for {item.audio_uuid} - created {len(created_memory_ids)} memories"
                     )
+
+                    # Add memory references to MongoDB conversation document
+                    try:
+                        for memory_id in created_memory_ids:
+                            await conversation_repo.add_memory_reference(
+                                item.audio_uuid, memory_id, "created"
+                            )
+                        audio_logger.info(
+                            f"📝 Added {len(created_memory_ids)} memory references to MongoDB for {item.audio_uuid}"
+                        )
+                    except Exception as e:
+                        audio_logger.warning(f"Failed to add memory references to MongoDB: {e}")
 
                     # Update database memory processing status to completed
                     try:

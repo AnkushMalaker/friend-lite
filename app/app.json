@@ -17,7 +17,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.cupbearer5517.friendlite"
+      "bundleIdentifier": "com.cupbearer5517.friendlite",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Friend-Lite needs access to your microphone to stream audio to the backend for processing."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -29,12 +32,29 @@
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.ACCESS_NETWORK_STATE"
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ],
       "usesCleartextTraffic": true
     },
     "newArchEnabled": true,
     "plugins": [
+      [
+        "@siteed/expo-audio-studio",
+        {
+          "enablePhoneStateHandling": true,
+          "enableNotifications": true,
+          "enableBackgroundAudio": true,
+          "enableDeviceDetection": true,
+          "iosBackgroundModes": { "useProcessing": true },
+          "iosConfig": {
+            "microphoneUsageDescription": "We use the mic for live audio streaming"
+          }
+        }
+      ],
       [
         "react-native-ble-plx",
         {
@@ -46,10 +66,29 @@
         }
       ],
       [
+        "./plugins/with-ws-fgs",
+        {
+          "microphone": true,
+          "android": {
+            "permissions": [
+              "FOREGROUND_SERVICE",
+              "FOREGROUND_SERVICE_DATA_SYNC",
+              "FOREGROUND_SERVICE_MICROPHONE",
+              "POST_NOTIFICATIONS"
+            ]
+          }
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "extraMavenRepos": [
+              "../../node_modules/@notifee/react-native/android/libs"
+            ]
           }
         }
       ]

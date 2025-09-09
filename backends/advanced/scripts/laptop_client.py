@@ -125,8 +125,6 @@ async def send_wyoming_event(websocket, wyoming_event):
         logger.debug(f"Sent audio payload: {len(event_data.payload)} bytes")
 
 
-
-
 async def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(

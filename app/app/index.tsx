@@ -19,6 +19,7 @@ import {
 } from './utils/storage';
 import { useAudioListener } from './hooks/useAudioListener';
 import { useAudioStreamer } from './hooks/useAudioStreamer';
+import { usePhoneAudioRecorder } from './hooks/usePhoneAudioRecorder';
 
 // Components
 import BluetoothStatusBanner from './components/BluetoothStatusBanner';
@@ -27,6 +28,7 @@ import DeviceListItem from './components/DeviceListItem';
 import DeviceDetails from './components/DeviceDetails';
 import AuthSection from './components/AuthSection';
 import BackendStatus from './components/BackendStatus';
+import PhoneAudioButton from './components/PhoneAudioButton';
 
 export default function App() {
   // Initialize OmiConnection
@@ -62,6 +64,10 @@ export default function App() {
 
   // Custom Audio Streamer Hook
   const audioStreamer = useAudioStreamer();
+  
+  // Phone Audio Recorder Hook
+  const phoneAudioRecorder = usePhoneAudioRecorder();
+  const [isPhoneAudioMode, setIsPhoneAudioMode] = useState<boolean>(false);
 
 
   const {
@@ -114,7 +120,13 @@ export default function App() {
       console.log('[App.tsx] Disconnect: Stopping custom audio streaming.');
       audioStreamer.stopStreaming();
     }
-  }, [originalStopAudioListener, audioStreamer.stopStreaming]);
+    // Also stop phone audio if it's running
+    if (phoneAudioRecorder.isRecording) {
+      console.log('[App.tsx] Disconnect: Stopping phone audio recording.');
+      await phoneAudioRecorder.stopRecording();
+      setIsPhoneAudioMode(false);
+    }
+  }, [originalStopAudioListener, audioStreamer.stopStreaming, phoneAudioRecorder.stopRecording, phoneAudioRecorder.isRecording, setIsPhoneAudioMode]);
 
   // Initialize Device Connection hook, passing the memoized callbacks
   const deviceConnection = useDeviceConnection(
@@ -296,22 +308,120 @@ export default function App() {
     audioStreamer.stopStreaming();
   }, [originalStopAudioListener, audioStreamer]);
 
-  // Cleanup OmiConnection and BleManager when App unmounts
-  useEffect(() => {
-    const disconnectFunc = deviceConnection.disconnectFromDevice;
-    const currentStopStreaming = audioStreamer.stopStreaming;
+  // Phone Audio Streaming Functions
+  const handleStartPhoneAudioStreaming = useCallback(async () => {
+    if (!webSocketUrl || webSocketUrl.trim() === '') {
+      Alert.alert('WebSocket URL Required', 'Please enter the WebSocket URL for streaming.');
+      return;
+    }
 
-    return () => {
-      console.log('App unmounting - cleaning up OmiConnection, BleManager, and AudioStreamer');
-      if (omiConnection.isConnected()) {
-        disconnectFunc().catch(err => console.error("Error disconnecting in cleanup:", err));
+    try {
+      let finalWebSocketUrl = webSocketUrl.trim();
+      
+      // Convert HTTP/HTTPS to WS/WSS protocol
+      finalWebSocketUrl = finalWebSocketUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+      
+      // Ensure /ws_pcm endpoint is included
+      if (!finalWebSocketUrl.includes('/ws_pcm')) {
+        // Remove trailing slash if present, then add /ws_pcm
+        finalWebSocketUrl = finalWebSocketUrl.replace(/\/$/, '') + '/ws_pcm';
       }
-      if (bleManager) {
-        bleManager.destroy();
+      
+      // Check if this is the advanced backend (requires authentication) or simple backend
+      const isAdvancedBackend = jwtToken && isAuthenticated;
+      
+      if (isAdvancedBackend) {
+        // Advanced backend: include JWT token and device parameters
+        const params = new URLSearchParams();
+        params.append('token', jwtToken);
+        
+        const deviceName = userId && userId.trim() !== '' ? userId.trim() : 'phone-mic';
+        params.append('device_name', deviceName);
+        console.log('[App.tsx] Using advanced backend with token and device_name:', deviceName);
+        
+        const separator = finalWebSocketUrl.includes('?') ? '&' : '?';
+        finalWebSocketUrl = `${finalWebSocketUrl}${separator}${params.toString()}`;
+        console.log('[App.tsx] Advanced backend WebSocket URL constructed for phone audio');
+      } else {
+        // Simple backend: use URL as-is without authentication
+        console.log('[App.tsx] Using simple backend without authentication for phone audio');
       }
-      currentStopStreaming();
+
+      // Start WebSocket streaming first
+      await audioStreamer.startStreaming(finalWebSocketUrl);
+      
+      // Start phone audio recording
+      await phoneAudioRecorder.startRecording(async (pcmBuffer) => {
+        const wsReadyState = audioStreamer.getWebSocketReadyState();
+        if (wsReadyState === WebSocket.OPEN && pcmBuffer.length > 0) {
+          await audioStreamer.sendAudio(pcmBuffer);
+        }
+      });
+      
+      setIsPhoneAudioMode(true);
+      console.log('[App.tsx] Phone audio streaming started successfully');
+    } catch (error) {
+      console.error('[App.tsx] Error starting phone audio streaming:', error);
+      Alert.alert('Error', 'Could not start phone audio streaming.');
+      // Ensure cleanup if one part started but the other failed
+      if (audioStreamer.isStreaming) audioStreamer.stopStreaming();
+      if (phoneAudioRecorder.isRecording) await phoneAudioRecorder.stopRecording();
+      setIsPhoneAudioMode(false);
+    }
+  }, [audioStreamer, phoneAudioRecorder, webSocketUrl, userId, jwtToken, isAuthenticated]);
+
+  const handleStopPhoneAudioStreaming = useCallback(async () => {
+    console.log('[App.tsx] Stopping phone audio streaming.');
+    await phoneAudioRecorder.stopRecording();
+    audioStreamer.stopStreaming();
+    setIsPhoneAudioMode(false);
+  }, [phoneAudioRecorder, audioStreamer]);
+
+  const handleTogglePhoneAudio = useCallback(async () => {
+    if (isPhoneAudioMode || phoneAudioRecorder.isRecording) {
+      await handleStopPhoneAudioStreaming();
+    } else {
+      await handleStartPhoneAudioStreaming();
+    }
+  }, [isPhoneAudioMode, phoneAudioRecorder.isRecording, handleStartPhoneAudioStreaming, handleStopPhoneAudioStreaming]);
+
+  // Store stable references for cleanup
+  const cleanupRefs = useRef({
+    omiConnection,
+    bleManager,
+    disconnectFromDevice: deviceConnection.disconnectFromDevice,
+    stopAudioStreaming: audioStreamer.stopStreaming,
+    stopPhoneAudio: phoneAudioRecorder.stopRecording,
+  });
+
+  // Update refs when functions change
+  useEffect(() => {
+    cleanupRefs.current = {
+      omiConnection,
+      bleManager,
+      disconnectFromDevice: deviceConnection.disconnectFromDevice,
+      stopAudioStreaming: audioStreamer.stopStreaming,
+      stopPhoneAudio: phoneAudioRecorder.stopRecording,
     };
-  }, [omiConnection, bleManager, deviceConnection.disconnectFromDevice, audioStreamer.stopStreaming]);
+  });
+
+  // Cleanup only on actual unmount (no dependencies to avoid re-runs)
+  useEffect(() => {
+    return () => {
+      console.log('App unmounting - cleaning up OmiConnection, BleManager, AudioStreamer, and PhoneAudioRecorder');
+      const refs = cleanupRefs.current;
+      
+      if (refs.omiConnection.isConnected()) {
+        refs.disconnectFromDevice().catch(err => console.error("Error disconnecting in cleanup:", err));
+      }
+      if (refs.bleManager) {
+        refs.bleManager.destroy();
+      }
+      refs.stopAudioStreaming();
+      // Phone audio stopRecording now handles inactive state gracefully
+      refs.stopPhoneAudio().catch(err => console.error("Error stopping phone audio in cleanup:", err));
+    };
+  }, []); // Empty dependency array - only run on mount/unmount
 
   const canScan = React.useMemo(() => (
     permissionGranted &&
@@ -426,6 +536,16 @@ export default function App() {
             isAuthenticated={isAuthenticated}
             currentUserEmail={currentUserEmail}
             onAuthStatusChange={handleAuthStatusChange}
+          />
+
+          {/* Phone Audio Streaming Button */}
+          <PhoneAudioButton
+            isRecording={phoneAudioRecorder.isRecording || isPhoneAudioMode}
+            isInitializing={phoneAudioRecorder.isInitializing}
+            isDisabled={!!deviceConnection.connectedDeviceId || deviceConnection.isConnecting}
+            audioLevel={phoneAudioRecorder.audioLevel}
+            error={phoneAudioRecorder.error}
+            onPress={handleTogglePhoneAudio}
           />
 
           <BluetoothStatusBanner

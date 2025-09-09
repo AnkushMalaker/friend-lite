@@ -1,0 +1,78 @@
+/* Custom slider styles for relevance threshold */
+input[type="range"].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: 5px;
+  outline: none;
+  opacity: 0.9;
+  transition: opacity 0.2s;
+}
+
+input[type="range"].slider:hover {
+  opacity: 1;
+}
+
+/* Webkit browsers (Chrome, Safari, etc.) */
+input[type="range"].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #3B82F6;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+input[type="range"].slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+}
+
+/* Firefox */
+input[type="range"].slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: #3B82F6;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+input[type="range"].slider::-moz-range-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+}
+
+/* Track styling for gradient effect */
+input[type="range"].slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 8px;
+  cursor: pointer;
+  border-radius: 5px;
+}
+
+input[type="range"].slider::-moz-range-track {
+  width: 100%;
+  height: 8px;
+  cursor: pointer;
+  border-radius: 5px;
+}
+
+/* Dark mode adjustments */
+.dark input[type="range"].slider {
+  background: linear-gradient(to right, #3B82F6 var(--progress), #374151 var(--progress));
+}
+
+.dark input[type="range"].slider::-webkit-slider-thumb {
+  background: #60A5FA;
+}
+
+.dark input[type="range"].slider::-moz-range-thumb {
+  background: #60A5FA;
+}

@@ -52,7 +52,6 @@ jobs:
         DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
       run: |
         cd extras/speaker-recognition
-        chmod +x run-test.sh
         ./run-test.sh
         
     - name: Debug Docker build failure

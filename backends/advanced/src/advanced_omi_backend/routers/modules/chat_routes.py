@@ -369,6 +369,44 @@ async def get_chat_statistics(
         )
 
 
+@router.post("/sessions/{session_id}/extract-memories")
+async def extract_memories_from_session(
+    session_id: str,
+    current_user: User = Depends(current_active_user)
+):
+    """Extract memories from a chat session."""
+    try:
+        chat_service = get_chat_service()
+        
+        # Extract memories from the session
+        success, memory_ids, memory_count = await chat_service.extract_memories_from_session(
+            session_id=session_id,
+            user_id=str(current_user.id)
+        )
+        
+        if success:
+            return {
+                "success": True,
+                "memory_ids": memory_ids,
+                "count": memory_count,
+                "message": f"Successfully extracted {memory_count} memories from chat session"
+            }
+        else:
+            return {
+                "success": False,
+                "memory_ids": [],
+                "count": 0,
+                "message": "Failed to extract memories from chat session"
+            }
+        
+    except Exception as e:
+        logger.error(f"Failed to extract memories from session {session_id} for user {current_user.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to extract memories from chat session"
+        )
+
+
 @router.get("/health")
 async def chat_health_check():
     """Health check endpoint for chat service."""

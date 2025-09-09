@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { MessageCircle, Send, Plus, Trash2, Brain, Clock, User, Bot } from 'lucide-react'
+import { MessageCircle, Send, Plus, Trash2, Brain, Clock, User, Bot, BookOpen, Loader2 } from 'lucide-react'
 import { chatApi } from '../services/api'
 
 interface ChatSession {
@@ -42,6 +42,8 @@ export default function Chat() {
   const [streamingMessage, setStreamingMessage] = useState('')
   const [memoryContext, setMemoryContext] = useState<MemoryContext | null>(null)
   const [showMemoryPanel, setShowMemoryPanel] = useState(false)
+  const [isExtractingMemories, setIsExtractingMemories] = useState(false)
+  const [extractionMessage, setExtractionMessage] = useState('')
   
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -128,6 +130,40 @@ export default function Chat() {
     } catch (err: any) {
       console.error('Failed to delete session:', err)
       setError('Failed to delete chat session')
+    }
+  }
+
+  const extractMemoriesFromChat = async () => {
+    if (!currentSession) return
+
+    setIsExtractingMemories(true)
+    setExtractionMessage('')
+    
+    try {
+      const response = await chatApi.extractMemories(currentSession.session_id)
+      
+      if (response.data.success) {
+        setExtractionMessage(`✅ Successfully extracted ${response.data.count} memories from this chat`)
+        
+        // Clear the success message after 5 seconds
+        setTimeout(() => {
+          setExtractionMessage('')
+        }, 5000)
+      } else {
+        setExtractionMessage(`⚠️ ${response.data.message || 'Failed to extract memories'}`)
+      }
+    } catch (err: any) {
+      console.error('Failed to extract memories:', err)
+      setExtractionMessage('❌ Failed to extract memories from chat')
+    } finally {
+      setIsExtractingMemories(false)
+      
+      // Clear any error message after 5 seconds
+      setTimeout(() => {
+        if (extractionMessage.startsWith('❌') || extractionMessage.startsWith('⚠️')) {
+          setExtractionMessage('')
+        }
+      }, 5000)
     }
   }
 
@@ -334,6 +370,21 @@ export default function Chat() {
                   {currentSession.title}
                 </h2>
                 <div className="flex items-center space-x-2">
+                  {/* Remember from Chat Button */}
+                  <button
+                    onClick={extractMemoriesFromChat}
+                    disabled={isExtractingMemories}
+                    className="flex items-center space-x-2 px-3 py-1 rounded-full text-sm transition-colors bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50 disabled:opacity-50"
+                    title="Extract memories from this chat session"
+                  >
+                    {isExtractingMemories ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <BookOpen className="h-4 w-4" />
+                    )}
+                    <span>{isExtractingMemories ? 'Extracting...' : 'Remember from Chat'}</span>
+                  </button>
+
                   {memoryContext && memoryContext.memory_count > 0 && (
                     <button
                       onClick={() => setShowMemoryPanel(!showMemoryPanel)}
@@ -351,6 +402,17 @@ export default function Chat() {
                 </div>
               </div>
             </div>
+
+            {/* Memory Extraction Notification */}
+            {extractionMessage && (
+              <div className={`p-3 border-b border-gray-200 dark:border-gray-700 text-sm ${
+                extractionMessage.startsWith('✅') 
+                  ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300' 
+                  : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+              }`}>
+                {extractionMessage}
+              </div>
+            )}
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">

@@ -18,14 +18,14 @@ dependencies = [
     "aiohttp>=3.8.0",
     "fastapi-users[beanie]>=14.0.1",
     "PyYAML>=6.0.1",
+    "langfuse>=3.3.0",
+    "spacy>=3.8.2",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
 deepgram = [
     "deepgram-sdk>=4.0.0",
-]
-webui = [
-    "streamlit>=1.45.1",
 ]
 
 local-audio = [
@@ -47,6 +47,11 @@ line-length = 100
 
 [tool.uv.sources]
 mem0ai = { git = "https://github.com/AnkushMalaker/mem0.git", rev = "async-client-unbound-var-fix" }
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests",
+]
 
 [dependency-groups]
 dev = [
