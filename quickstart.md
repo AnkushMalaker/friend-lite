@@ -219,5 +219,5 @@ Before connecting your phone, make sure everything works:
 ## Need Help?
 
 - **Full Documentation**: [CLAUDE.md](CLAUDE.md) - Complete technical reference
-- **Architecture Details**: [docs/features.md](docs/features.md) - How everything works  
-- **Advanced Setup**: [docs/init-system.md](docs/init-system.md) - Power user options
+- **Architecture Details**: [Docs/features.md](Docs/features.md) - How everything works  
+- **Advanced Setup**: [Docs/init-system.md](Docs/init-system.md) - Power user options
