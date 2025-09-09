@@ -68,10 +68,12 @@
       [
         "./plugins/with-ws-fgs",
         {
+          "microphone": true,
           "android": {
             "permissions": [
               "FOREGROUND_SERVICE",
               "FOREGROUND_SERVICE_DATA_SYNC",
+              "FOREGROUND_SERVICE_MICROPHONE",
               "POST_NOTIFICATIONS"
             ]
           }
