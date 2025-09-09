@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Settings, RefreshCw, CheckCircle, XCircle, AlertCircle, Activity, Users, Database, Server, Volume2, Mic } from 'lucide-react'
 import { systemApi, speakerApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import MemorySettings from '../components/MemorySettings'
 
 interface HealthData {
   status: 'healthy' | 'partial' | 'unhealthy'
@@ -536,6 +537,9 @@ export default function System() {
 
         {/* Speaker Configuration */}
         <SpeakerConfiguration />
+
+        {/* Memory Configuration */}
+        <MemorySettings />
 
         {/* Active Clients */}
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">

@@ -966,3 +966,187 @@ async def get_speaker_service_status():
             "message": f"Health check failed: {str(e)}",
             "status": "error"
         }
+
+
+# Memory Configuration Management Functions
+
+async def get_memory_config_raw():
+    """Get current memory configuration YAML as plain text."""
+    try:
+        from advanced_omi_backend.memory_config_loader import get_config_loader
+        
+        config_loader = get_config_loader()
+        config_path = config_loader.config_path
+        
+        if not os.path.exists(config_path):
+            return JSONResponse(
+                status_code=404, content={"error": f"Memory config file not found: {config_path}"}
+            )
+        
+        with open(config_path, 'r') as file:
+            config_yaml = file.read()
+        
+        return {
+            "config_yaml": config_yaml,
+            "config_path": config_path,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error reading memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to read memory config: {str(e)}"}
+        )
+
+
+async def update_memory_config_raw(config_yaml: str):
+    """Update memory configuration YAML and hot reload."""
+    try:
+        import yaml
+        from advanced_omi_backend.memory_config_loader import get_config_loader
+        
+        # First validate YAML syntax
+        try:
+            yaml.safe_load(config_yaml)
+        except yaml.YAMLError as e:
+            return JSONResponse(
+                status_code=400, content={"error": f"Invalid YAML syntax: {str(e)}"}
+            )
+        
+        config_loader = get_config_loader()
+        config_path = config_loader.config_path
+        
+        # Create backup
+        backup_path = f"{config_path}.bak"
+        if os.path.exists(config_path):
+            shutil.copy2(config_path, backup_path)
+            logger.info(f"Created backup at {backup_path}")
+        
+        # Write new configuration
+        with open(config_path, 'w') as file:
+            file.write(config_yaml)
+        
+        # Hot reload configuration
+        reload_success = config_loader.reload_config()
+        
+        if reload_success:
+            logger.info("Memory configuration updated and reloaded successfully")
+            return {
+                "message": "Memory configuration updated and reloaded successfully",
+                "config_path": config_path,
+                "backup_created": os.path.exists(backup_path),
+                "status": "success"
+            }
+        else:
+            return JSONResponse(
+                status_code=500, content={"error": "Configuration saved but reload failed"}
+            )
+        
+    except Exception as e:
+        logger.error(f"Error updating memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to update memory config: {str(e)}"}
+        )
+
+
+async def validate_memory_config(config_yaml: str):
+    """Validate memory configuration YAML syntax."""
+    try:
+        import yaml
+        from advanced_omi_backend.memory_config_loader import MemoryConfigLoader
+        
+        # Parse YAML
+        try:
+            parsed_config = yaml.safe_load(config_yaml)
+            if not parsed_config:
+                return JSONResponse(
+                    status_code=400, content={"error": "Configuration file is empty"}
+                )
+        except yaml.YAMLError as e:
+            return JSONResponse(
+                status_code=400, content={"error": f"Invalid YAML syntax: {str(e)}"}
+            )
+        
+        # Create a temporary config loader to validate structure
+        try:
+            # Create a temporary file for validation
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp_file:
+                tmp_file.write(config_yaml)
+                tmp_path = tmp_file.name
+            
+            # Try to load with MemoryConfigLoader to validate structure
+            temp_loader = MemoryConfigLoader(tmp_path)
+            temp_loader.validate_config()
+            
+            # Clean up temp file
+            os.unlink(tmp_path)
+            
+            return {
+                "message": "Configuration is valid",
+                "status": "success"
+            }
+            
+        except ValueError as e:
+            return JSONResponse(
+                status_code=400, content={"error": f"Configuration validation failed: {str(e)}"}
+            )
+        
+    except Exception as e:
+        logger.error(f"Error validating memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to validate memory config: {str(e)}"}
+        )
+
+
+async def reload_memory_config():
+    """Reload memory configuration from file."""
+    try:
+        from advanced_omi_backend.memory_config_loader import get_config_loader
+        
+        config_loader = get_config_loader()
+        reload_success = config_loader.reload_config()
+        
+        if reload_success:
+            logger.info("Memory configuration reloaded successfully")
+            return {
+                "message": "Memory configuration reloaded successfully",
+                "config_path": config_loader.config_path,
+                "status": "success"
+            }
+        else:
+            return JSONResponse(
+                status_code=500, content={"error": "Failed to reload memory configuration"}
+            )
+        
+    except Exception as e:
+        logger.error(f"Error reloading memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to reload memory config: {str(e)}"}
+        )
+
+
+async def delete_all_user_memories(user: User):
+    """Delete all memories for the current user."""
+    try:
+        from advanced_omi_backend.memory import get_memory_service
+        
+        memory_service = get_memory_service()
+        
+        # Delete all memories for the user
+        deleted_count = await memory_service.delete_all_user_memories(user.user_id)
+        
+        logger.info(f"Deleted {deleted_count} memories for user {user.user_id}")
+        
+        return {
+            "message": f"Successfully deleted {deleted_count} memories",
+            "deleted_count": deleted_count,
+            "user_id": user.user_id,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting all memories for user {user.user_id}: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to delete memories: {str(e)}"}
+        )
