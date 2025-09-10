@@ -264,6 +264,7 @@ async def process_audio_files(
                         audio_item = AudioProcessingItem(
                             client_id=client_id,
                             user_id=user.user_id,
+                            user_email=user.email,
                             audio_chunk=chunk,
                             timestamp=chunk.timestamp,
                         )
@@ -637,6 +638,7 @@ async def process_files_with_content(
                         audio_item = AudioProcessingItem(
                             client_id=client_id,
                             user_id=user.user_id,
+                            user_email=user.email,
                             audio_chunk=chunk,
                             timestamp=chunk.timestamp,
                         )
