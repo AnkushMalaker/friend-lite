@@ -884,6 +884,11 @@ async def save_diarization_settings(settings: dict):
                     return JSONResponse(
                         status_code=400, content={"error": f"Invalid value for {key}: must be integer 1-20"}
                     )
+            elif key == "diarization_source":
+                if not isinstance(value, str) or not value:
+                    return JSONResponse(
+                        status_code=400, content={"error": f"Invalid value for {key}: must be a non-empty string"}
+                    )
             else:
                 if not isinstance(value, (int, float)) or value < 0:
                     return JSONResponse(
