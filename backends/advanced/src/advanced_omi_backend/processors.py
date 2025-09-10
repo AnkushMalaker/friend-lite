@@ -46,6 +46,7 @@ class AudioProcessingItem:
 
     client_id: str
     user_id: str
+    user_email: str
     audio_chunk: AudioChunk
     audio_uuid: Optional[str] = None
     timestamp: Optional[int] = None
@@ -658,6 +659,8 @@ class ProcessorManager:
                                 audio_path=wav_filename,
                                 client_id=item.client_id,
                                 timestamp=timestamp,
+                                user_id=item.user_id,
+                                user_email=item.user_email,
                             )
 
                             # Notify client state about new audio UUID
