@@ -128,3 +128,41 @@ async def get_enrolled_speakers(current_user: User = Depends(current_active_user
 async def get_speaker_service_status(current_user: User = Depends(current_superuser)):
     """Check speaker recognition service health status. Admin only."""
     return await system_controller.get_speaker_service_status()
+
+
+# Memory Configuration Management Endpoints
+
+@router.get("/admin/memory/config/raw")
+async def get_memory_config_raw(current_user: User = Depends(current_superuser)):
+    """Get current memory configuration YAML as plain text. Admin only."""
+    return await system_controller.get_memory_config_raw()
+
+
+@router.post("/admin/memory/config/raw")
+async def update_memory_config_raw(
+    config_yaml: str,
+    current_user: User = Depends(current_superuser)
+):
+    """Update memory configuration YAML and hot reload. Admin only."""
+    return await system_controller.update_memory_config_raw(config_yaml)
+
+
+@router.post("/admin/memory/config/validate")
+async def validate_memory_config(
+    config_yaml: str,
+    current_user: User = Depends(current_superuser)
+):
+    """Validate memory configuration YAML syntax. Admin only."""
+    return await system_controller.validate_memory_config(config_yaml)
+
+
+@router.post("/admin/memory/config/reload")
+async def reload_memory_config(current_user: User = Depends(current_superuser)):
+    """Reload memory configuration from file. Admin only."""
+    return await system_controller.reload_memory_config()
+
+
+@router.delete("/admin/memory/delete-all")
+async def delete_all_user_memories(current_user: User = Depends(current_active_user)):
+    """Delete all memories for the current user."""
+    return await system_controller.delete_all_user_memories(current_user)
