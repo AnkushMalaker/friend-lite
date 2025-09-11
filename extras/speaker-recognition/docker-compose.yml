@@ -44,6 +44,10 @@ services:
   speaker-service-gpu:
     <<: *base-speaker-service
     profiles: ["gpu"]
+    networks:
+      default:
+        aliases:
+          - speaker-service
     build:
       context: .
       dockerfile: Dockerfile
