@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Settings, RefreshCw, CheckCircle, XCircle, AlertCircle, Activity, Users, Database, Server, Volume2, Mic } from 'lucide-react'
 import { systemApi, speakerApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import MemorySettings from '../components/MemorySettings'
 
 interface HealthData {
   status: 'healthy' | 'partial' | 'unhealthy'
@@ -599,6 +600,11 @@ export default function System() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Memory Configuration - Full Width Section */}
+      <div className="mt-6">
+        <MemorySettings />
       </div>
 
       {/* Raw Data (Debug) */}
