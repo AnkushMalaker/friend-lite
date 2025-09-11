@@ -51,6 +51,8 @@ class AudioChunksRepository:
         audio_path,
         client_id,
         timestamp,
+        user_id=None,
+        user_email=None,
         transcript=None,
         speakers_identified=None,
         memories=None,
@@ -62,6 +64,8 @@ class AudioChunksRepository:
             "audio_path": audio_path,
             "client_id": client_id,
             "timestamp": timestamp,
+            "user_id": user_id,
+            "user_email": user_email,
             "transcript": transcript or [],  # List of conversation segments
             "speakers_identified": speakers_identified or [],  # List of identified speakers
             "memories": memories or [],  # List of memory references created from this audio

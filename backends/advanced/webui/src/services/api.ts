@@ -89,6 +89,7 @@ export const memoriesApi = {
       } 
     }),
   delete: (id: string) => api.delete(`/api/memories/${id}`),
+  deleteAll: () => api.delete('/api/admin/memory/delete-all'),
 }
 
 export const usersApi = {
@@ -107,6 +108,18 @@ export const systemApi = {
   getActiveClients: () => api.get('/api/clients/active'),
   getDiarizationSettings: () => api.get('/api/diarization-settings'),
   saveDiarizationSettings: (settings: any) => api.post('/api/diarization-settings', settings),
+  
+  // Memory Configuration Management
+  getMemoryConfigRaw: () => api.get('/api/admin/memory/config/raw'),
+  updateMemoryConfigRaw: (configYaml: string) => 
+    api.post('/api/admin/memory/config/raw', configYaml, {
+      headers: { 'Content-Type': 'text/plain' }
+    }),
+  validateMemoryConfig: (configYaml: string) => 
+    api.post('/api/admin/memory/config/validate', configYaml, {
+      headers: { 'Content-Type': 'text/plain' }
+    }),
+  reloadMemoryConfig: () => api.post('/api/admin/memory/config/reload'),
 }
 
 export const uploadApi = {

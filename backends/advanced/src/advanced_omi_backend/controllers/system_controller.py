@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.client_manager import generate_client_id
+from advanced_omi_backend.config import load_diarization_settings_from_file, save_diarization_settings_to_file
 from advanced_omi_backend.database import chunks_col
 from advanced_omi_backend.job_tracker import FileStatus, JobStatus, get_job_tracker
 from advanced_omi_backend.processors import AudioProcessingItem, get_processor_manager
@@ -263,6 +264,7 @@ async def process_audio_files(
                         audio_item = AudioProcessingItem(
                             client_id=client_id,
                             user_id=user.user_id,
+                            user_email=user.email,
                             audio_chunk=chunk,
                             timestamp=chunk.timestamp,
                         )
@@ -636,6 +638,7 @@ async def process_files_with_content(
                         audio_item = AudioProcessingItem(
                             client_id=client_id,
                             user_id=user.user_id,
+                            user_email=user.email,
                             audio_chunk=chunk,
                             timestamp=chunk.timestamp,
                         )
@@ -748,103 +751,7 @@ async def process_files_with_content(
         await job_tracker.update_job_status(job_id, JobStatus.FAILED, error_msg)
 
 
-# Default diarization settings
-DEFAULT_DIARIZATION_SETTINGS = {
-    "diarization_source": "pyannote",
-    "similarity_threshold": 0.15,
-    "min_duration": 0.5,
-    "collar": 2.0,
-    "min_duration_off": 1.5,
-    "min_speakers": 2,
-    "max_speakers": 6
-}
-
-# Global cache for diarization settings
-_diarization_settings = None
-
-
-def get_diarization_config_path():
-    """Get the path to the diarization config file."""
-    # Try different locations in order of preference
-    # 1. Data directory (for persistence across container restarts)
-    data_path = Path("/app/data/diarization_config.json")
-    if data_path.parent.exists():
-        return data_path
-    
-    # 2. App root directory
-    app_path = Path("/app/diarization_config.json")
-    if app_path.parent.exists():
-        return app_path
-    
-    # 3. Local development path
-    local_path = Path("diarization_config.json")
-    return local_path
-
-
-def load_diarization_settings_from_file():
-    """Load diarization settings from file or create from template."""
-    global _diarization_settings
-    
-    config_path = get_diarization_config_path()
-    template_path = Path("/app/diarization_config.json.template")
-    
-    # If no template, try local development path
-    if not template_path.exists():
-        template_path = Path("diarization_config.json.template")
-    
-    # If config doesn't exist, try to copy from template
-    if not config_path.exists():
-        if template_path.exists():
-            try:
-                # Ensure parent directory exists
-                config_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(template_path, config_path)
-                logger.info(f"Created diarization config from template at {config_path}")
-            except Exception as e:
-                logger.warning(f"Could not copy template to {config_path}: {e}")
-    
-    # Load from file if it exists
-    if config_path.exists():
-        try:
-            with open(config_path, 'r') as f:
-                _diarization_settings = json.load(f)
-                logger.info(f"Loaded diarization settings from {config_path}")
-                return _diarization_settings
-        except Exception as e:
-            logger.error(f"Error loading diarization settings from {config_path}: {e}")
-    
-    # Fall back to defaults
-    _diarization_settings = DEFAULT_DIARIZATION_SETTINGS.copy()
-    logger.info("Using default diarization settings")
-    return _diarization_settings
-
-
-def save_diarization_settings_to_file(settings):
-    """Save diarization settings to file."""
-    global _diarization_settings
-    
-    config_path = get_diarization_config_path()
-    
-    try:
-        # Ensure parent directory exists
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Write settings to file
-        with open(config_path, 'w') as f:
-            json.dump(settings, f, indent=2)
-        
-        # Update cache
-        _diarization_settings = settings
-        
-        logger.info(f"Saved diarization settings to {config_path}")
-        return True
-    except Exception as e:
-        logger.error(f"Error saving diarization settings to {config_path}: {e}")
-        return False
-
-
-# Initialize settings on module load
-_diarization_settings = load_diarization_settings_from_file()
+# Configuration functions moved to config.py to avoid circular imports
 
 
 async def get_diarization_settings():
@@ -885,9 +792,9 @@ async def save_diarization_settings(settings: dict):
                         status_code=400, content={"error": f"Invalid value for {key}: must be integer 1-20"}
                     )
             elif key == "diarization_source":
-                if not isinstance(value, str) or not value:
+                if not isinstance(value, str) or value not in ["pyannote", "deepgram"]:
                     return JSONResponse(
-                        status_code=400, content={"error": f"Invalid value for {key}: must be a non-empty string"}
+                        status_code=400, content={"error": f"Invalid value for {key}: must be 'pyannote' or 'deepgram'"}
                     )
             else:
                 if not isinstance(value, (int, float)) or value < 0:
@@ -895,20 +802,17 @@ async def save_diarization_settings(settings: dict):
                         status_code=400, content={"error": f"Invalid value for {key}: must be positive number"}
                     )
         
-        # Update global settings with new values
-        global _diarization_settings
-        if _diarization_settings is None:
-            _diarization_settings = DEFAULT_DIARIZATION_SETTINGS.copy()
-        
-        _diarization_settings.update(settings)
+        # Get current settings and merge with new values
+        current_settings = load_diarization_settings_from_file()
+        current_settings.update(settings)
         
         # Save to file
-        if save_diarization_settings_to_file(_diarization_settings):
+        if save_diarization_settings_to_file(current_settings):
             logger.info(f"Updated and saved diarization settings: {settings}")
             
             return {
                 "message": "Diarization settings saved successfully",
-                "settings": _diarization_settings,
+                "settings": current_settings,
                 "status": "success"
             }
         else:
@@ -916,7 +820,7 @@ async def save_diarization_settings(settings: dict):
             logger.warning("Settings updated in memory but file save failed")
             return {
                 "message": "Settings updated (file save failed)",
-                "settings": _diarization_settings,
+                "settings": current_settings,
                 "status": "partial"
             }
         
@@ -1064,3 +968,187 @@ async def get_speaker_service_status():
             "message": f"Health check failed: {str(e)}",
             "status": "error"
         }
+
+
+# Memory Configuration Management Functions
+
+async def get_memory_config_raw():
+    """Get current memory configuration YAML as plain text."""
+    try:
+        from advanced_omi_backend.memory_config_loader import get_config_loader
+        
+        config_loader = get_config_loader()
+        config_path = config_loader.config_path
+        
+        if not os.path.exists(config_path):
+            return JSONResponse(
+                status_code=404, content={"error": f"Memory config file not found: {config_path}"}
+            )
+        
+        with open(config_path, 'r') as file:
+            config_yaml = file.read()
+        
+        return {
+            "config_yaml": config_yaml,
+            "config_path": config_path,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error reading memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to read memory config: {str(e)}"}
+        )
+
+
+async def update_memory_config_raw(config_yaml: str):
+    """Update memory configuration YAML and hot reload."""
+    try:
+        import yaml
+        from advanced_omi_backend.memory_config_loader import get_config_loader
+        
+        # First validate YAML syntax
+        try:
+            yaml.safe_load(config_yaml)
+        except yaml.YAMLError as e:
+            return JSONResponse(
+                status_code=400, content={"error": f"Invalid YAML syntax: {str(e)}"}
+            )
+        
+        config_loader = get_config_loader()
+        config_path = config_loader.config_path
+        
+        # Create backup
+        backup_path = f"{config_path}.bak"
+        if os.path.exists(config_path):
+            shutil.copy2(config_path, backup_path)
+            logger.info(f"Created backup at {backup_path}")
+        
+        # Write new configuration
+        with open(config_path, 'w') as file:
+            file.write(config_yaml)
+        
+        # Hot reload configuration
+        reload_success = config_loader.reload_config()
+        
+        if reload_success:
+            logger.info("Memory configuration updated and reloaded successfully")
+            return {
+                "message": "Memory configuration updated and reloaded successfully",
+                "config_path": config_path,
+                "backup_created": os.path.exists(backup_path),
+                "status": "success"
+            }
+        else:
+            return JSONResponse(
+                status_code=500, content={"error": "Configuration saved but reload failed"}
+            )
+        
+    except Exception as e:
+        logger.error(f"Error updating memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to update memory config: {str(e)}"}
+        )
+
+
+async def validate_memory_config(config_yaml: str):
+    """Validate memory configuration YAML syntax."""
+    try:
+        import yaml
+        from advanced_omi_backend.memory_config_loader import MemoryConfigLoader
+        
+        # Parse YAML
+        try:
+            parsed_config = yaml.safe_load(config_yaml)
+            if not parsed_config:
+                return JSONResponse(
+                    status_code=400, content={"error": "Configuration file is empty"}
+                )
+        except yaml.YAMLError as e:
+            return JSONResponse(
+                status_code=400, content={"error": f"Invalid YAML syntax: {str(e)}"}
+            )
+        
+        # Create a temporary config loader to validate structure
+        try:
+            # Create a temporary file for validation
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp_file:
+                tmp_file.write(config_yaml)
+                tmp_path = tmp_file.name
+            
+            # Try to load with MemoryConfigLoader to validate structure
+            temp_loader = MemoryConfigLoader(tmp_path)
+            temp_loader.validate_config()
+            
+            # Clean up temp file
+            os.unlink(tmp_path)
+            
+            return {
+                "message": "Configuration is valid",
+                "status": "success"
+            }
+            
+        except ValueError as e:
+            return JSONResponse(
+                status_code=400, content={"error": f"Configuration validation failed: {str(e)}"}
+            )
+        
+    except Exception as e:
+        logger.error(f"Error validating memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to validate memory config: {str(e)}"}
+        )
+
+
+async def reload_memory_config():
+    """Reload memory configuration from file."""
+    try:
+        from advanced_omi_backend.memory_config_loader import get_config_loader
+        
+        config_loader = get_config_loader()
+        reload_success = config_loader.reload_config()
+        
+        if reload_success:
+            logger.info("Memory configuration reloaded successfully")
+            return {
+                "message": "Memory configuration reloaded successfully",
+                "config_path": config_loader.config_path,
+                "status": "success"
+            }
+        else:
+            return JSONResponse(
+                status_code=500, content={"error": "Failed to reload memory configuration"}
+            )
+        
+    except Exception as e:
+        logger.error(f"Error reloading memory config: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to reload memory config: {str(e)}"}
+        )
+
+
+async def delete_all_user_memories(user: User):
+    """Delete all memories for the current user."""
+    try:
+        from advanced_omi_backend.memory import get_memory_service
+        
+        memory_service = get_memory_service()
+        
+        # Delete all memories for the user
+        deleted_count = await memory_service.delete_all_user_memories(user.user_id)
+        
+        logger.info(f"Deleted {deleted_count} memories for user {user.user_id}")
+        
+        return {
+            "message": f"Successfully deleted {deleted_count} memories",
+            "deleted_count": deleted_count,
+            "user_id": user.user_id,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting all memories for user {user.user_id}: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to delete memories: {str(e)}"}
+        )

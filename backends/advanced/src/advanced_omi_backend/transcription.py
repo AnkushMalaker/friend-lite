@@ -7,12 +7,14 @@ from typing import Optional
 from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.client_manager import get_client_manager
+from advanced_omi_backend.conversation_repository import get_conversation_repository
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
     get_transcription_provider,
 )
+from advanced_omi_backend.config import load_diarization_settings_from_file
 
 # ASR Configuration
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")  # Optional: 'deepgram' or 'parakeet'
@@ -117,7 +119,18 @@ class TranscriptionManager:
                 logger.warning("No audio data or sample rate available for transcription")
                 return None
 
-            return await self.provider.transcribe(combined_audio, sample_rate)
+            # Check if we should request diarization based on configuration
+            config = load_diarization_settings_from_file()
+            diarization_source = config.get("diarization_source", "pyannote")
+            
+            # Request diarization if using Deepgram as diarization source
+            should_diarize = (diarization_source == "deepgram" and 
+                            self.provider.name in ["Deepgram", "Deepgram-Streaming"])
+            
+            if should_diarize:
+                logger.info(f"Requesting diarization from {self.provider.name} (diarization_source=deepgram)")
+            
+            return await self.provider.transcribe(combined_audio, sample_rate, diarize=should_diarize)
 
         except Exception as e:
             logger.error(f"Error getting transcript from {self.provider.name}: {e}")
@@ -337,27 +350,28 @@ class TranscriptionManager:
         This is data-driven - no event coordination needed since we know transcript is ready.
         """
         try:
-            # Get current client for user info
-            current_client = self._get_current_client()
-            if not current_client:
+            # Get user info from persistent conversation data instead of ephemeral client state
+            conversation_repo = get_conversation_repository()
+            conversation = await conversation_repo.get_conversation(self._current_audio_uuid)
+            if not conversation:
                 logger.warning(
-                    f"No client state available for memory processing {self._current_audio_uuid}"
+                    f"No conversation found for memory processing {self._current_audio_uuid}"
                 )
                 return
 
             # Check if we have required data
             if not all(
-                [self._current_audio_uuid, current_client.user_id, current_client.user_email]
+                [self._current_audio_uuid, conversation.get("user_id"), conversation.get("user_email")]
             ):
                 logger.warning(
                     f"Memory processing skipped - missing required data for {self._current_audio_uuid}"
                 )
                 logger.warning(f"    - audio_uuid: {bool(self._current_audio_uuid)}")
                 logger.warning(
-                    f"    - user_id: {bool(current_client.user_id) if current_client else False}"
+                    f"    - user_id: {bool(conversation.get('user_id'))}"
                 )
                 logger.warning(
-                    f"    - user_email: {bool(current_client.user_email) if current_client else False}"
+                    f"    - user_email: {bool(conversation.get('user_email'))}"
                 )
                 return
 
@@ -376,8 +390,8 @@ class TranscriptionManager:
             await processor_manager.queue_memory(
                 MemoryProcessingItem(
                     client_id=self._client_id,
-                    user_id=current_client.user_id,
-                    user_email=current_client.user_email,
+                    user_id=conversation["user_id"],
+                    user_email=conversation["user_email"],
                     audio_uuid=self._current_audio_uuid,
                 )
             )

@@ -602,6 +602,7 @@ async def ws_endpoint_omi(
                         AudioProcessingItem(
                             client_id=client_id,
                             user_id=user.user_id,
+                            user_email=user.email,
                             audio_chunk=chunk,
                             timestamp=chunk.timestamp,
                         )
@@ -843,6 +844,7 @@ async def ws_endpoint_pcm(
                                                 AudioProcessingItem(
                                                     client_id=client_id,
                                                     user_id=user.user_id,
+                                                    user_email=user.email,
                                                     audio_chunk=chunk,
                                                     timestamp=chunk.timestamp,
                                                 )
@@ -882,6 +884,7 @@ async def ws_endpoint_pcm(
                                 AudioProcessingItem(
                                     client_id=client_id,
                                     user_id=user.user_id,
+                                    user_email=user.email,
                                     audio_chunk=chunk,
                                     timestamp=chunk.timestamp,
                                 )
