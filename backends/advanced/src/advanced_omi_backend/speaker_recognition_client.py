@@ -63,7 +63,7 @@ class SpeakerRecognitionClient:
             logger.info(f"Diarizing, identifying, and matching words for {audio_path}")
 
             # Read diarization source from existing config system
-            from advanced_omi_backend.controllers.system_controller import load_diarization_settings_from_file
+            from advanced_omi_backend.config import load_diarization_settings_from_file
             config = load_diarization_settings_from_file()
             diarization_source = config.get("diarization_source", "pyannote")
             
@@ -78,54 +78,42 @@ class SpeakerRecognitionClient:
                     )
                     
                     if diarization_source == "deepgram":
-                        # DEEPGRAM PATH: Use /v1/listen with structured config
-                        logger.info("Using Deepgram diarization path")
+                        # DEEPGRAM DIARIZATION PATH: We EXPECT transcript has speaker info from Deepgram
+                        # Only need speaker identification of existing segments
+                        logger.info("Using Deepgram diarization path - transcript should have speaker segments, identifying speakers")
                         
-                        # Structure config for Deepgram diarization
-                        diarization_config = {"diarization": {"provider": "deepgram"}}
+                        # TODO: Implement proper speaker identification for Deepgram segments
+                        # For now, use diarize-identify-match as fallback until we implement segment identification
+                        logger.warning("Deepgram segment identification not yet implemented, using diarize-identify-match as fallback")
                         
-                        # Log warning if pyannote params provided
-                        pyannote_params = ["min_speakers", "max_speakers", "collar", "min_duration_off"]
-                        provided_params = [p for p in pyannote_params if config.get(p) is not None]
-                        if provided_params:
-                            logger.warning("Ignoring pyannote parameters for Deepgram diarization: %s", provided_params)
-                        
-                        # Add structured diarization config
-                        form_data.add_field("diarization_config", json.dumps(diarization_config))
-                        
-                        # Add speaker identification params
-                        form_data.add_field("enhance_speakers", "true")
+                        form_data.add_field("transcript_data", json.dumps(transcript_data))
                         form_data.add_field("user_id", "1")  # TODO: Implement proper user mapping
-                        form_data.add_field("speaker_confidence_threshold", str(config.get("similarity_threshold", 0.15)))
+                        form_data.add_field("similarity_threshold", str(config.get("similarity_threshold", 0.15)))
+                        form_data.add_field("min_duration", str(config.get("min_duration", 0.5)))
                         
-                        # Use /v1/listen endpoint
-                        endpoint = "/v1/listen"
+                        # Use /v1/diarize-identify-match endpoint as fallback
+                        endpoint = "/v1/diarize-identify-match"
                         
                     else:  # pyannote (default)
-                        # PYANNOTE PATH: Use /v1/listen with structured config including pyannote parameters
-                        logger.info("Using Pyannote diarization path")
+                        # PYANNOTE PATH: Backend has transcript, need diarization + speaker identification
+                        logger.info("Using Pyannote path - diarizing backend transcript and identifying speakers")
                         
-                        # Structure config for Pyannote diarization  
-                        diarization_config = {
-                            "diarization": {
-                                "provider": "pyannote",
-                                "min_speakers": config.get("min_speakers"),
-                                "max_speakers": config.get("max_speakers"),
-                                "collar": config.get("collar", 2.0),
-                                "min_duration_off": config.get("min_duration_off", 1.5)
-                            }
-                        }
-                        
-                        # Add structured diarization config
-                        form_data.add_field("diarization_config", json.dumps(diarization_config))
-                        
-                        # Add speaker identification params
-                        form_data.add_field("enhance_speakers", "true")
+                        # Send existing transcript for diarization and speaker matching
+                        form_data.add_field("transcript_data", json.dumps(transcript_data))
                         form_data.add_field("user_id", "1")  # TODO: Implement proper user mapping
-                        form_data.add_field("speaker_confidence_threshold", str(config.get("similarity_threshold", 0.15)))
+                        form_data.add_field("similarity_threshold", str(config.get("similarity_threshold", 0.15)))
                         
-                        # Use /v1/listen endpoint (now supports both providers)
-                        endpoint = "/v1/listen"
+                        # Add pyannote diarization parameters
+                        form_data.add_field("min_duration", str(config.get("min_duration", 0.5)))
+                        form_data.add_field("collar", str(config.get("collar", 2.0)))
+                        form_data.add_field("min_duration_off", str(config.get("min_duration_off", 1.5)))
+                        if config.get("min_speakers"):
+                            form_data.add_field("min_speakers", str(config.get("min_speakers")))
+                        if config.get("max_speakers"):
+                            form_data.add_field("max_speakers", str(config.get("max_speakers")))
+                        
+                        # Use /v1/diarize-identify-match endpoint for backend integration
+                        endpoint = "/v1/diarize-identify-match"
 
                     # Make the request to the consolidated endpoint
                     async with session.post(

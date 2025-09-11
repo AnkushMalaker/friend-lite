@@ -8,10 +8,12 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+import os
 
 from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
+from dotenv import dotenv_values
 
 console = Console()
 
@@ -68,16 +70,46 @@ def run_compose_command(service_name, command, build=False):
         return False
     
     cmd = ['docker', 'compose']
-    if command == 'up':
-        cmd.extend(['up', '-d'])
-        if build:
-            cmd.append('--build')
-    elif command == 'down':
-        cmd.extend(['down'])
-    elif command == 'restart':
-        cmd.extend(['restart'])
-    elif command == 'status':
-        cmd.extend(['ps'])
+    
+    # Handle speaker-recognition service specially
+    if service_name == 'speaker-recognition' and command == 'up':
+        # Read configuration to determine how to start
+        env_file = service_path / '.env'
+        if env_file.exists():
+            env_values = dotenv_values(env_file)
+            compute_mode = env_values.get('COMPUTE_MODE', 'cpu')
+            https_enabled = env_values.get('REACT_UI_HTTPS', 'false')
+            
+            if https_enabled.lower() == 'true':
+                # HTTPS mode: start with profile for all services (includes nginx)
+                if compute_mode == 'gpu':
+                    cmd.extend(['--profile', 'gpu'])
+                else:
+                    cmd.extend(['--profile', 'cpu'])
+                cmd.extend(['up', '-d'])
+            else:
+                # HTTP mode: start specific services with profile (no nginx)
+                if compute_mode == 'gpu':
+                    cmd.extend(['--profile', 'gpu'])
+                else:
+                    cmd.extend(['--profile', 'cpu'])
+                cmd.extend(['up', '-d', 'speaker-service-gpu' if compute_mode == 'gpu' else 'speaker-service-cpu', 'web-ui'])
+        else:
+            # Fallback: just start base service
+            cmd.extend(['up', '-d'])
+    else:
+        # Standard compose commands for other services
+        if command == 'up':
+            cmd.extend(['up', '-d'])
+        elif command == 'down':
+            cmd.extend(['down'])
+        elif command == 'restart':
+            cmd.extend(['restart'])
+        elif command == 'status':
+            cmd.extend(['ps'])
+    
+    if command == 'up' and build:
+        cmd.append('--build')
     
     try:
         # For commands that need real-time output (build), stream to console
