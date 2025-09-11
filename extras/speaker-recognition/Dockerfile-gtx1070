@@ -16,20 +16,22 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # Copy dependency files first (for better caching)
-# Copy dependency files first (for better caching)
 COPY pyproject.toml uv.lock ./
 
-# Copy source code
-COPY src/ src/
-
-# Install dependencies
+# Install dependencies BEFORE copying source code (for better layer caching)
 ARG COMPUTE_MODE=gpu
 RUN uv pip install --system setuptools wheel && \
 if [ "$COMPUTE_MODE" = "gpu" ]; then \
-    uv pip install --system --group gpu .; \
+    uv pip install --system --group gpu; \
 else \
-    uv pip install --system --group cpu .; \
+    uv pip install --system --group cpu; \
 fi
+
+# Copy source code AFTER dependencies are installed
+COPY src/ src/
+
+# Install the package in editable mode
+RUN uv pip install --system -e .
 
 # Ensure numpy 1.x is available (PyAnnote requires NumPy 1.x, not 2.x)
 RUN uv pip install --system "numpy<2"
@@ -48,6 +50,10 @@ ENV HF_HOME=/models
 ENV PYTHONPATH=/app
 ENV CUDA_VISIBLE_DEVICES=0
 ENV TORCH_CUDA_ARCH_LIST="6.1"
+
+# Pre-download models using cache mount (only downloads if not already cached)
+RUN --mount=type=cache,target=/models \
+    python -c "import os; os.environ['HF_HOME'] = '/models'; from pyannote.audio import Pipeline; from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding; Pipeline.from_pretrained('pyannote/speaker-diarization-3.1'); PretrainedSpeakerEmbedding('pyannote/wespeaker-voxceleb-resnet34-LM'); print('Models downloaded successfully')" || true
 
 # Expose port
 EXPOSE 8085

@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     host: '0.0.0.0',
     allowedHosts: process.env.VITE_ALLOWED_HOSTS 
-      ? process.env.VITE_ALLOWED_HOSTS.split(',').map(host => host.trim())
+      ? process.env.VITE_ALLOWED_HOSTS.split(' ').map(host => host.trim()).filter(host => host.length > 0)
       : [
           'localhost',
           '127.0.0.1',

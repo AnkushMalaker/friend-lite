@@ -13,9 +13,9 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Accept build argument for backend URL
-ARG VITE_BACKEND_URL
-ENV VITE_BACKEND_URL=${VITE_BACKEND_URL}
+# Accept build arguments
+ARG VITE_ALLOWED_HOSTS
+ENV VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS}
 
 # Build the application
 RUN npm run build

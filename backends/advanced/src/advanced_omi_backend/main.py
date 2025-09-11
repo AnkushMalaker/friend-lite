@@ -1282,7 +1282,20 @@ async def health_check():
 @app.get("/readiness")
 async def readiness_check():
     """Simple readiness check for container orchestration."""
-    return JSONResponse(content={"status": "ready", "timestamp": int(time.time())}, status_code=200)
+    # Use debug level for health check to reduce log spam
+    logger.debug("Readiness check requested")
+    
+    # Only check critical services for readiness
+    try:
+        # Quick MongoDB ping to ensure we can serve requests
+        await asyncio.wait_for(mongo_client.admin.command("ping"), timeout=2.0)
+        return JSONResponse(content={"status": "ready", "timestamp": int(time.time())}, status_code=200)
+    except Exception as e:
+        logger.error(f"Readiness check failed: {e}")
+        return JSONResponse(
+            content={"status": "not_ready", "error": str(e), "timestamp": int(time.time())}, 
+            status_code=503
+        )
 
 
 if __name__ == "__main__":

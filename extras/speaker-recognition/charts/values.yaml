@@ -25,7 +25,7 @@ speaker:
       enabled: true
       size: 1Gi
     debug:
-      enabled: true
+      enabled: false
       size: 1Gi
     speakerData:
       enabled: true
@@ -51,9 +51,17 @@ webui:
       memory: "512Mi"
       cpu: "500m"
   env:
-    REACT_UI_HOST: "0.0.0.0"
-    REACT_UI_PORT: "5173"
-    REACT_UI_HTTPS: "false"
+    # Environment variables are set by Skaffold setValueTemplates
+    # REACT_UI_HOST: set by skaffold
+    # REACT_UI_PORT: set by skaffold  
+    # REACT_UI_HTTPS: set by skaffold
+    # VITE_ALLOWED_HOSTS: set by skaffold
+    # WEBUI_CORS_ORIGIN: set by skaffold
+
+# Ingress configuration
+ingress:
+  # host: {{ .env.SPEAKER_SERVICE_HOST }}
+  enabled: true
 
 # Global shared configuration
 global:

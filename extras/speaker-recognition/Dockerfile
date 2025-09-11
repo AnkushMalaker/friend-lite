@@ -38,6 +38,10 @@ RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
 ENV HF_HOME=/models
 ENV PYTHONPATH=/app
 
+# Pre-download models using cache mount (only downloads if not already cached)
+RUN --mount=type=cache,target=/models \
+    python -c "import os; os.environ['HF_HOME'] = '/models'; from pyannote.audio import Pipeline; from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding; Pipeline.from_pretrained('pyannote/speaker-diarization-3.1'); PretrainedSpeakerEmbedding('pyannote/wespeaker-voxceleb-resnet34-LM'); print('Models downloaded successfully')" || true
+
 # Expose port
 EXPOSE 8085
 
