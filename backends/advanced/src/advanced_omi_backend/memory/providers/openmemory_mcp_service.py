@@ -42,10 +42,10 @@ class OpenMemoryMCPService(MemoryServiceBase):
     
     def __init__(
         self, 
-        server_url: str = os.getenv("OPENMEMORY_MCP_URL", "http://localhost:8765"),
-        client_name: str =  os.getenv("OPENMEMORY_CLIENT_NAME", "friend_lite"),
-        user_id: str = os.getenv("OPENMEMORY_USER_ID", "default"),
-        timeout: int = int(os.getenv("OPENMEMORY_TIMEOUT", "30"))
+        server_url: Optional[str] = None,
+        client_name: Optional[str] = None,
+        user_id: Optional[str] = None,
+        timeout: Optional[int] = None
     ):
         """Initialize OpenMemory MCP service as a thin client.
         
@@ -56,15 +56,20 @@ class OpenMemoryMCPService(MemoryServiceBase):
         - User isolation via ACL (OpenMemory handles internally)
         
         Args:
-            server_url: URL of the OpenMemory MCP server (default: http://localhost:8765)
-            client_name: Client identifier for OpenMemory MCP
-            user_id: User identifier for memory isolation via OpenMemory ACL
-            timeout: HTTP request timeout in seconds
+            server_url: URL of the OpenMemory MCP server (default: from OPENMEMORY_MCP_URL env var)
+            client_name: Client identifier for OpenMemory MCP (default: from OPENMEMORY_CLIENT_NAME env var)
+            user_id: User identifier for memory isolation via OpenMemory ACL (default: from OPENMEMORY_USER_ID env var)
+            timeout: HTTP request timeout in seconds (default: from OPENMEMORY_TIMEOUT env var)
         """
-        self.server_url = server_url
-        self.client_name = client_name
-        self.user_id = user_id
-        self.timeout = timeout
+        self.server_url = server_url or os.getenv("OPENMEMORY_MCP_URL", "http://localhost:8765")
+        self.client_name = client_name or os.getenv("OPENMEMORY_CLIENT_NAME", "friend_lite")
+        self.user_id = user_id or os.getenv("OPENMEMORY_USER_ID", "default")
+        # Handle timeout conversion from string to int if from env var
+        if timeout is not None:
+            self.timeout = timeout
+        else:
+            timeout_str = os.getenv("OPENMEMORY_TIMEOUT", "30")
+            self.timeout = int(timeout_str)
         self.mcp_client: Optional[MCPClient] = None
         self._initialized = False
     

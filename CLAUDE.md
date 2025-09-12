@@ -645,6 +645,7 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 - **GET /api/admin/memories**: All memories across all users with debug stats (Admin only)
 - **GET /api/memories/unfiltered**: User's memories without filtering
 - **GET /api/memories/search**: Semantic memory search with relevance scoring
+- **DELETE /api/admin/memory/delete-all**: Delete all memories for the current user
 - **GET /api/conversations**: User's conversations with transcripts
 - **GET /api/conversations/{audio_uuid}**: Specific conversation details
 
