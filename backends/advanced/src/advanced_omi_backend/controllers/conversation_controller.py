@@ -8,8 +8,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi.responses import JSONResponse
-
 from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
@@ -20,6 +18,7 @@ from advanced_omi_backend.client_manager import (
 )
 from advanced_omi_backend.database import AudioChunksRepository, chunks_col
 from advanced_omi_backend.users import User
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")

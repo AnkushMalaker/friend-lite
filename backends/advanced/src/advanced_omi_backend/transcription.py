@@ -99,10 +99,22 @@ class TranscriptionManager:
                 logger.error(f"❌ Error cancelling collection task: {e}")
 
         # Get transcript from provider
-        transcript_result = await self._get_transcript(audio_duration_seconds)
-
-        # Process the result uniformly
-        await self._process_transcript_result(transcript_result)
+        try:
+            transcript_result = await self._get_transcript(audio_duration_seconds)
+            # Process the result uniformly
+            await self._process_transcript_result(transcript_result)
+        except Exception as e:
+            # Signal transcription failure
+            logger.error(f"Transcription failed for {self._current_audio_uuid}: {e}")
+            if self._current_audio_uuid:
+                # Update database status to FAILED
+                if self.chunk_repo:
+                    await self.chunk_repo.update_transcription_status(
+                        self._current_audio_uuid, "FAILED", error_message=str(e)
+                    )
+                # Signal coordinator about failure
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_failed(self._current_audio_uuid, str(e))
 
     async def _get_transcript(self, audio_duration_seconds: Optional[float] = None):
         """Get transcript from any provider using unified interface."""
@@ -134,9 +146,13 @@ class TranscriptionManager:
 
         except Exception as e:
             logger.error(f"Error getting transcript from {self.provider.name}: {e}")
-            return None
+            # Clean up buffer before re-raising
+            self._audio_buffer.clear()
+            self._audio_start_time = None
+            self._collecting = False
+            raise e
         finally:
-            # Clear the buffer for all provider types
+            # Clear the buffer for all provider types (in case of success)
             self._audio_buffer.clear()
             self._audio_start_time = None
             self._collecting = False

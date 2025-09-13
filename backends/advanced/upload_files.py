@@ -3,6 +3,7 @@
 Upload audio files to the Friend-Lite backend for processing.
 """
 
+import argparse
 import logging
 import os
 import sys
@@ -201,9 +202,6 @@ def collect_wav_files(audio_dir: str, filter_list: Optional[list[str]] = None) -
         duration = get_audio_duration(str(file_path))
         duration_minutes = duration / 60.0
         
-        if duration > 1200:  # 20 minutes
-            logger.error(f"🔴 SKIPPING: {file_path.name} - Duration {duration_minutes:.1f} minutes exceeds 20-minute limit")
-            continue
         
         selected_files.append(file_path)
         total_duration += duration
@@ -376,8 +374,26 @@ def poll_job_status(job_id: str, token: str, base_url: str, total_files: int) ->
             return False
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Upload audio files to Friend-Lite backend")
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="Audio files to upload. If none provided, uses default test file."
+    )
+    parser.add_argument(
+        "--base-url",
+        default="http://localhost:8000",
+        help="Backend base URL (default: http://localhost:8000)"
+    )
+    return parser.parse_args()
+
+
 def main():
     """Main function to orchestrate the upload process."""
+    args = parse_args()
+    
     logger.info("Friend-Lite Audio File Upload Tool")
     logger.info("=" * 40)
     
@@ -387,37 +403,44 @@ def main():
         sys.exit(1)
     
     # Get admin token
-    token = get_admin_token(admin_password)
+    token = get_admin_token(admin_password, args.base_url)
     if not token:
         sys.exit(1)
-    # Test with the specific file the user mentioned
-    specific_file = "none"
     
-    # Check backends/advanced-backend/audio_chunks/ first
-    backend_audio_dir = "./audio_chunks/"
-    audio_dir_path = Path(backend_audio_dir)
-    specific_file_path = audio_dir_path / specific_file
-    
-    if specific_file_path.exists():
-        wav_files = [str(specific_file_path)]
-        logger.info(f"Found specific test file: {specific_file_path}")
+    # Determine files to upload
+    if args.files:
+        # Use provided files
+        wav_files = []
+        for file_path in args.files:
+            file_path = Path(file_path).expanduser().resolve()
+            if file_path.exists():
+                wav_files.append(str(file_path))
+                logger.info(f"Added file: {file_path}")
+            else:
+                logger.error(f"File not found: {file_path}")
+                sys.exit(1)
     else:
-        # Fallback to ds1 directory
-        audio_dir = "../../ds1/"
-        # You can specify some test_files list if you want here
-        wav_files = collect_wav_files(audio_dir, filter_list=None)
-        if not wav_files:
+        # Use default test file (committed to git, used in tests)
+        project_root = Path(__file__).parent.parent.parent
+        specific_file = project_root / "extras" / "test-audios" / "DIY Experts Glass Blowing_16khz_mono_4min.wav"
+        
+        if specific_file.exists():
+            wav_files = [str(specific_file)]
+            logger.info(f"Using default test file: {specific_file}")
+        else:
+            logger.error(f"Default test file not found: {specific_file}")
+            logger.info("Please provide file paths as arguments or ensure test file exists")
             sys.exit(1)
     
     if not wav_files:
-        logger.error("None of the test files were found")
+        logger.error("No files to upload")
         sys.exit(1)
     
-    logger.info(f"Testing with {len(wav_files)} files:")
+    logger.info(f"Uploading {len(wav_files)} files:")
     for f in wav_files:
         logger.info(f"- {os.path.basename(f)}")
     
-    success = upload_files_async(wav_files, token)
+    success = upload_files_async(wav_files, token, args.base_url)
     
     if success:
         logger.info("🎉 Upload process completed successfully!")
