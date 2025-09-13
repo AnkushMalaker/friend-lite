@@ -554,7 +554,7 @@ class ParakeetProvider(BatchTranscriptionProvider):
                     
         except Exception as e:
             logger.error(f"Error calling Parakeet service: {e}")
-            return {"text": "", "words": [], "segments": []}
+            raise e
 
 
 class ParakeetStreamingProvider(StreamingTranscriptionProvider):

@@ -8,8 +8,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi.responses import JSONResponse
-
 from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
@@ -20,6 +18,7 @@ from advanced_omi_backend.client_manager import (
 )
 from advanced_omi_backend.database import AudioChunksRepository, chunks_col
 from advanced_omi_backend.users import User
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -313,3 +312,125 @@ async def update_transcript_segment(
     except Exception as e:
         audio_logger.error(f"Error updating transcript segment: {e}")
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
+
+async def delete_conversation(audio_uuid: str, user: User):
+    """Delete a conversation and its associated audio file. Users can only delete their own conversations."""
+    try:
+        # DEBUG: Log comprehensive details about the search
+        logger.info(f"DELETE DEBUG: Starting delete for audio_uuid='{audio_uuid}'")
+        logger.info(f"DELETE DEBUG: audio_uuid type={type(audio_uuid)}, length={len(audio_uuid)}")
+        logger.info(f"DELETE DEBUG: audio_uuid repr={repr(audio_uuid)}")
+        logger.info(f"DELETE DEBUG: audio_uuid bytes={audio_uuid.encode('utf-8').hex()}")
+        logger.info(f"DELETE DEBUG: Database collection={chunks_col.name}, database={chunks_col.database.name}")
+        
+        # DEBUG: Test if ANY conversations exist in the collection
+        total_count = await chunks_col.count_documents({})
+        logger.info(f"DELETE DEBUG: Total conversations in collection: {total_count}")
+        
+        # DEBUG: Try to find a few conversations to compare
+        sample_conversations = []
+        async for doc in chunks_col.find({}).limit(3):
+            sample_conversations.append({
+                "audio_uuid": doc.get("audio_uuid"),
+                "audio_uuid_type": type(doc.get("audio_uuid")),
+                "audio_uuid_repr": repr(doc.get("audio_uuid"))
+            })
+        logger.info(f"DELETE DEBUG: Sample conversations: {sample_conversations}")
+        
+        # DEBUG: Execute the exact query we're about to use
+        query = {"audio_uuid": audio_uuid}
+        logger.info(f"DELETE DEBUG: Query being executed: {query}")
+        
+        # First, get the conversation to check ownership
+        conversation = await chunks_col.find_one(query)
+        
+        # DEBUG: Log the result
+        logger.info(f"DELETE DEBUG: Query result: {conversation is not None}")
+        if conversation:
+            logger.info(f"DELETE DEBUG: Found conversation with client_id={conversation.get('client_id')}")
+        else:
+            # DEBUG: Try alternative queries to see what might work
+            logger.info("DELETE DEBUG: Trying alternative queries...")
+            
+            # Try with regex (case insensitive)
+            regex_result = await chunks_col.find_one({"audio_uuid": {"$regex": f"^{audio_uuid}$", "$options": "i"}})
+            logger.info(f"DELETE DEBUG: Case-insensitive regex query result: {regex_result is not None}")
+            
+            # Try to find any conversation containing this uuid as substring
+            contains_result = await chunks_col.find_one({"audio_uuid": {"$regex": audio_uuid}})
+            logger.info(f"DELETE DEBUG: Contains substring query result: {contains_result is not None}")
+        
+        if not conversation:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Conversation with audio_uuid '{audio_uuid}' not found"}
+            )
+
+        # Check if user has permission to delete this conversation
+        client_id = conversation.get("client_id")
+        if not user.is_superuser and not client_belongs_to_user(client_id, user.user_id):
+            logger.warning(
+                f"User {user.user_id} attempted to delete conversation {audio_uuid} without permission"
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Access forbidden. You can only delete your own conversations.",
+                    "details": f"Conversation '{audio_uuid}' does not belong to your account."
+                }
+            )
+
+        # Get audio file path for deletion
+        audio_path = conversation.get("audio_path")
+        cropped_audio_path = conversation.get("cropped_audio_path")
+        
+        # Delete the conversation from database
+        result = await chunks_col.delete_one({"audio_uuid": audio_uuid})
+        
+        if result.deleted_count == 0:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Conversation with audio_uuid '{audio_uuid}' not found"}
+            )
+
+        # Delete associated audio files
+        deleted_files = []
+        if audio_path:
+            try:
+                # Construct full path to audio file
+                full_audio_path = Path("/app/audio_chunks") / audio_path
+                if full_audio_path.exists():
+                    full_audio_path.unlink()
+                    deleted_files.append(str(full_audio_path))
+                    logger.info(f"Deleted audio file: {full_audio_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete audio file {audio_path}: {e}")
+
+        if cropped_audio_path:
+            try:
+                # Construct full path to cropped audio file
+                full_cropped_path = Path("/app/audio_chunks") / cropped_audio_path
+                if full_cropped_path.exists():
+                    full_cropped_path.unlink()
+                    deleted_files.append(str(full_cropped_path))
+                    logger.info(f"Deleted cropped audio file: {full_cropped_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete cropped audio file {cropped_audio_path}: {e}")
+
+        logger.info(f"Successfully deleted conversation {audio_uuid} for user {user.user_id}")
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": f"Conversation '{audio_uuid}' deleted successfully",
+                "deleted_files": deleted_files,
+                "client_id": client_id
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error deleting conversation {audio_uuid}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to delete conversation: {str(e)}"}
+        )

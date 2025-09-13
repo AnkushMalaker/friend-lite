@@ -20,6 +20,7 @@ class TranscriptCoordinator:
 
     def __init__(self):
         self.transcript_events: Dict[str, asyncio.Event] = {}
+        self.transcript_failures: Dict[str, str] = {}  # audio_uuid -> error_message
         self._lock = asyncio.Lock()
         logger.info("TranscriptCoordinator initialized")
 
@@ -31,7 +32,10 @@ class TranscriptCoordinator:
             timeout: Maximum time to wait in seconds
 
         Returns:
-            True if transcript was completed, False if timeout
+            True if transcript was completed successfully, False if timeout or failed
+        
+        Raises:
+            Exception: If transcription failed with an error
         """
         async with self._lock:
             # Create event for this audio_uuid if it doesn't exist
@@ -44,6 +48,15 @@ class TranscriptCoordinator:
         try:
             # Wait for the transcript to be ready
             await asyncio.wait_for(event.wait(), timeout=timeout)
+            
+            # Check if this was a failure
+            if audio_uuid in self.transcript_failures:
+                error_msg = self.transcript_failures[audio_uuid]
+                logger.error(f"Transcript failed for {audio_uuid}: {error_msg}")
+                # Clean up failure tracking
+                self.transcript_failures.pop(audio_uuid, None)
+                raise Exception(f"Transcription failed: {error_msg}")
+            
             logger.info(f"Transcript ready event received for {audio_uuid}")
             return True
         except asyncio.TimeoutError:
@@ -53,6 +66,7 @@ class TranscriptCoordinator:
             # Clean up the event
             async with self._lock:
                 self.transcript_events.pop(audio_uuid, None)
+                self.transcript_failures.pop(audio_uuid, None)
                 logger.debug(f"Cleaned up transcript event for {audio_uuid}")
 
     def signal_transcript_ready(self, audio_uuid: str):
@@ -69,6 +83,26 @@ class TranscriptCoordinator:
             logger.info(f"Signaled transcript ready for {audio_uuid}")
         else:
             logger.debug(f"No waiting processors for transcript {audio_uuid}")
+
+    def signal_transcript_failed(self, audio_uuid: str, error_message: str):
+        """Signal that transcript processing failed for the given audio_uuid.
+
+        This should be called by TranscriptionManager when transcription fails.
+        Waiting processes will be unblocked and can check for failure status.
+
+        Args:
+            audio_uuid: The audio UUID that failed transcription
+            error_message: Description of the failure
+        """
+        # Store the failure message
+        self.transcript_failures[audio_uuid] = error_message
+        
+        if audio_uuid in self.transcript_events:
+            # Set the event to unblock waiting processes
+            self.transcript_events[audio_uuid].set()
+            logger.error(f"Signaled transcript failed for {audio_uuid}: {error_message}")
+        else:
+            logger.debug(f"No waiting processors for failed transcript {audio_uuid}")
     
     def cleanup_transcript_events_for_client(self, client_id: str):
         """Clean up any transcript events associated with a disconnected client.
