@@ -1,0 +1,21 @@
+ingress:
+  # Common paths for all hosts (hosts are set dynamically by Skaffold)
+  commonPaths:
+    - path: /api
+      pathType: Prefix
+    - path: /auth
+      pathType: Prefix
+    - path: /users
+      pathType: Prefix
+    - path: /ws_pcm
+      pathType: Prefix
+    - path: /ws_omi
+      pathType: Prefix
+    - path: /ws
+      pathType: Prefix
+    - path: /health
+      pathType: Prefix
+    - path: /readiness
+      pathType: Prefix
+    - path: /audio
+      pathType: Prefix

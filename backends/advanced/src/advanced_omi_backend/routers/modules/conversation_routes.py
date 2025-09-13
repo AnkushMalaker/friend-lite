@@ -80,3 +80,12 @@ async def update_transcript_segment(
     return await conversation_controller.update_transcript_segment(
         audio_uuid, segment_index, current_user, speaker_id, start_time, end_time
     )
+
+
+@router.delete("/{audio_uuid}")
+async def delete_conversation(
+    audio_uuid: str,
+    current_user: User = Depends(current_active_user),
+):
+    """Delete a conversation and its associated audio file. Users can only delete their own conversations."""
+    return await conversation_controller.delete_conversation(audio_uuid, current_user)

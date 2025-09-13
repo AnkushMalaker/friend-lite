@@ -1,4 +1,4 @@
-{{- if and .Values.speaker.persistence.modelCache.enabled (not .Values.global.sharedModels.enabled) }}
+{{- if .Values.speaker.persistence.modelCache.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -6,6 +6,8 @@ metadata:
   labels:
     app: {{ .Release.Name }}
     component: speaker
+  annotations:
+    openebs.io/hostpath: "/var/openebs/{{ .Release.Name }}-model-cache"
 spec:
   accessModes:
     - ReadWriteOnce
@@ -13,11 +15,8 @@ spec:
     requests:
       storage: {{ .Values.speaker.persistence.modelCache.size }}
   storageClassName: openebs-hostpath
-
-
 ---
 {{- end }}
-{{- if .Values.speaker.persistence.audioChunks.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -25,6 +24,8 @@ metadata:
   labels:
     app: {{ .Release.Name }}
     component: speaker
+  annotations:
+    openebs.io/hostpath: "/var/openebs/{{ .Release.Name }}-audio-chunks"
 spec:
   accessModes:
     - ReadWriteOnce
@@ -33,8 +34,6 @@ spec:
       storage: {{ .Values.speaker.persistence.audioChunks.size }}
   storageClassName: openebs-hostpath
 ---
-{{- end }}
-{{- if .Values.speaker.persistence.debug.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -42,6 +41,8 @@ metadata:
   labels:
     app: {{ .Release.Name }}
     component: speaker
+  annotations:
+    openebs.io/hostpath: "/var/openebs/{{ .Release.Name }}-debug"
 spec:
   accessModes:
     - ReadWriteOnce
@@ -50,8 +51,6 @@ spec:
       storage: {{ .Values.speaker.persistence.debug.size }}
   storageClassName: openebs-hostpath
 ---
-{{- end }}
-{{- if .Values.speaker.persistence.speakerData.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -59,6 +58,8 @@ metadata:
   labels:
     app: {{ .Release.Name }}
     component: speaker
+  annotations:
+    openebs.io/hostpath: "/var/openebs/{{ .Release.Name }}-speaker-data"
 spec:
   accessModes:
     - ReadWriteOnce
@@ -66,4 +67,3 @@ spec:
     requests:
       storage: {{ .Values.speaker.persistence.speakerData.size }}
   storageClassName: openebs-hostpath
-{{- end }}

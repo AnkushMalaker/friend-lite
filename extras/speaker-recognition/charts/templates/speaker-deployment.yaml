@@ -35,14 +35,14 @@ spec:
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-secrets
+                  name: speaker-recognition-secrets
                   key: HF_TOKEN
             {{- end }}
             {{- if .Values.secrets.deepgramApiKey }}
             - name: DEEPGRAM_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-secrets
+                  name: speaker-recognition-secrets
                   key: DEEPGRAM_API_KEY
             {{- end }}
             {{- range $key, $value := .Values.speaker.env }}

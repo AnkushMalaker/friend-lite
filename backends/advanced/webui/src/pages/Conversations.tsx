@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { MessageSquare, RefreshCw, Calendar, User, Play, Pause } from 'lucide-react'
+import { MessageSquare, RefreshCw, Calendar, User, Play, Pause, Trash2 } from 'lucide-react'
 import { conversationsApi, BACKEND_URL } from '../services/api'
 
 interface Conversation {
@@ -40,6 +40,7 @@ export default function Conversations() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [debugMode, setDebugMode] = useState(false)
+  const [deletingConversation, setDeletingConversation] = useState<string | null>(null)
   
   // Audio playback state
   const [playingSegment, setPlayingSegment] = useState<string | null>(null) // Format: "audioUuid-segmentIndex"
@@ -61,6 +62,40 @@ export default function Conversations() {
       setError(err.message || 'Failed to load conversations')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const deleteConversation = async (audioUuid: string) => {
+    if (!confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
+      return
+    }
+
+    try {
+      setDeletingConversation(audioUuid)
+      await conversationsApi.delete(audioUuid)
+      
+      // Remove the conversation from the local state
+      setConversations(prev => prev.filter(conv => conv.audio_uuid !== audioUuid))
+      
+      // Clean up any audio references
+      if (audioRefs.current[audioUuid]) {
+        audioRefs.current[audioUuid].pause()
+        delete audioRefs.current[audioUuid]
+      }
+      
+      // If the deleted conversation was playing, stop it
+      if (playingSegment && playingSegment.startsWith(audioUuid)) {
+        setPlayingSegment(null)
+        if (segmentTimerRef.current) {
+          window.clearTimeout(segmentTimerRef.current)
+          segmentTimerRef.current = null
+        }
+      }
+      
+    } catch (err: any) {
+      setError(err.response?.data?.error || err.message || 'Failed to delete conversation')
+    } finally {
+      setDeletingConversation(null)
     }
   }
 
@@ -232,7 +267,19 @@ export default function Conversations() {
                   </div>
                 </div>
                 
-{/* Audio Player */}
+                {/* Delete Button */}
+                <button
+                  onClick={() => deleteConversation(conversation.audio_uuid)}
+                  disabled={deletingConversation === conversation.audio_uuid}
+                  className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Delete conversation"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Audio Player */}
+              <div className="mb-4">
                 <div className="space-y-2">
                   {(conversation.audio_path || conversation.cropped_audio_path) && (
                     <>
