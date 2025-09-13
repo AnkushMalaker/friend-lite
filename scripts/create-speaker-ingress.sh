@@ -7,9 +7,9 @@ set -e
 
 # Default values
 NAMESPACE=${NAMESPACE:-"speech"}
-HOSTNAME=${HOSTNAME:-"speaker.friend-lite.192-168-1-42.nip.io"}
+SPEAKER_HOSTNAME=${SPEAKER_HOSTNAME:-"speaker.friend-lite.192-168-1-140.nip.io"}
 NGINX_CONF=${NGINX_CONF:-"extras/speaker-recognition/nginx.conf"}
-OUTPUT_FILE=${OUTPUT_FILE:-"extras/speaker-recognition/charts/speaker-recognition-ingress.yaml"}
+OUTPUT_FILE=${OUTPUT_FILE:-"extras/speaker-recognition/charts/templates/speaker-recognition-ingress.yaml"}
 
 # Colors for output
 RED='\033[0;31m'
@@ -19,7 +19,7 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Creating Kubernetes Ingress for speaker-recognition service${NC}"
 echo -e "${YELLOW}Namespace: ${NAMESPACE}${NC}"
-echo -e "${YELLOW}Hostname: ${HOSTNAME}${NC}"
+echo -e "${YELLOW}Hostname: ${SPEAKER_HOSTNAME}${NC}"
 echo -e "${YELLOW}Nginx config: ${NGINX_CONF}${NC}"
 echo -e "${YELLOW}Output: ${OUTPUT_FILE}${NC}"
 echo
@@ -91,7 +91,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-  - host: ${HOSTNAME}
+  - host: ${SPEAKER_HOSTNAME}
     http:
       paths:
       # Health check endpoint - proxy to speaker service (no rewrite)

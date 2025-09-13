@@ -5,6 +5,8 @@ metadata:
   name: {{ include "advanced-backend.fullname" . }}-data
   labels:
     {{- include "advanced-backend.labels" . | nindent 4 }}
+  annotations:
+    openebs.io/hostpath: "/var/openebs/{{ include "advanced-backend.fullname" . }}-data"
 spec:
   accessModes:
     - {{ .Values.persistence.accessMode }}

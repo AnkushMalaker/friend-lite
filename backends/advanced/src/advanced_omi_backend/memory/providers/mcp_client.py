@@ -41,7 +41,13 @@ class MCPClient:
         self.client_name = client_name
         self.user_id = user_id
         self.timeout = timeout
-        self.client = httpx.AsyncClient(timeout=timeout)
+        
+        # Use custom CA certificate if available
+        import os
+        ca_bundle = os.getenv('REQUESTS_CA_BUNDLE')
+        verify = ca_bundle if ca_bundle and os.path.exists(ca_bundle) else True
+        
+        self.client = httpx.AsyncClient(timeout=timeout, verify=verify)
         
     async def close(self):
         """Close the HTTP client."""

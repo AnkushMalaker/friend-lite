@@ -5,6 +5,10 @@ RUN apk add curl
 
 WORKDIR /app
 
+# Accept build arguments for environment variables
+ARG VITE_ALLOWED_HOSTS
+ENV VITE_ALLOWED_HOSTS=$VITE_ALLOWED_HOSTS
+
 # Install dependencies
 COPY package*.json ./
 RUN npm ci

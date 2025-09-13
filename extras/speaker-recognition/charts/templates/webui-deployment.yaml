@@ -31,4 +31,8 @@ spec:
               value: {{ .Release.Name }}-speaker
             - name: SPEAKER_SERVICE_PORT
               value: {{ .Values.speaker.service.port | quote }}
+            - name: VITE_ALLOWED_HOSTS
+              value: {{ .Values.webui.env.VITE_ALLOWED_HOSTS | quote }}
+            - name: WEBUI_CORS_ORIGIN
+              value: {{ .Values.webui.env.WEBUI_CORS_ORIGIN | quote }}
       restartPolicy: Always
