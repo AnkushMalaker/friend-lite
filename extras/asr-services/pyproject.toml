@@ -15,7 +15,8 @@ dependencies = [
   "python-multipart>=0.0.6",
   "silero-vad>=5.1.2",
   "wyoming>=1.7.0",
-  "easy-audio-interfaces>=0.6.0",
+  "easy-audio-interfaces>=0.7.1",
+  "httpx>=0.28.1",
 ]
 
 [tool.uv]

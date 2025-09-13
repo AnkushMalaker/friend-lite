@@ -21,6 +21,12 @@ services:
     environment:
       - HF_HOME=/models
       - PARAKEET_MODEL=$PARAKEET_MODEL
+      # Enhanced chunking configuration
+      - CHUNKING_ENABLED=${CHUNKING_ENABLED:-true}
+      - CHUNK_DURATION_SECONDS=${CHUNK_DURATION_SECONDS:-30.0}
+      - OVERLAP_DURATION_SECONDS=${OVERLAP_DURATION_SECONDS:-5.0}
+      - MIN_AUDIO_FOR_CHUNKING=${MIN_AUDIO_FOR_CHUNKING:-60.0}
+      - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.8}
     restart: unless-stopped
 
   # moonshine-asr:
