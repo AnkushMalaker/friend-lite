@@ -184,10 +184,13 @@ class TranscriptionManager:
         try:
             # Store raw transcript data
             provider_name = self.provider.name if self.provider else "unknown"
+            logger.info(f"🔍 DEBUG: transcript_result type={type(transcript_result)}, content preview: {str(transcript_result)[:200]}")
             if self.chunk_repo:
+                logger.info(f"🔍 DEBUG: About to store raw transcript data for {self._current_audio_uuid}")
                 await self.chunk_repo.store_raw_transcript_data(
                     self._current_audio_uuid, transcript_result, provider_name
                 )
+                logger.info(f"🔍 DEBUG: Successfully stored raw transcript data for {self._current_audio_uuid}")
 
             # Normalize transcript result
             normalized_result = self._normalize_transcript_result(transcript_result)
@@ -210,6 +213,7 @@ class TranscriptionManager:
                 "words": normalized_result.get("words", []),
                 "text": normalized_result.get("text", ""),
             }
+            logger.info(f"🔍 DEBUG: transcript_data for speaker service - text_length={len(transcript_data.get('text', ''))}, words_count={len(transcript_data.get('words', []))}")
             if self.speaker_client.enabled and self._current_audio_uuid and self.chunk_repo:
                 try:
                     # Get audio file path from database
@@ -236,6 +240,9 @@ class TranscriptionManager:
                             logger.info(
                                 f"🎤 Speaker service returned {len(final_segments)} segments with matched text"
                             )
+                            # Debug: Log first few segments to see text content
+                            for i, seg in enumerate(final_segments[:3]):
+                                logger.info(f"🔍 DEBUG: Segment {i}: text='{seg.get('text', 'MISSING')}', speaker={seg.get('speaker', 'UNKNOWN')}")
                         else:
                             logger.info("🎤 Speaker service returned no segments")
                     else:
@@ -274,6 +281,7 @@ class TranscriptionManager:
                         "chunk_sequence": 0,
                         "absolute_timestamp": time.time() + segment.get("start", 0.0),
                     }
+                    logger.info(f"🔍 DEBUG: Storing segment - text='{segment_to_store['text']}', speaker={segment_to_store['speaker']}")
                     await self.chunk_repo.add_transcript_segment(
                         self._current_audio_uuid, segment_to_store
                     )
@@ -302,7 +310,7 @@ class TranscriptionManager:
             await self._queue_memory_processing()
 
             # Queue audio cropping if we have diarization segments and cropping is enabled
-            if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "false").lower() == "true":
+            if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true":
                 await self._queue_diarization_based_cropping(final_segments)
 
             # Update database transcription status

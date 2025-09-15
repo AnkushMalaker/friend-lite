@@ -225,6 +225,7 @@ MEMORY_PROVIDER=friend_lite  # or openmemory_mcp
 
 # Database
 MONGODB_URI=mongodb://mongo:27017
+# Database name: friend-lite
 QDRANT_BASE_URL=qdrant
 
 # Network Configuration
@@ -658,12 +659,11 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
   - Client timeout: 5 minutes, Server processing: up to 3x audio duration + 60s
   - Example usage:
     ```bash
-    # Get admin credentials from .env file first
+    # Step 1: Read .env file for ADMIN_EMAIL and ADMIN_PASSWORD
+    # Step 2: Get auth token
+    # Step 3: Use token in file upload
     curl -X POST \
-      -H "Authorization: Bearer $(curl -s -X POST \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=ADMIN_EMAIL&password=ADMIN_PASSWORD" \
-        http://localhost:8000/auth/jwt/login | jq -r '.access_token')" \
+      -H "Authorization: Bearer YOUR_TOKEN_HERE" \
       -F "files=@/path/to/audio.wav" \
       -F "device_name=test-upload" \
       http://localhost:8000/api/process-audio-files
@@ -673,6 +673,77 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 - **POST /auth/jwt/login**: Email-based login (returns JWT token)
 - **GET /users/me**: Get current authenticated user
 - **GET /api/auth/config**: Authentication configuration
+
+### Step-by-Step API Testing Guide
+
+When testing API endpoints that require authentication, follow these steps:
+
+#### Step 1: Read credentials from .env file
+```bash
+# Use the Read tool to view the .env file and identify credentials
+# Look for:
+# ADMIN_EMAIL=admin@example.com
+# ADMIN_PASSWORD=your-password-here
+```
+
+#### Step 2: Get authentication token
+```bash
+curl -s -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin@example.com&password=your-password-here" \
+  http://localhost:8000/auth/jwt/login
+```
+This returns:
+```json
+{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...","token_type":"bearer"}
+```
+
+#### Step 3: Use the token in API calls
+```bash
+# Extract the token from the response above and use it:
+curl -s -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  http://localhost:8000/api/conversations
+
+# For reprocessing endpoints:
+curl -s -X POST \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  http://localhost:8000/api/conversations/{audio_uuid}/reprocess-transcript
+```
+
+**Important**: Always read the .env file first using the Read tool rather than using shell commands like `grep` or `cut`. This ensures you see the exact values and can copy them accurately.
+
+#### Step 4: Testing Reprocessing Endpoints
+Once you have the auth token, you can test the reprocessing functionality:
+
+```bash
+# Get list of conversations to find an audio_uuid
+curl -s -H "Authorization: Bearer YOUR_TOKEN" \
+  http://localhost:8000/api/conversations
+
+# Test transcript reprocessing
+curl -s -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/reprocess-transcript
+
+# Test memory reprocessing
+curl -s -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/reprocess-memory
+
+# Get transcript versions
+curl -s -H "Authorization: Bearer YOUR_TOKEN" \
+  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/versions
+
+# Activate a specific transcript version
+curl -s -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"transcript_version_id": "VERSION_ID"}' \
+  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/activate-transcript
+```
 
 ### Development Reset Endpoints
 Useful endpoints for resetting state during development:
@@ -848,7 +919,7 @@ OPENAI_BASE_URL=http://100.64.1.100:8080  # For vLLM/OpenAI-compatible APIs
 SPEAKER_SERVICE_URL=http://100.64.1.100:8085
 
 # Database services (can be on separate machine)
-MONGODB_URI=mongodb://100.64.1.200:27017
+MONGODB_URI=mongodb://100.64.1.200:27017  # Database name: friend-lite
 QDRANT_BASE_URL=http://100.64.1.200:6333
 ```
 
