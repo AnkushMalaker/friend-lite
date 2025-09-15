@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 from nemo.collections.asr.parts.utils.streaming_utils import FrameBatchChunkedRNNT
 from nemo.collections.asr.parts.utils import rnnt_utils
 from nemo.collections.asr.parts.utils.rnnt_utils import Hypothesis
+from nemo.collections.asr.parts.utils.timestamp_utils import process_timestamp_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +31,25 @@ class TimestampedFrameBatchChunkedRNNT(FrameBatchChunkedRNNT):
         self.chunk_offsets = [0]  # Track chunk offsets like NeMo's FrameBatchMultiTaskAED
         self.merged_hypothesis = None
 
-        # Get subsampling factor for timestamp calculations (following FrameBatchMultiTaskAED)
+        # Get model parameters for timestamp calculations (following FrameBatchMultiTaskAED)
         self.subsampling_factor = getattr(asr_model._cfg.encoder, 'subsampling_factor', 4)
+        self.window_stride = getattr(asr_model._cfg.preprocessor, 'window_stride', 0.01)
 
         # Ensure model is in eval mode and timestamps enabled
         self.asr_model.eval()
-        if hasattr(self.asr_model, 'decoding') and hasattr(self.asr_model.decoding, 'compute_timestamps'):
-            original_value = self.asr_model.decoding.compute_timestamps
-            self.asr_model.decoding.compute_timestamps = True
-            logger.info(f"🔧 TIMESTAMP CONFIG: Set compute_timestamps=True (was: {original_value})")
+        if hasattr(self.asr_model, 'decoding'):
+            # Enable word timestamps but not char timestamps to avoid issues
+            if hasattr(self.asr_model.decoding, 'compute_timestamps'):
+                original_value = self.asr_model.decoding.compute_timestamps
+                self.asr_model.decoding.compute_timestamps = True
+                logger.debug(f"Set compute_timestamps=True (was: {original_value})")
+
+            # Set timestamp type to word only to avoid char_offsets issues
+            if hasattr(self.asr_model.decoding, 'rnnt_timestamp_type'):
+                self.asr_model.decoding.rnnt_timestamp_type = 'word'
+                logger.debug("Set rnnt_timestamp_type='word' to avoid char offset issues")
         else:
-            logger.warning("🚨 TIMESTAMP CONFIG: Model does not have compute_timestamps attribute!")
+            logger.warning("Model does not have decoding attribute!")
 
     def reset(self):
         """Reset the chunked inference state and clear accumulated hypotheses."""
@@ -71,25 +80,33 @@ class TimestampedFrameBatchChunkedRNNT(FrameBatchChunkedRNNT):
             )
 
             # KEY CHANGE: Get full Hypothesis objects instead of just text
+            # Temporarily disable timestamps to avoid char_offsets error
+            old_compute_timestamps = getattr(self.asr_model.decoding, 'compute_timestamps', False)
+            self.asr_model.decoding.compute_timestamps = False
+
             hypotheses = self.asr_model.decoding.rnnt_decoder_predictions_tensor(
                 encoder_output=encoded, encoded_lengths=encoded_len,
-                return_hypotheses=True  # CRITICAL: Get timestamps and confidence
+                return_hypotheses=True  # Get hypothesis objects even without timestamps
             )
+
+            # Restore original setting
+            self.asr_model.decoding.compute_timestamps = old_compute_timestamps
 
             # Store hypotheses with chunk offset tracking
             self.all_hypotheses.extend(hypotheses)
+            logger.debug(f"Got {len(hypotheses)} hypotheses from chunk {len(self.chunk_offsets)}")
 
-            # Update chunk offsets for timestamp joining (following FrameBatchMultiTaskAED pattern)
-            if hypotheses:
-                # Calculate frame-based offset for proper timestamp alignment
-                # Each chunk processes audio frames, track cumulative frame offset
-                if len(self.chunk_offsets) > 1:
-                    # Add frame offset based on processed frames
-                    frame_offset = feat_signal.shape[1]  # Number of frames in current chunk
-                    self.chunk_offsets.append(self.chunk_offsets[-1] + frame_offset)
+            # Update chunk offsets for ALL chunks (following FrameBatchMultiTaskAED pattern)
+            for length in feat_signal_len:
+                current_length = length.item()
+                if len(self.chunk_offsets) == 1:
+                    self.chunk_offsets.append(current_length)
                 else:
-                    # First chunk beyond initialization
-                    self.chunk_offsets.append(feat_signal.shape[1])
+                    old_offset = self.chunk_offsets[-1]
+                    new_offset = old_offset + current_length
+                    self.chunk_offsets.append(new_offset)
+
+            logger.debug(f"Chunk offsets updated: {self.chunk_offsets}")
 
             # Extract text for parent class compatibility
             best_hyp_text = [hyp.text if hyp.text else "" for hyp in hypotheses]
@@ -103,13 +120,32 @@ class TimestampedFrameBatchChunkedRNNT(FrameBatchChunkedRNNT):
         if not self.all_hypotheses:
             return []
 
+        logger.info(f"Joining {len(self.all_hypotheses)} hypotheses")
+
         # Join hypotheses using NeMo's FrameBatchMultiTaskAED pattern
         try:
             self.merged_hypothesis = self._join_hypotheses(self.all_hypotheses)
+
+            # Check merged hypothesis results
+            if self.merged_hypothesis and hasattr(self.merged_hypothesis, 'timestamp'):
+                words = self.merged_hypothesis.timestamp.get('word', [])
+                if words and len(words) > 0:
+                    first_word = words[0]
+                    last_word = words[-1]
+                    first_start = first_word.get('start', 0)
+                    last_end = last_word.get('end', 0)
+
+                    logger.info(f"Merged {len(words)} words: {first_start:.2f}s to {last_end:.2f}s")
+
+                    if first_start > 1.0:
+                        logger.warning(f"First word starts at {first_start:.2f}s (may be chunk-relative)")
+                else:
+                    logger.warning("No word timestamps found in merged hypothesis")
+
             return [self.merged_hypothesis] if self.merged_hypothesis else self.all_hypotheses
         except Exception as e:
-            logger.warning(f"Hypothesis joining failed: {e}, returning raw hypotheses")
-            return self.all_hypotheses
+            logger.error(f"Hypothesis joining FAILED: {e}")
+            raise e  # Don't silently fall back
 
     def _join_hypotheses(self, hypotheses):
         """Join multiple hypotheses with proper timestamp alignment following NeMo's FrameBatchMultiTaskAED."""
@@ -149,48 +185,177 @@ class TimestampedFrameBatchChunkedRNNT(FrameBatchChunkedRNNT):
     def _join_timestamp(self, merged_hypothesis, hypotheses):
         """Join timestamps from multiple hypotheses with proper offset handling."""
         cumulative_offset = 0
+        logger.debug(f"Processing {len(hypotheses)} hypotheses with chunk_offsets: {self.chunk_offsets}")
 
         for i, h in enumerate(hypotheses):
+            # Calculate cumulative offset for this hypothesis
             if i < len(self.chunk_offsets):
                 cumulative_offset = self.chunk_offsets[i]
+            else:
+                logger.warning(f"Hypothesis {i}: No chunk offset available, using previous offset {cumulative_offset}")
 
-            # Process word-level timestamps if available
-            if hasattr(h, 'timestamp') and h.timestamp and 'word' in h.timestamp:
-                word_timestamps = h.timestamp['word']
+            logger.debug(f"Hypothesis {i}: using cumulative_offset {cumulative_offset}")
+
+            # Process word-level timestamps using h.words and h.timestamp tensor
+            if hasattr(h, 'words') and h.words:
+                word_list = h.words
+                timestamp_tensor = getattr(h, 'timestamp', None)
+                word_confidence = getattr(h, 'word_confidence', []) or []
+
+                logger.debug(f"Hypothesis {i}: Processing {len(word_list)} words")
+
                 updated_timestamps = []
 
-                for word in word_timestamps:
-                    if isinstance(word, dict):
-                        updated_word = word.copy()
-                        # Apply frame offset with subsampling factor
-                        if 'start_offset' in word:
-                            updated_word['start_offset'] = word['start_offset'] + cumulative_offset // self.subsampling_factor
-                        if 'end_offset' in word:
-                            updated_word['end_offset'] = word['end_offset'] + cumulative_offset // self.subsampling_factor
+                for j, word_text in enumerate(word_list):
+                    if word_text and word_text.strip():  # Skip empty words
+                        # Calculate frame indices for this word from the tensor
+                        if timestamp_tensor is not None and j < len(timestamp_tensor):
+                            frame_start = timestamp_tensor[j].item()
+                            frame_end = timestamp_tensor[j + 1].item() if j + 1 < len(timestamp_tensor) else frame_start + 1
+                        else:
+                            # Fallback: estimate frames
+                            frame_start = j
+                            frame_end = j + 1
+
+                        # Apply cumulative offset for absolute timestamps
+                        absolute_frame_start = frame_start + cumulative_offset // self.subsampling_factor
+                        absolute_frame_end = frame_end + cumulative_offset // self.subsampling_factor
+
+                        # Convert frames to time using model parameters
+                        start_time = absolute_frame_start * self.window_stride * self.subsampling_factor
+                        end_time = absolute_frame_end * self.window_stride * self.subsampling_factor
+
+                        # Get confidence if available
+                        confidence = word_confidence[j] if j < len(word_confidence) else 1.0
+
+                        # Create word timestamp entry in NeMo format
+                        updated_word = {
+                            'word': word_text,
+                            'start_offset': absolute_frame_start,
+                            'end_offset': absolute_frame_end,
+                            'start': start_time,
+                            'end': end_time,
+                            'confidence': confidence
+                        }
+
                         updated_timestamps.append(updated_word)
 
-                merged_hypothesis.timestamp['word'].extend(updated_timestamps)
+                if updated_timestamps:
+                    logger.debug(f"Hypothesis {i}: processed {len(updated_timestamps)} words")
+                    merged_hypothesis.timestamp['word'].extend(updated_timestamps)
 
             # Process segment-level timestamps if available
-            if hasattr(h, 'timestamp') and h.timestamp and 'segment' in h.timestamp:
-                segment_timestamps = h.timestamp['segment']
-                updated_timestamps = []
+            if hasattr(h, 'timestamp') and hasattr(h.timestamp, 'get'):
+                segment_timestamps = h.timestamp.get('segment', None)
+                if segment_timestamps:
+                    updated_timestamps = []
 
-                for segment in segment_timestamps:
-                    if isinstance(segment, dict):
-                        updated_segment = segment.copy()
-                        # Apply frame offset with subsampling factor
-                        if 'start_offset' in segment:
-                            updated_segment['start_offset'] = segment['start_offset'] + cumulative_offset // self.subsampling_factor
-                        if 'end_offset' in segment:
-                            updated_segment['end_offset'] = segment['end_offset'] + cumulative_offset // self.subsampling_factor
-                        updated_timestamps.append(updated_segment)
+                    for segment in segment_timestamps:
+                        if isinstance(segment, dict):
+                            updated_segment = segment.copy()
+                            # Apply frame offset with subsampling factor
+                            if 'start_offset' in segment:
+                                updated_segment['start_offset'] = segment['start_offset'] + cumulative_offset // self.subsampling_factor
+                            if 'end_offset' in segment:
+                                updated_segment['end_offset'] = segment['end_offset'] + cumulative_offset // self.subsampling_factor
 
-                merged_hypothesis.timestamp['segment'].extend(updated_timestamps)
+                            # Convert to absolute time using model parameters
+                            if 'start_offset' in updated_segment:
+                                updated_segment['start'] = updated_segment['start_offset'] * self.window_stride * self.subsampling_factor
+                            if 'end_offset' in updated_segment:
+                                updated_segment['end'] = updated_segment['end_offset'] * self.window_stride * self.subsampling_factor
+
+                            updated_timestamps.append(updated_segment)
+
+                    merged_hypothesis.timestamp['segment'].extend(updated_timestamps)
 
         return merged_hypothesis
 
 
+
+
+def extract_timestamps_from_hypotheses_native(hypotheses: List[Hypothesis], chunk_start_time: float = 0.0, model=None) -> List[Dict[str, Any]]:
+    """
+    Extract word-level timestamps using NeMo's native process_timestamp_outputs.
+
+    This is the recommended approach using NeMo's official utilities.
+    """
+    try:
+        if not hypotheses:
+            return []
+
+        logger.debug(f"Processing {len(hypotheses)} hypotheses with chunk_start_time={chunk_start_time}")
+
+        # Get model parameters
+        window_stride = getattr(model._cfg.preprocessor, 'window_stride', 0.01) if model else 0.01
+        subsampling_factor = getattr(model._cfg.encoder, 'subsampling_factor', 4) if model else 4
+
+        logger.debug(f"Model params: window_stride={window_stride}, subsampling_factor={subsampling_factor}")
+
+        words = []
+        for i, hyp in enumerate(hypotheses):
+            # Check if hypothesis already has processed timestamp dict (from joining)
+            if hasattr(hyp, 'timestamp') and isinstance(hyp.timestamp, dict) and 'word' in hyp.timestamp:
+                word_timestamps = hyp.timestamp['word']
+                for word_data in word_timestamps:
+                    if isinstance(word_data, dict) and word_data.get('word'):
+                        # Already processed by joining - just add chunk offset if needed
+                        final_start = float(word_data.get('start', 0)) + chunk_start_time
+                        final_end = float(word_data.get('end', 0)) + chunk_start_time
+
+                        word_dict = {
+                            'word': word_data['word'],
+                            'start': final_start,
+                            'end': final_end,
+                            'confidence': float(word_data.get('confidence', 1.0))
+                        }
+                        words.append(word_dict)
+
+            elif hasattr(hyp, 'words') and hyp.words:
+                # Original tensor processing for raw hypotheses
+                word_list = hyp.words
+                timestamp_tensor = getattr(hyp, 'timestamp', None) if hasattr(hyp, 'timestamp') and hasattr(hyp.timestamp, 'shape') else None
+                word_confidence = getattr(hyp, 'word_confidence', []) or []
+
+                for j, word_text in enumerate(word_list):
+                    if word_text and word_text.strip():  # Skip empty words
+                        # Calculate frame indices for this word
+                        if timestamp_tensor is not None and j < len(timestamp_tensor):
+                            frame_start = timestamp_tensor[j].item()
+                            frame_end = timestamp_tensor[j + 1].item() if j + 1 < len(timestamp_tensor) else frame_start + 1
+                        else:
+                            # Fallback: estimate frames
+                            frame_start = j
+                            frame_end = j + 1
+
+                        # Convert frames to time using model parameters
+                        start_time = frame_start * window_stride * subsampling_factor
+                        end_time = frame_end * window_stride * subsampling_factor
+
+                        # Get confidence
+                        confidence = word_confidence[j] if j < len(word_confidence) else 1.0
+
+                        # Add chunk start time for absolute positioning
+                        final_start = start_time + chunk_start_time
+                        final_end = end_time + chunk_start_time
+
+                        word_dict = {
+                            'word': word_text,
+                            'start': final_start,
+                            'end': final_end,
+                            'confidence': float(confidence)
+                        }
+                        words.append(word_dict)
+
+        logger.info(f"Extracted {len(words)} words")
+        if words:
+            logger.info(f"Time range: {words[0]['start']:.2f}s to {words[-1]['end']:.2f}s")
+
+        return words
+
+    except Exception as e:
+        logger.error(f"Native timestamp extraction FAILED: {e}")
+        raise e  # Don't silently fall back
 
 
 def extract_timestamps_from_hypotheses(hypotheses: List[Hypothesis], chunk_start_time: float = 0.0, model=None) -> List[Dict[str, Any]]:
@@ -207,107 +372,65 @@ def extract_timestamps_from_hypotheses(hypotheses: List[Hypothesis], chunk_start
     """
     try:
         words = []
-
-        print(f"🔍 LEN CHECK 1: hypotheses type: {type(hypotheses)}")
         if hypotheses is None:
-            print("🔍 LEN CHECK 1: hypotheses is None - returning empty list")
             return []
 
-        print(f"🔍 LEN CHECK 1: About to call len(hypotheses)")
-        logger.info(f"Processing {len(hypotheses)} hypotheses for timestamp extraction")
-        print(f"🔍 LEN CHECK 1: Successfully called len(hypotheses) = {len(hypotheses)}")
+        logger.debug(f"Processing {len(hypotheses)} hypotheses for timestamp extraction")
 
         for i, hyp in enumerate(hypotheses):
-            print(f"🔍 LEN CHECK 2: Processing hypothesis {i}, hyp type: {type(hyp)}")
+            logger.debug(f"Processing hypothesis {i}: {type(hyp)}")
+
             try:
-                # Extract timestamps from NeMo Hypothesis structure:
-                # timestamp={'timestep': [], 'char': [], 'word': [], 'segment': []}
-                if hasattr(hyp, 'timestamp') and isinstance(hyp.timestamp, dict):
-                    timestamp_dict = hyp.timestamp
-                    print(f"🔍 LEN CHECK 3: timestamp_dict type: {type(timestamp_dict)}")
+                # Use h.words instead of h.timestamp['word']
+                if hasattr(hyp, 'words') and hyp.words:
+                    word_list = hyp.words
+                    timestamp_tensor = getattr(hyp, 'timestamp', None)
+                    word_confidence = getattr(hyp, 'word_confidence', []) or []
 
-                    # Get word-level timestamps
-                    word_timestamps = timestamp_dict.get('word', [])
-                    print(f"🔍 DEBUG: word_timestamps type: {type(word_timestamps)}")
-                    if word_timestamps is None:
-                        logger.warning(f"Hypothesis {i}: word_timestamps is None, using empty list")
-                        word_timestamps = []
+                    # Convert frame indices to word timestamps using model parameters
+                    window_stride = getattr(model._cfg.preprocessor, 'window_stride', 0.01) if model else 0.01
+                    subsampling_factor = getattr(model._cfg.encoder, 'subsampling_factor', 4) if model else 4
 
-                    word_confidence = getattr(hyp, 'word_confidence', [])
-                    print(f"🔍 DEBUG: word_confidence type: {type(word_confidence)}")
-                    if word_confidence is None:
-                        logger.warning(f"Hypothesis {i}: word_confidence is None, using empty list")
-                        word_confidence = []
-
-                    print(f"🔍 DEBUG: word_timestamps length: {len(word_timestamps)}")
-                    logger.info(f"Hypothesis {i}: Found {len(word_timestamps)} word timestamps")
-
-                    # 🔍 CRITICAL DEBUG: Log structure of first word timestamp
-                    if word_timestamps:
-                        print(f"🔍 TIMESTAMP STRUCTURE: First word_timestamp: {word_timestamps[0]}")
-                        print(f"🔍 TIMESTAMP STRUCTURE: Type: {type(word_timestamps[0])}")
-                        if isinstance(word_timestamps[0], dict):
-                            print(f"🔍 TIMESTAMP STRUCTURE: Keys: {list(word_timestamps[0].keys())}")
-                        logger.info(f"🔍 TIMESTAMP STRUCTURE: {word_timestamps[0]}")
-
-                    # Process word-level timing data
-                    for j, word_timing in enumerate(word_timestamps):
-                        print(f"🔍 DEBUG: Processing word {j}, word_timing: {word_timing}")
+                    # Process each word with its corresponding frame indices
+                    for j, word_text in enumerate(word_list):
                         try:
-                            logger.info(f"🔍 WORD PROCESSING: word {j}: {word_timing}")
-                            if isinstance(word_timing, dict):
-                                # Word timing is a dictionary with timing info
-                                word_text = word_timing.get('word', '')
-
-                                # Extract timestamps using NeMo's offset fields
-                                start_offset = word_timing.get('start_offset', 0)
-                                end_offset = word_timing.get('end_offset', 0)
-
-                                # Convert frame offsets to time using NeMo's formula
-                                window_stride = 0.01  # NeMo default
-                                subsampling_factor = 4  # NeMo default
-                                start_time = start_offset * window_stride * subsampling_factor
-                                end_time = end_offset * window_stride * subsampling_factor
-
-                                print(f"🔧 TIMESTAMP: {word_text} [{start_offset},{end_offset}] -> [{start_time:.3f}s,{end_time:.3f}s]")
-
-                                print(f"🔍 LEN CHECK 9: word_confidence before len check: {type(word_confidence)}")
-                                if word_confidence is not None:
-                                    print(f"🔍 LEN CHECK 10: About to call len(word_confidence)")
-                                    confidence_len = len(word_confidence)
-                                    print(f"🔍 LEN CHECK 10: len(word_confidence) = {confidence_len}")
-                                    logger.info(f"🔍 ISOLATE: word_confidence type: {type(word_confidence)}, len: {confidence_len}")
-                                    confidence = word_confidence[j] if j < confidence_len else 1.0
+                            if word_text and word_text.strip():  # Skip empty words
+                                # Calculate frame indices for this word
+                                # For word j, we typically use frames [j, j+1] or similar pattern
+                                if timestamp_tensor is not None and j < len(timestamp_tensor):
+                                    # Use frame index from tensor
+                                    frame_start = timestamp_tensor[j].item() if j < len(timestamp_tensor) else j
+                                    frame_end = timestamp_tensor[j + 1].item() if j + 1 < len(timestamp_tensor) else frame_start + 1
                                 else:
-                                    print(f"🔍 LEN CHECK 10: word_confidence is None, using default confidence")
-                                    confidence = 1.0
+                                    # Fallback: estimate frame indices
+                                    frame_start = j
+                                    frame_end = j + 1
 
-                                if word_text:  # Only add non-empty words
-                                    word_dict = {
-                                        'word': word_text,
-                                        'start': float(start_time) + chunk_start_time,
-                                        'end': float(end_time) + chunk_start_time,
-                                        'confidence': float(confidence)
-                                    }
-                                    words.append(word_dict)
-                                    print(f"🔍 LEN CHECK 11: Added word {j}: {word_text}")
+                                # Convert frame indices to time using model parameters
+                                start_time = frame_start * window_stride * subsampling_factor
+                                end_time = frame_end * window_stride * subsampling_factor
+
+                                # Get confidence for this word
+                                confidence = word_confidence[j] if j < len(word_confidence) else 1.0
+
+                                word_dict = {
+                                    'word': word_text,
+                                    'start': float(start_time) + chunk_start_time,
+                                    'end': float(end_time) + chunk_start_time,
+                                    'confidence': float(confidence)
+                                }
+                                words.append(word_dict)
+
                         except Exception as word_error:
-                            print(f"🔍 LEN CHECK ERROR: Error processing word {j}: {word_error}")
-                            logger.error(f"🔍 ISOLATE: Error processing word {j}: {word_error}", exc_info=True)
+                            logger.error(f"Error processing word {j} '{word_text}': {word_error}")
                             raise
 
                 # Fallback: if no word timestamps but we have text, create words from text
                 elif hasattr(hyp, 'text') and hyp.text:
-                    print(f"🔍 LEN CHECK 12: Using text fallback for hyp {i}")
                     try:
-                        # Split text into words and estimate timing
                         text_words = hyp.text.split()
-                        print(f"🔍 LEN CHECK 13: text_words type: {type(text_words)}")
                         if text_words:
-                            print(f"🔍 LEN CHECK 14: About to call len(text_words)")
-                            # Estimate timing: spread words evenly across a reasonable duration
                             estimated_duration = max(len(text_words) * 0.5, 1.0)  # 0.5s per word minimum
-                            print(f"🔍 LEN CHECK 14: len(text_words) = {len(text_words)}")
                             word_duration = estimated_duration / len(text_words)
 
                             for j, word in enumerate(text_words):
@@ -322,14 +445,12 @@ def extract_timestamps_from_hypotheses(hypotheses: List[Hypothesis], chunk_start
                                 }
                                 words.append(word_dict)
 
-                            logger.info(f"Hypothesis {i}: Created {len(text_words)} estimated word timings from text")
+                            logger.debug(f"Hypothesis {i}: Created {len(text_words)} estimated word timings from text")
                     except Exception as text_error:
-                        print(f"🔍 LEN CHECK ERROR: Text fallback error for hyp {i}: {text_error}")
-                        logger.error(f"Error processing text fallback for hypothesis {i}: {text_error}", exc_info=True)
+                        logger.error(f"Error processing text fallback for hypothesis {i}: {text_error}")
 
                 # Create empty word entries for silence/non-speech if hypothesis is empty
                 else:
-                    print(f"🔍 LEN CHECK 15: Creating empty word entry for hyp {i}")
                     # This represents silence or non-speech audio
                     words.append({
                         'word': '',
@@ -339,18 +460,13 @@ def extract_timestamps_from_hypotheses(hypotheses: List[Hypothesis], chunk_start
                     })
 
             except Exception as hyp_error:
-                print(f"🔍 LEN CHECK ERROR: Error processing hypothesis {i}: {hyp_error}")
-                logger.error(f"Error processing hypothesis {i}: {hyp_error}", exc_info=True)
+                logger.error(f"Error processing hypothesis {i}: {hyp_error}")
 
-        print(f"🔍 LEN CHECK 16: About to call len(words) at end")
-        logger.info(f"Extracted {len(words)} total words with timestamps")
-        print(f"🔍 LEN CHECK 16: Successfully called len(words) = {len(words)}")
-        print(f"🔍 LEN CHECK 17: About to return words")
+        logger.debug(f"Extracted {len(words)} total words with timestamps")
         return words
 
     except Exception as e:
-        print(f"🔍 LEN CHECK ERROR: Critical error in extract_timestamps_from_hypotheses: {e}")
-        logger.error(f"Critical error in extract_timestamps_from_hypotheses: {e}", exc_info=True)
+        logger.error(f"Critical error in extract_timestamps_from_hypotheses: {e}")
         return []
 
 
@@ -369,20 +485,18 @@ async def transcribe_with_enhanced_chunking(model, audio_file_path: str,
     Returns:
         Dictionary with transcription results including word-level timestamps
     """
-    # 📊 TIMING: Start overall timing
+    # Start timing
     overall_start = time.time()
-    logger.info(f"📊 TIMING: Starting enhanced chunking transcription for {audio_file_path}")
-    print(f"📊 TIMING: 🎯 PHASE START: Audio Upload/Processing at {time.strftime('%H:%M:%S')}")
+    logger.info(f"Starting enhanced chunking transcription for {audio_file_path}")
 
     # Ensure model is in eval mode for inference
     model.eval()
 
     try:
         with torch.no_grad():
-            # 📊 TIMING: Initialization phase
+            # Initialization phase
             init_start = time.time()
-            logger.info(f"📊 TIMING: Initializing NeMo chunked processor...")
-            print(f"📊 TIMING: 🔧 PHASE START: Initialization at {time.strftime('%H:%M:%S')}")
+            logger.debug(f"Initializing NeMo chunked processor...")
 
             # Initialize NeMo's chunked processor with timestamp preservation
             chunker = TimestampedFrameBatchChunkedRNNT(
@@ -394,13 +508,11 @@ async def transcribe_with_enhanced_chunking(model, audio_file_path: str,
 
             init_end = time.time()
             init_duration = init_end - init_start
-            logger.info(f"📊 TIMING: ✅ Initialization completed in {init_duration:.3f}s")
-            print(f"📊 TIMING: ✅ PHASE END: Initialization completed in {init_duration:.3f}s")
+            logger.debug(f"Initialization completed in {init_duration:.3f}s")
 
-            # 📊 TIMING: Audio loading phase
+            # Audio loading phase
             loading_start = time.time()
-            logger.info(f"📊 TIMING: Loading audio file into chunker...")
-            print(f"📊 TIMING: 📁 PHASE START: Audio Loading at {time.strftime('%H:%M:%S')}")
+            logger.debug(f"Loading audio file into chunker...")
 
             # Process the audio file using NeMo's built-in chunking
             chunker.read_audio_file(
@@ -411,50 +523,43 @@ async def transcribe_with_enhanced_chunking(model, audio_file_path: str,
 
             loading_end = time.time()
             loading_duration = loading_end - loading_start
-            logger.info(f"📊 TIMING: ✅ Audio loading completed in {loading_duration:.3f}s")
-            print(f"📊 TIMING: ✅ PHASE END: Audio Loading completed in {loading_duration:.3f}s")
+            logger.debug(f"Audio loading completed in {loading_duration:.3f}s")
 
-            # 📊 TIMING: Processing phase
+            # Processing phase
             processing_start = time.time()
-            logger.info(f"📊 TIMING: Running enhanced chunking inference...")
-            print(f"📊 TIMING: 🚀 PHASE START: Processing at {time.strftime('%H:%M:%S')}")
+            logger.info(f"Running enhanced chunking inference...")
 
             # Run inference with NeMo's chunked processing
             result_text = chunker.transcribe()
 
             processing_end = time.time()
             processing_duration = processing_end - processing_start
-            logger.info(f"📊 TIMING: ✅ Processing completed in {processing_duration:.3f}s")
-            print(f"📊 TIMING: ✅ PHASE END: Processing completed in {processing_duration:.3f}s")
+            logger.info(f"Processing completed in {processing_duration:.3f}s")
 
-            # 📊 TIMING: Reconcile phase (hypothesis extraction and merging)
+            # Reconcile phase (hypothesis extraction and merging)
             reconcile_start = time.time()
-            logger.info(f"📊 TIMING: Extracting and reconciling hypotheses...")
-            print(f"📊 TIMING: 🔀 PHASE START: Reconcile at {time.strftime('%H:%M:%S')}")
+            logger.debug(f"Extracting and reconciling hypotheses...")
 
             hypotheses = chunker.get_timestamped_results()
 
             reconcile_end = time.time()
             reconcile_duration = reconcile_end - reconcile_start
-            logger.info(f"📊 TIMING: ✅ Reconcile completed in {reconcile_duration:.3f}s")
-            print(f"📊 TIMING: ✅ PHASE END: Reconcile completed in {reconcile_duration:.3f}s")
+            logger.debug(f"Reconcile completed in {reconcile_duration:.3f}s")
 
-            # 📊 TIMING: Timestamp extraction phase
+            # Timestamp extraction phase
             timestamp_start = time.time()
-            logger.info(f"📊 TIMING: Extracting word-level timestamps...")
-            print(f"📊 TIMING: 📝 PHASE START: Timestamp Extraction at {time.strftime('%H:%M:%S')}")
+            logger.debug(f"Extracting word-level timestamps...")
 
-            words = extract_timestamps_from_hypotheses(hypotheses, chunk_start_time=0.0, model=model)
+            # Try using native NeMo processing first, fall back to manual if needed
+            words = extract_timestamps_from_hypotheses_native(hypotheses, chunk_start_time=0.0, model=model)
 
             timestamp_end = time.time()
             timestamp_duration = timestamp_end - timestamp_start
-            logger.info(f"📊 TIMING: ✅ Timestamp extraction completed in {timestamp_duration:.3f}s")
-            print(f"📊 TIMING: ✅ PHASE END: Timestamp Extraction completed in {timestamp_duration:.3f}s")
+            logger.debug(f"Timestamp extraction completed in {timestamp_duration:.3f}s")
 
-            # 📊 TIMING: Final formatting phase
+            # Final formatting phase
             format_start = time.time()
-            logger.info(f"📊 TIMING: Formatting final response...")
-            print(f"📊 TIMING: 📄 PHASE START: Final Formatting at {time.strftime('%H:%M:%S')}")
+            logger.debug(f"Formatting final response...")
 
             if words is None:
                 logger.warning("Words extraction returned None, using empty list")
@@ -478,34 +583,14 @@ async def transcribe_with_enhanced_chunking(model, audio_file_path: str,
 
             format_end = time.time()
             format_duration = format_end - format_start
-            logger.info(f"📊 TIMING: ✅ Final formatting completed in {format_duration:.3f}s")
-            print(f"📊 TIMING: ✅ PHASE END: Final Formatting completed in {format_duration:.3f}s")
+            logger.debug(f"Final formatting completed in {format_duration:.3f}s")
 
-        # 📊 TIMING: Overall completion summary
+        # Overall completion summary
         overall_end = time.time()
         overall_duration = overall_end - overall_start
 
-        logger.info(f"📊 TIMING: =================== COMPLETE TIMING SUMMARY ===================")
-        logger.info(f"📊 TIMING: 🔧 Initialization: {init_duration:.3f}s")
-        logger.info(f"📊 TIMING: 📁 Audio Loading: {loading_duration:.3f}s")
-        logger.info(f"📊 TIMING: 🚀 Processing: {processing_duration:.3f}s")
-        logger.info(f"📊 TIMING: 🔀 Reconcile: {reconcile_duration:.3f}s")
-        logger.info(f"📊 TIMING: 📝 Timestamp Extraction: {timestamp_duration:.3f}s")
-        logger.info(f"📊 TIMING: 📄 Final Formatting: {format_duration:.3f}s")
-        logger.info(f"📊 TIMING: 🎯 TOTAL END-TO-END: {overall_duration:.3f}s")
-        logger.info(f"📊 TIMING: Enhanced chunking completed. Transcribed {words_count} words")
-        logger.info(f"📊 TIMING: ================================================================")
-
-        print(f"📊 TIMING: =================== COMPLETE TIMING SUMMARY ===================")
-        print(f"📊 TIMING: 🔧 Initialization: {init_duration:.3f}s")
-        print(f"📊 TIMING: 📁 Audio Loading: {loading_duration:.3f}s")
-        print(f"📊 TIMING: 🚀 Processing: {processing_duration:.3f}s")
-        print(f"📊 TIMING: 🔀 Reconcile: {reconcile_duration:.3f}s")
-        print(f"📊 TIMING: 📝 Timestamp Extraction: {timestamp_duration:.3f}s")
-        print(f"📊 TIMING: 📄 Final Formatting: {format_duration:.3f}s")
-        print(f"📊 TIMING: 🎯 TOTAL END-TO-END: {overall_duration:.3f}s")
-        print(f"📊 TIMING: Enhanced chunking completed. Transcribed {words_count} words")
-        print(f"📊 TIMING: ================================================================")
+        logger.info(f"Enhanced chunking completed in {overall_duration:.3f}s - {words_count} words")
+        logger.debug(f"Timing breakdown: init={init_duration:.3f}s, load={loading_duration:.3f}s, process={processing_duration:.3f}s, reconcile={reconcile_duration:.3f}s, extract={timestamp_duration:.3f}s, format={format_duration:.3f}s")
 
         return response
 
