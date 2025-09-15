@@ -7,7 +7,7 @@ Handles conversation CRUD operations, audio processing, and transcript managemen
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from advanced_omi_backend.auth import current_active_user
 from advanced_omi_backend.client_manager import (
@@ -89,3 +89,58 @@ async def update_transcript_segment(
     return await conversation_controller.update_transcript_segment(
         audio_uuid, segment_index, current_user, speaker_id, start_time, end_time
     )
+
+
+# New reprocessing endpoints
+@router.post("/{audio_uuid}/reprocess-transcript")
+async def reprocess_transcript(
+    audio_uuid: str, current_user: User = Depends(current_active_user)
+):
+    """Reprocess transcript for a conversation. Users can only reprocess their own conversations."""
+    return await conversation_controller.reprocess_transcript(audio_uuid, current_user)
+
+
+@router.post("/{audio_uuid}/reprocess-memory")
+async def reprocess_memory(
+    audio_uuid: str,
+    current_user: User = Depends(current_active_user),
+    transcript_version_id: str = Query(...)
+):
+    """Reprocess memory extraction for a specific transcript version. Users can only reprocess their own conversations."""
+    return await conversation_controller.reprocess_memory(audio_uuid, transcript_version_id, current_user)
+
+
+@router.post("/{audio_uuid}/activate-transcript/{version_id}")
+async def activate_transcript_version(
+    audio_uuid: str,
+    version_id: str,
+    current_user: User = Depends(current_active_user)
+):
+    """Activate a specific transcript version. Users can only modify their own conversations."""
+    return await conversation_controller.activate_transcript_version(audio_uuid, version_id, current_user)
+
+
+@router.post("/{audio_uuid}/activate-memory/{version_id}")
+async def activate_memory_version(
+    audio_uuid: str,
+    version_id: str,
+    current_user: User = Depends(current_active_user)
+):
+    """Activate a specific memory version. Users can only modify their own conversations."""
+    return await conversation_controller.activate_memory_version(audio_uuid, version_id, current_user)
+
+
+@router.get("/{audio_uuid}/versions")
+async def get_conversation_version_history(
+    audio_uuid: str, current_user: User = Depends(current_active_user)
+):
+    """Get version history for a conversation. Users can only access their own conversations."""
+    return await conversation_controller.get_conversation_version_history(audio_uuid, current_user)
+
+
+@router.delete("/{audio_uuid}")
+async def delete_conversation(
+    audio_uuid: str, current_user: User = Depends(current_active_user)
+):
+    """Delete a conversation and its associated audio file. Users can only delete their own conversations."""
+    return await conversation_controller.delete_conversation(audio_uuid, current_user)
