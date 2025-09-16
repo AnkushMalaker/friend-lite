@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y \
     git \
     ffmpeg \
     curl \
+    cmake \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
     # portaudio19-dev \
     # libasound2-dev \
@@ -15,23 +17,21 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files first (for better caching)
-COPY pyproject.toml uv.lock ./
+# Copy dependency files first
+COPY pyproject.toml ./
+COPY uv.lock ./
 
-# Install dependencies BEFORE copying source code (for better layer caching)
-ARG COMPUTE_MODE=cpu
-RUN uv pip install --system setuptools wheel && \
-    if [ "$COMPUTE_MODE" = "gpu" ]; then \
-        uv pip install --system --group gpu; \
-    else \
-        uv pip install --system --group cpu; \
-    fi
-
-# Copy source code AFTER dependencies are installed
+# Copy source code
 COPY src/ src/
 
-# Install the package in editable mode (only after source is available)
-RUN uv pip install --system -e .
+# Install dependencies and package  
+# Use build arg to control CPU vs GPU mode
+ARG COMPUTE_MODE=cpu
+RUN if [ "$COMPUTE_MODE" = "gpu" ]; then \
+        uv sync --no-default-groups --group gpu; \
+    else \
+        uv sync --no-default-groups --group cpu; \
+    fi
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
@@ -40,12 +40,20 @@ RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
 ENV HF_HOME=/models
 ENV PYTHONPATH=/app
 
+# Copy the scripts
+COPY scripts/download-pyannote.py /app/scripts/
+COPY scripts/install-pytorch.py /app/scripts/
+
+# Install PyTorch using cache mount
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv run --env COMPUTE_MODE=cpu scripts/install-pytorch.py || true
+
 # Pre-download models using cache mount (only downloads if not already cached)
 RUN --mount=type=cache,target=/models \
-    python -c "import os; os.environ['HF_HOME'] = '/models'; from pyannote.audio import Pipeline; from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding; Pipeline.from_pretrained('pyannote/speaker-diarization-3.1'); PretrainedSpeakerEmbedding('pyannote/wespeaker-voxceleb-resnet34-LM'); print('Models downloaded successfully')" || true
+    uv run --env HF_HOME=/models scripts/download-pyannote.py || true
 
 # Expose port
 EXPOSE 8085
 
-# Run the module directly
-CMD ["uv", "run", "--no-dev", "--no-sync", "simple-speaker-service"] 
+# Run the service
+CMD ["uv", "run", "--no-dev", "simple-speaker-service"] 

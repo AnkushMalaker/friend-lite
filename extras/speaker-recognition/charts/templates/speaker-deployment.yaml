@@ -36,7 +36,7 @@ spec:
             - configMapRef:
                 name: friend-lite-config
             - secretRef:
-                name: friend-lite-secrets
+                name: {{ .Values.secrets.name | default (printf "%s-secrets" .Release.Name) }}
           env:
             - name: HF_HOME
               value: /models

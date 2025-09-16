@@ -1,10 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
-import { MessageSquare, RefreshCw, Calendar, User, Play, Pause, Trash2 } from 'lucide-react'
+import { MessageSquare, RefreshCw, Calendar, User, Play, Pause, ChevronDown, ChevronUp } from 'lucide-react'
 import { conversationsApi, BACKEND_URL } from '../services/api'
 
 interface Conversation {
+  conversation_id?: string
   audio_uuid: string
+  title?: string
+  summary?: string
   timestamp: number
+  created_at?: string
   client_id: string
   transcript: Array<{
     text: string
@@ -17,8 +21,13 @@ interface Conversation {
   audio_path?: string
   cropped_audio_path?: string
   speakers_identified?: string[]
-  transcription_status?: string
+  speaker_names?: { [key: string]: string }
+  duration_seconds?: number
+  memories?: any[]
+  has_memory?: boolean
   memory_processing_status?: string
+  transcription_status?: string
+  action_items?: any[]
 }
 
 // Speaker color palette for consistent colors across conversations
@@ -40,8 +49,10 @@ export default function Conversations() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [debugMode, setDebugMode] = useState(false)
-  const [deletingConversation, setDeletingConversation] = useState<string | null>(null)
-  
+
+  // Transcript expand/collapse state
+  const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
+
   // Audio playback state
   const [playingSegment, setPlayingSegment] = useState<string | null>(null) // Format: "audioUuid-segmentIndex"
   const audioRefs = useRef<{ [key: string]: HTMLAudioElement }>({})
@@ -112,6 +123,18 @@ export default function Conversations() {
     const minutes = Math.floor(duration / 60)
     const seconds = Math.floor(duration % 60)
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
+  }
+
+  const toggleTranscriptExpansion = (audioUuid: string) => {
+    setExpandedTranscripts(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(audioUuid)) {
+        newSet.delete(audioUuid)
+      } else {
+        newSet.add(audioUuid)
+      }
+      return newSet
+    })
   }
 
   const handleSegmentPlayPause = (audioUuid: string, segmentIndex: number, segment: any, audioPath: string) => {
@@ -256,14 +279,34 @@ export default function Conversations() {
             >
               {/* Conversation Header */}
               <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center space-x-4">
-                  <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
-                    <Calendar className="h-4 w-4" />
-                    <span>{formatDate(conversation.timestamp)}</span>
-                  </div>
-                  <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
-                    <User className="h-4 w-4" />
-                    <span>{conversation.client_id}</span>
+                <div className="flex flex-col space-y-2">
+                  {/* Conversation Title */}
+                  <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                    {conversation.title || "Conversation"}
+                  </h2>
+
+                  {/* Summary */}
+                  {conversation.summary && (
+                    <p className="text-sm text-gray-600 dark:text-gray-400 italic">
+                      {conversation.summary}
+                    </p>
+                  )}
+
+                  {/* Metadata */}
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
+                      <Calendar className="h-4 w-4" />
+                      <span>{formatDate(conversation.timestamp)}</span>
+                    </div>
+                    <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
+                      <User className="h-4 w-4" />
+                      <span>{conversation.client_id}</span>
+                    </div>
+                    {conversation.duration_seconds && conversation.duration_seconds > 0 && (
+                      <div className="text-sm text-gray-600 dark:text-gray-400">
+                        Duration: {Math.floor(conversation.duration_seconds / 60)}:{(conversation.duration_seconds % 60).toFixed(0).padStart(2, '0')}
+                      </div>
+                    )}
                   </div>
                 </div>
                 
@@ -319,10 +362,33 @@ export default function Conversations() {
 
               {/* Transcript */}
               <div className="space-y-2">
-                <h3 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Transcript:</h3>
-                {conversation.transcript && conversation.transcript.length > 0 ? (
-                  <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
-                    <div className="space-y-1">
+                {/* Transcript Header with Expand/Collapse */}
+                <div
+                  className="flex items-center justify-between cursor-pointer p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+                  onClick={() => toggleTranscriptExpansion(conversation.audio_uuid)}
+                >
+                  <h3 className="font-medium text-gray-900 dark:text-gray-100">
+                    Transcript {conversation.transcript && conversation.transcript.length > 0 && (
+                      <span className="text-sm text-gray-500 dark:text-gray-400 ml-1">
+                        ({conversation.transcript.length} segments)
+                      </span>
+                    )}
+                  </h3>
+                  <div className="flex items-center space-x-2">
+                    {expandedTranscripts.has(conversation.audio_uuid) ? (
+                      <ChevronUp className="h-5 w-5 text-gray-500 dark:text-gray-400 transition-transform duration-200" />
+                    ) : (
+                      <ChevronDown className="h-5 w-5 text-gray-500 dark:text-gray-400 transition-transform duration-200" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Transcript Content - Conditionally Rendered */}
+                {expandedTranscripts.has(conversation.audio_uuid) && (
+                  <div className="animate-in slide-in-from-top-2 duration-300 ease-out">
+                    {conversation.transcript && conversation.transcript.length > 0 ? (
+                      <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
+                        <div className="space-y-1">
                       {(() => {
                         // Build a speaker-to-color map for this conversation
                         const speakerColorMap: { [key: string]: string } = {};
@@ -388,13 +454,15 @@ export default function Conversations() {
                               </div>
                             </div>
                           );
-                        });
-                      })()}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-sm text-gray-500 dark:text-gray-400 italic">
-                    No transcript available
+                          });
+                        })()}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-500 dark:text-gray-400 italic p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
+                        No transcript available
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

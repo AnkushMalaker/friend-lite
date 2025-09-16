@@ -19,7 +19,7 @@ speaker:
     enabled: true
   persistence:
     modelCache:
-      enabled: true
+      enabled: false  # Using shared models cache instead
       size: 10Gi
     audioChunks:
       enabled: true
@@ -34,6 +34,11 @@ speaker:
     SIMILARITY_THRESHOLD: "0.15"
     SPEAKER_SERVICE_HOST: "0.0.0.0"
     SPEAKER_SERVICE_PORT: "8085"
+
+# Node selector configuration
+nodeSelector:
+  enabled: true
+  hostname: "babel"
 
 webui:
   image:
@@ -88,3 +93,7 @@ secrets:
   # --set secrets.deepgramApiKey="your_deepgram_key_here"
   hfToken: ""
   deepgramApiKey: ""
+  # Fixed secret name to prevent regeneration - uses existing secret from Makefile
+  name: "friend-lite-secrets"
+  # Don't create the secret, use existing one from Makefile
+  create: false

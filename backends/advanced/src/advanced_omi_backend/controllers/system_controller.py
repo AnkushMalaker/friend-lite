@@ -567,13 +567,8 @@ async def process_files_with_content(
                         f"❌ [Job {job_id}] Duration check failed for {filename}: {duration_error}"
                     )
                     raise
-                if duration > 1200:  # 20 minutes
-                    error_msg = f"File duration ({duration/60:.1f} minutes) exceeds 20-minute limit"
-                    audio_logger.error(f"🔴 {error_msg}")
-                    await job_tracker.update_file_status(
-                        job_id, filename, FileStatus.SKIPPED, error_message=error_msg
-                    )
-                    continue
+                # Duration limit removed - process files of any reasonable length
+                audio_logger.info(f"📊 File duration: {duration/60:.1f} minutes")
 
                 # Validate file type
                 if not filename or not filename.lower().endswith(".wav"):
@@ -683,8 +678,19 @@ async def process_files_with_content(
                                 memory_status=memory_status,
                             )
 
-                            # First check if transcription is complete to trigger memory processing
-                            if transcription_status in ["COMPLETED", "EMPTY", "FAILED"]:
+                            # Check if transcription failed - immediately fail the job
+                            if transcription_status == "FAILED":
+                                audio_logger.error(
+                                    f"❌ [Job {job_id}] Transcription failed, marking file as failed: {filename}"
+                                )
+                                await job_tracker.update_file_status(
+                                    job_id, filename, FileStatus.FAILED, 
+                                    error_message="Transcription failed"
+                                )
+                                break  # Exit monitoring loop for this file
+                            
+                            # Check if transcription is complete to trigger memory processing
+                            elif transcription_status in ["COMPLETED", "EMPTY"]:
                                 # Trigger memory processing if not already done
                                 if memory_status == "PENDING" and not memory_triggered:
                                     audio_logger.info(
