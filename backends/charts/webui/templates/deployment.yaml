@@ -22,6 +22,11 @@ spec:
             - name: http
               containerPort: 80
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: friend-lite-config
+            - secretRef:
+                name: friend-lite-secrets
           env:
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}

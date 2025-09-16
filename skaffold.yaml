@@ -73,24 +73,15 @@ profiles:
               speaker.image.tag: "{{.IMAGE_TAG_speaker_recognition}}"
               webui.image.repository: "{{.IMAGE_REPO_speaker_recognition_ui}}"
               webui.image.tag: "{{.IMAGE_TAG_speaker_recognition_ui}}"
-              secrets.hfToken: "{{.HF_TOKEN}}"
-              secrets.deepgramApiKey: "{{.DEEPGRAM_API_KEY}}"
-              speaker.env.SIMILARITY_THRESHOLD: "{{.SIMILARITY_THRESHOLD}}"
-              speaker.env.COMPUTE_MODE: "{{.COMPUTE_MODE}}"
-              speaker.env.SPEAKER_SERVICE_HOST: "{{.SPEAKER_SERVICE_HOST}}"
-              speaker.env.SPEAKER_SERVICE_PORT: "{{.SPEAKER_SERVICE_PORT}}"
-              webui.env.REACT_UI_HOST: "{{.REACT_UI_HOST}}"
-              webui.env.REACT_UI_PORT: "{{.REACT_UI_PORT}}"
-              webui.env.REACT_UI_HTTPS: "{{.REACT_UI_HTTPS}}"
-              webui.env.WEBUI_CORS_ORIGIN: "{{.WEBUI_CORS_ORIGIN}}"
-              webui.env.VITE_ALLOWED_HOSTS: "{{.VITE_ALLOWED_HOSTS}}"
-              ingress.host: "{{.SPEAKER_HOST}}"
-              env.BACKEND_HOST: "{{.BACKEND_HOST}}"
+              # Node selector configuration
+              nodeSelector.hostname: "{{.SPEAKER_NODE}}"
               # Shared models configuration
               global.sharedModels.enabled: "true"
               global.sharedModels.useHostPath: "true"
               global.sharedModels.size: "20Gi"
               global.sharedModels.hostPath: "/shared/models"
+              global.sharedModels.nodes[0]: "anubis"
+              global.sharedModels.nodes[1]: "babel"
 
   # Infrastructure profile - deploy once, rarely updated
   - name: infrastructure
@@ -131,9 +122,6 @@ profiles:
           context: backends/advanced/webui
           docker:
             dockerfile: Dockerfile
-            buildArgs:
-              VITE_BACKEND_URL: ""
-              VITE_ALLOWED_HOSTS: "{{.VITE_ALLOWED_HOSTS}}"
 
     deploy:
       helm:
@@ -148,53 +136,30 @@ profiles:
             setValueTemplates:
               image.repository: "{{.IMAGE_REPO_advanced_backend}}"
               image.tag: "{{.IMAGE_TAG_advanced_backend}}"
-              # Override specific Kubernetes-specific values
+              # Override specific Kubernetes-specific values (not in env file)
               env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend"
               env.QDRANT_BASE_URL: "qdrant.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local"
-              # Auto-generated environment variables from skaffold.env
-              env.BACKEND_HOST: "{{.BACKEND_HOST}}"
-              env.WEBUI_HOST: "{{.WEBUI_HOST}}"
-              env.SPEAKER_HOST: "{{.SPEAKER_HOST}}"
-              env.HF_TOKEN: "{{.HF_TOKEN}}"
-              env.DEEPGRAM_API_KEY: "{{.DEEPGRAM_API_KEY}}"
-              env.SIMILARITY_THRESHOLD: "{{.SIMILARITY_THRESHOLD}}"
-              env.SPEAKER_SERVICE_HOST: "{{.SPEAKER_SERVICE_HOST}}"
-              env.SPEAKER_SERVICE_PORT: "{{.SPEAKER_SERVICE_PORT}}"
-              env.SPEAKER_SERVICE_URL: "{{.SPEAKER_SERVICE_URL}}"
-              env.REACT_UI_HOST: "{{.REACT_UI_HOST}}"
-              env.REACT_UI_PORT: "{{.REACT_UI_PORT}}"
-              env.WEBUI_CORS_ORIGIN: "{{.WEBUI_CORS_ORIGIN}}"
-              env.MEMORY_PROVIDER: "{{.MEMORY_PROVIDER}}"
-              env.OPENMEMORY_MCP_URL: "{{.OPENMEMORY_MCP_URL}}"
               persistence.storageClass: "openebs-hostpath"
               persistence.size: "10Gi"
               service.nodePort: "{{.BACKEND_NODEPORT}}"
-              # Ingress configuration - Using escaped values to handle domains with dots
+              # Ingress configuration
               ingress.hosts[0].host: "{{.BACKEND_HOST}}"
               ingress.hosts[1].host: "{{.EXTERNAL_DOMAIN}}"
-              # CORS_ORIGINS - Temporarily disabled due to Helm parsing issues with domains containing dots and commas
-              # env.CORS_ORIGINS: "https://{{.BACKEND_HOST}},http://{{.BACKEND_HOST}},https://{{.EXTERNAL_DOMAIN}},http://{{.EXTERNAL_DOMAIN}}"
-
+              # Node selector
+              nodeSelector.kubernetes\.io/hostname: anubis
 
           - name: webui
             chartPath: backends/charts/webui
             namespace: "{{.APPLICATION_NAMESPACE}}"
-            valuesFiles:
-              - backends/charts/webui/ingress-values.yaml
             setValueTemplates:
               image.repository: "{{.IMAGE_REPO_webui}}"
               image.tag: "{{.IMAGE_TAG_webui}}"
-              # Auto-generated environment variables from skaffold.env
-              env.WEBUI_HOST: "{{.WEBUI_HOST}}"
-              env.BACKEND_HOST: "{{.BACKEND_HOST}}"
-              env.SPEAKER_HOST: "{{.SPEAKER_HOST}}"
-              env.WEBUI_CORS_ORIGIN: "{{.WEBUI_CORS_ORIGIN}}"
-              env.REACT_UI_HOST: "{{.REACT_UI_HOST}}"
-              env.REACT_UI_PORT: "{{.REACT_UI_PORT}}"
               service.nodePort: "{{.WEBUI_NODEPORT}}"
-              # Ingress configuration handled via values file due to Helm --set parsing limitations
-              # See: generated-values.yaml files created by Makefile
-              # VITE_ALLOWED_HOSTS moved to build-time configuration
+              # Ingress configuration
+              ingress.hosts[0].host: "{{.WEBUI_HOST}}"
+              ingress.hosts[1].host: "{{.EXTERNAL_DOMAIN}}"
+              # Node selector
+              nodeSelector.kubernetes\.io/hostname: anubis
 
   - name: speaker-recognition-gtx1070
     build:
@@ -210,8 +175,6 @@ profiles:
           context: extras/speaker-recognition/webui
           docker:
             dockerfile: Dockerfile
-            buildArgs:
-              VITE_ALLOWED_HOSTS: "{{.VITE_ALLOWED_HOSTS}}"
     deploy:
       helm:
         releases:
@@ -223,19 +186,6 @@ profiles:
               speaker.image.tag: "{{.IMAGE_TAG_speaker_recognition}}"
               webui.image.repository: "{{.IMAGE_REPO_speaker_recognition_ui}}"
               webui.image.tag: "{{.IMAGE_TAG_speaker_recognition_ui}}"
-              secrets.hfToken: "{{.HF_TOKEN}}"
-              secrets.deepgramApiKey: "{{.DEEPGRAM_API_KEY}}"
-              speaker.env.SIMILARITY_THRESHOLD: "{{.SIMILARITY_THRESHOLD}}"
-              speaker.env.COMPUTE_MODE: "{{.COMPUTE_MODE}}"
-              speaker.env.SPEAKER_SERVICE_HOST: "{{.SPEAKER_SERVICE_HOST}}"
-              speaker.env.SPEAKER_SERVICE_PORT: "{{.SPEAKER_SERVICE_PORT}}"
-              webui.env.REACT_UI_HOST: "{{.REACT_UI_HOST}}"
-              webui.env.REACT_UI_PORT: "{{.REACT_UI_PORT}}"
-              webui.env.REACT_UI_HTTPS: "{{.REACT_UI_HTTPS}}"
-              # webui environment variables set by main speaker-recognition profile to avoid duplicates
-              # webui.env.WEBUI_CORS_ORIGIN: "{{.WEBUI_CORS_ORIGIN}}"
-              # webui.env.VITE_ALLOWED_HOSTS: "{{.VITE_ALLOWED_HOSTS}}"
-              ingress.host: "{{.SPEAKER_HOST}}"
               # Shared models configuration
               global.sharedModels.enabled: "true"
               global.sharedModels.useHostPath: "true"

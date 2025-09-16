@@ -16,6 +16,10 @@ spec:
       labels:
         app: {{ .Release.Name }}-speaker
     spec:
+      {{- if .Values.nodeSelector.enabled }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.nodeSelector.hostname }}
+      {{- end }}
       tolerations:
         - key: "gpu"
           operator: "Equal"
@@ -28,6 +32,11 @@ spec:
             - name: http
               containerPort: {{ .Values.speaker.service.port }}
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: friend-lite-config
+            - secretRef:
+                name: friend-lite-secrets
           env:
             - name: HF_HOME
               value: /models

@@ -24,9 +24,9 @@ spec:
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: advanced-backend-env
+                name: friend-lite-config
             - secretRef:
-                name: advanced-backend-secrets
+                name: friend-lite-secrets
           env:
             # Override specific values from Kubernetes/Helm if needed
             {{- range $key, $value := .Values.env }}
@@ -53,6 +53,8 @@ spec:
             {{- if .Values.persistence.enabled }}
             - name: data-volume
               mountPath: {{ .Values.persistence.mountPath }}
+            - name: data-volume
+              mountPath: /app/audio_chunks
             {{- end }}
             - name: mem0-ca-cert
               mountPath: /etc/ssl/certs/mem0-ca.crt
