@@ -353,29 +353,28 @@ async def delete_conversation(audio_uuid: str, user: User):
                 content={"error": f"Conversation with audio_uuid '{audio_uuid}' not found"}
             )
 
-        # Delete associated audio files
+        # Delete associated audio files (safely within base directory)
+        base_dir = Path("/app/audio_chunks").resolve()
         deleted_files = []
-        if audio_path:
-            try:
-                # Construct full path to audio file
-                full_audio_path = Path("/app/audio_chunks") / audio_path
-                if full_audio_path.exists():
-                    full_audio_path.unlink()
-                    deleted_files.append(str(full_audio_path))
-                    logger.info(f"Deleted audio file: {full_audio_path}")
-            except Exception as e:
-                logger.warning(f"Failed to delete audio file {audio_path}: {e}")
 
-        if cropped_audio_path:
+        def _delete_if_safe(rel_path: str):
             try:
-                # Construct full path to cropped audio file
-                full_cropped_path = Path("/app/audio_chunks") / cropped_audio_path
-                if full_cropped_path.exists():
-                    full_cropped_path.unlink()
-                    deleted_files.append(str(full_cropped_path))
-                    logger.info(f"Deleted cropped audio file: {full_cropped_path}")
-            except Exception as e:
-                logger.warning(f"Failed to delete cropped audio file {cropped_audio_path}: {e}")
+                p = (base_dir / rel_path).resolve()
+                # Prevent deletion outside base_dir
+                if not p.is_relative_to(base_dir):
+                    logger.warning("Refusing to delete outside audio dir: %s", p)
+                    return
+                if p.exists():
+                    p.unlink()
+                    deleted_files.append(str(p))
+                    logger.info("Deleted audio file: %s", p)
+            except OSError as e:
+                logger.warning("Failed to delete audio file %s: %s", rel_path, e)
+
+        if audio_path:
+            _delete_if_safe(audio_path)
+        if cropped_audio_path:
+            _delete_if_safe(cropped_audio_path)
 
         logger.info(f"Successfully deleted conversation {audio_uuid} for user {user.user_id}")
         
@@ -388,9 +387,9 @@ async def delete_conversation(audio_uuid: str, user: User):
             }
         )
 
-    except Exception as e:
-        logger.error(f"Error deleting conversation {audio_uuid}: {e}")
+    except Exception:
+        logger.exception("Error deleting conversation %s", audio_uuid)
         return JSONResponse(
             status_code=500,
-            content={"error": f"Failed to delete conversation: {str(e)}"}
+            content={"error": "Failed to delete conversation"}
         )

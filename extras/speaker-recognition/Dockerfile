@@ -9,18 +9,19 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
     # portaudio19-dev \
     # libasound2-dev \
-t 
+
 WORKDIR /app
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files first
+# Copy dependency files first (for better caching)
 COPY pyproject.toml ./
 COPY uv.lock ./
 
-# Copy the source code maintaining the src/ structure
-COPY src/ ./src/
+# Create minimal package structure for dependency installation
+RUN mkdir -p src/simple_speaker_recognition
+COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 
 # Install dependencies and package  
 # Use build arg to control CPU vs GPU mode
@@ -37,10 +38,6 @@ RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
 # Set environment variables
 ENV HF_HOME=/models
 ENV PYTHONPATH=/app
-
-# Pre-download models using cache mount (only downloads if not already cached)
-RUN --mount=type=cache,target=/models \
-    python -c "import os; os.environ['HF_HOME'] = '/models'; from pyannote.audio import Pipeline; from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding; Pipeline.from_pretrained('pyannote/speaker-diarization-3.1'); PretrainedSpeakerEmbedding('pyannote/wespeaker-voxceleb-resnet34-LM'); print('Models downloaded successfully')" || true
 
 # Expose port
 EXPOSE 8085
