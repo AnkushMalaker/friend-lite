@@ -42,11 +42,17 @@ class OpenMemoryMCPService(MemoryServiceBase):
     
     def __init__(
         self, 
-        server_url: str = os.getenv("OPENMEMORY_MCP_URL", "http://localhost:8765"),
-        client_name: str =  os.getenv("OPENMEMORY_CLIENT_NAME", "friend_lite"),
-        user_id: str = os.getenv("OPENMEMORY_USER_ID", "default"),
-        timeout: int = int(os.getenv("OPENMEMORY_TIMEOUT", "30"))
+    def __init__(
+        self,
+        server_url: Optional[str] = None,
+        client_name: Optional[str] = None,
+        user_id: Optional[str] = None,
+        timeout: Optional[int] = None,
     ):
+        self.server_url = server_url or os.getenv("OPENMEMORY_MCP_URL", "http://localhost:8765")
+        self.client_name = client_name or os.getenv("OPENMEMORY_CLIENT_NAME", "friend_lite")
+        self.user_id = user_id or os.getenv("OPENMEMORY_USER_ID", "default")
+        self.timeout = int(timeout or os.getenv("OPENMEMORY_TIMEOUT", "30"))
         """Initialize OpenMemory MCP service as a thin client.
         
         This service delegates all memory processing to the OpenMemory MCP server:
