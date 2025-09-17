@@ -251,6 +251,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "easy-audio-interfaces" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-12-asr-services-parakeet'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-12-asr-services-demo' or extra != 'group-12-asr-services-parakeet'" },
     { name = "python-multipart" },
@@ -285,8 +286,9 @@ parakeet = [
 
 [package.metadata]
 requires-dist = [
-    { name = "easy-audio-interfaces", specifier = ">=0.6.0" },
+    { name = "easy-audio-interfaces", specifier = ">=0.7.1" },
     { name = "fastapi", specifier = ">=0.115.12" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "silero-vad", specifier = ">=5.1.2" },
@@ -1000,7 +1002,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf57
 
 [[package]]
 name = "easy-audio-interfaces"
-version = "0.6.0"
+version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
@@ -1011,9 +1013,9 @@ dependencies = [
     { name = "websockets" },
     { name = "wyoming" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cc/0a/ab7313eca395daf3e69ca484ac39d555aa17609e7cd4209a489f33408ca8/easy_audio_interfaces-0.6.0.tar.gz", hash = "sha256:70fbf82df690a59aeb0e41799289a9f18ccb77b58978935269b928c617b5568d", size = 35602, upload_time = "2025-07-01T15:03:28.315Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/e6/9e3ff12be5b4a3e8579d7504c3f4a8981561ca75339eada4a56452092f98/easy_audio_interfaces-0.7.1.tar.gz", hash = "sha256:04cccc20cf342a89efcf079ab05a4343b57a0be8491f9519cdaf92cd421a8a7f", size = 36620, upload_time = "2025-07-13T21:27:40.669Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/69/a5/9eaecdbdcdc0d429f129c69e7f6a085578e2a066dffab104ef073d7f53c5/easy_audio_interfaces-0.6.0-py3-none-any.whl", hash = "sha256:146888390f77e9b00dad4d8812e0cdbb1d48c31bb201eb33910408b010bfbd2d", size = 41550, upload_time = "2025-07-01T15:03:27.187Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/6c/18de57f237cf90dd32a299365707a31a6b42b7b7fff4593f3867818e6afd/easy_audio_interfaces-0.7.1-py3-none-any.whl", hash = "sha256:6ee94d9636da35a3bd0cafb41498c2d0e5b8d16d746ba8f46392891e956fb199", size = 43112, upload_time = "2025-07-13T21:27:39.289Z" },
 ]
 
 [[package]]
