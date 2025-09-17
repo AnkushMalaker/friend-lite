@@ -10,7 +10,6 @@ from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.config import get_speech_detection_settings, get_conversation_stop_settings, load_diarization_settings_from_file
-from advanced_omi_backend.conversation_repository import get_conversation_repository
 from advanced_omi_backend.database import conversations_col, ConversationsRepository
 from advanced_omi_backend.llm_client import async_generate
 from advanced_omi_backend.processors import AudioCroppingItem, MemoryProcessingItem, get_processor_manager
@@ -199,9 +198,11 @@ class TranscriptionManager:
             transcript_result = await self._get_transcript(audio_duration_seconds)
             # Process the result uniformly
             await self._process_transcript_result(transcript_result)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             # Signal transcription failure
-            logger.error(f"Transcription failed for {self._current_audio_uuid}: {e}")
+            logger.exception(f"Transcription failed for {self._current_audio_uuid}: {e}")
             if self._current_audio_uuid:
                 # Update database status to FAILED
                 if self.chunk_repo:
