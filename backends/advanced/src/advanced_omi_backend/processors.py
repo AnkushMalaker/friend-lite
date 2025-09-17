@@ -1026,7 +1026,6 @@ class ProcessorManager:
                     item.user_id,
                     item.user_email,
                     allow_update=True,
-                    db_helper=None,  # Using ConversationRepository now
                 ),
                 timeout=3600,  # 60 minutes
             )

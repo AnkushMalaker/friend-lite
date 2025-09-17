@@ -366,8 +366,29 @@ async def update_transcript_segment(
 async def delete_conversation(audio_uuid: str, user: User):
     """Delete a conversation and its associated audio file. Users can only delete their own conversations."""
     try:
+        # Create masked identifier for logging
+        masked_uuid = f"{audio_uuid[:8]}...{audio_uuid[-4:]}" if len(audio_uuid) > 12 else "***"
+        logger.info(f"Attempting to delete conversation: {masked_uuid}")
+
+        # Detailed debugging only when debug level is enabled
+        if logger.isEnabledFor(logging.DEBUG):
+            total_count = await chunks_col.count_documents({})
+            logger.debug(f"Total conversations in collection: {total_count}")
+            logger.debug(f"UUID length: {len(audio_uuid)}, type: {type(audio_uuid)}")
+
         # First, get the conversation to check ownership
         conversation = await chunks_col.find_one({"audio_uuid": audio_uuid})
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Conversation lookup result: {'found' if conversation else 'not found'}")
+            if conversation:
+                logger.debug(f"Found conversation with client_id: {conversation.get('client_id')}")
+            else:
+                # Try alternative queries for debugging
+                regex_result = await chunks_col.find_one({"audio_uuid": {"$regex": f"^{audio_uuid}$", "$options": "i"}})
+                contains_result = await chunks_col.find_one({"audio_uuid": {"$regex": audio_uuid}})
+                logger.debug(f"Alternative query attempts - case insensitive: {'found' if regex_result else 'not found'}, substring: {'found' if contains_result else 'not found'}")
+        
         if not conversation:
             return JSONResponse(
                 status_code=404,
