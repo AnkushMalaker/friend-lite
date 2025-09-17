@@ -26,6 +26,7 @@ interface Conversation {
   memories?: any[]
   has_memory?: boolean
   memory_processing_status?: string
+  transcription_status?: string
   action_items?: any[]
 }
 

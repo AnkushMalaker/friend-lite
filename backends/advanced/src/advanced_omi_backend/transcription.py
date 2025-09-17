@@ -572,8 +572,6 @@ class TranscriptionManager:
         # Calculate speech duration
         if valid_words:
             speech_duration = valid_words[-1].get("end", 0) - valid_words[0].get("start", 0)
-            if speech_duration < settings["min_duration"]:
-                return {"has_speech": False, "reason": f"Speech too short ({speech_duration:.1f}s < {settings['min_duration']}s)"}
 
             return {
                 "has_speech": True,
