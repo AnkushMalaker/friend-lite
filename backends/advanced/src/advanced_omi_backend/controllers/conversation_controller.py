@@ -365,49 +365,28 @@ async def update_transcript_segment(
 async def delete_conversation(audio_uuid: str, user: User):
     """Delete a conversation and its associated audio file. Users can only delete their own conversations."""
     try:
-        # DEBUG: Log comprehensive details about the search
-        logger.info(f"DELETE DEBUG: Starting delete for audio_uuid='{audio_uuid}'")
-        logger.info(f"DELETE DEBUG: audio_uuid type={type(audio_uuid)}, length={len(audio_uuid)}")
-        logger.info(f"DELETE DEBUG: audio_uuid repr={repr(audio_uuid)}")
-        logger.info(f"DELETE DEBUG: audio_uuid bytes={audio_uuid.encode('utf-8').hex()}")
-        logger.info(f"DELETE DEBUG: Database collection={chunks_col.name}, database={chunks_col.database.name}")
-        
-        # DEBUG: Test if ANY conversations exist in the collection
-        total_count = await chunks_col.count_documents({})
-        logger.info(f"DELETE DEBUG: Total conversations in collection: {total_count}")
-        
-        # DEBUG: Try to find a few conversations to compare
-        sample_conversations = []
-        async for doc in chunks_col.find({}).limit(3):
-            sample_conversations.append({
-                "audio_uuid": doc.get("audio_uuid"),
-                "audio_uuid_type": type(doc.get("audio_uuid")),
-                "audio_uuid_repr": repr(doc.get("audio_uuid"))
-            })
-        logger.info(f"DELETE DEBUG: Sample conversations: {sample_conversations}")
-        
-        # DEBUG: Execute the exact query we're about to use
-        query = {"audio_uuid": audio_uuid}
-        logger.info(f"DELETE DEBUG: Query being executed: {query}")
-        
+        # Create masked identifier for logging
+        masked_uuid = f"{audio_uuid[:8]}...{audio_uuid[-4:]}" if len(audio_uuid) > 12 else "***"
+        logger.info(f"Attempting to delete conversation: {masked_uuid}")
+
+        # Detailed debugging only when debug level is enabled
+        if logger.isEnabledFor(logging.DEBUG):
+            total_count = await chunks_col.count_documents({})
+            logger.debug(f"Total conversations in collection: {total_count}")
+            logger.debug(f"UUID length: {len(audio_uuid)}, type: {type(audio_uuid)}")
+
         # First, get the conversation to check ownership
-        conversation = await chunks_col.find_one(query)
-        
-        # DEBUG: Log the result
-        logger.info(f"DELETE DEBUG: Query result: {conversation is not None}")
-        if conversation:
-            logger.info(f"DELETE DEBUG: Found conversation with client_id={conversation.get('client_id')}")
-        else:
-            # DEBUG: Try alternative queries to see what might work
-            logger.info("DELETE DEBUG: Trying alternative queries...")
-            
-            # Try with regex (case insensitive)
-            regex_result = await chunks_col.find_one({"audio_uuid": {"$regex": f"^{audio_uuid}$", "$options": "i"}})
-            logger.info(f"DELETE DEBUG: Case-insensitive regex query result: {regex_result is not None}")
-            
-            # Try to find any conversation containing this uuid as substring
-            contains_result = await chunks_col.find_one({"audio_uuid": {"$regex": audio_uuid}})
-            logger.info(f"DELETE DEBUG: Contains substring query result: {contains_result is not None}")
+        conversation = await chunks_col.find_one({"audio_uuid": audio_uuid})
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Conversation lookup result: {'found' if conversation else 'not found'}")
+            if conversation:
+                logger.debug(f"Found conversation with client_id: {conversation.get('client_id')}")
+            else:
+                # Try alternative queries for debugging
+                regex_result = await chunks_col.find_one({"audio_uuid": {"$regex": f"^{audio_uuid}$", "$options": "i"}})
+                contains_result = await chunks_col.find_one({"audio_uuid": {"$regex": audio_uuid}})
+                logger.debug(f"Alternative query attempts - case insensitive: {'found' if regex_result else 'not found'}, substring: {'found' if contains_result else 'not found'}")
         
         if not conversation:
             return JSONResponse(
