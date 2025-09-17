@@ -316,12 +316,12 @@ class ProcessorManager:
 
     async def queue_audio(self, item: AudioProcessingItem):
         """Queue audio for processing."""
-        audio_logger.info(
+        audio_logger.debug(
             f"📥 queue_audio called for client {item.client_id}, audio chunk: {len(item.audio_chunk.audio)} bytes"
         )
         await self.audio_queue.put(item)
         queue_size = self.audio_queue.qsize()
-        audio_logger.info(
+        audio_logger.debug(
             f"✅ Successfully queued audio for client {item.client_id}, queue size: {queue_size}"
         )
 
@@ -620,12 +620,12 @@ class ProcessorManager:
                     # Get item with timeout to allow periodic health checks
                     queue_size = self.audio_queue.qsize()
                     if queue_size > 0:
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"🔄 Audio processor waiting for items, queue size: {queue_size}"
                         )
                     item = await asyncio.wait_for(self.audio_queue.get(), timeout=30.0)
                     
-                    audio_logger.info(
+                    audio_logger.debug(
                         f"📦 Audio processor dequeued item for client {item.client_id if item else 'None'}"
                     )
 
@@ -734,7 +734,7 @@ class ProcessorManager:
                         )
                     finally:
                         self.audio_queue.task_done()
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"✅ Completed processing audio item for client {item.client_id if item else 'None'}"
                         )
 
