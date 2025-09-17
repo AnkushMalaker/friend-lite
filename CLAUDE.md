@@ -677,6 +677,29 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 - **GET /users/me**: Get current authenticated user
 - **GET /api/auth/config**: Authentication configuration
 
+### Development Reset Endpoints
+Useful endpoints for resetting state during development:
+
+#### Data Cleanup
+- **DELETE /api/admin/memory/delete-all**: Delete all memories for the current user
+- **DELETE /api/memories/{memory_id}**: Delete a specific memory
+- **DELETE /api/conversations/{audio_uuid}**: Delete a specific conversation and its audio file
+- **DELETE /api/chat/sessions/{session_id}**: Delete a chat session and all its messages
+- **DELETE /api/users/{user_id}**: Delete a user (Admin only)
+  - Optional query params: `delete_conversations=true`, `delete_memories=true`
+
+#### Quick Reset Commands
+```bash
+# Reset all data (development only)
+cd backends/advanced
+sudo rm -rf data/
+
+# Reset Docker volumes
+docker compose down -v
+docker compose up --build -d
+```
+
+
 ## Speaker Recognition Service Features
 
 ### Speaker Analysis & Visualization

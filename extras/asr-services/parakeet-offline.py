@@ -24,6 +24,7 @@ import nemo.collections.asr as nemo_asr
 import numpy as np
 import torch
 import uvicorn
+import wave
 from easy_audio_interfaces.audio_interfaces import ResamplingBlock
 from easy_audio_interfaces.filesystem import LocalFileSink, LocalFileStreamer
 from fastapi import (
@@ -38,6 +39,13 @@ from fastapi.responses import JSONResponse
 from silero_vad import VADIterator, load_silero_vad
 from wyoming.audio import AudioChunk
 
+# Import enhanced chunking modules
+from enhanced_chunking import (
+    TimestampedFrameBatchChunkedRNNT,
+    extract_timestamps_from_hypotheses,
+    transcribe_with_enhanced_chunking,
+)
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -46,6 +54,13 @@ PARAKEET_SAMPLING_RATE = VAD_SAMPLING_RATE = 16_000
 CHUNK_SAMPLES = 512  # Silero requirement (32 ms @ 16 kHz)
 MAX_SPEECH_SECS = 120  # Max duration of a speech segment
 MIN_SPEECH_SECS = 0.5  # Min duration for transcription
+
+# Enhanced chunking configuration
+CHUNKING_ENABLED = os.getenv("CHUNKING_ENABLED", "true").lower() == "true"
+CHUNK_DURATION_SECONDS = float(os.getenv("CHUNK_DURATION_SECONDS", "30.0"))
+OVERLAP_DURATION_SECONDS = float(os.getenv("OVERLAP_DURATION_SECONDS", "5.0"))
+MIN_AUDIO_FOR_CHUNKING = float(os.getenv("MIN_AUDIO_FOR_CHUNKING", "60.0"))  # Use chunking for audio > 60s
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.8"))
 
 @dataclass
 class ProcessEventConfig:
@@ -93,6 +108,9 @@ class SharedTranscriber:
         self._model_name = model_name
         self._lock = asyncio.Lock()
 
+        # Chunking components are now handled by enhanced_chunking.transcribe_with_enhanced_chunking
+        self.chunked_processor = None  # Will be initialized when needed
+
     async def warmup(self) -> None:
         """Warm up the ASR model."""
         logger.info("Warming up shared NeMo ASR model...")
@@ -111,9 +129,90 @@ class SharedTranscriber:
         except Exception as e:
             logger.error(f"Error during ASR model warm-up: {e}")
 
+    async def _transcribe_chunked(self, speech: Sequence[AudioChunk]) -> dict:
+        """Chunked transcription method for long audio."""
+        logger.info("Using chunked transcription for long audio")
+
+        # Save audio to temporary file for NeMo processing
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmpfile:
+            tmpfile_name = tmpfile.name
+
+            # Convert audio chunks to numpy array and save as WAV
+            audio_arrays = []
+            for chunk in speech:
+                if chunk.width == 2:
+                    audio_array = np.frombuffer(chunk.audio, dtype=np.int16).astype(np.float32) / np.iinfo(np.int16).max
+                elif chunk.width == 4:
+                    audio_array = np.frombuffer(chunk.audio, dtype=np.int32).astype(np.float32) / np.iinfo(np.int32).max
+                else:
+                    raise ValueError(f"Unsupported width: {chunk.width}")
+                audio_arrays.append(audio_array)
+
+            # Concatenate and save as WAV file
+            full_audio = np.concatenate(audio_arrays)
+
+            # Convert to int16 for WAV format
+            audio_int16 = (full_audio * np.iinfo(np.int16).max).astype(np.int16)
+
+            with wave.open(tmpfile_name, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(self._rate)
+                wav_file.writeframes(audio_int16.tobytes())
+
+        try:
+            # Use the enhanced chunking function for proper NeMo integration
+            logger.info("🔍 ISOLATE: About to call transcribe_with_enhanced_chunking")
+            result = await transcribe_with_enhanced_chunking(
+                model=self.model,
+                audio_file_path=tmpfile_name,
+                frame_len=4.0,      # 4-second frames
+                total_buffer=8.0    # 8-second total buffer
+            )
+
+            logger.info(f"🔍 ISOLATE: transcribe_with_enhanced_chunking returned: {type(result)}")
+
+            if result is None:
+                logger.error("🔍 ISOLATE: result is None!")
+                return {"text": "", "words": [], "segments": []}
+
+            logger.info(f"🔍 ISOLATE: result.get('words') type: {type(result.get('words'))}")
+            words = result.get('words', [])
+            logger.info(f"🔍 ISOLATE: words variable type: {type(words)}")
+
+            if words is None:
+                logger.warning("🔍 ISOLATE: words is None, using empty list")
+                words = []
+
+            logger.info(f"🔍 ISOLATE: About to call len() on words: {type(words)}")
+            word_count = len(words) if words else 0
+            logger.info(f"Enhanced chunking completed: {word_count} words")
+            return result
+
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(tmpfile_name)
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary file {tmpfile_name}: {e}")
+
     async def _transcribe(self, speech: Sequence[AudioChunk]) -> dict:
         """Internal transcription method that returns structured result."""
         assert len(speech) > 0
+
+        # Calculate total audio duration
+        total_duration = sum(
+            len(chunk.audio) / (chunk.rate * chunk.width * chunk.channels)
+            for chunk in speech
+        )
+
+        # Use chunked processing for long audio if enabled
+        if CHUNKING_ENABLED and total_duration > MIN_AUDIO_FOR_CHUNKING:
+            logger.info(f"Audio duration {total_duration:.1f}s > {MIN_AUDIO_FOR_CHUNKING}s threshold - using chunked processing")
+            return await self._transcribe_chunked(speech)
+
+        logger.info(f"Audio duration {total_duration:.1f}s - using single-pass processing")
+
         sample_rate = speech[0].rate
         channels = speech[0].channels
         sample_width = speech[0].width
@@ -186,7 +285,8 @@ class SharedTranscriber:
                 
         except Exception as e:
             logger.error(f"Error during transcription: {e}")
-            return {"text": "", "words": [], "segments": []}
+            # Re-raise the exception so HTTP endpoint can return proper error code
+            raise e
         finally:
             if tmpfile_name and os.path.exists(tmpfile_name):
                 os.remove(tmpfile_name)
@@ -345,10 +445,16 @@ async def batch_transcribe(file: UploadFile = File(...)):
     """Batch transcription endpoint."""
     if not transcriber:
         raise HTTPException(status_code=503, detail="Transcriber not initialized")
-    
+
+    request_start = time.time()
+    logger.info(f"🕐 TIMING: Transcription request started at {time.strftime('%H:%M:%S', time.localtime(request_start))}")
+
     try:
         # Read uploaded file
+        file_read_start = time.time()
         audio_content = await file.read()
+        file_read_time = time.time() - file_read_start
+        logger.info(f"🕐 TIMING: File read completed in {file_read_time:.3f}s (size: {len(audio_content)} bytes)")
         
         # Save to temporary file for processing
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
@@ -356,41 +462,78 @@ async def batch_transcribe(file: UploadFile = File(...)):
             tmp_filename = tmp_file.name
         
         try:
+            # TIMING: LocalFileStreamer creation
+            streamer_create_start = time.time()
             streamer = LocalFileStreamer(tmp_filename,
                                          chunk_size_samples=CHUNK_SAMPLES)
+            streamer_create_time = time.time() - streamer_create_start
+            logger.info(f"🕐 TIMING: LocalFileStreamer creation: {streamer_create_time:.3f}s")
+
+            # TIMING: streamer.open()
+            streamer_open_start = time.time()
             await streamer.open()
-            
-            # Get audio properties from first chunk to determine if resampling needed
+            streamer_open_time = time.time() - streamer_open_start
+            logger.info(f"🕐 TIMING: LocalFileStreamer open: {streamer_open_time:.3f}s")
+
+            # TIMING: First chunk read
+            first_chunk_start = time.time()
             first_chunk = await streamer.read()
+            first_chunk_time = time.time() - first_chunk_start
+            logger.info(f"🕐 TIMING: First chunk read: {first_chunk_time:.3f}s")
+
             original_rate = first_chunk.rate
             original_channels = first_chunk.channels
             original_width = first_chunk.width
-            
+
             logger.info(f"Input audio: {original_rate}Hz, {original_channels}ch, {original_width*8}bit")
-            
-            # Collect ALL audio chunks using iter_frames()  
+
+            # TIMING: Collect all chunks using iter_frames()
+            iter_frames_start = time.time()
             all_chunks = [first_chunk]  # Include the first chunk we already read
+            chunk_count = 1
             async for chunk in streamer.iter_frames():
                 all_chunks.append(chunk)
-            
+                chunk_count += 1
+                # Progress every 10,000 chunks
+                if chunk_count % 10000 == 0:
+                    elapsed = time.time() - iter_frames_start
+                    logger.info(f"🕐 TIMING: Loaded {chunk_count} chunks in {elapsed:.3f}s so far...")
+
+            iter_frames_time = time.time() - iter_frames_start
+            logger.info(f"🕐 TIMING: iter_frames() completed: {iter_frames_time:.3f}s for {len(all_chunks)} chunks")
             logger.info(f"Loaded {len(all_chunks)} audio chunks, total duration: {sum(len(c.audio)/(c.rate*c.width*c.channels) for c in all_chunks):.2f}s")
-            
-            # Setup resampling if needed
+
+            # TIMING: Setup resampling
+            resampling_setup_start = time.time()
             needs_resampling = (original_rate != PARAKEET_SAMPLING_RATE or original_channels != 1)
-            
+            resampling_setup_time = time.time() - resampling_setup_start
+            logger.info(f"🕐 TIMING: Resampling setup check: {resampling_setup_time:.3f}s")
+
             if needs_resampling:
                 logger.info(f"Resampling from {original_rate}Hz/{original_channels}ch to {PARAKEET_SAMPLING_RATE}Hz/1ch")
+
+                # TIMING: ResamplingBlock creation
+                resampler_create_start = time.time()
                 resampler = ResamplingBlock(
                     resample_rate=PARAKEET_SAMPLING_RATE,
                     resample_channels=1
                 )
-                
-                # Resample all chunks
+                resampler_create_time = time.time() - resampler_create_start
+                logger.info(f"🕐 TIMING: ResamplingBlock creation: {resampler_create_time:.3f}s")
+
+                # TIMING: Resample all chunks
+                resampling_start = time.time()
                 resampled_chunks = []
-                for chunk in all_chunks:
+                for i, chunk in enumerate(all_chunks):
+                    if i % 10000 == 0 and i > 0:
+                        elapsed = time.time() - resampling_start
+                        logger.info(f"🕐 TIMING: Resampled {i}/{len(all_chunks)} chunks in {elapsed:.3f}s so far...")
+
                     async for resampled_chunk in resampler.process_chunk(chunk):
                         resampled_chunks.append(resampled_chunk)
-                
+
+                resampling_time = time.time() - resampling_start
+                logger.info(f"🕐 TIMING: Resampling completed: {resampling_time:.3f}s")
                 final_chunks = resampled_chunks
                 logger.info(f"Resampled to {len(final_chunks)} chunks at {PARAKEET_SAMPLING_RATE}Hz")
             else:
@@ -398,15 +541,25 @@ async def batch_transcribe(file: UploadFile = File(...)):
                 logger.info("No resampling needed - audio already at 16kHz mono")
             
             # Transcribe with all chunks (assertion will verify they're all 16kHz)
+            transcribe_start = time.time()
+            logger.info(f"🕐 TIMING: Starting NeMo transcription with {len(final_chunks)} chunks")
             result = await transcriber.transcribe_async(final_chunks)
+            transcribe_time = time.time() - transcribe_start
+            logger.info(f"🕐 TIMING: Transcription completed in {transcribe_time:.3f}s")
+
+            total_time = time.time() - request_start
+            logger.info(f"🕐 TIMING: Total request time: {total_time:.3f}s")
             return JSONResponse(content=result)
             
         finally:
             os.unlink(tmp_filename)
             
     except Exception as e:
-        logger.error(f"Error in batch transcription: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_time = time.time() - request_start
+        if isinstance(e, HTTPException):
+            raise
+        logger.exception(f"🕐 TIMING: Error occurred after {error_time:.3f}s - {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.websocket("/stream")
 async def websocket_endpoint(websocket: WebSocket):

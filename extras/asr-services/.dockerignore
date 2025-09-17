@@ -1,6 +1,7 @@
 *
 !moonshine-online.py
 !parakeet-offline.py
+!enhanced_chunking.py
 !pyproject*.toml
 !README.md
 !uv.lock
