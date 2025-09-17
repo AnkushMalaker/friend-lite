@@ -7,6 +7,7 @@ across main.py and router modules.
 
 import logging
 import os
+import time
 from datetime import UTC, datetime
 
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -22,6 +23,7 @@ db = mongo_client.get_default_database("friend-lite")
 chunks_col = db["audio_chunks"]
 users_col = db["users"]
 speakers_col = db["speakers"]
+conversations_col = db["conversations"]
 
 
 def get_database():
@@ -35,6 +37,7 @@ def get_collections():
         "chunks_col": chunks_col,
         "users_col": users_col,
         "speakers_col": speakers_col,
+        "conversations_col": conversations_col,
     }
 
 
@@ -247,4 +250,121 @@ class AudioChunksRepository:
         result = await self.col.update_one({"audio_uuid": audio_uuid}, {"$set": update_doc})
         if result.modified_count > 0:
             logger.info(f"Updated memory processing status to {status} for {audio_uuid}")
+        return result.modified_count > 0
+
+    # ========================================
+    # SPEECH-DRIVEN CONVERSATIONS METHODS
+    # ========================================
+
+    async def add_audio_file_path(self, audio_uuid: str, file_path: str):
+        """Add new audio file path to existing session."""
+        result = await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {
+                "$push": {"audio_file_paths": file_path},
+                "$set": {"updated_at": datetime.now(UTC).isoformat()}
+            }
+        )
+        if result.modified_count > 0:
+            logger.info(f"Added audio file path {file_path} to session {audio_uuid}")
+        return result.modified_count > 0
+
+
+    async def update_speech_detection(self, audio_uuid: str, **speech_data):
+        """Update speech detection results."""
+        update_doc = {
+            "updated_at": datetime.now(UTC).isoformat()
+        }
+
+        # Add speech detection fields
+        for key, value in speech_data.items():
+            if key in ["has_speech", "conversation_created", "conversation_id",
+                      "speech_start_time", "speech_end_time", "status"]:
+                update_doc[key] = value
+
+        result = await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {"$set": update_doc}
+        )
+        if result.modified_count > 0:
+            logger.info(f"Updated speech detection for {audio_uuid}: {speech_data}")
+        return result.modified_count > 0
+
+    async def mark_conversation_created(self, audio_uuid: str, conversation_id: str):
+        """Mark that conversation was created for this audio."""
+        result = await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {"$set": {
+                "conversation_created": True,
+                "conversation_id": conversation_id,
+                "has_speech": True,
+                "status": "speech_detected",
+                "updated_at": datetime.now(UTC).isoformat()
+            }}
+        )
+        if result.modified_count > 0:
+            logger.info(f"Marked conversation created for {audio_uuid} with ID {conversation_id}")
+        return result.modified_count > 0
+
+    async def get_sessions_with_speech(self, user_id: str, limit: int = 100):
+        """Get audio sessions that have detected speech."""
+        cursor = self.col.find({
+            "user_id": user_id,
+            "has_speech": True,
+            "conversation_created": True
+        }).sort("timestamp", -1).limit(limit)
+
+        return await cursor.to_list(length=None)
+
+
+class ConversationsRepository:
+    """Repository for user-facing conversations (speech-driven architecture)."""
+
+    def __init__(self, collection):
+        self.col = collection
+
+    async def create_conversation(self, conversation_data: dict) -> str:
+        """Create new user-facing conversation."""
+        result = await self.col.insert_one(conversation_data)
+        return conversation_data["conversation_id"]
+
+    async def get_conversation(self, conversation_id: str):
+        """Get conversation by conversation_id."""
+        return await self.col.find_one({"conversation_id": conversation_id})
+
+    async def get_user_conversations(self, user_id: str, limit=100):
+        """Get all conversations for a user (only shows conversations with speech)."""
+        cursor = self.col.find({"user_id": user_id})
+        return await cursor.sort("created_at", -1).limit(limit).to_list()
+
+    async def update_conversation(self, conversation_id: str, update_data: dict):
+        """Update conversation data."""
+        result = await self.col.update_one(
+            {"conversation_id": conversation_id},
+            {"$set": {**update_data, "updated_at": datetime.now(UTC)}}
+        )
+        return result.modified_count > 0
+
+    async def add_memories(self, conversation_id: str, memories: list):
+        """Add memories to conversation."""
+        result = await self.col.update_one(
+            {"conversation_id": conversation_id},
+            {
+                "$push": {"memories": {"$each": memories}},
+                "$set": {"updated_at": datetime.now(UTC)}
+            }
+        )
+        return result.modified_count > 0
+
+    async def update_memory_processing_status(self, conversation_id: str, status: str):
+        """Update memory processing status for conversation."""
+        result = await self.col.update_one(
+            {"conversation_id": conversation_id},
+            {
+                "$set": {
+                    "memory_processing_status": status,
+                    "memory_processing_updated_at": datetime.now(UTC)
+                }
+            }
+        )
         return result.modified_count > 0

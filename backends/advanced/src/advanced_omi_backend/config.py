@@ -7,6 +7,7 @@ causing circular imports. Other configurations can be moved here as needed.
 
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -21,6 +22,19 @@ DEFAULT_DIARIZATION_SETTINGS = {
     "min_duration_off": 1.5,
     "min_speakers": 2,
     "max_speakers": 6
+}
+
+# Default speech detection settings
+DEFAULT_SPEECH_DETECTION_SETTINGS = {
+    "min_words": 5,               # Minimum words to create conversation
+    "min_confidence": 0.5,        # Word confidence threshold (unified)
+    "min_duration": 2.0,          # Minimum speech duration (seconds)
+}
+
+# Default conversation stop settings
+DEFAULT_CONVERSATION_STOP_SETTINGS = {
+    "transcription_buffer_seconds": 120,    # Periodic transcription interval (2 minutes)
+    "speech_inactivity_threshold": 60,      # Speech gap threshold for closure (1 minute)
 }
 
 # Global cache for diarization settings
@@ -105,6 +119,25 @@ def save_diarization_settings_to_file(settings):
     except Exception as e:
         logger.error(f"Error saving diarization settings to {config_path}: {e}")
         return False
+
+
+def get_speech_detection_settings():
+    """Get speech detection settings from environment or defaults."""
+
+    return {
+        "min_words": int(os.getenv("SPEECH_DETECTION_MIN_WORDS", DEFAULT_SPEECH_DETECTION_SETTINGS["min_words"])),
+        "min_confidence": float(os.getenv("SPEECH_DETECTION_MIN_CONFIDENCE", DEFAULT_SPEECH_DETECTION_SETTINGS["min_confidence"])),
+    }
+
+
+def get_conversation_stop_settings():
+    """Get conversation stop settings from environment or defaults."""
+
+    return {
+        "transcription_buffer_seconds": float(os.getenv("TRANSCRIPTION_BUFFER_SECONDS", DEFAULT_CONVERSATION_STOP_SETTINGS["transcription_buffer_seconds"])),
+        "speech_inactivity_threshold": float(os.getenv("SPEECH_INACTIVITY_THRESHOLD_SECONDS", DEFAULT_CONVERSATION_STOP_SETTINGS["speech_inactivity_threshold"])),
+        "min_word_confidence": float(os.getenv("SPEECH_DETECTION_MIN_CONFIDENCE", DEFAULT_SPEECH_DETECTION_SETTINGS["min_confidence"])),
+    }
 
 
 # Initialize settings on module load

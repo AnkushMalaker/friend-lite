@@ -594,11 +594,14 @@ docker compose up --build -d
 ### Code Style
 - **Python**: Black formatter with 100-character line length, isort for imports
 - **TypeScript**: Standard React Native conventions
-- **Import Guidelines**: 
+- **Import Guidelines**:
   - NEVER import modules in the middle of functions or files
   - ALL imports must be at the top of the file after the docstring
   - Use lazy imports sparingly and only when absolutely necessary for circular import issues
   - Group imports: standard library, third-party, local imports
+- **Error Handling Guidelines**:
+  - **Always raise errors, never silently ignore**: Use explicit error handling with proper exceptions rather than silent failures
+  - **Understand data structures**: Research and understand input/response or class structure instead of adding defensive `hasattr()` checks
 
 ### Docker Build Cache Management
 - **Default Behavior**: Docker automatically detects file changes in Dockerfile COPY/ADD instructions and invalidates cache as needed
