@@ -2,9 +2,12 @@ services:
   # Base Speaker Recognition Service Configuration
   speaker-service:
     &base-speaker-service
+    profiles: ["cpu"]
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        COMPUTE_MODE: cpu
     image: speaker-recognition:latest
     env_file:
       - .env
@@ -29,16 +32,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # CPU Profile Configuration
-  speaker-service-cpu:
-    <<: *base-speaker-service
-    profiles: ["cpu"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        COMPUTE_MODE: cpu
 
   # GPU Profile Configuration
   speaker-service-gpu:
