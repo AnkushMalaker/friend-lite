@@ -178,17 +178,55 @@ Optional:
 1. **Audio Ingestion**: OMI devices stream audio via WebSocket using Wyoming protocol with JWT auth
 2. **Wyoming Protocol Session Management**: Clients send audio-start/audio-stop events for session boundaries
 3. **Application-Level Processing**: Global queues and processors handle all audio/transcription/memory tasks
-4. **Conversation Storage**: Transcripts saved to MongoDB `audio_chunks` collection with segments array
-5. **Conversation Management**: Session-based conversation segmentation using Wyoming protocol events
-6. **Memory Processing**: Pluggable providers (Friend-Lite native with individual facts or OpenMemory MCP delegation)
-7. **Memory Storage**: Direct Qdrant (Friend-Lite) or OpenMemory server (MCP provider)
-8. **Action Items**: Automatic task detection with "Simon says" trigger phrases
-9. **Audio Optimization**: Speech segment extraction removes silence automatically
-10. **Task Tracking**: BackgroundTaskManager ensures proper cleanup of all async operations
+4. **Speech-Driven Conversation Creation**: User-facing conversations only created when speech is detected
+5. **Dual Storage System**: Audio sessions always stored in `audio_chunks`, conversations created in `conversations` collection only with speech
+6. **Versioned Processing**: Transcript and memory versions tracked with active version pointers
+7. **Memory Processing**: Pluggable providers (Friend-Lite native with individual facts or OpenMemory MCP delegation)
+8. **Memory Storage**: Direct Qdrant (Friend-Lite) or OpenMemory server (MCP provider)
+9. **Action Items**: Automatic task detection with "Simon says" trigger phrases
+10. **Audio Optimization**: Speech segment extraction removes silence automatically
+11. **Task Tracking**: BackgroundTaskManager ensures proper cleanup of all async operations
+
+### Speech-Driven Architecture
+
+**Core Principle**: Conversations are only created when speech is detected, eliminating noise-only sessions from user interfaces.
+
+**Storage Architecture**:
+- **`audio_chunks` Collection**: Always stores audio sessions by `audio_uuid` (raw audio capture)
+- **`conversations` Collection**: Only created when speech is detected, identified by `conversation_id`
+- **Speech Detection**: Analyzes transcript content, duration, and meaningfulness before conversation creation
+- **Automatic Filtering**: No user-facing conversations for silence, noise, or brief audio without speech
+
+**Benefits**:
+- Clean user experience with only meaningful conversations displayed
+- Reduced noise in conversation lists and memory processing
+- Efficient storage utilization for speech-only content
+- Automatic quality filtering without manual intervention
+
+### Versioned Transcript and Memory System
+
+**Version Architecture**:
+- **`transcript_versions`**: Array of transcript processing attempts with timestamps and providers
+- **`memory_versions`**: Array of memory extraction attempts with different models/prompts
+- **`active_transcript_version`**: Pointer to currently displayed transcript
+- **`active_memory_version`**: Pointer to currently active memory extraction
+
+**Reprocessing Capabilities**:
+- **Transcript Reprocessing**: Re-run speech-to-text with different providers or settings
+- **Memory Reprocessing**: Re-extract memories using different LLM models or prompts
+- **Version Management**: Switch between different processing results
+- **Backward Compatibility**: Legacy fields auto-populated from active versions
+
+**Data Consistency**:
+- All reprocessing operations use `conversation_id` (not `audio_uuid`)
+- DateTime objects stored as ISO strings for MongoDB/JSON compatibility
+- Legacy field support ensures existing integrations continue working
 
 ### Database Schema Details
-- **Conversations**: Stored in `audio_chunks` collection (not `conversations`)
+- **Primary Storage**: `audio_chunks` collection for all audio sessions
+- **User-Facing Storage**: `conversations` collection for speech-detected sessions only
 - **Transcript Format**: Array of segment objects with `text`, `speaker`, `start`, `end` fields
+- **Version Fields**: `transcript_versions[]`, `memory_versions[]`, `active_transcript_version`, `active_memory_version`
 - **Service Decoupling**: Conversation creation independent of memory processing
 - **Error Isolation**: Memory service failures don't affect conversation storage
 
@@ -577,6 +615,88 @@ docker compose up --build -d
 - You want access to OpenMemory's web interface
 - You're already using OpenMemory in other tools
 
+## Versioned Processing System
+
+### Overview
+
+Friend-Lite implements a comprehensive versioning system for both transcript and memory processing, allowing multiple processing attempts with different providers, models, or settings while maintaining a clean user experience.
+
+### Version Data Structure
+
+**Transcript Versions**:
+```json
+{
+  "transcript_versions": [
+    {
+      "version_id": "uuid",
+      "transcript": "processed text",
+      "segments": [...],
+      "provider": "deepgram|mistral|parakeet",
+      "model": "nova-3|voxtral-mini-2507",
+      "created_at": "2025-01-15T10:30:00Z",
+      "processing_time_seconds": 12.5,
+      "metadata": {
+        "confidence_scores": [...],
+        "speaker_diarization": true
+      }
+    }
+  ],
+  "active_transcript_version": "uuid"
+}
+```
+
+**Memory Versions**:
+```json
+{
+  "memory_versions": [
+    {
+      "version_id": "uuid",
+      "memory_count": 5,
+      "transcript_version_id": "uuid",
+      "provider": "friend_lite|openmemory_mcp",
+      "model": "gpt-4o-mini|ollama-llama3",
+      "created_at": "2025-01-15T10:32:00Z",
+      "processing_time_seconds": 45.2,
+      "metadata": {
+        "prompt_version": "v2.1",
+        "extraction_quality": "high"
+      }
+    }
+  ],
+  "active_memory_version": "uuid"
+}
+```
+
+### Reprocessing Workflows
+
+**Transcript Reprocessing**:
+1. Trigger via API: `POST /api/conversations/{conversation_id}/reprocess-transcript`
+2. System creates new transcript version with different provider/model
+3. New version added to `transcript_versions` array
+4. User can activate any version via `activate-transcript` endpoint
+5. Legacy `transcript` field automatically updated from active version
+
+**Memory Reprocessing**:
+1. Trigger via API: `POST /api/conversations/{conversation_id}/reprocess-memory`
+2. Specify which transcript version to use as input
+3. System creates new memory version using specified transcript
+4. New version added to `memory_versions` array
+5. User can activate any version via `activate-memory` endpoint
+6. Legacy `memories` field automatically updated from active version
+
+### Legacy Field Compatibility
+
+**Automatic Population**:
+- `transcript`: Auto-populated from active transcript version
+- `segments`: Auto-populated from active transcript version
+- `memories`: Auto-populated from active memory version
+- `memory_count`: Auto-populated from active memory version
+
+**Backward Compatibility**:
+- Existing API clients continue working without modification
+- WebUI displays active versions by default
+- Advanced users can access version history and switch between versions
+
 ## Development Notes
 
 ### Package Management
@@ -650,7 +770,12 @@ Project includes `.cursor/rules/always-plan-first.mdc` requiring understanding b
 - **GET /api/memories/unfiltered**: User's memories without filtering
 - **GET /api/memories/search**: Semantic memory search with relevance scoring
 - **GET /api/conversations**: User's conversations with transcripts
-- **GET /api/conversations/{audio_uuid}**: Specific conversation details
+- **GET /api/conversations/{conversation_id}**: Specific conversation details
+- **POST /api/conversations/{conversation_id}/reprocess-transcript**: Re-run transcript processing
+- **POST /api/conversations/{conversation_id}/reprocess-memory**: Re-extract memories with different parameters
+- **GET /api/conversations/{conversation_id}/versions**: Get all transcript and memory versions
+- **POST /api/conversations/{conversation_id}/activate-transcript**: Switch to a different transcript version
+- **POST /api/conversations/{conversation_id}/activate-memory**: Switch to a different memory version
 
 ### Client Management
 - **GET /api/clients/active**: Currently active WebSocket clients
@@ -711,7 +836,7 @@ curl -s -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
 curl -s -X POST \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
   -H "Content-Type: application/json" \
-  http://localhost:8000/api/conversations/{audio_uuid}/reprocess-transcript
+  http://localhost:8000/api/conversations/{conversation_id}/reprocess-transcript
 ```
 
 **Important**: Always read the .env file first using the Read tool rather than using shell commands like `grep` or `cut`. This ensures you see the exact values and can copy them accurately.
@@ -720,32 +845,40 @@ curl -s -X POST \
 Once you have the auth token, you can test the reprocessing functionality:
 
 ```bash
-# Get list of conversations to find an audio_uuid
+# Get list of conversations to find a conversation_id
 curl -s -H "Authorization: Bearer YOUR_TOKEN" \
   http://localhost:8000/api/conversations
 
-# Test transcript reprocessing
+# Test transcript reprocessing (uses conversation_id)
 curl -s -X POST \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/reprocess-transcript
+  http://localhost:8000/api/conversations/YOUR_CONVERSATION_ID/reprocess-transcript
 
-# Test memory reprocessing
+# Test memory reprocessing (uses conversation_id and transcript_version_id)
 curl -s -X POST \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/reprocess-memory
+  -d '{"transcript_version_id": "VERSION_ID"}' \
+  http://localhost:8000/api/conversations/YOUR_CONVERSATION_ID/reprocess-memory
 
-# Get transcript versions
+# Get transcript and memory versions
 curl -s -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/versions
+  http://localhost:8000/api/conversations/YOUR_CONVERSATION_ID/versions
 
 # Activate a specific transcript version
 curl -s -X POST \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"transcript_version_id": "VERSION_ID"}' \
-  http://localhost:8000/api/conversations/YOUR_AUDIO_UUID/activate-transcript
+  http://localhost:8000/api/conversations/YOUR_CONVERSATION_ID/activate-transcript
+
+# Activate a specific memory version
+curl -s -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"memory_version_id": "VERSION_ID"}' \
+  http://localhost:8000/api/conversations/YOUR_CONVERSATION_ID/activate-memory
 ```
 
 ### Development Reset Endpoints
@@ -754,7 +887,7 @@ Useful endpoints for resetting state during development:
 #### Data Cleanup
 - **DELETE /api/admin/memory/delete-all**: Delete all memories for the current user
 - **DELETE /api/memories/{memory_id}**: Delete a specific memory
-- **DELETE /api/conversations/{audio_uuid}**: Delete a specific conversation and its audio file
+- **DELETE /api/conversations/{conversation_id}**: Delete a specific conversation (keeps original audio file in audio_chunks)
 - **DELETE /api/chat/sessions/{session_id}**: Delete a chat session and all its messages
 - **DELETE /api/users/{user_id}**: Delete a user (Admin only)
   - Optional query params: `delete_conversations=true`, `delete_memories=true`

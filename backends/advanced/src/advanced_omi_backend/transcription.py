@@ -475,10 +475,23 @@ class TranscriptionManager:
                     try:
                         conversations_repo = ConversationsRepository(conversations_col)
 
-                        # Update conversation with transcript segments and speaker info
+                        # Check if this is the first transcript for this conversation
+                        conversation = await conversations_repo.get_conversation(conversation_id)
+                        if conversation and not conversation.get("active_transcript_version"):
+                            # This is the first transcript - create initial version
+                            version_id = await conversations_repo.create_transcript_version(
+                                conversation_id=conversation_id,
+                                segments=segments_to_store,
+                                provider="speech_detection",
+                                raw_data={}
+                            )
+                            if version_id:
+                                # Activate this version
+                                await conversations_repo.activate_transcript_version(conversation_id, version_id)
+                                logger.info(f"✅ Created and activated initial transcript version {version_id} for conversation {conversation_id}")
+
+                        # Update conversation with speaker info and metadata (NOT transcript data - that's in versions)
                         update_data = {
-                            "transcript": segments_to_store,
-                            "speakers_identified": list(speakers_found),
                             "speaker_names": speaker_names,
                             "updated_at": datetime.now(UTC)
                         }
@@ -625,14 +638,20 @@ class TranscriptionManager:
                 "client_id": audio_session["client_id"],
                 "title": title,
                 "summary": summary,
-                "transcript": [],  # Will be populated by existing segment processing
+
+                # Versioned system (source of truth)
+                "transcript_versions": [],
+                "active_transcript_version": None,
+                "memory_versions": [],
+                "active_memory_version": None,
+
+                # Legacy compatibility fields (auto-populated on read)
+                # Note: These will be auto-populated from active versions when retrieved
+
                 "duration_seconds": speech_analysis.get("duration", 0.0),
                 "speech_start_time": speech_analysis.get("speech_start", 0.0),
                 "speech_end_time": speech_analysis.get("speech_end", 0.0),
-                "speakers_identified": [],
                 "speaker_names": {},
-                "memories": [],
-                "memory_processing_status": "pending",
                 "action_items": [],
                 "created_at": datetime.now(UTC),
                 "updated_at": datetime.now(UTC),
