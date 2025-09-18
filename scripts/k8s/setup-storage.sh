@@ -5,6 +5,10 @@
 
 set -e
 
+# Load environment variables
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/load-env.sh"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -50,7 +54,7 @@ case $choice in
         echo
         echo -e "${BLUE}Next steps:${NC}"
         echo -e "1. Deploy the application:"
-        echo -e "   ${YELLOW}skaffold run --profile speaker-recognition --default-repo=anubis:32000${NC}"
+        echo -e "   ${YELLOW}skaffold run --profile speaker-recognition --default-repo=${CONTAINER_REGISTRY:-localhost:32000}${NC}"
         echo
         ;;
         
@@ -74,7 +78,7 @@ case $choice in
         echo
         echo -e "${BLUE}Next steps:${NC}"
         echo -e "1. Deploy the application:"
-        echo -e "   ${YELLOW}skaffold run --profile speaker-recognition --default-repo=anubis:32000${NC}"
+        echo -e "   ${YELLOW}skaffold run --profile speaker-recognition --default-repo=${CONTAINER_REGISTRY:-localhost:32000}${NC}"
         echo -e "2. Monitor model download:"
         echo -e "   ${YELLOW}kubectl logs -n speech -l app.kubernetes.io/component=speaker -f${NC}"
         echo
