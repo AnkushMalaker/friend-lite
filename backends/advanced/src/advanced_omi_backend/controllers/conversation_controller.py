@@ -485,18 +485,26 @@ async def delete_conversation(audio_uuid: str, user: User):
         )
 
 
-async def reprocess_transcript(audio_uuid: str, user: User):
+async def reprocess_transcript(conversation_id: str, user: User):
     """Reprocess transcript for a conversation. Users can only reprocess their own conversations."""
     try:
-        # Find the conversation
-        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        # Find the conversation in conversations collection
+        conversations_repo = ConversationsRepository(conversations_col)
+        conversation = await conversations_repo.get_conversation(conversation_id)
+        if not conversation:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser:
-            if not client_belongs_to_user(chunk["client_id"], user.user_id):
-                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+            return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only reprocess your own conversations."})
+
+        # Get audio_uuid for file access
+        audio_uuid = conversation["audio_uuid"]
+
+        # Get audio file path from audio_chunks collection
+        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        if not chunk:
+            return JSONResponse(status_code=404, content={"error": "Audio session not found"})
 
         audio_path = chunk.get("audio_path")
         if not audio_path:
@@ -528,7 +536,6 @@ async def reprocess_transcript(audio_uuid: str, user: User):
             )
 
         # Generate configuration hash for duplicate detection
-        # This includes audio file path and current transcription settings
         config_data = {
             "audio_path": str(full_audio_path),
             "transcription_provider": "deepgram",  # This would come from settings
@@ -538,6 +545,7 @@ async def reprocess_transcript(audio_uuid: str, user: User):
 
         # Create processing run
         run_id = await processing_runs_repo.create_run(
+            conversation_id=conversation_id,
             audio_uuid=audio_uuid,
             run_type="transcript",
             user_id=user.user_id,
@@ -545,9 +553,9 @@ async def reprocess_transcript(audio_uuid: str, user: User):
             config_hash=config_hash
         )
 
-        # Create new transcript version
-        version_id = await chunk_repo.create_transcript_version(
-            audio_uuid=audio_uuid,
+        # Create new transcript version in conversations collection
+        version_id = await conversations_repo.create_transcript_version(
+            conversation_id=conversation_id,
             processing_run_id=run_id
         )
 
@@ -560,10 +568,10 @@ async def reprocess_transcript(audio_uuid: str, user: User):
         # This is where we would integrate with the existing processor
         # For now, we'll return the version ID for the caller to handle
 
-        logger.info(f"Created transcript reprocessing job {run_id} (version {version_id}) for {audio_uuid}")
+        logger.info(f"Created transcript reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
 
         return JSONResponse(content={
-            "message": f"Transcript reprocessing started for {audio_uuid}",
+            "message": f"Transcript reprocessing started for conversation {conversation_id}",
             "run_id": run_id,
             "version_id": version_id,
             "config_hash": config_hash,
@@ -575,25 +583,28 @@ async def reprocess_transcript(audio_uuid: str, user: User):
         return JSONResponse(status_code=500, content={"error": "Error starting transcript reprocessing"})
 
 
-async def reprocess_memory(audio_uuid: str, transcript_version_id: str, user: User):
+async def reprocess_memory(conversation_id: str, transcript_version_id: str, user: User):
     """Reprocess memory extraction for a specific transcript version. Users can only reprocess their own conversations."""
     try:
-        # Find the conversation
-        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        # Find the conversation in conversations collection
+        conversations_repo = ConversationsRepository(conversations_col)
+        conversation = await conversations_repo.get_conversation(conversation_id)
+        if not conversation:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser:
-            if not client_belongs_to_user(chunk["client_id"], user.user_id):
-                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+            return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only reprocess your own conversations."})
+
+        # Get audio_uuid for processing run tracking
+        audio_uuid = conversation["audio_uuid"]
 
         # Resolve transcript version ID
-        transcript_versions = chunk.get("transcript_versions", [])
+        transcript_versions = conversation.get("transcript_versions", [])
 
         # Handle special "active" version ID
         if transcript_version_id == "active":
-            active_version_id = chunk.get("active_transcript_version")
+            active_version_id = conversation.get("active_transcript_version")
             if not active_version_id:
                 return JSONResponse(
                     status_code=404, content={"error": "No active transcript version found"}
@@ -622,6 +633,7 @@ async def reprocess_memory(audio_uuid: str, transcript_version_id: str, user: Us
 
         # Create processing run
         run_id = await processing_runs_repo.create_run(
+            conversation_id=conversation_id,
             audio_uuid=audio_uuid,
             run_type="memory",
             user_id=user.user_id,
@@ -629,9 +641,9 @@ async def reprocess_memory(audio_uuid: str, transcript_version_id: str, user: Us
             config_hash=config_hash
         )
 
-        # Create new memory version
-        version_id = await chunk_repo.create_memory_version(
-            audio_uuid=audio_uuid,
+        # Create new memory version in conversations collection
+        version_id = await conversations_repo.create_memory_version(
+            conversation_id=conversation_id,
             transcript_version_id=transcript_version_id,
             processing_run_id=run_id
         )
@@ -644,10 +656,10 @@ async def reprocess_memory(audio_uuid: str, transcript_version_id: str, user: Us
         # TODO: Queue memory extraction for processing
         # This is where we would integrate with the existing memory processor
 
-        logger.info(f"Created memory reprocessing job {run_id} (version {version_id}) for {audio_uuid}")
+        logger.info(f"Created memory reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
 
         return JSONResponse(content={
-            "message": f"Memory reprocessing started for {audio_uuid}",
+            "message": f"Memory reprocessing started for conversation {conversation_id}",
             "run_id": run_id,
             "version_id": version_id,
             "transcript_version_id": transcript_version_id,
@@ -660,21 +672,21 @@ async def reprocess_memory(audio_uuid: str, transcript_version_id: str, user: Us
         return JSONResponse(status_code=500, content={"error": "Error starting memory reprocessing"})
 
 
-async def activate_transcript_version(audio_uuid: str, version_id: str, user: User):
+async def activate_transcript_version(conversation_id: str, version_id: str, user: User):
     """Activate a specific transcript version. Users can only modify their own conversations."""
     try:
-        # Find the conversation
-        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        # Find the conversation in conversations collection
+        conversations_repo = ConversationsRepository(conversations_col)
+        conversation = await conversations_repo.get_conversation(conversation_id)
+        if not conversation:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser:
-            if not client_belongs_to_user(chunk["client_id"], user.user_id):
-                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+            return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only modify your own conversations."})
 
         # Activate the transcript version
-        success = await chunk_repo.activate_transcript_version(audio_uuid, version_id)
+        success = await conversations_repo.activate_transcript_version(conversation_id, version_id)
         if not success:
             return JSONResponse(
                 status_code=400, content={"error": "Failed to activate transcript version"}
@@ -683,7 +695,7 @@ async def activate_transcript_version(audio_uuid: str, version_id: str, user: Us
         # TODO: Trigger speaker recognition if configured
         # This would integrate with existing speaker recognition logic
 
-        logger.info(f"Activated transcript version {version_id} for {audio_uuid} by user {user.user_id}")
+        logger.info(f"Activated transcript version {version_id} for conversation {conversation_id} by user {user.user_id}")
 
         return JSONResponse(content={
             "message": f"Transcript version {version_id} activated successfully",
@@ -695,27 +707,27 @@ async def activate_transcript_version(audio_uuid: str, version_id: str, user: Us
         return JSONResponse(status_code=500, content={"error": "Error activating transcript version"})
 
 
-async def activate_memory_version(audio_uuid: str, version_id: str, user: User):
+async def activate_memory_version(conversation_id: str, version_id: str, user: User):
     """Activate a specific memory version. Users can only modify their own conversations."""
     try:
-        # Find the conversation
-        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        # Find the conversation in conversations collection
+        conversations_repo = ConversationsRepository(conversations_col)
+        conversation = await conversations_repo.get_conversation(conversation_id)
+        if not conversation:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser:
-            if not client_belongs_to_user(chunk["client_id"], user.user_id):
-                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+            return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only modify your own conversations."})
 
         # Activate the memory version
-        success = await chunk_repo.activate_memory_version(audio_uuid, version_id)
+        success = await conversations_repo.activate_memory_version(conversation_id, version_id)
         if not success:
             return JSONResponse(
                 status_code=400, content={"error": "Failed to activate memory version"}
             )
 
-        logger.info(f"Activated memory version {version_id} for {audio_uuid} by user {user.user_id}")
+        logger.info(f"Activated memory version {version_id} for conversation {conversation_id} by user {user.user_id}")
 
         return JSONResponse(content={
             "message": f"Memory version {version_id} activated successfully",
@@ -727,21 +739,21 @@ async def activate_memory_version(audio_uuid: str, version_id: str, user: User):
         return JSONResponse(status_code=500, content={"error": "Error activating memory version"})
 
 
-async def get_conversation_version_history(audio_uuid: str, user: User):
+async def get_conversation_version_history(conversation_id: str, user: User):
     """Get version history for a conversation. Users can only access their own conversations."""
     try:
-        # Find the conversation first to check ownership
-        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        # Find the conversation in conversations collection to check ownership
+        conversations_repo = ConversationsRepository(conversations_col)
+        conversation = await conversations_repo.get_conversation(conversation_id)
+        if not conversation:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser:
-            if not client_belongs_to_user(chunk["client_id"], user.user_id):
-                return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+            return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only access your own conversations."})
 
         # Get version history
-        history = await chunk_repo.get_version_history(audio_uuid)
+        history = await conversations_repo.get_version_history(conversation_id)
 
         return JSONResponse(content=history)
 

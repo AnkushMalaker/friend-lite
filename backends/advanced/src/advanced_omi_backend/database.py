@@ -77,7 +77,7 @@ class AudioChunksRepository:
                 "segments": transcript,
                 "status": transcription_status,
                 "provider": None,
-                "created_at": datetime.now(UTC),
+                "created_at": datetime.now(UTC).isoformat(),
                 "processing_run_id": None,
                 "raw_data": {},
                 "speakers_identified": speakers_identified or []
@@ -94,7 +94,7 @@ class AudioChunksRepository:
                 "version_id": version_id,
                 "memories": memories,
                 "status": memory_processing_status,
-                "created_at": datetime.now(UTC),
+                "created_at": datetime.now(UTC).isoformat(),
                 "processing_run_id": None,
                 "transcript_version_id": active_transcript_version
             })
@@ -145,7 +145,7 @@ class AudioChunksRepository:
                 "segments": [transcript_segment],
                 "status": "PENDING",
                 "provider": None,
-                "created_at": datetime.now(UTC),
+                "created_at": datetime.now(UTC).isoformat(),
                 "processing_run_id": None,
                 "raw_data": {},
                 "speakers_identified": []
@@ -344,7 +344,7 @@ class AudioChunksRepository:
                 "version_id": version_id,
                 "memories": [],
                 "status": status,
-                "created_at": datetime.now(UTC),
+                "created_at": datetime.now(UTC).isoformat(),
                 "processing_run_id": None,
                 "transcript_version_id": chunk.get("active_transcript_version")
             }
@@ -461,14 +461,49 @@ class ConversationsRepository:
         result = await self.col.insert_one(conversation_data)
         return conversation_data["conversation_id"]
 
+    def _populate_legacy_fields(self, conversation):
+        """Auto-populate legacy fields from active versions for backward compatibility."""
+        if not conversation:
+            return conversation
+
+        # Auto-populate transcript from active transcript version
+        active_transcript_version_id = conversation.get("active_transcript_version")
+        if active_transcript_version_id:
+            for version in conversation.get("transcript_versions", []):
+                if version.get("version_id") == active_transcript_version_id:
+                    conversation["transcript"] = version.get("segments", [])
+                    conversation["speakers_identified"] = version.get("speakers_identified", [])
+                    break
+        else:
+            # No active version - ensure empty transcript
+            conversation["transcript"] = []
+
+        # Auto-populate memories from active memory version
+        active_memory_version_id = conversation.get("active_memory_version")
+        if active_memory_version_id:
+            for version in conversation.get("memory_versions", []):
+                if version.get("version_id") == active_memory_version_id:
+                    conversation["memories"] = version.get("memories", [])
+                    conversation["memory_processing_status"] = version.get("status", "pending")
+                    break
+        else:
+            # No active version - ensure empty memories
+            conversation["memories"] = []
+            conversation["memory_processing_status"] = "pending"
+
+        return conversation
+
     async def get_conversation(self, conversation_id: str):
-        """Get conversation by conversation_id."""
-        return await self.col.find_one({"conversation_id": conversation_id})
+        """Get conversation by conversation_id with auto-populated legacy fields."""
+        conversation = await self.col.find_one({"conversation_id": conversation_id})
+        return self._populate_legacy_fields(conversation)
 
     async def get_user_conversations(self, user_id: str, limit=100):
         """Get all conversations for a user (only shows conversations with speech)."""
         cursor = self.col.find({"user_id": user_id})
-        return await cursor.sort("created_at", -1).limit(limit).to_list()
+        conversations = await cursor.sort("created_at", -1).limit(limit).to_list()
+        # Auto-populate legacy fields for all conversations
+        return [self._populate_legacy_fields(conv) for conv in conversations]
 
     async def update_conversation(self, conversation_id: str, update_data: dict):
         """Update conversation data."""
@@ -521,7 +556,7 @@ class ConversationsRepository:
             "segments": segments or [],
             "status": "PENDING",
             "provider": provider,
-            "created_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC).isoformat(),
             "processing_run_id": processing_run_id,
             "raw_data": raw_data or {},
             "speakers_identified": []
@@ -550,7 +585,7 @@ class ConversationsRepository:
             "version_id": version_id,
             "memories": memories or [],
             "status": "PENDING",
-            "created_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC).isoformat(),
             "processing_run_id": processing_run_id,
             "transcript_version_id": transcript_version_id
         }
