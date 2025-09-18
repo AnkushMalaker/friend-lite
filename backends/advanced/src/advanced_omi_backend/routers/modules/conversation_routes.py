@@ -92,50 +92,50 @@ async def update_transcript_segment(
 
 
 # New reprocessing endpoints
-@router.post("/{audio_uuid}/reprocess-transcript")
+@router.post("/{conversation_id}/reprocess-transcript")
 async def reprocess_transcript(
-    audio_uuid: str, current_user: User = Depends(current_active_user)
+    conversation_id: str, current_user: User = Depends(current_active_user)
 ):
     """Reprocess transcript for a conversation. Users can only reprocess their own conversations."""
-    return await conversation_controller.reprocess_transcript(audio_uuid, current_user)
+    return await conversation_controller.reprocess_transcript(conversation_id, current_user)
 
 
-@router.post("/{audio_uuid}/reprocess-memory")
+@router.post("/{conversation_id}/reprocess-memory")
 async def reprocess_memory(
-    audio_uuid: str,
+    conversation_id: str,
     current_user: User = Depends(current_active_user),
-    transcript_version_id: str = Query(...)
+    transcript_version_id: str = Query(default="active")
 ):
     """Reprocess memory extraction for a specific transcript version. Users can only reprocess their own conversations."""
-    return await conversation_controller.reprocess_memory(audio_uuid, transcript_version_id, current_user)
+    return await conversation_controller.reprocess_memory(conversation_id, transcript_version_id, current_user)
 
 
-@router.post("/{audio_uuid}/activate-transcript/{version_id}")
+@router.post("/{conversation_id}/activate-transcript/{version_id}")
 async def activate_transcript_version(
-    audio_uuid: str,
+    conversation_id: str,
     version_id: str,
     current_user: User = Depends(current_active_user)
 ):
     """Activate a specific transcript version. Users can only modify their own conversations."""
-    return await conversation_controller.activate_transcript_version(audio_uuid, version_id, current_user)
+    return await conversation_controller.activate_transcript_version(conversation_id, version_id, current_user)
 
 
-@router.post("/{audio_uuid}/activate-memory/{version_id}")
+@router.post("/{conversation_id}/activate-memory/{version_id}")
 async def activate_memory_version(
-    audio_uuid: str,
+    conversation_id: str,
     version_id: str,
     current_user: User = Depends(current_active_user)
 ):
     """Activate a specific memory version. Users can only modify their own conversations."""
-    return await conversation_controller.activate_memory_version(audio_uuid, version_id, current_user)
+    return await conversation_controller.activate_memory_version(conversation_id, version_id, current_user)
 
 
-@router.get("/{audio_uuid}/versions")
+@router.get("/{conversation_id}/versions")
 async def get_conversation_version_history(
-    audio_uuid: str, current_user: User = Depends(current_active_user)
+    conversation_id: str, current_user: User = Depends(current_active_user)
 ):
     """Get version history for a conversation. Users can only access their own conversations."""
-    return await conversation_controller.get_conversation_version_history(audio_uuid, current_user)
+    return await conversation_controller.get_conversation_version_history(conversation_id, current_user)
 
 
 @router.delete("/{audio_uuid}")
