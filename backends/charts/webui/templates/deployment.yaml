@@ -16,12 +16,17 @@ spec:
     spec:
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 80
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: friend-lite-config
+            - secretRef:
+                name: friend-lite-secrets
           env:
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
@@ -32,13 +37,13 @@ spec:
               path: /
               port: http
             initialDelaySeconds: 30
-            periodSeconds: 10
+            periodSeconds: 60
           readinessProbe:
             httpGet:
               path: /
               port: http
             initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 60
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

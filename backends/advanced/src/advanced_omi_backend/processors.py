@@ -637,12 +637,12 @@ class ProcessorManager:
                     try:
                         # Get or create file sink for this client
                         if item.client_id not in self.active_file_sinks:
-                            audio_logger.info(
+                            audio_logger.debug(
                                 f"🆕 Creating new audio file sink for client {item.client_id}"
                             )
                             # Get client state to access/store sample rate
                             client_state = self.client_manager.get_client(item.client_id)
-                            audio_logger.info(
+                            audio_logger.debug(
                                 f"👤 Client state lookup for {item.client_id}: {client_state is not None}"
                             )
 

@@ -15,27 +15,28 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files first (for better caching)
-# Copy dependency files first (for better caching)
-COPY pyproject.toml uv.lock ./
+# Copy dependency files first
+COPY pyproject.toml ./
+COPY uv.lock ./
 
 # Copy source code
 COPY src/ src/
 
-# Install dependencies
+# Install dependencies and package  
+# Use build arg to control CPU vs GPU mode
 ARG COMPUTE_MODE=gpu
-RUN uv pip install --system setuptools wheel && \
-if [ "$COMPUTE_MODE" = "gpu" ]; then \
-    uv pip install --system --group gpu .; \
-else \
-    uv pip install --system --group cpu .; \
-fi
+RUN if [ "$COMPUTE_MODE" = "gpu" ]; then \
+        uv sync --no-default-groups --group gpu; \
+    else \
+        uv sync --no-default-groups --group cpu; \
+    fi
 
-# Ensure numpy 1.x is available (PyAnnote requires NumPy 1.x, not 2.x)
-RUN uv pip install --system "numpy<2"
+# Copy the PyTorch installation script
+COPY scripts/install-pytorch.py /app/scripts/
 
-# Install PyTorch with CUDA 11.8 support for GTX 1070 (compute capability 6.1)
-RUN uv pip install --system torch==2.2.0+cu118 torchaudio==2.2.0+cu118 --index-url https://download.pytorch.org/whl/cu118
+# Install PyTorch with CUDA support using cache mount
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv run --env COMPUTE_MODE=gpu scripts/install-pytorch.py || true
 
 
 
@@ -49,9 +50,15 @@ ENV PYTHONPATH=/app
 ENV CUDA_VISIBLE_DEVICES=0
 ENV TORCH_CUDA_ARCH_LIST="6.1"
 
+# Copy the download script
+COPY scripts/download-pyannote.py /app/scripts/
+
+# Pre-download models using cache mount (only downloads if not already cached)
+RUN --mount=type=cache,target=/models \
+    uv run --env HF_HOME=/models scripts/download-pyannote.py || true
+
 # Expose port
 EXPOSE 8085
 
-# Run the service directly with python module
-# CMD ["python", "-m", "simple_speaker_recognition.api.service"]
+# Run the service
 CMD ["uv", "run", "--no-dev", "--no-sync", "simple-speaker-service"] 
