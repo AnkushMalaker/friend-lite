@@ -556,8 +556,10 @@ async def batch_transcribe(file: UploadFile = File(...)):
             
     except Exception as e:
         error_time = time.time() - request_start
-        logger.error(f"🕐 TIMING: Error occurred after {error_time:.3f}s - {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, HTTPException):
+            raise
+        logger.exception(f"🕐 TIMING: Error occurred after {error_time:.3f}s - {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.websocket("/stream")
 async def websocket_endpoint(websocket: WebSocket):

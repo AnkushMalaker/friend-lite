@@ -17,7 +17,7 @@ from advanced_omi_backend.client_manager import (
     client_belongs_to_user,
     get_user_clients_all,
 )
-from advanced_omi_backend.database import AudioChunksRepository, ProcessingRunsRepository, chunks_col, processing_runs_col
+from advanced_omi_backend.database import AudioChunksRepository, ProcessingRunsRepository, chunks_col, processing_runs_col, conversations_col, ConversationsRepository
 from advanced_omi_backend.users import User
 from fastapi.responses import JSONResponse
 
@@ -90,57 +90,52 @@ async def close_current_conversation(client_id: str, user: User, client_manager:
 
 
 async def get_conversations(user: User):
-    """Get conversations. Admins see all conversations, users see only their own."""
+    """Get conversations with speech only (speech-driven architecture)."""
     try:
+        # Import conversations collection and repository
+        conversations_repo = ConversationsRepository(conversations_col)
+
         # Build query based on user permissions
         if not user.is_superuser:
             # Regular users can only see their own conversations
-            user_client_ids = get_user_clients_all(user.user_id)
-            if not user_client_ids:
-                # User has no clients, return empty result
-                return {"conversations": {}}
-            query = {"client_id": {"$in": user_client_ids}}
+            user_conversations = await conversations_repo.get_user_conversations(str(user.user_id))
         else:
-            query = {}
+            # Admins see all conversations
+            cursor = conversations_col.find({}).sort("created_at", -1)
+            user_conversations = await cursor.to_list(length=None)
 
-        # Get audio chunks and group by client_id
-        cursor = chunks_col.find(query).sort("timestamp", -1)
+        # Group conversations by client_id for backwards compatibility
         conversations = {}
-
-        async for chunk in cursor:
-            client_id = chunk["client_id"]
+        for conversation in user_conversations:
+            client_id = conversation["client_id"]
             if client_id not in conversations:
                 conversations[client_id] = []
 
-            # Get transcript data - prefer segments but fallback to raw transcript
-            transcript_segments = chunk.get("transcript", [])
-            if not transcript_segments and chunk.get("raw_transcript_data"):
-                # No segments but we have raw transcript data - create fallback representation
-                raw_data = chunk["raw_transcript_data"]
-                if raw_data.get("data", {}).get("text"):
-                    transcript_segments = [{
-                        "text": raw_data["data"]["text"],
-                        "start": 0.0,
-                        "end": 0.0,
-                        "speaker": "Unknown",
-                        "confidence": 0.0,
-                        "source": "raw_transcript"  # Indicator this is fallback data
-                    }]
+            # Get audio file paths from audio_chunks collection
+            audio_chunk = await chunk_repo.get_chunk_by_audio_uuid(conversation["audio_uuid"])
+            audio_path = audio_chunk.get("audio_path") if audio_chunk else None
+            cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
 
+            # Convert conversation to API format
             conversations[client_id].append(
                 {
-                    "audio_uuid": chunk["audio_uuid"],
-                    "audio_path": chunk["audio_path"],
-                    "timestamp": chunk["timestamp"],
-                    "transcript": transcript_segments,
-                    "speakers_identified": chunk.get("speakers_identified", []),
-                    "cropped_audio_path": chunk.get("cropped_audio_path"),
-                    "speech_segments": chunk.get("speech_segments"),
-                    "cropped_duration": chunk.get("cropped_duration"),
-                    "memories": chunk.get(
-                        "memories", []
-                    ),  # Include memory references if they exist
-                    "has_memory": bool(chunk.get("memories", [])),  # Quick boolean check for UI
+                    "conversation_id": conversation["conversation_id"],
+                    "audio_uuid": conversation["audio_uuid"],
+                    "title": conversation.get("title", "Conversation"),
+                    "summary": conversation.get("summary", ""),
+                    "timestamp": conversation.get("session_start").timestamp() if conversation.get("session_start") else 0,
+                    "created_at": conversation.get("created_at").isoformat() if conversation.get("created_at") else None,
+                    "transcript": conversation.get("transcript", []),
+                    "speakers_identified": conversation.get("speakers_identified", []),
+                    "speaker_names": conversation.get("speaker_names", {}),
+                    "duration_seconds": conversation.get("duration_seconds", 0),
+                    "memories": conversation.get("memories", []),
+                    "has_memory": bool(conversation.get("memories", [])),
+                    "memory_processing_status": conversation.get("memory_processing_status", "pending"),
+                    "action_items": conversation.get("action_items", []),
+                    # Audio file paths for playback
+                    "audio_path": audio_path,
+                    "cropped_audio_path": cropped_audio_path,
                 }
             )
 
@@ -149,6 +144,60 @@ async def get_conversations(user: User):
     except Exception as e:
         logger.error(f"Error fetching conversations: {e}")
         return JSONResponse(status_code=500, content={"error": "Error fetching conversations"})
+
+
+async def get_conversation_by_id(conversation_id: str, user: User):
+    """Get a specific conversation by conversation_id (speech-driven architecture)."""
+    try:
+        # Import conversations collection and repository
+        conversations_repo = ConversationsRepository(conversations_col)
+
+        # Get the conversation
+        conversation = await conversations_repo.get_conversation(conversation_id)
+        if not conversation:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Conversation not found"}
+            )
+
+        # Check if user owns this conversation
+        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Access forbidden. You can only access your own conversations."}
+            )
+
+        # Get audio file paths from audio_chunks collection
+        audio_chunk = await chunk_repo.get_chunk_by_audio_uuid(conversation["audio_uuid"])
+        audio_path = audio_chunk.get("audio_path") if audio_chunk else None
+        cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
+
+        # Format conversation for API response
+        formatted_conversation = {
+            "conversation_id": conversation["conversation_id"],
+            "audio_uuid": conversation["audio_uuid"],
+            "title": conversation.get("title", "Conversation"),
+            "summary": conversation.get("summary", ""),
+            "timestamp": conversation.get("session_start").timestamp() if conversation.get("session_start") else 0,
+            "created_at": conversation.get("created_at").isoformat() if conversation.get("created_at") else None,
+            "transcript": conversation.get("transcript", []),
+            "speakers_identified": conversation.get("speakers_identified", []),
+            "speaker_names": conversation.get("speaker_names", {}),
+            "duration_seconds": conversation.get("duration_seconds", 0),
+            "memories": conversation.get("memories", []),
+            "has_memory": bool(conversation.get("memories", [])),
+            "memory_processing_status": conversation.get("memory_processing_status", "pending"),
+            "action_items": conversation.get("action_items", []),
+            # Audio file paths for playback
+            "audio_path": audio_path,
+            "cropped_audio_path": cropped_audio_path,
+        }
+
+        return {"conversation": formatted_conversation}
+
+    except Exception as e:
+        logger.error(f"Error fetching conversation {conversation_id}: {e}")
+        return JSONResponse(status_code=500, content={"error": "Error fetching conversation"})
 
 
 async def get_cropped_audio_info(audio_uuid: str, user: User):
@@ -337,49 +386,28 @@ async def update_transcript_segment(
 async def delete_conversation(audio_uuid: str, user: User):
     """Delete a conversation and its associated audio file. Users can only delete their own conversations."""
     try:
-        # DEBUG: Log comprehensive details about the search
-        logger.info(f"DELETE DEBUG: Starting delete for audio_uuid='{audio_uuid}'")
-        logger.info(f"DELETE DEBUG: audio_uuid type={type(audio_uuid)}, length={len(audio_uuid)}")
-        logger.info(f"DELETE DEBUG: audio_uuid repr={repr(audio_uuid)}")
-        logger.info(f"DELETE DEBUG: audio_uuid bytes={audio_uuid.encode('utf-8').hex()}")
-        logger.info(f"DELETE DEBUG: Database collection={chunks_col.name}, database={chunks_col.database.name}")
-        
-        # DEBUG: Test if ANY conversations exist in the collection
-        total_count = await chunks_col.count_documents({})
-        logger.info(f"DELETE DEBUG: Total conversations in collection: {total_count}")
-        
-        # DEBUG: Try to find a few conversations to compare
-        sample_conversations = []
-        async for doc in chunks_col.find({}).limit(3):
-            sample_conversations.append({
-                "audio_uuid": doc.get("audio_uuid"),
-                "audio_uuid_type": type(doc.get("audio_uuid")),
-                "audio_uuid_repr": repr(doc.get("audio_uuid"))
-            })
-        logger.info(f"DELETE DEBUG: Sample conversations: {sample_conversations}")
-        
-        # DEBUG: Execute the exact query we're about to use
-        query = {"audio_uuid": audio_uuid}
-        logger.info(f"DELETE DEBUG: Query being executed: {query}")
-        
+        # Create masked identifier for logging
+        masked_uuid = f"{audio_uuid[:8]}...{audio_uuid[-4:]}" if len(audio_uuid) > 12 else "***"
+        logger.info(f"Attempting to delete conversation: {masked_uuid}")
+
+        # Detailed debugging only when debug level is enabled
+        if logger.isEnabledFor(logging.DEBUG):
+            total_count = await chunks_col.count_documents({})
+            logger.debug(f"Total conversations in collection: {total_count}")
+            logger.debug(f"UUID length: {len(audio_uuid)}, type: {type(audio_uuid)}")
+
         # First, get the conversation to check ownership
-        conversation = await chunks_col.find_one(query)
-        
-        # DEBUG: Log the result
-        logger.info(f"DELETE DEBUG: Query result: {conversation is not None}")
-        if conversation:
-            logger.info(f"DELETE DEBUG: Found conversation with client_id={conversation.get('client_id')}")
-        else:
-            # DEBUG: Try alternative queries to see what might work
-            logger.info("DELETE DEBUG: Trying alternative queries...")
-            
-            # Try with regex (case insensitive)
-            regex_result = await chunks_col.find_one({"audio_uuid": {"$regex": f"^{audio_uuid}$", "$options": "i"}})
-            logger.info(f"DELETE DEBUG: Case-insensitive regex query result: {regex_result is not None}")
-            
-            # Try to find any conversation containing this uuid as substring
-            contains_result = await chunks_col.find_one({"audio_uuid": {"$regex": audio_uuid}})
-            logger.info(f"DELETE DEBUG: Contains substring query result: {contains_result is not None}")
+        conversation = await chunks_col.find_one({"audio_uuid": audio_uuid})
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Conversation lookup result: {'found' if conversation else 'not found'}")
+            if conversation:
+                logger.debug(f"Found conversation with client_id: {conversation.get('client_id')}")
+            else:
+                # Try alternative queries for debugging
+                regex_result = await chunks_col.find_one({"audio_uuid": {"$regex": f"^{audio_uuid}$", "$options": "i"}})
+                contains_result = await chunks_col.find_one({"audio_uuid": {"$regex": audio_uuid}})
+                logger.debug(f"Alternative query attempts - case insensitive: {'found' if regex_result else 'not found'}, substring: {'found' if contains_result else 'not found'}")
         
         if not conversation:
             return JSONResponse(

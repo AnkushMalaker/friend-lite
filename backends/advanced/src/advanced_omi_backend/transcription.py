@@ -2,24 +2,109 @@ import asyncio
 import logging
 import os
 import time
+import uuid
+from datetime import UTC, datetime
 from typing import Optional
 
 from wyoming.audio import AudioChunk
 
 from advanced_omi_backend.client_manager import get_client_manager
-from advanced_omi_backend.conversation_repository import get_conversation_repository
+from advanced_omi_backend.config import get_speech_detection_settings, get_conversation_stop_settings, load_diarization_settings_from_file
+from advanced_omi_backend.database import conversations_col, ConversationsRepository
+from advanced_omi_backend.llm_client import async_generate
+from advanced_omi_backend.processors import AudioCroppingItem, MemoryProcessingItem, get_processor_manager
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
     get_transcription_provider,
 )
-from advanced_omi_backend.config import load_diarization_settings_from_file
 
 # ASR Configuration
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")  # Optional: 'deepgram' or 'parakeet'
 
 logger = logging.getLogger(__name__)
+
+
+class AudioTimeline:
+    """Track audio timeline for proper speech gap detection."""
+
+    def __init__(self):
+        self.start_time = time.time()
+        self.total_samples = 0
+        self.sample_rate = None
+
+    def add_chunk(self, chunk: AudioChunk):
+        """Add audio chunk and update timeline."""
+        if chunk.audio and len(chunk.audio) > 0:
+            # Assuming 16-bit PCM audio (2 bytes per sample)
+            self.total_samples += len(chunk.audio) // 2
+            self.sample_rate = chunk.rate
+
+    @property
+    def current_position(self) -> float:
+        """Get current position in audio stream (seconds)."""
+        if not self.sample_rate:
+            return 0.0
+        return self.total_samples / self.sample_rate
+
+    def reset(self):
+        """Reset timeline for new audio session."""
+        self.start_time = time.time()
+        self.total_samples = 0
+
+
+class SpeechActivityAnalyzer:
+    """Analyze transcripts for speech activity after transcription."""
+
+    def __init__(self, audio_timeline: AudioTimeline):
+        config = get_conversation_stop_settings()
+        self.speech_inactivity_threshold = config["speech_inactivity_threshold"]
+        self.min_word_confidence = config["min_word_confidence"]
+        self.audio_timeline = audio_timeline
+
+    def analyze_transcript_activity(self, transcript_data: dict) -> dict:
+        """
+        Analyze transcript for speech activity.
+
+        Returns:
+            dict: {
+                "has_speech": bool,
+                "last_word_time": float or None,
+                "speech_gap_seconds": float or None,
+                "word_count": int
+            }
+        """
+        words = transcript_data.get("words", [])
+
+        # Filter by confidence
+        valid_words = [
+            w for w in words
+            if w.get("confidence", 0) >= self.min_word_confidence
+        ]
+
+        if not valid_words:
+            return {
+                "has_speech": False,
+                "last_word_time": None,
+                "speech_gap_seconds": None,
+                "word_count": 0
+            }
+
+        # Find last word timestamp
+        last_word = valid_words[-1]
+        last_word_end = last_word.get("end", 0)
+
+        # Calculate speech gap using audio timeline
+        current_audio_position = self.audio_timeline.current_position
+        speech_gap = current_audio_position - last_word_end if current_audio_position else None
+
+        return {
+            "has_speech": True,
+            "last_word_time": last_word_end,
+            "speech_gap_seconds": speech_gap,
+            "word_count": len(valid_words)
+        }
 
 
 class TranscriptionManager:
@@ -44,6 +129,16 @@ class TranscriptionManager:
         # Collection state tracking
         self._collecting = False
         self._collection_task = None
+
+        # Audio timeline for speech gap detection
+        self._audio_timeline = AudioTimeline()
+
+        # Buffer monitoring for periodic transcription (batch providers)
+        self._buffer_start_time = None
+        config = get_conversation_stop_settings()
+        self._max_buffer_duration = config["transcription_buffer_seconds"]
+        self._transcribing = False  # Track transcription state
+        self._last_word_time = None  # Track last word for conversation closure
 
         # Optional speaker recognition
         self.speaker_client = SpeakerRecognitionClient()
@@ -103,9 +198,11 @@ class TranscriptionManager:
             transcript_result = await self._get_transcript(audio_duration_seconds)
             # Process the result uniformly
             await self._process_transcript_result(transcript_result)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             # Signal transcription failure
-            logger.error(f"Transcription failed for {self._current_audio_uuid}: {e}")
+            logger.exception(f"Transcription failed for {self._current_audio_uuid}: {e}")
             if self._current_audio_uuid:
                 # Update database status to FAILED
                 if self.chunk_repo:
@@ -213,7 +310,74 @@ class TranscriptionManager:
                 "words": normalized_result.get("words", []),
                 "text": normalized_result.get("text", ""),
             }
-            logger.info(f"🔍 DEBUG: transcript_data for speaker service - text_length={len(transcript_data.get('text', ''))}, words_count={len(transcript_data.get('words', []))}")
+            # SPEECH DETECTION: Analyze transcript for meaningful speech
+            speech_analysis = self._analyze_speech(transcript_data)
+            logger.info(f"🎯 Speech analysis for {self._current_audio_uuid}: {speech_analysis}")
+
+            # Mark audio_chunks with speech detection results
+            if self.chunk_repo:
+                await self.chunk_repo.update_speech_detection(
+                    self._current_audio_uuid,
+                    has_speech=speech_analysis["has_speech"],
+                    **{k: v for k, v in speech_analysis.items() if k != "has_speech"}
+                )
+
+            # Create conversation only if speech is detected
+            conversation_id = None
+            if speech_analysis["has_speech"]:
+                conversation_id = await self._create_conversation(
+                    self._current_audio_uuid, transcript_data, speech_analysis
+                )
+                if conversation_id:
+                    logger.info(f"✅ Created conversation {conversation_id} for detected speech in {self._current_audio_uuid}")
+                else:
+                    logger.error(f"❌ Failed to create conversation for {self._current_audio_uuid}")
+            else:
+                logger.info(f"⏭️ No speech detected in {self._current_audio_uuid}: {speech_analysis.get('reason', 'Unknown reason')}")
+                # Update transcript status to EMPTY for silent audio
+                if self.chunk_repo:
+                    await self.chunk_repo.update_transcription_status(
+                        self._current_audio_uuid, "EMPTY", provider=provider_name
+                    )
+                # Signal completion but don't queue memory processing
+                coordinator = get_transcript_coordinator()
+                coordinator.signal_transcript_ready(self._current_audio_uuid)
+                return
+
+            # SPEECH GAP ANALYSIS: Check for conversation closure (only if conversation exists)
+            if conversation_id:
+                analyzer = SpeechActivityAnalyzer(self._audio_timeline)
+                activity = analyzer.analyze_transcript_activity(transcript_data)
+
+                last_word_str = f"{activity['last_word_time']:.1f}s" if activity['last_word_time'] else 'N/A'
+                gap_str = f"{activity['speech_gap_seconds']:.1f}s" if activity['speech_gap_seconds'] else 'N/A'
+                logger.info(
+                    f"📊 Speech activity analysis for {self._client_id}: "
+                    f"words={activity['word_count']}, "
+                    f"last_word={last_word_str}, "
+                    f"gap={gap_str}"
+                )
+
+                # Check if we should close due to inactivity
+                if activity['speech_gap_seconds'] and \
+                   activity['speech_gap_seconds'] > analyzer.speech_inactivity_threshold:
+                    logger.info(
+                        f"💤 No speech for {activity['speech_gap_seconds']:.1f}s, "
+                        f"closing conversation for {self._client_id}"
+                    )
+                    await self._trigger_conversation_close()
+                    # Signal completion and return (conversation closed)
+                    coordinator = get_transcript_coordinator()
+                    coordinator.signal_transcript_ready(self._current_audio_uuid)
+                    return
+                else:
+                    # Update last word time for next analysis
+                    if activity['last_word_time']:
+                        self._last_word_time = activity['last_word_time']
+                    logger.debug(f"Speech detected, continuing collection for {self._client_id}")
+
+            # ONLY process speaker diarization if speech was detected
+            final_segments = []
             if self.speaker_client.enabled and self._current_audio_uuid and self.chunk_repo:
                 try:
                     # Get audio file path from database
@@ -269,6 +433,11 @@ class TranscriptionManager:
 
             # Store final segments with required fields
             if self.chunk_repo and final_segments:
+                # Process segments for storage
+                segments_to_store = []
+                speakers_found = set()
+                speaker_names = {}
+
                 for segment in final_segments:
                     # Add required fields for database storage
                     segment_to_store = {
@@ -281,21 +450,43 @@ class TranscriptionManager:
                         "chunk_sequence": 0,
                         "absolute_timestamp": time.time() + segment.get("start", 0.0),
                     }
-                    logger.info(f"🔍 DEBUG: Storing segment - text='{segment_to_store['text']}', speaker={segment_to_store['speaker']}")
+                    segments_to_store.append(segment_to_store)
+
+                    # Store segments in audio_chunks (legacy support)
                     await self.chunk_repo.add_transcript_segment(
                         self._current_audio_uuid, segment_to_store
                     )
 
-                # Add speakers if we have them
-                speakers_found = set()
-                for segment in final_segments:
-                    # Use identified name if available, fallback to generic label
+                    # Collect speaker information
                     speaker_name = segment.get("identified_as") or segment.get("speaker")
                     if speaker_name:
                         speakers_found.add(speaker_name)
+                        # Map speaker_id to name if available
+                        speaker_id = segment.get("speaker_id", "")
+                        if speaker_id:
+                            speaker_names[speaker_id] = speaker_name
 
+                # Add speakers to audio_chunks (legacy support)
                 for speaker in speakers_found:
                     await self.chunk_repo.add_speaker(self._current_audio_uuid, speaker)
+
+                # CRITICAL: Update conversation with transcript data
+                if conversation_id:
+                    try:
+                        conversations_repo = ConversationsRepository(conversations_col)
+
+                        # Update conversation with transcript segments and speaker info
+                        update_data = {
+                            "transcript": segments_to_store,
+                            "speakers_identified": list(speakers_found),
+                            "speaker_names": speaker_names,
+                            "updated_at": datetime.now(UTC)
+                        }
+                        await conversations_repo.update_conversation(conversation_id, update_data)
+
+                        logger.info(f"✅ Updated conversation {conversation_id} with {len(segments_to_store)} transcript segments and {len(speakers_found)} speakers")
+                    except Exception as e:
+                        logger.error(f"Failed to update conversation {conversation_id} with transcript data: {e}")
 
             # Update client state
             current_client = self._get_current_client()
@@ -306,8 +497,9 @@ class TranscriptionManager:
             coordinator = get_transcript_coordinator()
             coordinator.signal_transcript_ready(self._current_audio_uuid)
 
-            # Queue memory processing now that transcription is complete
-            await self._queue_memory_processing()
+            # Queue memory processing now that transcription is complete (only for conversations with speech)
+            if conversation_id:
+                await self._queue_memory_processing(conversation_id)
 
             # Queue audio cropping if we have diarization segments and cropping is enabled
             if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true":
@@ -368,69 +560,219 @@ class TranscriptionManager:
     # which handles diarization, speaker identification, and word-to-speaker matching.
     # This keeps all the segment creation logic in one place (speaker service).
 
-    async def _queue_memory_processing(self):
-        """Queue memory processing now that transcription is complete.
+    def _analyze_speech(self, transcript_data: dict):
+        """Analyze transcript for meaningful speech to determine if conversation should be created."""
 
-        This is data-driven - no event coordination needed since we know transcript is ready.
+        settings = get_speech_detection_settings()
+        words = transcript_data.get("words", [])
+
+        # Filter by confidence
+        valid_words = [
+            w for w in words
+            if w.get("confidence", 0) >= settings["min_confidence"]
+        ]
+
+        if len(valid_words) < settings["min_words"]:
+            return {"has_speech": False, "reason": f"Not enough valid words ({len(valid_words)} < {settings['min_words']})"}
+
+        # Calculate speech duration
+        if valid_words:
+            speech_duration = valid_words[-1].get("end", 0) - valid_words[0].get("start", 0)
+
+            return {
+                "has_speech": True,
+                "word_count": len(valid_words),
+                "speech_start": valid_words[0].get("start", 0),
+                "speech_end": valid_words[-1].get("end", 0),
+                "duration": speech_duration
+            }
+
+        # Fallback for transcripts without detailed word timing
+        text = transcript_data.get("text", "").strip()
+        if text:
+            word_count = len(text.split())
+            if word_count >= settings["min_words"]:
+                return {
+                    "has_speech": True,
+                    "word_count": word_count,
+                    "speech_start": 0.0,
+                    "speech_end": 0.0,  # Duration unknown
+                    "duration": 0.0,
+                    "fallback": True
+                }
+
+        return {"has_speech": False, "reason": "No meaningful speech content detected"}
+
+    async def _create_conversation(self, audio_uuid: str, transcript_data: dict, speech_analysis: dict):
+        """Create conversation entry for detected speech."""
+        try:
+            # Get audio session info from audio_chunks
+            audio_session = await self.chunk_repo.get_chunk(audio_uuid)
+            if not audio_session:
+                logger.error(f"No audio session found for {audio_uuid}")
+                return None
+
+            # Generate title and summary from transcript
+            title = await self._generate_title(transcript_data.get("text", ""))
+            summary = await self._generate_summary(transcript_data.get("text", ""))
+
+            # Create conversation data
+            conversation_id = str(uuid.uuid4())
+            conversation_data = {
+                "conversation_id": conversation_id,
+                "audio_uuid": audio_uuid,
+                "user_id": audio_session["user_id"],
+                "client_id": audio_session["client_id"],
+                "title": title,
+                "summary": summary,
+                "transcript": [],  # Will be populated by existing segment processing
+                "duration_seconds": speech_analysis.get("duration", 0.0),
+                "speech_start_time": speech_analysis.get("speech_start", 0.0),
+                "speech_end_time": speech_analysis.get("speech_end", 0.0),
+                "speakers_identified": [],
+                "speaker_names": {},
+                "memories": [],
+                "memory_processing_status": "pending",
+                "action_items": [],
+                "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
+                "session_start": datetime.fromtimestamp(audio_session.get("timestamp", 0), tz=UTC),
+                "session_end": datetime.now(UTC),
+            }
+
+            # Create conversation in conversations collection
+            conversations_repo = ConversationsRepository(conversations_col)
+            await conversations_repo.create_conversation(conversation_data)
+
+            # Mark audio_chunks as having speech and link to conversation
+            await self.chunk_repo.mark_conversation_created(audio_uuid, conversation_id)
+
+            logger.info(f"✅ Created conversation {conversation_id} for audio {audio_uuid} (speech detected)")
+            return conversation_id
+
+        except Exception as e:
+            logger.error(f"Failed to create conversation for {audio_uuid}: {e}", exc_info=True)
+            return None
+
+    async def _generate_title(self, text: str) -> str:
+        """Generate an LLM-powered title from conversation text."""
+        if not text or len(text.strip()) < 10:
+            return "Conversation"
+
+        try:
+            prompt = f"""Generate a concise, descriptive title (3-6 words) for this conversation transcript:
+
+"{text[:500]}"
+
+Rules:
+- Maximum 6 words
+- Capture the main topic or theme
+- No quotes or special characters
+- Examples: "Planning Weekend Trip", "Work Project Discussion", "Medical Appointment"
+
+Title:"""
+
+            title = await async_generate(prompt, temperature=0.3)
+            return title.strip().strip('"').strip("'") or "Conversation"
+
+        except Exception as e:
+            logger.warning(f"Failed to generate LLM title: {e}")
+            # Fallback to simple title generation
+            words = text.split()[:6]
+            title = " ".join(words)
+            return title[:40] + "..." if len(title) > 40 else title or "Conversation"
+
+    async def _generate_summary(self, text: str) -> str:
+        """Generate an LLM-powered summary from conversation text."""
+        if not text or len(text.strip()) < 10:
+            return "No content"
+
+        try:
+            prompt = f"""Generate a brief, informative summary (1-2 sentences, max 120 characters) for this conversation:
+
+"{text[:1000]}"
+
+Rules:
+- Maximum 120 characters
+- 1-2 complete sentences
+- Capture key topics and outcomes
+- Use present tense
+- Be specific and informative
+
+Summary:"""
+
+            summary = await async_generate(prompt, temperature=0.3)
+            return summary.strip().strip('"').strip("'") or "No content"
+
+        except Exception as e:
+            logger.warning(f"Failed to generate LLM summary: {e}")
+            # Fallback to simple summary generation
+            return text[:120] + "..." if len(text) > 120 else text or "No content"
+
+    async def _queue_memory_processing(self, conversation_id: str):
+        """Queue memory processing for a speech-detected conversation.
+
+        Args:
+            conversation_id: The conversation ID to process (not audio_uuid)
         """
         try:
-            # Get user info from persistent conversation data instead of ephemeral client state
-            conversation_repo = get_conversation_repository()
-            conversation = await conversation_repo.get_conversation(self._current_audio_uuid)
+            # Get conversation data from conversations collection
+            conversations_repo = ConversationsRepository(conversations_col)
+            conversation = await conversations_repo.get_conversation(conversation_id)
             if not conversation:
                 logger.warning(
-                    f"No conversation found for memory processing {self._current_audio_uuid}"
+                    f"No conversation found for memory processing {conversation_id}"
+                )
+                return
+
+            # Get audio session data to get user info
+            audio_session = await self.chunk_repo.get_chunk(conversation["audio_uuid"])
+            if not audio_session:
+                logger.warning(
+                    f"No audio session found for conversation {conversation_id}"
                 )
                 return
 
             # Check if we have required data
             if not all(
-                [self._current_audio_uuid, conversation.get("user_id"), conversation.get("user_email")]
+                [conversation_id, conversation.get("user_id"), audio_session.get("user_email")]
             ):
                 logger.warning(
-                    f"Memory processing skipped - missing required data for {self._current_audio_uuid}"
+                    f"Memory processing skipped - missing required data for conversation {conversation_id}"
                 )
-                logger.warning(f"    - audio_uuid: {bool(self._current_audio_uuid)}")
+                logger.warning(f"    - conversation_id: {bool(conversation_id)}")
                 logger.warning(
                     f"    - user_id: {bool(conversation.get('user_id'))}"
                 )
                 logger.warning(
-                    f"    - user_email: {bool(conversation.get('user_email'))}"
+                    f"    - user_email: {bool(audio_session.get('user_email'))}"
                 )
                 return
 
             logger.info(
-                f"💭 Queuing memory processing for completed transcription {self._current_audio_uuid}"
+                f"💭 Queuing memory processing for conversation {conversation_id} (audio: {conversation['audio_uuid']})"
             )
 
             # Import here to avoid circular imports
-            from advanced_omi_backend.processors import (
-                MemoryProcessingItem,
-                get_processor_manager,
-            )
 
-            # Queue memory processing - no event coordination needed
+            # Queue memory processing for conversation
             processor_manager = get_processor_manager()
             await processor_manager.queue_memory(
                 MemoryProcessingItem(
                     client_id=self._client_id,
                     user_id=conversation["user_id"],
-                    user_email=conversation["user_email"],
-                    audio_uuid=self._current_audio_uuid,
+                    user_email=audio_session["user_email"],
+                    conversation_id=conversation_id,
                 )
             )
 
         except Exception as e:
-            logger.error(f"Error queuing memory processing for {self._current_audio_uuid}: {e}")
+            logger.error(f"Error queuing memory processing for conversation {conversation_id}: {e}")
 
     async def _queue_diarization_based_cropping(self, segments):
         """Queue audio cropping based on diarization segments."""
         try:
             # Import here to avoid circular imports
-            from advanced_omi_backend.processors import (
-                AudioCroppingItem,
-                get_processor_manager,
-            )
 
             # Get current client for user info
             current_client = self._get_current_client()
@@ -586,6 +928,11 @@ class TranscriptionManager:
                 self._audio_start_time = time.time()
                 self._collecting = True
 
+                # Reset audio timeline for new session
+                self._audio_timeline.reset()
+                self._buffer_start_time = time.time()
+                self._last_word_time = None
+
                 # Start collection timeout task
                 if self._collection_task and not self._collection_task.done():
                     self._collection_task.cancel()
@@ -609,14 +956,72 @@ class TranscriptionManager:
                     )
 
                 self._audio_buffer.append(chunk)
+
+                # Update audio timeline
+                self._audio_timeline.add_chunk(chunk)
+
                 logger.debug(
                     f"📦 Collected {len(chunk.audio)} bytes for {audio_uuid} (total chunks: {len(self._audio_buffer)})"
                 )
+
+                # Track buffer start time for periodic transcription
+                if not self._buffer_start_time:
+                    self._buffer_start_time = time.time()
+
+                # Check if buffer duration exceeded and safe to transcribe
+                buffer_duration = time.time() - self._buffer_start_time
+                if buffer_duration >= self._max_buffer_duration and not self._transcribing:
+                    logger.info(
+                        f"📊 Buffer duration limit reached ({buffer_duration:.1f}s), "
+                        f"triggering transcription for {client_id}"
+                    )
+                    await self._trigger_periodic_transcription()
             else:
                 logger.warning(f"⚠️ Empty audio chunk received for {audio_uuid}")
 
         except Exception as e:
             logger.error(f"Error collecting audio chunk for {audio_uuid}: {e}")
+
+    async def _trigger_periodic_transcription(self):
+        """Safely trigger periodic transcription with state management."""
+        # Check if already transcribing or not collecting
+        if self._transcribing or not self._collecting:
+            logger.debug("Skipping periodic trigger - transcribing or not collecting")
+            return
+
+        # Mark as transcribing to prevent concurrent triggers
+        self._transcribing = True
+        try:
+            await self.process_collected_audio()
+        finally:
+            self._transcribing = False
+            self._buffer_start_time = time.time()  # Reset for next period
+
+    async def _trigger_conversation_close(self):
+        """Trigger conversation close due to inactivity but continue audio collection."""
+        if not self._client_id:
+            logger.warning("Cannot close conversation - missing client_id")
+            return
+
+        logger.info(f"🔚 Closing conversation for {self._client_id} due to speech inactivity")
+
+        try:
+            # Reset conversation-specific state but continue audio collection
+            # Setting _current_audio_uuid to None will trigger "new session" logic
+            # on next audio chunk, which will reset buffer and timeline
+            self._current_audio_uuid = None
+            self._last_word_time = None
+
+            # Keep audio collection active:
+            # - _collecting=True (audio stream continues)
+            # - _audio_buffer (will be cleared on next chunk due to _current_audio_uuid=None)
+            # - _audio_timeline (will be reset on next chunk)
+            # - _buffer_start_time (will be reset on next chunk)
+
+            logger.info(f"✅ Conversation closed for {self._client_id}, audio collection continues for new conversations")
+
+        except Exception as e:
+            logger.error(f"❌ Error closing conversation for {self._client_id}: {e}")
 
     async def _reconnect(self):
         """Attempt to reconnect to transcription service."""
