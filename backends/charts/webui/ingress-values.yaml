@@ -1,0 +1,5 @@
+ingress:
+  # Paths for all hosts (hosts are set dynamically by Skaffold)
+  commonPaths:
+    - path: /
+      pathType: Prefix

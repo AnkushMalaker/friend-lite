@@ -223,10 +223,82 @@ Optional:
 - Legacy field support ensures existing integrations continue working
 
 ### Database Schema Details
-- **Primary Storage**: `audio_chunks` collection for all audio sessions
-- **User-Facing Storage**: `conversations` collection for speech-detected sessions only
-- **Transcript Format**: Array of segment objects with `text`, `speaker`, `start`, `end` fields
-- **Version Fields**: `transcript_versions[]`, `memory_versions[]`, `active_transcript_version`, `active_memory_version`
+
+**Collections Overview**:
+- **`audio_chunks`**: All audio sessions by `audio_uuid` (always created)
+- **`conversations`**: Speech-detected conversations by `conversation_id` (created conditionally)
+- **`users`**: User accounts and authentication data
+
+**Speech-Driven Schema**:
+```javascript
+// audio_chunks collection (always created)
+{
+  "_id": ObjectId,
+  "audio_uuid": "uuid",  // Primary identifier
+  "user_id": ObjectId,
+  "client_id": "user_suffix-device_name",
+  "audio_file_path": "/path/to/audio.wav",
+  "created_at": ISODate,
+  "transcript": "fallback transcript",  // For non-speech audio
+  "segments": [...],  // Speaker segments
+  "has_speech": boolean,  // Speech detection result
+  "speech_analysis": {...},  // Detection metadata
+  "conversation_id": "conv_id" | null  // Link to conversations collection
+}
+
+// conversations collection (speech-detected only)
+{
+  "_id": ObjectId,
+  "conversation_id": "conv_uuid",  // Primary identifier for user-facing operations
+  "audio_uuid": "audio_uuid",  // Link to audio_chunks
+  "user_id": ObjectId,
+  "client_id": "user_suffix-device_name",
+  "created_at": ISODate,
+
+  // Versioned Transcript System
+  "transcript_versions": [
+    {
+      "version_id": "uuid",
+      "transcript": "text content",
+      "segments": [...],  // Speaker diarization
+      "provider": "deepgram|mistral|parakeet",
+      "model": "nova-3|voxtral-mini-2507",
+      "created_at": ISODate,
+      "processing_time_seconds": 12.5,
+      "metadata": {...}
+    }
+  ],
+  "active_transcript_version": "uuid",  // Points to current version
+
+  // Versioned Memory System
+  "memory_versions": [
+    {
+      "version_id": "uuid",
+      "memory_count": 5,
+      "transcript_version_id": "uuid",  // Which transcript was used
+      "provider": "friend_lite|openmemory_mcp",
+      "model": "gpt-4o-mini|ollama-llama3",
+      "created_at": ISODate,
+      "processing_time_seconds": 45.2,
+      "metadata": {...}
+    }
+  ],
+  "active_memory_version": "uuid",  // Points to current version
+
+  // Legacy Fields (auto-populated from active versions)
+  "transcript": "text",  // From active_transcript_version
+  "segments": [...],     // From active_transcript_version
+  "memories": [...],     // From active_memory_version
+  "memory_count": 5      // From active_memory_version
+}
+```
+
+**Key Architecture Benefits**:
+- **Clean Separation**: Raw audio storage vs user-facing conversations
+- **Speech Filtering**: Only meaningful conversations appear in UI
+- **Version History**: Complete audit trail of processing attempts
+- **Backward Compatibility**: Legacy fields ensure existing code works
+- **Reprocessing Support**: Easy to re-run with different providers/models
 - **Service Decoupling**: Conversation creation independent of memory processing
 - **Error Isolation**: Memory service failures don't affect conversation storage
 

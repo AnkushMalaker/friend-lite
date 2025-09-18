@@ -4,13 +4,13 @@ replicaCount: 1
 image:
   repository: webui
   pullPolicy: Always
-  tag: ""
+  tag: "latest"
 
 nameOverride: ""
 fullnameOverride: ""
 
 service:
-  type: NodePort
+  type: LoadBalancer
   port: 80
   nodePort: 31011  
 
@@ -27,15 +27,20 @@ ingress:
       add_header X-Frame-Options "SAMEORIGIN" always;
       add_header X-XSS-Protection "1; mode=block" always;
       add_header X-Content-Type-Options "nosniff" always;
+  # Define common paths to avoid duplication
+  commonPaths: &commonPaths
+    - path: /
+      pathType: Prefix
+  
   hosts:
-    - host: friend-lite.192-168-1-42.nip.io
-      paths:
-        - path: /
-          pathType: Prefix
+    - host: webui.example.com  # Overridden by Skaffold setValueTemplates
+      paths: *commonPaths
+    - host: external.example.com  # Overridden by Skaffold setValueTemplates
+      paths: *commonPaths
   # tls:
   #   - secretName: friend-lite-tls
   #     hosts:
-  #       - friend-lite.192-168-1-42.nip.io
+  #       - webui.example.com
 
 resources:
   limits:
@@ -49,6 +54,8 @@ resources:
 env:
   # Backend connection (will be set by Skaffold)
   REACT_APP_BACKEND_URL: ""
+  
+  # Vite allowed hosts configured at build time via Docker buildArgs
   
   # Other environment variables
   NODE_ENV: "production"

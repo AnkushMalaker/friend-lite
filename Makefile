@@ -1,79 +1,153 @@
-# Makefile for building Docker Compose from backends/advanced directory
+# ========================================
+# Friend-Lite Configuration Management
+# ========================================
+# This Makefile generates all service-specific configuration files from the master .env
+# Configuration is data-driven via config.yaml - no hardcoded variable names!
 
-.PHONY: all help build-backend build-no-cache up-backend down-backend logs clean build-langfuse build-asr-services up-langfuse down-langfuse up-asr-services down-asr-services
+# Load environment variables from .env file
+ifneq (,$(wildcard ./.env))
+    include .env
+    export $(shell sed 's/=.*//' .env | grep -v '^\s*$$' | grep -v '^\s*\#')
+endif
 
-# Build all Docker Compose services
-all: build-backend build-langfuse build-asr-services
-	@echo "All Docker Compose services have been built successfully!"
+# Load configuration definitions
+include config.env
+# Export all variables from config.env
+export $(shell sed 's/=.*//' config.env | grep -v '^\s*$$' | grep -v '^\s*\#')
 
-# Default target
-help:
-	@echo "Available targets:"
-	@echo "  all          - Build all Docker Compose services from all directories"
-	@echo "  build-backend - Build Docker Compose services from backends/advanced"
-	@echo "  up-backend   - Start Docker Compose services from backends/advanced"
-	@echo "  down-backend - Stop Docker Compose services from backends/advanced"
-	@echo "  logs         - Show Docker Compose logs from backends/advanced"
-	@echo "  clean        - Remove containers, networks, and images from backends/advanced"
-	@echo "  build-langfuse - Build Docker Compose services from extras/langfuse"
-	@echo "  up-langfuse   - Start Docker Compose services from extras/langfuse"
-	@echo "  down-langfuse - Stop Docker Compose services from extras/langfuse"
-	@echo "  build-asr-services - Build Docker Compose services from extras/asr-services"
-	@echo "  up-asr-services   - Start Docker Compose services from extras/asr-services"
-	@echo "  down-asr-services - Stop Docker Compose services from extras/asr-services"
-	@echo "  help         - Show this help message"
+.PHONY: help config config-docker config-k8s config-all clean deploy deploy-docker deploy-k8s deploy-k8s-full deploy-infrastructure deploy-apps check-infrastructure check-apps build-backend up-backend down-backend
 
-# Build Docker Compose services
-build-backend:
-	@echo "Building Docker Compose services from backends/advanced directory..."
-	cd backends/advanced && docker-compose build
+help: ## Show this help message
+	@echo "Friend-Lite Configuration Management"
+	@echo "===================================="
+	@echo
+	@echo "📝 Configuration targets:"
+	@echo "  config               Generate all configuration files (Docker + K8s)"
+	@echo "  config-docker        Generate Docker Compose .env files"
+	@echo "  config-k8s           Generate Kubernetes files (Skaffold env + ConfigMap/Secret)"
+	@echo
+	@echo "🚀 Simple deployment workflow:"
+	@echo "  1. Edit config.env with your settings"
+	@echo "  2. Run: make config-k8s"
+	@echo "  3. Run: skaffold run -p advanced-backend --default-repo=your-registry"
+	@echo
+	@echo "🧹 Utility targets:"
+	@echo "  clean                Clean up generated configuration files"
+	@echo
+	@echo "💡 Key improvement:"
+	@echo "  - No more manual setValueTemplates in skaffold.yaml!"
+	@echo "  - All environment variables automatically available via ConfigMap/Secret"
+	@echo "  - Add new env vars to config.env, run 'make config', done!"
+	@echo
+	@echo "Current configuration:"
+	@echo "  DOMAIN: $(DOMAIN)"
+	@echo "  DEPLOYMENT_MODE: $(DEPLOYMENT_MODE)"
+	@echo "  INFRASTRUCTURE_NAMESPACE: $(INFRASTRUCTURE_NAMESPACE)"
+	@echo "  APPLICATION_NAMESPACE: $(APPLICATION_NAMESPACE)"
 
-# Start Docker Compose services
-up-backend:
-	@echo "Starting Docker Compose services from backends/advanced directory..."
-	cd backends/advanced && docker-compose up -d
+config: config-all ## Generate all configuration files
 
-# Stop Docker Compose services
-down-backend:
-	@echo "Stopping Docker Compose services from backends/advanced directory..."
-	cd backends/advanced && docker-compose down
+config-docker: ## Generate Docker Compose configuration files
+	@echo "🐳 Generating Docker Compose configuration files..."
+	@python3 scripts/generate-docker-configs.py
+	@echo "✅ Docker Compose configuration files generated"
 
-# Show Docker Compose logs
-logs:
-	@echo "Showing Docker Compose logs from backends/advanced directory..."
-	cd backends/advanced && docker-compose logs -f
+config-k8s: ## Generate Kubernetes configuration files (Skaffold env + ConfigMap/Secret)
+	@echo "☸️  Generating Kubernetes configuration files..."
+	@python3 scripts/generate-docker-configs.py
+	@python3 scripts/generate-k8s-configs.py
+	@echo "📦 Applying ConfigMap and Secret to Kubernetes..."
+	@kubectl apply -f k8s-manifests/configmap.yaml -n $(APPLICATION_NAMESPACE) 2>/dev/null || echo "⚠️  ConfigMap not applied (cluster not available?)"
+	@kubectl apply -f k8s-manifests/secrets.yaml -n $(APPLICATION_NAMESPACE) 2>/dev/null || echo "⚠️  Secret not applied (cluster not available?)"
+	@echo "📦 Copying ConfigMap and Secret to speech namespace..."
+	@kubectl get configmap friend-lite-config -n $(APPLICATION_NAMESPACE) -o yaml | \
+		sed -e '/namespace:/d' -e '/resourceVersion:/d' -e '/uid:/d' -e '/creationTimestamp:/d' | \
+		kubectl apply -n speech -f - 2>/dev/null || echo "⚠️  ConfigMap not copied to speech namespace"
+	@kubectl get secret friend-lite-secrets -n $(APPLICATION_NAMESPACE) -o yaml | \
+		sed -e '/namespace:/d' -e '/resourceVersion:/d' -e '/uid:/d' -e '/creationTimestamp:/d' | \
+		kubectl apply -n speech -f - 2>/dev/null || echo "⚠️  Secret not copied to speech namespace"
+	@echo "✅ Kubernetes configuration files generated"
 
-# Clean up Docker resources
-clean:
-	@echo "Cleaning up Docker resources from backends/advanced directory..."
-	cd backends/advanced && docker-compose down --rmi all --volumes --remove-orphans
+config-all: config-docker config-k8s ## Generate all configuration files
+	@echo "✅ All configuration files generated"
 
-# Build Langfuse Docker Compose services
-build-langfuse:
-	@echo "Building Langfuse Docker Compose services from extras/langfuse directory..."
-	cd extras/langfuse && docker-compose build
+clean-config: ## Clean up generated configuration files
+	@echo "🧹 Cleaning up generated configuration files..."
+	@rm -f backends/advanced/.env
+	@rm -f extras/speaker-recognition/.env
+	@rm -f extras/openmemory-mcp/.env
+	@rm -f extras/asr-services/.env
+	@rm -f extras/havpe-relay/.env
+	@rm -f backends/simple/.env
+	@rm -f backends/other-backends/omi-webhook-compatible/.env
+	@rm -f skaffold.env
+	@rm -f backends/charts/advanced-backend/templates/env-configmap.yaml
+	@echo "✅ Generated files cleaned"
 
-# Build ASR Services Docker Compose services
-build-asr-services:
-	@echo "Building ASR Services Docker Compose services from extras/asr-services directory..."
-	cd extras/asr-services && docker-compose build
+# ========================================
+# DEPLOYMENT TARGETS
+# ========================================
 
-# Start Langfuse Docker Compose services
-up-langfuse:
-	@echo "Starting Langfuse Docker Compose services from extras/langfuse directory..."
-	cd extras/langfuse && docker-compose up -d
+deploy: ## Deploy using configured deployment mode
+	@echo "🚀 Deploying using $(DEPLOYMENT_MODE) mode..."
+ifeq ($(DEPLOYMENT_MODE),docker-compose)
+	@$(MAKE) deploy-docker
+else ifeq ($(DEPLOYMENT_MODE),kubernetes)
+	@$(MAKE) deploy-k8s
+else
+	@echo "❌ Unknown deployment mode: $(DEPLOYMENT_MODE)"
+	@exit 1
+endif
 
-# Stop Langfuse Docker Compose services
-down-langfuse:
-	@echo "Stopping Langfuse Docker Compose services from extras/langfuse directory..."
-	cd extras/langfuse && docker-compose down
+deploy-docker: config-docker ## Deploy using Docker Compose
+	@echo "🐳 Deploying with Docker Compose..."
+	@cd backends/advanced && docker-compose up -d
+	@echo "✅ Docker Compose deployment completed"
 
-# Start ASR Services Docker Compose services
-up-asr-services:
-	@echo "Starting ASR Services Docker Compose services from extras/asr-services directory..."
-	cd extras/asr-services && docker-compose up -d
+deploy-k8s: config-skaffold ## Deploy to Kubernetes using Skaffold
+	@echo "☸️  Deploying to Kubernetes with Skaffold..."
+	@set -a; source skaffold.env; set +a; skaffold run --profile=advanced-backend --default-repo=anubis:32000
+	@echo "✅ Kubernetes deployment completed"
 
-# Stop ASR Services Docker Compose services
-down-asr-services:
-	@echo "Stopping ASR Services Docker Compose services from extras/asr-services directory..."
-	cd extras/asr-services && docker-compose down
+deploy-k8s-full: deploy-infrastructure deploy-apps ## Deploy infrastructure + applications to Kubernetes
+	@echo "✅ Full Kubernetes deployment completed"
+
+deploy-infrastructure: ## Deploy infrastructure services to Kubernetes
+	@echo "🏗️  Deploying infrastructure services..."
+	@kubectl apply -f k8s-manifests/
+	@echo "✅ Infrastructure deployment completed"
+
+deploy-apps: config-skaffold ## Deploy application services to Kubernetes
+	@echo "📱 Deploying application services..."
+	@set -a; source skaffold.env; set +a; skaffold run --profile=advanced-backend --default-repo=anubis:32000
+	@echo "✅ Application deployment completed"
+
+# ========================================
+# UTILITY TARGETS
+# ========================================
+
+check-infrastructure: ## Check if infrastructure services are running
+	@echo "🔍 Checking infrastructure services..."
+	@kubectl get pods -n $(INFRASTRUCTURE_NAMESPACE) || echo "❌ Infrastructure namespace not found"
+	@kubectl get services -n $(INFRASTRUCTURE_NAMESPACE) || echo "❌ Infrastructure services not found"
+
+check-apps: ## Check if application services are running
+	@echo "🔍 Checking application services..."
+	@kubectl get pods -n $(APPLICATION_NAMESPACE) || echo "❌ Application namespace not found"
+	@kubectl get services -n $(APPLICATION_NAMESPACE) || echo "❌ Application services not found"
+
+# ========================================
+# DEVELOPMENT TARGETS
+# ========================================
+
+build-backend: ## Build backend Docker image
+	@echo "🔨 Building backend Docker image..."
+	@cd backends/advanced && docker build -t advanced-backend:latest .
+
+up-backend: config-docker ## Start backend services
+	@echo "🚀 Starting backend services..."
+	@cd backends/advanced && docker-compose up -d
+
+down-backend: ## Stop backend services
+	@echo "🛑 Stopping backend services..."
+	@cd backends/advanced && docker-compose down
