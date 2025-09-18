@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { MessageSquare, RefreshCw, Calendar, User, Play, Pause, ChevronDown, ChevronUp } from 'lucide-react'
+import { MessageSquare, RefreshCw, Calendar, User, Play, Pause, MoreVertical, RotateCcw, Zap, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { conversationsApi, BACKEND_URL } from '../services/api'
 
 interface Conversation {
@@ -52,11 +52,16 @@ export default function Conversations() {
 
   // Transcript expand/collapse state
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
-
   // Audio playback state
   const [playingSegment, setPlayingSegment] = useState<string | null>(null) // Format: "audioUuid-segmentIndex"
   const audioRefs = useRef<{ [key: string]: HTMLAudioElement }>({})
   const segmentTimerRef = useRef<number | null>(null)
+
+  // Reprocessing state
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+  const [reprocessingTranscript, setReprocessingTranscript] = useState<Set<string>>(new Set())
+  const [reprocessingMemory, setReprocessingMemory] = useState<Set<string>>(new Set())
+  const [deletingConversation, setDeletingConversation] = useState<Set<string>>(new Set())
 
   const loadConversations = async () => {
     try {
@@ -80,6 +85,13 @@ export default function Conversations() {
     loadConversations()
   }, [])
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => setOpenDropdown(null)
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [])
+
   const formatDate = (timestamp: number) => {
     return new Date(timestamp * 1000).toLocaleString()
   }
@@ -89,6 +101,96 @@ export default function Conversations() {
     const minutes = Math.floor(duration / 60)
     const seconds = Math.floor(duration % 60)
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
+  }
+
+  const handleReprocessTranscript = async (conversation: Conversation) => {
+    try {
+      if (!conversation.conversation_id) {
+        setError('Cannot reprocess transcript: Conversation ID is missing. This conversation may be from an older format.')
+        return
+      }
+
+      setReprocessingTranscript(prev => new Set(prev).add(conversation.conversation_id!))
+      setOpenDropdown(null)
+
+      const response = await conversationsApi.reprocessTranscript(conversation.conversation_id)
+
+      if (response.status === 200) {
+        // Refresh conversations to show updated data
+        await loadConversations()
+      } else {
+        setError(`Failed to start transcript reprocessing: ${response.data?.error || 'Unknown error'}`)
+      }
+    } catch (err: any) {
+      setError(`Error starting transcript reprocessing: ${err.message || 'Unknown error'}`)
+    } finally {
+      if (conversation.conversation_id) {
+        setReprocessingTranscript(prev => {
+          const newSet = new Set(prev)
+          newSet.delete(conversation.conversation_id!)
+          return newSet
+        })
+      }
+    }
+  }
+
+  const handleReprocessMemory = async (conversation: Conversation, transcriptVersionId?: string) => {
+    try {
+      if (!conversation.conversation_id) {
+        setError('Cannot reprocess memory: Conversation ID is missing. This conversation may be from an older format.')
+        return
+      }
+
+      setReprocessingMemory(prev => new Set(prev).add(conversation.conversation_id!))
+      setOpenDropdown(null)
+
+      // For now, use active transcript version. In future, this could be selected from UI
+      const response = await conversationsApi.reprocessMemory(conversation.conversation_id, transcriptVersionId || 'active')
+
+      if (response.status === 200) {
+        // Refresh conversations to show updated data
+        await loadConversations()
+      } else {
+        setError(`Failed to start memory reprocessing: ${response.data?.error || 'Unknown error'}`)
+      }
+    } catch (err: any) {
+      setError(`Error starting memory reprocessing: ${err.message || 'Unknown error'}`)
+    } finally {
+      if (conversation.conversation_id) {
+        setReprocessingMemory(prev => {
+          const newSet = new Set(prev)
+          newSet.delete(conversation.conversation_id!)
+          return newSet
+        })
+      }
+    }
+  }
+
+  const handleDeleteConversation = async (audioUuid: string) => {
+    try {
+      const confirmed = window.confirm('Are you sure you want to delete this conversation? This action cannot be undone.')
+      if (!confirmed) return
+
+      setDeletingConversation(prev => new Set(prev).add(audioUuid))
+      setOpenDropdown(null)
+
+      const response = await conversationsApi.delete(audioUuid)
+
+      if (response.status === 200) {
+        // Refresh conversations to show updated data
+        await loadConversations()
+      } else {
+        setError(`Failed to delete conversation: ${response.data?.error || 'Unknown error'}`)
+      }
+    } catch (err: any) {
+      setError(`Error deleting conversation: ${err.message || 'Unknown error'}`)
+    } finally {
+      setDeletingConversation(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(audioUuid)
+        return newSet
+      })
+    }
   }
 
   const toggleTranscriptExpansion = (audioUuid: string) => {
@@ -275,8 +377,73 @@ export default function Conversations() {
                     )}
                   </div>
                 </div>
-                
-{/* Audio Player */}
+
+                {/* Hamburger Menu */}
+                <div className="relative">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setOpenDropdown(openDropdown === conversation.audio_uuid ? null : conversation.audio_uuid)
+                    }}
+                    className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                    title="Conversation options"
+                  >
+                    <MoreVertical className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {openDropdown === conversation.audio_uuid && (
+                    <div className="absolute right-0 top-8 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-600 py-2 z-10">
+                      <button
+                        onClick={() => handleReprocessTranscript(conversation)}
+                        disabled={!conversation.conversation_id || reprocessingTranscript.has(conversation.conversation_id)}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {conversation.conversation_id && reprocessingTranscript.has(conversation.conversation_id) ? (
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RotateCcw className="h-4 w-4" />
+                        )}
+                        <span>Reprocess Transcript</span>
+                        {!conversation.conversation_id && (
+                          <span className="text-xs text-red-500 ml-1">(ID missing)</span>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleReprocessMemory(conversation)}
+                        disabled={!conversation.conversation_id || reprocessingMemory.has(conversation.conversation_id)}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {conversation.conversation_id && reprocessingMemory.has(conversation.conversation_id) ? (
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Zap className="h-4 w-4" />
+                        )}
+                        <span>Reprocess Memory</span>
+                        {!conversation.conversation_id && (
+                          <span className="text-xs text-red-500 ml-1">(ID missing)</span>
+                        )}
+                      </button>
+                      <div className="border-t border-gray-200 dark:border-gray-600 my-1"></div>
+                      <button
+                        onClick={() => handleDeleteConversation(conversation.audio_uuid)}
+                        disabled={deletingConversation.has(conversation.audio_uuid)}
+                        className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {deletingConversation.has(conversation.audio_uuid) ? (
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                        <span>Delete Conversation</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Audio Player */}
+              <div className="mb-4">
                 <div className="space-y-2">
                   {(conversation.audio_path || conversation.cropped_audio_path) && (
                     <>
@@ -395,8 +562,8 @@ export default function Conversations() {
                               
                               <div className="flex-1 min-w-0">
                                 {debugMode && (
-                                  <span className="text-xs text-gray-400 mr-2" title={`${segment.start.toFixed(1)}s - ${segment.end.toFixed(1)}s`}>
-                                    [{formatDuration(segment.start, segment.end)}]
+                                  <span className="text-xs text-gray-400 mr-2">
+                                    [start: {segment.start.toFixed(1)}s, end: {segment.end.toFixed(1)}s, duration: {formatDuration(segment.start, segment.end)}]
                                   </span>
                                 )}
                                 <span className={`font-medium ${speakerColor}`}>
@@ -443,6 +610,7 @@ export default function Conversations() {
                 <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
                   <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">🔧 Debug Info:</h4>
                   <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1">
+                    <div>Conversation ID: {conversation.conversation_id || 'N/A'}</div>
                     <div>Audio UUID: {conversation.audio_uuid}</div>
                     <div>Original Audio: {conversation.audio_path || 'N/A'}</div>
                     <div>Cropped Audio: {conversation.cropped_audio_path || 'N/A'}</div>

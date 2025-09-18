@@ -281,10 +281,13 @@ class TranscriptionManager:
         try:
             # Store raw transcript data
             provider_name = self.provider.name if self.provider else "unknown"
+            logger.info(f"🔍 DEBUG: transcript_result type={type(transcript_result)}, content preview: {str(transcript_result)[:200]}")
             if self.chunk_repo:
+                logger.info(f"🔍 DEBUG: About to store raw transcript data for {self._current_audio_uuid}")
                 await self.chunk_repo.store_raw_transcript_data(
                     self._current_audio_uuid, transcript_result, provider_name
                 )
+                logger.info(f"🔍 DEBUG: Successfully stored raw transcript data for {self._current_audio_uuid}")
 
             # Normalize transcript result
             normalized_result = self._normalize_transcript_result(transcript_result)
@@ -307,7 +310,6 @@ class TranscriptionManager:
                 "words": normalized_result.get("words", []),
                 "text": normalized_result.get("text", ""),
             }
-
             # SPEECH DETECTION: Analyze transcript for meaningful speech
             speech_analysis = self._analyze_speech(transcript_data)
             logger.info(f"🎯 Speech analysis for {self._current_audio_uuid}: {speech_analysis}")
@@ -402,6 +404,9 @@ class TranscriptionManager:
                             logger.info(
                                 f"🎤 Speaker service returned {len(final_segments)} segments with matched text"
                             )
+                            # Debug: Log first few segments to see text content
+                            for i, seg in enumerate(final_segments[:3]):
+                                logger.info(f"🔍 DEBUG: Segment {i}: text='{seg.get('text', 'MISSING')}', speaker={seg.get('speaker', 'UNKNOWN')}")
                         else:
                             logger.info("🎤 Speaker service returned no segments")
                     else:
@@ -470,10 +475,23 @@ class TranscriptionManager:
                     try:
                         conversations_repo = ConversationsRepository(conversations_col)
 
-                        # Update conversation with transcript segments and speaker info
+                        # Check if this is the first transcript for this conversation
+                        conversation = await conversations_repo.get_conversation(conversation_id)
+                        if conversation and not conversation.get("active_transcript_version"):
+                            # This is the first transcript - create initial version
+                            version_id = await conversations_repo.create_transcript_version(
+                                conversation_id=conversation_id,
+                                segments=segments_to_store,
+                                provider="speech_detection",
+                                raw_data={}
+                            )
+                            if version_id:
+                                # Activate this version
+                                await conversations_repo.activate_transcript_version(conversation_id, version_id)
+                                logger.info(f"✅ Created and activated initial transcript version {version_id} for conversation {conversation_id}")
+
+                        # Update conversation with speaker info and metadata (NOT transcript data - that's in versions)
                         update_data = {
-                            "transcript": segments_to_store,
-                            "speakers_identified": list(speakers_found),
                             "speaker_names": speaker_names,
                             "updated_at": datetime.now(UTC)
                         }
@@ -497,7 +515,7 @@ class TranscriptionManager:
                 await self._queue_memory_processing(conversation_id)
 
             # Queue audio cropping if we have diarization segments and cropping is enabled
-            if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "false").lower() == "true":
+            if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true":
                 await self._queue_diarization_based_cropping(final_segments)
 
             # Update database transcription status
@@ -620,14 +638,20 @@ class TranscriptionManager:
                 "client_id": audio_session["client_id"],
                 "title": title,
                 "summary": summary,
-                "transcript": [],  # Will be populated by existing segment processing
+
+                # Versioned system (source of truth)
+                "transcript_versions": [],
+                "active_transcript_version": None,
+                "memory_versions": [],
+                "active_memory_version": None,
+
+                # Legacy compatibility fields (auto-populated on read)
+                # Note: These will be auto-populated from active versions when retrieved
+
                 "duration_seconds": speech_analysis.get("duration", 0.0),
                 "speech_start_time": speech_analysis.get("speech_start", 0.0),
                 "speech_end_time": speech_analysis.get("speech_end", 0.0),
-                "speakers_identified": [],
                 "speaker_names": {},
-                "memories": [],
-                "memory_processing_status": "pending",
                 "action_items": [],
                 "created_at": datetime.now(UTC),
                 "updated_at": datetime.now(UTC),
