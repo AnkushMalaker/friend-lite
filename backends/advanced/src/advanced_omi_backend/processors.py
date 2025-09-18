@@ -10,24 +10,32 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
 
-from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
-from wyoming.audio import AudioChunk
+# Import TranscriptionManager for type hints
+from typing import TYPE_CHECKING, Any, Optional
 
 from advanced_omi_backend.audio_cropping_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
-from advanced_omi_backend.users import get_user_by_id
 from advanced_omi_backend.client_manager import get_client_manager
-from advanced_omi_backend.database import AudioChunksRepository
+from advanced_omi_backend.database import (
+    AudioChunksRepository,
+    ConversationsRepository,
+    conversations_col,
+)
 from advanced_omi_backend.memory import get_memory_service
+from advanced_omi_backend.task_manager import get_task_manager
+from advanced_omi_backend.users import get_user_by_id
+from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
+from wyoming.audio import AudioChunk
 
 # Lazy import to avoid config loading issues
 # from advanced_omi_backend.memory import get_memory_service
-from advanced_omi_backend.task_manager import get_task_manager
-from advanced_omi_backend.transcription import TranscriptionManager
+
+if TYPE_CHECKING:
+    from advanced_omi_backend.transcription import TranscriptionManager
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -38,6 +46,9 @@ OMI_CHANNELS = 1
 OMI_SAMPLE_WIDTH = 2
 SEGMENT_SECONDS = 60
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
+
+if TYPE_CHECKING:
+    from advanced_omi_backend.transcription import TranscriptionManager
 
 
 @dataclass
@@ -64,12 +75,12 @@ class TranscriptionItem:
 
 @dataclass
 class MemoryProcessingItem:
-    """Item for memory processing queue."""
+    """Item for memory processing queue (speech-driven conversations architecture)."""
 
     client_id: str
     user_id: str
     user_email: str
-    audio_uuid: str
+    conversation_id: str
 
 
 @dataclass
@@ -113,7 +124,7 @@ class ProcessorManager:
         self.active_audio_uuids: dict[str, str] = {}
 
         # Transcription managers pool
-        self.transcription_managers: dict[str, TranscriptionManager] = {}
+        self.transcription_managers: dict[str, "TranscriptionManager"] = {}
 
         # Shutdown flag
         self.shutdown_flag = False
@@ -126,6 +137,16 @@ class ProcessorManager:
         
         # Track clients currently being closed to prevent duplicate close operations
         self.closing_clients: set[str] = set()
+
+    async def _update_memory_status(self, conversation_id: str, status: str):
+        """Update memory processing status for conversation."""
+        try:
+            conversations_repo = ConversationsRepository(conversations_col)
+            await conversations_repo.update_memory_processing_status(conversation_id, status)
+
+            audio_logger.info(f"📝 Updated memory status to {status} for conversation {conversation_id}")
+        except Exception as e:
+            audio_logger.error(f"Failed to update memory status to {status} for conversation {conversation_id}: {e}")
 
     async def start(self):
         """Start all processors."""
@@ -161,21 +182,21 @@ class ProcessorManager:
 
         logger.info("All processors started successfully")
 
-    async def _should_process_memory(self, user_id: str, audio_uuid: str) -> tuple[bool, str]:
+    async def _should_process_memory(self, user_id: str, conversation_id: str) -> tuple[bool, str]:
         """
         Determine if memory processing should proceed based on primary speakers configuration.
-        
+
         Implements graceful degradation:
         - No primary speakers configured → Process all (True)
-        - Speaker service unavailable → Process all (True) 
+        - Speaker service unavailable → Process all (True)
         - No speakers identified → Process all (True)
         - Primary speakers found → Process (True)
         - Only non-primary speakers → Skip (False)
-        
+
         Args:
             user_id: User ID to check primary speakers configuration
-            audio_uuid: Audio UUID to check transcript speakers
-            
+            conversation_id: Conversation ID to check transcript speakers
+
         Returns:
             Tuple of (should_process: bool, reason: str)
         """
@@ -184,12 +205,13 @@ class ProcessorManager:
             user = await get_user_by_id(user_id)
             if not user or not user.primary_speakers:
                 return True, "No primary speakers configured - processing all conversations"
-            
-            audio_logger.info(f"🔍 Checking primary speakers filter for {audio_uuid} - user has {len(user.primary_speakers)} primary speakers configured")
-            
-            # Get transcript with speaker identification
-            chunk = await self.repository.get_chunk_by_audio_uuid(audio_uuid)
-            if not chunk or not chunk.get('transcript'):
+
+            audio_logger.info(f"🔍 Checking primary speakers filter for conversation {conversation_id} - user has {len(user.primary_speakers)} primary speakers configured")
+
+            # Get conversation data from conversations collection
+            conversations_repo = ConversationsRepository(conversations_col)
+            conversation = await conversations_repo.get_conversation(conversation_id)
+            if not conversation or not conversation.get('transcript'):
                 return True, "No transcript data available - processing conversation"
             
             # Extract speakers from transcript segments (normalized for comparison)
@@ -198,7 +220,7 @@ class ProcessorManager:
             total_segments = 0
             identified_segments = 0
             
-            for segment in chunk['transcript']:
+            for segment in conversation['transcript']:
                 total_segments += 1
                 if 'identified_as' in segment and segment['identified_as'] and segment['identified_as'] != 'Unknown':
                     original_name = segment['identified_as']
@@ -229,7 +251,7 @@ class ProcessorManager:
                 
         except Exception as e:
             # On any error, default to processing (fail-safe)
-            audio_logger.warning(f"Error checking primary speakers filter for {audio_uuid}: {e} - defaulting to process conversation")
+            audio_logger.warning(f"Error checking primary speakers filter for {conversation_id}: {e} - defaulting to process conversation")
             return True, f"Error in speaker filtering: {str(e)} - processing conversation as fallback"
 
     async def shutdown(self):
@@ -294,12 +316,12 @@ class ProcessorManager:
 
     async def queue_audio(self, item: AudioProcessingItem):
         """Queue audio for processing."""
-        audio_logger.info(
+        audio_logger.debug(
             f"📥 queue_audio called for client {item.client_id}, audio chunk: {len(item.audio_chunk.audio)} bytes"
         )
         await self.audio_queue.put(item)
         queue_size = self.audio_queue.qsize()
-        audio_logger.info(
+        audio_logger.debug(
             f"✅ Successfully queued audio for client {item.client_id}, queue size: {queue_size}"
         )
 
@@ -316,12 +338,12 @@ class ProcessorManager:
     async def queue_memory(self, item: MemoryProcessingItem):
         """Queue conversation for memory processing."""
         audio_logger.info(
-            f"📥 queue_memory called for client {item.client_id}, audio_uuid: {item.audio_uuid}"
+            f"📥 queue_memory called for conversation {item.conversation_id} (client {item.client_id})"
         )
         audio_logger.info(f"📥 Memory queue size before: {self.memory_queue.qsize()}")
         await self.memory_queue.put(item)
         audio_logger.info(f"📥 Memory queue size after: {self.memory_queue.qsize()}")
-        audio_logger.info(f"✅ Successfully queued memory processing item for {item.audio_uuid}")
+        audio_logger.info(f"✅ Successfully queued memory processing item for conversation {item.conversation_id}")
 
     async def queue_cropping(self, item: AudioCroppingItem):
         """Queue audio for cropping."""
@@ -564,6 +586,7 @@ class ProcessorManager:
         This can be called early (e.g., on audio-start) to create the manager
         before audio chunks arrive.
         """
+        from advanced_omi_backend.transcription import TranscriptionManager
         if client_id not in self.transcription_managers:
             audio_logger.info(
                 f"🔌 Creating transcription manager for client {client_id} (early creation)"
@@ -597,12 +620,12 @@ class ProcessorManager:
                     # Get item with timeout to allow periodic health checks
                     queue_size = self.audio_queue.qsize()
                     if queue_size > 0:
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"🔄 Audio processor waiting for items, queue size: {queue_size}"
                         )
                     item = await asyncio.wait_for(self.audio_queue.get(), timeout=30.0)
                     
-                    audio_logger.info(
+                    audio_logger.debug(
                         f"📦 Audio processor dequeued item for client {item.client_id if item else 'None'}"
                     )
 
@@ -711,7 +734,7 @@ class ProcessorManager:
                         )
                     finally:
                         self.audio_queue.task_done()
-                        audio_logger.info(
+                        audio_logger.debug(
                             f"✅ Completed processing audio item for client {item.client_id if item else 'None'}"
                         )
 
@@ -733,6 +756,7 @@ class ProcessorManager:
     async def _transcription_processor(self):
         """Process transcription requests."""
         audio_logger.info("Transcription processor started")
+        from advanced_omi_backend.transcription import TranscriptionManager
 
         try:
             while not self.shutdown_flag:
@@ -746,6 +770,8 @@ class ProcessorManager:
                     try:
                         # Get or create transcription manager for client
                         if item.client_id not in self.transcription_managers:
+                            # Import here to avoid circular imports
+
                             audio_logger.info(
                                 f"🔌 Creating new transcription manager for client {item.client_id}"
                             )
@@ -875,7 +901,7 @@ class ProcessorManager:
                         task = asyncio.create_task(self._process_memory_item(item))
 
                         # Track task with 5 minute timeout
-                        task_name = f"memory_{item.client_id}_{item.audio_uuid}"
+                        task_name = f"memory_{item.client_id}_{item.conversation_id}"
                         actual_task_id = self.task_manager.track_task(
                             task,
                             task_name,
@@ -914,85 +940,92 @@ class ProcessorManager:
             audio_logger.info("Memory processor stopped")
 
     async def _process_memory_item(self, item: MemoryProcessingItem):
-        """Process a single memory item."""
+        """Process a single memory item (speech-driven conversations architecture)."""
         start_time = time.time()
-        audio_logger.info(f"🚀 MEMORY PROCESSING STARTED for {item.audio_uuid} at {start_time}")
+        audio_logger.info(f"🚀 MEMORY PROCESSING STARTED for conversation {item.conversation_id} at {start_time}")
 
         # Track memory processing start
         self.track_processing_stage(
             item.client_id,
             "memory",
             "started",
-            {"audio_uuid": item.audio_uuid, "started_at": start_time},
+            {"conversation_id": item.conversation_id, "started_at": start_time},
         )
 
         try:
-            # Use ConversationRepository for clean data access with event coordination
-            from advanced_omi_backend.conversation_repository import (
-                get_conversation_repository,
-            )
+            # Get conversation data directly from conversations collection (speech-driven architecture)
+            conversations_repo = ConversationsRepository(conversations_col)
+            conversation = await conversations_repo.get_conversation(item.conversation_id)
 
-            conversation_repo = get_conversation_repository()
-
-            # Memory processing is now data-driven - transcript should be available
-            # since this is queued AFTER transcription completion
-            full_conversation = await conversation_repo.get_full_conversation_text(item.audio_uuid)
-
-            if not full_conversation:
+            if not conversation:
                 audio_logger.warning(
-                    f"No valid conversation text found for {item.audio_uuid}, skipping memory processing"
+                    f"No conversation found for {item.conversation_id}, skipping memory processing"
+                )
+                return None
+
+            # Extract conversation text from transcript segments
+            full_conversation = ""
+            transcript = conversation.get("transcript", [])
+            if transcript:
+                dialogue_lines = []
+                for segment in transcript:
+                    text = segment.get("text", "").strip()
+                    if text:
+                        speaker = segment.get("speaker", "Unknown")
+                        dialogue_lines.append(f"{speaker}: {text}")
+                full_conversation = "\n".join(dialogue_lines)
+            else:
+                audio_logger.warning(
+                    f"No transcript found in conversation {item.conversation_id}, skipping memory processing"
                 )
                 return None
             if len(full_conversation) < 10:  # Minimum length check
                 audio_logger.warning(
-                    f"Conversation too short for memory processing ({len(full_conversation)} chars): {item.audio_uuid}"
+                    f"Conversation too short for memory processing ({len(full_conversation)} chars): conversation {item.conversation_id}"
                 )
                 return None
 
             # Debug tracking removed for cleaner architecture
 
             # Check if memory processing should proceed based on primary speakers configuration
-            should_process, filter_reason = await self._should_process_memory(item.user_id, item.audio_uuid)
-            audio_logger.info(f"🎯 Speaker filter decision for {item.audio_uuid}: {filter_reason}")
-            
+            should_process, filter_reason = await self._should_process_memory(item.user_id, item.conversation_id)
+            audio_logger.info(f"🎯 Speaker filter decision for conversation {item.conversation_id}: {filter_reason}")
+
             if not should_process:
                 # Update memory processing status to skipped
-                await self.repository.update_memory_processing_status(
-                    item.audio_uuid, "SKIPPED", error_message=filter_reason
-                )
-                
+                await self._update_memory_status(item.conversation_id, "skipped")
+
                 # Track completion
                 self.track_processing_stage(
                     item.client_id,
                     "memory",
                     "completed",
                     {
-                        "audio_uuid": item.audio_uuid,
+                        "conversation_id": item.conversation_id,
                         "status": "skipped",
                         "reason": filter_reason,
                         "completed_at": time.time(),
                     },
                 )
-                audio_logger.info(f"⏭️ Skipped memory processing for {item.audio_uuid}: {filter_reason}")
+                audio_logger.info(f"⏭️ Skipped memory processing for conversation {item.conversation_id}: {filter_reason}")
                 return None
 
             # Lazy import memory service
             if self.memory_service is None:
-                audio_logger.info(f"🔧 Initializing memory service for {item.audio_uuid}...")
+                audio_logger.info(f"🔧 Initializing memory service for conversation {item.conversation_id}...")
                 self.memory_service = get_memory_service()
-                audio_logger.info(f"✅ Memory service initialized for {item.audio_uuid}")
+                audio_logger.info(f"✅ Memory service initialized for conversation {item.conversation_id}")
 
             # Process memory with timeout
-            audio_logger.info(f"🔥 About to call add_memory() for {item.audio_uuid}...")
+            audio_logger.info(f"🔥 About to call add_memory() for conversation {item.conversation_id}...")
             memory_result = await asyncio.wait_for(
                 self.memory_service.add_memory(
                     full_conversation,
                     item.client_id,
-                    item.audio_uuid,
+                    item.conversation_id,  # Use conversation_id instead of audio_uuid
                     item.user_id,
                     item.user_email,
                     allow_update=True,
-                    db_helper=None,  # Using ConversationRepository now
                 ),
                 timeout=3600,  # 60 minutes
             )
@@ -1005,31 +1038,25 @@ class ProcessorManager:
                 if success and created_memory_ids:
                     # Memories were actually created
                     audio_logger.info(
-                        f"✅ Successfully processed memory for {item.audio_uuid} - created {len(created_memory_ids)} memories"
+                        f"✅ Successfully processed memory for conversation {item.conversation_id} - created {len(created_memory_ids)} memories"
                     )
 
-                    # Add memory references to MongoDB conversation document
+                    # Add memory references to conversations collection (speech-driven architecture)
                     try:
-                        for memory_id in created_memory_ids:
-                            await conversation_repo.add_memory_reference(
-                                item.audio_uuid, memory_id, "created"
-                            )
-                        audio_logger.info(
-                            f"📝 Added {len(created_memory_ids)} memory references to MongoDB for {item.audio_uuid}"
-                        )
-                    except Exception as e:
-                        audio_logger.warning(f"Failed to add memory references to MongoDB: {e}")
+                        conversations_repo = ConversationsRepository(conversations_col)
 
-                    # Update database memory processing status to completed
-                    try:
-                        await conversation_repo.update_memory_processing_status(
-                            item.audio_uuid, "COMPLETED"
-                        )
+                        # Add memory references to conversation
+                        memory_refs = [{"memory_id": mid, "created_at": datetime.now(UTC).isoformat(), "status": "created"} for mid in created_memory_ids]
+                        await conversations_repo.add_memories(item.conversation_id, memory_refs)
+
+                        # Update memory processing status
+                        await conversations_repo.update_memory_processing_status(item.conversation_id, "completed")
+
                         audio_logger.info(
-                            f"📝 Updated memory processing status to COMPLETED for {item.audio_uuid}"
+                            f"📝 Added {len(created_memory_ids)} memories to conversation {item.conversation_id}"
                         )
                     except Exception as e:
-                        audio_logger.warning(f"Failed to update memory status: {e}")
+                        audio_logger.warning(f"Failed to add memory references: {e}")
 
                     # Track memory processing completion
                     self.track_processing_stage(
@@ -1037,7 +1064,7 @@ class ProcessorManager:
                         "memory",
                         "completed",
                         {
-                            "audio_uuid": item.audio_uuid,
+                            "conversation_id": item.conversation_id,
                             "memories_created": len(created_memory_ids),
                             "processing_time": time.time() - start_time,
                         },
@@ -1045,19 +1072,11 @@ class ProcessorManager:
                 elif success and not created_memory_ids:
                     # Successful processing but no memories created (likely empty transcript)
                     audio_logger.info(
-                        f"✅ Memory processing completed for {item.audio_uuid} but no memories created (likely empty transcript)"
+                        f"✅ Memory processing completed for conversation {item.conversation_id} but no memories created (likely empty transcript)"
                     )
 
                     # Update database memory processing status to skipped
-                    try:
-                        await conversation_repo.update_memory_processing_status(
-                            item.audio_uuid, "SKIPPED"
-                        )
-                        audio_logger.info(
-                            f"📝 Updated memory processing status to SKIPPED for {item.audio_uuid} (no memories created - empty transcript)"
-                        )
-                    except Exception as e:
-                        audio_logger.warning(f"Failed to update memory status: {e}")
+                    await self._update_memory_status(item.conversation_id, "skipped")
 
                     # Track memory processing completion (even though no memories created)
                     self.track_processing_stage(
@@ -1065,7 +1084,7 @@ class ProcessorManager:
                         "memory",
                         "completed",
                         {
-                            "audio_uuid": item.audio_uuid,
+                            "conversation_id": item.conversation_id,
                             "memories_created": 0,
                             "processing_time": time.time() - start_time,
                             "status": "skipped",
@@ -1074,22 +1093,11 @@ class ProcessorManager:
                 else:
                     # This shouldn't happen, but handle it gracefully
                     audio_logger.warning(
-                        f"⚠️ Unexpected memory result for {item.audio_uuid}: success={success}, ids={created_memory_ids}"
+                        f"⚠️ Unexpected memory result for conversation {item.conversation_id}: success={success}, ids={created_memory_ids}"
                     )
 
                     # Update database memory processing status to failed
-                    try:
-                        await conversation_repo.update_memory_processing_status(
-                            item.audio_uuid, "FAILED"
-                        )
-                        audio_logger.warning(
-                            f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (unexpected result)"
-                        )
-                    except Exception as e:
-                        audio_logger.warning(f"Failed to update memory status: {e}")
-                        audio_logger.warning(
-                            f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
-                        )
+                    await self._update_memory_status(item.conversation_id, "failed")
 
                     # Track memory processing failure
                     self.track_processing_stage(
@@ -1097,28 +1105,17 @@ class ProcessorManager:
                         "memory",
                         "failed",
                         {
-                            "audio_uuid": item.audio_uuid,
+                            "conversation_id": item.conversation_id,
                             "error": f"Unexpected result: success={success}, ids={created_memory_ids}",
                             "processing_time": time.time() - start_time,
                         },
                     )
 
             else:
-                audio_logger.warning(f"⚠️ Memory service returned False for {item.audio_uuid}")
+                audio_logger.warning(f"⚠️ Memory service returned False for conversation {item.conversation_id}")
 
                 # Update database memory processing status to failed
-                try:
-                    await conversation_repo.update_memory_processing_status(
-                        item.audio_uuid, "FAILED"
-                    )
-                    audio_logger.warning(
-                        f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (memory service returned False)"
-                    )
-                except Exception as e:
-                    audio_logger.warning(f"Failed to update memory status: {e}")
-                    audio_logger.warning(
-                        f"📝 Updated memory processing status to FAILED for {item.audio_uuid}"
-                    )
+                await self._update_memory_status(item.conversation_id, "failed")
 
                 # Track memory processing failure
                 self.track_processing_stage(
@@ -1126,23 +1123,17 @@ class ProcessorManager:
                     "memory",
                     "failed",
                     {
-                        "audio_uuid": item.audio_uuid,
+                        "conversation_id": item.conversation_id,
                         "error": "Memory service returned False",
                         "processing_time": time.time() - start_time,
                     },
                 )
 
         except asyncio.TimeoutError:
-            audio_logger.error(f"Memory processing timed out for {item.audio_uuid}")
+            audio_logger.error(f"Memory processing timed out for conversation {item.conversation_id}")
 
             # Update database memory processing status to failed
-            try:
-                await conversation_repo.update_memory_processing_status(item.audio_uuid, "FAILED")
-                audio_logger.error(
-                    f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (timeout: 5 minutes)"
-                )
-            except Exception as e:
-                audio_logger.warning(f"Failed to update memory status: {e}")
+            await self._update_memory_status(item.conversation_id, "failed")
 
             # Track memory processing timeout failure
             self.track_processing_stage(
@@ -1150,23 +1141,17 @@ class ProcessorManager:
                 "memory",
                 "failed",
                 {
-                    "audio_uuid": item.audio_uuid,
+                    "conversation_id": item.conversation_id,
                     "error": "Processing timeout (5 minutes)",
                     "processing_time": time.time() - start_time,
                 },
             )
 
         except Exception as e:
-            audio_logger.error(f"Error processing memory for {item.audio_uuid}: {e}")
+            audio_logger.error(f"Error processing memory for conversation {item.conversation_id}: {e}")
 
             # Update database memory processing status to failed
-            try:
-                await conversation_repo.update_memory_processing_status(item.audio_uuid, "FAILED")
-                audio_logger.error(
-                    f"📝 Updated memory processing status to FAILED for {item.audio_uuid} (exception: {str(e)})"
-                )
-            except Exception as repo_e:
-                audio_logger.warning(f"Failed to update memory status: {repo_e}")
+            await self._update_memory_status(item.conversation_id, "failed")
 
             # Track memory processing exception failure
             self.track_processing_stage(
@@ -1174,7 +1159,7 @@ class ProcessorManager:
                 "memory",
                 "failed",
                 {
-                    "audio_uuid": item.audio_uuid,
+                    "conversation_id": item.conversation_id,
                     "error": f"Exception: {str(e)}",
                     "processing_time": time.time() - start_time,
                 },
@@ -1183,7 +1168,7 @@ class ProcessorManager:
         end_time = time.time()
         processing_time_ms = (end_time - start_time) * 1000
         audio_logger.info(
-            f"🏁 MEMORY PROCESSING COMPLETED for {item.audio_uuid} in {processing_time_ms:.1f}ms (end time: {end_time})"
+            f"🏁 MEMORY PROCESSING COMPLETED for conversation {item.conversation_id} in {processing_time_ms:.1f}ms (end time: {end_time})"
         )
 
     async def _cropping_processor(self):

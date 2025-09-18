@@ -7,6 +7,7 @@ across main.py and router modules.
 
 import logging
 import os
+import time
 from datetime import UTC, datetime
 from typing import Optional
 import uuid
@@ -25,6 +26,7 @@ chunks_col = db["audio_chunks"]
 processing_runs_col = db["processing_runs"]
 users_col = db["users"]
 speakers_col = db["speakers"]
+conversations_col = db["conversations"]
 
 
 def get_database():
@@ -39,6 +41,7 @@ def get_collections():
         "processing_runs_col": processing_runs_col,
         "users_col": users_col,
         "speakers_col": speakers_col,
+        "conversations_col": conversations_col,
     }
 
 
@@ -383,164 +386,135 @@ class AudioChunksRepository:
             logger.info(f"Updated memory processing status to {status} for {audio_uuid}")
         return result.modified_count > 0
 
-    async def update_transcription_status(
-        self, audio_uuid: str, status: str, provider: str = None, error_message: str = None
-    ):
-        """Update transcription status and completion timestamp.
+    # ========================================
+    # SPEECH-DRIVEN CONVERSATIONS METHODS
+    # ========================================
 
-        Interface compatibility method - updates active transcript version.
-        """
-        chunk = await self.get_chunk(audio_uuid)
-        if not chunk:
-            return False
-
-        active_version = chunk.get("active_transcript_version")
-        if not active_version:
-            # Create initial transcript version if none exists
-            version_id = str(uuid.uuid4())
-            version_data = {
-                "version_id": version_id,
-                "segments": [],
-                "status": status,
-                "provider": provider,
-                "created_at": datetime.now(UTC),
-                "processing_run_id": None,
-                "raw_data": {},
-                "speakers_identified": []
+    async def add_audio_file_path(self, audio_uuid: str, file_path: str):
+        """Add new audio file path to existing session."""
+        result = await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {
+                "$push": {"audio_file_paths": file_path},
+                "$set": {"updated_at": datetime.now(UTC).isoformat()}
             }
-            if error_message:
-                version_data["error_message"] = error_message
-
-            result = await self.col.update_one(
-                {"audio_uuid": audio_uuid},
-                {
-                    "$push": {"transcript_versions": version_data},
-                    "$set": {
-                        "active_transcript_version": version_id,
-                        "transcription_status": status,
-                        "transcription_updated_at": datetime.now(UTC).isoformat(),
-                    }
-                }
-            )
-        else:
-            # Update existing active version
-            update_doc = {
-                f"transcript_versions.$[version].status": status,
-                f"transcript_versions.$[version].updated_at": datetime.now(UTC),
-                "transcription_status": status,
-                "transcription_updated_at": datetime.now(UTC).isoformat(),
-            }
-            if provider:
-                update_doc[f"transcript_versions.$[version].provider"] = provider
-                update_doc["transcription_provider"] = provider
-            if status == "COMPLETED":
-                update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
-            if error_message:
-                update_doc[f"transcript_versions.$[version].error_message"] = error_message
-                update_doc["transcription_error"] = error_message
-
-            result = await self.col.update_one(
-                {"audio_uuid": audio_uuid},
-                {"$set": update_doc},
-                array_filters=[{"version.version_id": active_version}]
-            )
-
+        )
         if result.modified_count > 0:
-            logger.info(f"Updated transcription status to {status} for {audio_uuid}")
+            logger.info(f"Added audio file path {file_path} to session {audio_uuid}")
         return result.modified_count > 0
 
-    # Additional interface compatibility methods
-
-    async def update_transcript(self, audio_uuid, full_transcript):
-        """Update the entire transcript list (for compatibility).
-
-        Interface compatibility method - updates active transcript version.
-        """
-        chunk = await self.get_chunk(audio_uuid)
-        if not chunk:
-            return False
-
-        active_version = chunk.get("active_transcript_version")
-        if not active_version:
-            # Create initial version if none exists
-            version_id = str(uuid.uuid4())
-            version_data = {
-                "version_id": version_id,
-                "segments": full_transcript,
-                "status": "PENDING",
-                "provider": None,
-                "created_at": datetime.now(UTC),
-                "processing_run_id": None,
-                "raw_data": {},
-                "speakers_identified": []
-            }
-
-            result = await self.col.update_one(
-                {"audio_uuid": audio_uuid},
-                {
-                    "$push": {"transcript_versions": version_data},
-                    "$set": {
-                        "active_transcript_version": version_id,
-                        "transcript": full_transcript
-                    }
-                }
-            )
-        else:
-            # Update existing active version
-            result = await self.col.update_one(
-                {"audio_uuid": audio_uuid, "transcript_versions.version_id": active_version},
-                {
-                    "$set": {
-                        "transcript_versions.$.segments": full_transcript,
-                        "transcript": full_transcript
-                    }
-                }
-            )
-
-        return result.modified_count > 0
-
-    async def store_raw_transcript_data(self, audio_uuid, raw_data, provider):
-        """Store raw transcript data from transcription provider.
-
-        Interface compatibility method - stores in active transcript version.
-        """
-        chunk = await self.get_chunk(audio_uuid)
-        if not chunk:
-            return False
-
-        active_version = chunk.get("active_transcript_version")
-        if not active_version:
-            return False
-
-        raw_data_with_timestamp = {
-            "provider": provider,
-            "data": raw_data,
-            "stored_at": datetime.now(UTC).isoformat(),
+    async def update_speech_detection(self, audio_uuid: str, **speech_data):
+        """Update speech detection results."""
+        update_doc = {
+            "updated_at": datetime.now(UTC).isoformat()
         }
 
+        # Add speech detection fields
+        for key, value in speech_data.items():
+            if key in ["has_speech", "conversation_created", "conversation_id",
+                      "speech_start_time", "speech_end_time", "status"]:
+                update_doc[key] = value
+
         result = await self.col.update_one(
-            {"audio_uuid": audio_uuid, "transcript_versions.version_id": active_version},
+            {"audio_uuid": audio_uuid},
+            {"$set": update_doc}
+        )
+        if result.modified_count > 0:
+            logger.info(f"Updated speech detection for {audio_uuid}: {speech_data}")
+        return result.modified_count > 0
+
+    async def mark_conversation_created(self, audio_uuid: str, conversation_id: str):
+        """Mark that conversation was created for this audio."""
+        result = await self.col.update_one(
+            {"audio_uuid": audio_uuid},
+            {"$set": {
+                "conversation_created": True,
+                "conversation_id": conversation_id,
+                "has_speech": True,
+                "status": "speech_detected",
+                "updated_at": datetime.now(UTC).isoformat()
+            }}
+        )
+        if result.modified_count > 0:
+            logger.info(f"Marked conversation created for {audio_uuid} with ID {conversation_id}")
+        return result.modified_count > 0
+
+    async def get_sessions_with_speech(self, user_id: str, limit: int = 100):
+        """Get audio sessions that have detected speech."""
+        cursor = self.col.find({
+            "user_id": user_id,
+            "has_speech": True,
+            "conversation_created": True
+        }).sort("timestamp", -1).limit(limit)
+
+        return await cursor.to_list(length=None)
+
+
+class ConversationsRepository:
+    """Repository for user-facing conversations (speech-driven architecture)."""
+
+    def __init__(self, collection):
+        self.col = collection
+
+    async def create_conversation(self, conversation_data: dict) -> str:
+        """Create new user-facing conversation."""
+        result = await self.col.insert_one(conversation_data)
+        return conversation_data["conversation_id"]
+
+    async def get_conversation(self, conversation_id: str):
+        """Get conversation by conversation_id."""
+        return await self.col.find_one({"conversation_id": conversation_id})
+
+    async def get_user_conversations(self, user_id: str, limit=100):
+        """Get all conversations for a user (only shows conversations with speech)."""
+        cursor = self.col.find({"user_id": user_id})
+        return await cursor.sort("created_at", -1).limit(limit).to_list()
+
+    async def update_conversation(self, conversation_id: str, update_data: dict):
+        """Update conversation data."""
+        result = await self.col.update_one(
+            {"conversation_id": conversation_id},
+            {"$set": {**update_data, "updated_at": datetime.now(UTC)}}
+        )
+        return result.modified_count > 0
+
+    async def add_memories(self, conversation_id: str, memories: list):
+        """Add memories to conversation."""
+        result = await self.col.update_one(
+            {"conversation_id": conversation_id},
+            {
+                "$push": {"memories": {"$each": memories}},
+                "$set": {"updated_at": datetime.now(UTC)}
+            }
+        )
+        return result.modified_count > 0
+
+    async def update_memory_processing_status(self, conversation_id: str, status: str):
+        """Update memory processing status for conversation."""
+        result = await self.col.update_one(
+            {"conversation_id": conversation_id},
             {
                 "$set": {
-                    "transcript_versions.$.raw_data": raw_data_with_timestamp,
-                    "transcript_versions.$.provider": provider,
-                    "raw_transcript_data": raw_data_with_timestamp
+                    "memory_processing_status": status,
+                    "memory_processing_updated_at": datetime.now(UTC)
                 }
             }
         )
-
         return result.modified_count > 0
 
-    # New versioned methods for reprocessing functionality
+    # ========================================
+    # NEW: VERSIONING METHODS FOR REPROCESSING
+    # ========================================
+
     async def create_transcript_version(
         self,
-        audio_uuid: str,
+        conversation_id: str,
         segments: list = None,
         processing_run_id: str = None,
         provider: str = None,
         raw_data: dict = None
     ) -> Optional[str]:
-        """Create a new transcript version."""
+        """Create a new transcript version in conversation."""
         version_id = str(uuid.uuid4())
         version_data = {
             "version_id": version_id,
@@ -554,23 +528,23 @@ class AudioChunksRepository:
         }
 
         result = await self.col.update_one(
-            {"audio_uuid": audio_uuid},
+            {"conversation_id": conversation_id},
             {"$push": {"transcript_versions": version_data}}
         )
 
         if result.modified_count > 0:
-            logger.info(f"Created new transcript version {version_id} for {audio_uuid}")
+            logger.info(f"Created new transcript version {version_id} for conversation {conversation_id}")
             return version_id
         return None
 
     async def create_memory_version(
         self,
-        audio_uuid: str,
+        conversation_id: str,
         transcript_version_id: str,
         memories: list = None,
         processing_run_id: str = None
     ) -> Optional[str]:
-        """Create a new memory version."""
+        """Create a new memory version in conversation."""
         version_id = str(uuid.uuid4())
         version_data = {
             "version_id": version_id,
@@ -582,27 +556,27 @@ class AudioChunksRepository:
         }
 
         result = await self.col.update_one(
-            {"audio_uuid": audio_uuid},
+            {"conversation_id": conversation_id},
             {"$push": {"memory_versions": version_data}}
         )
 
         if result.modified_count > 0:
-            logger.info(f"Created new memory version {version_id} for {audio_uuid}")
+            logger.info(f"Created new memory version {version_id} for conversation {conversation_id}")
             return version_id
         return None
 
-    async def activate_transcript_version(self, audio_uuid: str, version_id: str) -> bool:
-        """Activate a specific transcript version."""
+    async def activate_transcript_version(self, conversation_id: str, version_id: str) -> bool:
+        """Activate a specific transcript version in conversation."""
         # First verify the version exists
-        chunk = await self.col.find_one(
-            {"audio_uuid": audio_uuid, "transcript_versions.version_id": version_id}
+        conversation = await self.col.find_one(
+            {"conversation_id": conversation_id, "transcript_versions.version_id": version_id}
         )
-        if not chunk:
+        if not conversation:
             return False
 
-        # Find the version and update compatibility fields
+        # Find the version and update active fields
         version_data = None
-        for version in chunk.get("transcript_versions", []):
+        for version in conversation.get("transcript_versions", []):
             if version["version_id"] == version_id:
                 version_data = version
                 break
@@ -611,34 +585,33 @@ class AudioChunksRepository:
             return False
 
         result = await self.col.update_one(
-            {"audio_uuid": audio_uuid},
+            {"conversation_id": conversation_id},
             {
                 "$set": {
                     "active_transcript_version": version_id,
                     "transcript": version_data["segments"],
                     "speakers_identified": version_data["speakers_identified"],
-                    "transcription_status": version_data["status"],
-                    "raw_transcript_data": version_data.get("raw_data", {})
+                    "updated_at": datetime.now(UTC)
                 }
             }
         )
 
         if result.modified_count > 0:
-            logger.info(f"Activated transcript version {version_id} for {audio_uuid}")
+            logger.info(f"Activated transcript version {version_id} for conversation {conversation_id}")
         return result.modified_count > 0
 
-    async def activate_memory_version(self, audio_uuid: str, version_id: str) -> bool:
-        """Activate a specific memory version."""
+    async def activate_memory_version(self, conversation_id: str, version_id: str) -> bool:
+        """Activate a specific memory version in conversation."""
         # First verify the version exists
-        chunk = await self.col.find_one(
-            {"audio_uuid": audio_uuid, "memory_versions.version_id": version_id}
+        conversation = await self.col.find_one(
+            {"conversation_id": conversation_id, "memory_versions.version_id": version_id}
         )
-        if not chunk:
+        if not conversation:
             return False
 
-        # Find the version and update compatibility fields
+        # Find the version and update active fields
         version_data = None
-        for version in chunk.get("memory_versions", []):
+        for version in conversation.get("memory_versions", []):
             if version["version_id"] == version_id:
                 version_data = version
                 break
@@ -647,37 +620,62 @@ class AudioChunksRepository:
             return False
 
         result = await self.col.update_one(
-            {"audio_uuid": audio_uuid},
+            {"conversation_id": conversation_id},
             {
                 "$set": {
                     "active_memory_version": version_id,
                     "memories": version_data["memories"],
-                    "memory_processing_status": version_data["status"]
+                    "memory_processing_status": version_data["status"],
+                    "updated_at": datetime.now(UTC)
                 }
             }
         )
 
         if result.modified_count > 0:
-            logger.info(f"Activated memory version {version_id} for {audio_uuid}")
+            logger.info(f"Activated memory version {version_id} for conversation {conversation_id}")
         return result.modified_count > 0
 
-    async def get_version_history(self, audio_uuid: str) -> dict:
+    async def get_version_history(self, conversation_id: str) -> dict:
         """Get all version history for a conversation."""
-        chunk = await self.col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        conversation = await self.col.find_one({"conversation_id": conversation_id})
+        if not conversation:
             return {}
 
         return {
-            "audio_uuid": audio_uuid,
-            "active_transcript_version": chunk.get("active_transcript_version"),
-            "active_memory_version": chunk.get("active_memory_version"),
-            "transcript_versions": chunk.get("transcript_versions", []),
-            "memory_versions": chunk.get("memory_versions", [])
+            "conversation_id": conversation_id,
+            "active_transcript_version": conversation.get("active_transcript_version"),
+            "active_memory_version": conversation.get("active_memory_version"),
+            "transcript_versions": conversation.get("transcript_versions", []),
+            "memory_versions": conversation.get("memory_versions", [])
         }
+
+    async def update_transcript_processing_status(
+        self,
+        conversation_id: str,
+        status: str,
+        provider: str = None,
+        error_message: str = None
+    ):
+        """Update transcript processing status for conversation."""
+        update_doc = {
+            "transcript_processing_status": status,
+            "transcript_processing_updated_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC)
+        }
+        if provider:
+            update_doc["transcript_provider"] = provider
+        if error_message:
+            update_doc["transcript_processing_error"] = error_message
+
+        result = await self.col.update_one(
+            {"conversation_id": conversation_id},
+            {"$set": update_doc}
+        )
+        return result.modified_count > 0
 
 
 class ProcessingRunsRepository:
-    """Repository for processing run tracking."""
+    """Repository for processing run tracking (updated for conversation_id)."""
 
     def __init__(self, collection):
         self.col = collection
@@ -685,17 +683,19 @@ class ProcessingRunsRepository:
     async def create_run(
         self,
         *,
-        audio_uuid: str,
+        conversation_id: str,
+        audio_uuid: str,  # Keep for audio file access
         run_type: str,  # 'transcript' or 'memory'
         user_id: str,
         trigger: str,  # 'manual_reprocess', 'initial_processing', etc.
         config_hash: str = None
     ) -> str:
-        """Create a new processing run."""
+        """Create a new processing run for conversation."""
         run_id = str(uuid.uuid4())
         doc = {
             "run_id": run_id,
-            "audio_uuid": audio_uuid,
+            "conversation_id": conversation_id,
+            "audio_uuid": audio_uuid,  # Keep for file access
             "run_type": run_type,
             "user_id": user_id,
             "trigger": trigger,
@@ -707,7 +707,7 @@ class ProcessingRunsRepository:
             "result_version_id": None
         }
         await self.col.insert_one(doc)
-        logger.info(f"Created processing run {run_id} for {audio_uuid}")
+        logger.info(f"Created processing run {run_id} for conversation {conversation_id}")
         return run_id
 
     async def update_run_status(
@@ -742,7 +742,7 @@ class ProcessingRunsRepository:
         """Get a processing run by ID."""
         return await self.col.find_one({"run_id": run_id})
 
-    async def get_runs_for_audio(self, audio_uuid: str):
-        """Get all processing runs for an audio UUID."""
-        cursor = self.col.find({"audio_uuid": audio_uuid}).sort("started_at", -1)
+    async def get_runs_for_conversation(self, conversation_id: str):
+        """Get all processing runs for a conversation."""
+        cursor = self.col.find({"conversation_id": conversation_id}).sort("started_at", -1)
         return await cursor.to_list(length=None)
