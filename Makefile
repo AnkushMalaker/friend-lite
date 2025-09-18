@@ -1,8 +1,8 @@
 # ========================================
-# Friend-Lite Configuration Management
+# Friend-Lite Management System
 # ========================================
-# This Makefile generates all service-specific configuration files from the master .env
-# Configuration is data-driven via config.yaml - no hardcoded variable names!
+# Central management interface for Friend-Lite project
+# Handles configuration, deployment, and maintenance tasks
 
 # Load environment variables from .env file
 ifneq (,$(wildcard ./.env))
@@ -15,35 +15,156 @@ include config.env
 # Export all variables from config.env
 export $(shell sed 's/=.*//' config.env | grep -v '^\s*$$' | grep -v '^\s*\#')
 
-.PHONY: help config config-docker config-k8s config-all clean deploy deploy-docker deploy-k8s deploy-k8s-full deploy-infrastructure deploy-apps check-infrastructure check-apps build-backend up-backend down-backend
+# Script directories
+SCRIPTS_DIR := scripts
+K8S_SCRIPTS_DIR := $(SCRIPTS_DIR)/k8s
 
-help: ## Show this help message
-	@echo "Friend-Lite Configuration Management"
-	@echo "===================================="
+.PHONY: help menu setup-k8s setup-infrastructure setup-rbac setup-storage-pvc config config-docker config-k8s config-all clean deploy deploy-docker deploy-k8s deploy-k8s-full deploy-infrastructure deploy-apps check-infrastructure check-apps build-backend up-backend down-backend k8s-status k8s-cleanup k8s-purge audio-manage
+
+# Default target
+.DEFAULT_GOAL := menu
+
+menu: ## Show interactive menu (default)
+	@echo "🎯 Friend-Lite Management System"
+	@echo "================================"
 	@echo
-	@echo "📝 Configuration targets:"
-	@echo "  config               Generate all configuration files (Docker + K8s)"
-	@echo "  config-docker        Generate Docker Compose .env files"
-	@echo "  config-k8s           Generate Kubernetes files (Skaffold env + ConfigMap/Secret)"
+	@echo "📋 Quick Actions:"
+	@echo "  setup-k8s          🏗️  Complete Kubernetes setup (registry + infrastructure + RBAC)"
+	@echo "  config             📝 Generate all configuration files"
+	@echo "  deploy             🚀 Deploy using configured mode ($(DEPLOYMENT_MODE))"
+	@echo "  k8s-status         📊 Check Kubernetes cluster status"
+	@echo "  k8s-cleanup        🧹 Clean up Kubernetes resources"
+	@echo "  audio-manage       🎵 Manage audio files"
 	@echo
-	@echo "🚀 Simple deployment workflow:"
-	@echo "  1. Edit config.env with your settings"
-	@echo "  2. Run: make config-k8s"
-	@echo "  3. Run: skaffold run -p advanced-backend --default-repo=your-registry"
+	@echo "📝 Configuration:"
+	@echo "  config-docker      🐳 Generate Docker Compose .env files"
+	@echo "  config-k8s         ☸️  Generate Kubernetes files (Skaffold env + ConfigMap/Secret)"
 	@echo
-	@echo "🧹 Utility targets:"
-	@echo "  clean                Clean up generated configuration files"
+	@echo "🚀 Deployment:"
+	@echo "  deploy-docker      🐳 Deploy with Docker Compose"
+	@echo "  deploy-k8s         ☸️  Deploy to Kubernetes with Skaffold"
+	@echo "  deploy-k8s-full    🏗️  Deploy infrastructure + applications"
 	@echo
-	@echo "💡 Key improvement:"
-	@echo "  - No more manual setValueTemplates in skaffold.yaml!"
-	@echo "  - All environment variables automatically available via ConfigMap/Secret"
-	@echo "  - Add new env vars to config.env, run 'make config', done!"
+	@echo "🔧 Utilities:"
+	@echo "  k8s-purge          🗑️  Purge unused images (registry + container)"
+	@echo "  check-infrastructure 🔍 Check infrastructure services"
+	@echo "  check-apps         🔍 Check application services"
+	@echo "  clean              🧹 Clean up generated files"
 	@echo
 	@echo "Current configuration:"
 	@echo "  DOMAIN: $(DOMAIN)"
 	@echo "  DEPLOYMENT_MODE: $(DEPLOYMENT_MODE)"
+	@echo "  CONTAINER_REGISTRY: $(CONTAINER_REGISTRY)"
+	@echo "  SPEAKER_NODE: $(SPEAKER_NODE)"
 	@echo "  INFRASTRUCTURE_NAMESPACE: $(INFRASTRUCTURE_NAMESPACE)"
 	@echo "  APPLICATION_NAMESPACE: $(APPLICATION_NAMESPACE)"
+	@echo
+	@echo "💡 Tip: Run 'make help' for detailed help on any target"
+
+help: ## Show detailed help for all targets
+	@echo "🎯 Friend-Lite Management System - Detailed Help"
+	@echo "================================================"
+	@echo
+	@echo "🏗️  KUBERNETES SETUP:"
+	@echo "  setup-k8s          Complete initial Kubernetes setup"
+	@echo "                     - Configures insecure registry access"
+	@echo "                     - Sets up infrastructure services (MongoDB, Qdrant)"
+	@echo "                     - Creates shared models PVC"
+	@echo "                     - Sets up cross-namespace RBAC"
+	@echo "                     - Generates and applies configuration"
+	@echo "  setup-infrastructure Deploy infrastructure services (MongoDB, Qdrant)"
+	@echo "  setup-rbac         Set up cross-namespace RBAC"
+	@echo "  setup-storage-pvc  Create shared models PVC"
+	@echo
+	@echo "📝 CONFIGURATION:"
+	@echo "  config             Generate all configuration files (Docker + K8s)"
+	@echo "  config-docker      Generate Docker Compose .env files"
+	@echo "  config-k8s         Generate Kubernetes files (Skaffold env + ConfigMap/Secret)"
+	@echo
+	@echo "🚀 DEPLOYMENT:"
+	@echo "  deploy             Deploy using configured deployment mode"
+	@echo "  deploy-docker      Deploy with Docker Compose"
+	@echo "  deploy-k8s         Deploy to Kubernetes with Skaffold"
+	@echo "  deploy-k8s-full    Deploy infrastructure + applications"
+	@echo
+	@echo "🔧 KUBERNETES UTILITIES:"
+	@echo "  k8s-status         Check Kubernetes cluster status and health"
+	@echo "  k8s-cleanup        Clean up Kubernetes resources and storage"
+	@echo "  k8s-purge          Purge unused images (registry + container)"
+	@echo
+	@echo "🎵 AUDIO MANAGEMENT:"
+	@echo "  audio-manage       Interactive audio file management"
+	@echo
+	@echo "🔍 MONITORING:"
+	@echo "  check-infrastructure Check if infrastructure services are running"
+	@echo "  check-apps         Check if application services are running"
+	@echo
+	@echo "🧹 CLEANUP:"
+	@echo "  clean              Clean up generated configuration files"
+
+# ========================================
+# KUBERNETES SETUP
+# ========================================
+
+setup-k8s: ## Initial Kubernetes setup (registry + infrastructure)
+	@echo "🏗️  Starting Kubernetes initial setup..."
+	@echo "This will set up the complete infrastructure for Friend-Lite"
+	@echo
+	@echo "📋 Setup includes:"
+	@echo "  • Insecure registry configuration"
+	@echo "  • Infrastructure services (MongoDB, Qdrant)"
+	@echo "  • Shared models PVC for speaker recognition"
+	@echo "  • Cross-namespace RBAC"
+	@echo "  • Configuration generation and application"
+	@echo
+	@read -p "Enter your Kubernetes node IP address: " node_ip; \
+	if [ -z "$$node_ip" ]; then \
+		echo "❌ Node IP is required"; \
+		exit 1; \
+	fi; \
+	echo "🔧 Step 1: Configuring insecure registry access on $$node_ip..."; \
+	$(SCRIPTS_DIR)/configure-insecure-registry-remote.sh $$node_ip; \
+	echo "📦 Step 2: Setting up storage for speaker recognition..."; \
+	$(K8S_SCRIPTS_DIR)/setup-storage.sh; \
+	echo "📝 Step 3: Generating configuration files..."; \
+	$(MAKE) config-k8s; \
+	echo "🏗️  Step 4: Setting up infrastructure services..."; \
+	$(MAKE) setup-infrastructure; \
+	echo "🔐 Step 5: Setting up cross-namespace RBAC..."; \
+	$(MAKE) setup-rbac; \
+	echo "💾 Step 6: Creating shared models PVC..."; \
+	$(MAKE) setup-storage-pvc; \
+	echo "✅ Kubernetes initial setup completed!"
+	@echo
+	@echo "🎯 Next steps:"
+	@echo "  • Run 'make deploy' to deploy applications"
+	@echo "  • Run 'make k8s-status' to check cluster status"
+	@echo "  • Run 'make help' for more options"
+
+setup-infrastructure: ## Set up infrastructure services (MongoDB, Qdrant)
+	@echo "🏗️  Setting up infrastructure services..."
+	@echo "Deploying MongoDB and Qdrant to $(INFRASTRUCTURE_NAMESPACE) namespace..."
+	@set -a; source skaffold.env; set +a; skaffold run --profile=infrastructure --default-repo=$(CONTAINER_REGISTRY)
+	@echo "⏳ Waiting for infrastructure services to be ready..."
+	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=mongodb -n $(INFRASTRUCTURE_NAMESPACE) --timeout=300s || echo "⚠️  MongoDB not ready yet"
+	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=qdrant -n $(INFRASTRUCTURE_NAMESPACE) --timeout=300s || echo "⚠️  Qdrant not ready yet"
+	@echo "✅ Infrastructure services deployed"
+
+setup-rbac: ## Set up cross-namespace RBAC
+	@echo "🔐 Setting up cross-namespace RBAC..."
+	@kubectl apply -f k8s-manifests/cross-namespace-rbac.yaml
+	@echo "✅ Cross-namespace RBAC configured"
+
+setup-storage-pvc: ## Set up shared models PVC
+	@echo "💾 Setting up shared models PVC..."
+	@kubectl apply -f k8s-manifests/shared-models-pvc.yaml
+	@echo "⏳ Waiting for PVC to be bound..."
+	@kubectl wait --for=condition=bound pvc/shared-models-cache -n speech --timeout=60s || echo "⚠️  PVC not bound yet"
+	@echo "✅ Shared models PVC created"
+
+# ========================================
+# CONFIGURATION
+# ========================================
 
 config: config-all ## Generate all configuration files
 
@@ -71,7 +192,7 @@ config-k8s: ## Generate Kubernetes configuration files (Skaffold env + ConfigMap
 config-all: config-docker config-k8s ## Generate all configuration files
 	@echo "✅ All configuration files generated"
 
-clean-config: ## Clean up generated configuration files
+clean: ## Clean up generated configuration files
 	@echo "🧹 Cleaning up generated configuration files..."
 	@rm -f backends/advanced/.env
 	@rm -f extras/speaker-recognition/.env
@@ -104,9 +225,9 @@ deploy-docker: config-docker ## Deploy using Docker Compose
 	@cd backends/advanced && docker-compose up -d
 	@echo "✅ Docker Compose deployment completed"
 
-deploy-k8s: config-skaffold ## Deploy to Kubernetes using Skaffold
+deploy-k8s: config-k8s ## Deploy to Kubernetes using Skaffold
 	@echo "☸️  Deploying to Kubernetes with Skaffold..."
-	@set -a; source skaffold.env; set +a; skaffold run --profile=advanced-backend --default-repo=anubis:32000
+	@set -a; source skaffold.env; set +a; skaffold run --profile=advanced-backend --default-repo=$(CONTAINER_REGISTRY)
 	@echo "✅ Kubernetes deployment completed"
 
 deploy-k8s-full: deploy-infrastructure deploy-apps ## Deploy infrastructure + applications to Kubernetes
@@ -117,9 +238,9 @@ deploy-infrastructure: ## Deploy infrastructure services to Kubernetes
 	@kubectl apply -f k8s-manifests/
 	@echo "✅ Infrastructure deployment completed"
 
-deploy-apps: config-skaffold ## Deploy application services to Kubernetes
+deploy-apps: config-k8s ## Deploy application services to Kubernetes
 	@echo "📱 Deploying application services..."
-	@set -a; source skaffold.env; set +a; skaffold run --profile=advanced-backend --default-repo=anubis:32000
+	@set -a; source skaffold.env; set +a; skaffold run --profile=advanced-backend --default-repo=$(CONTAINER_REGISTRY)
 	@echo "✅ Application deployment completed"
 
 # ========================================
@@ -151,3 +272,28 @@ up-backend: config-docker ## Start backend services
 down-backend: ## Stop backend services
 	@echo "🛑 Stopping backend services..."
 	@cd backends/advanced && docker-compose down
+
+# ========================================
+# KUBERNETES UTILITIES
+# ========================================
+
+k8s-status: ## Check Kubernetes cluster status and health
+	@echo "📊 Checking Kubernetes cluster status..."
+	@$(K8S_SCRIPTS_DIR)/cluster-status.sh
+
+k8s-cleanup: ## Clean up Kubernetes resources and storage
+	@echo "🧹 Starting Kubernetes cleanup..."
+	@echo "This will help clean up registry storage and unused resources"
+	@$(K8S_SCRIPTS_DIR)/cleanup-registry-storage.sh
+
+k8s-purge: ## Purge unused images (registry + container)
+	@echo "🗑️  Purging unused images..."
+	@$(K8S_SCRIPTS_DIR)/purge-images.sh
+
+# ========================================
+# AUDIO MANAGEMENT
+# ========================================
+
+audio-manage: ## Interactive audio file management
+	@echo "🎵 Starting audio file management..."
+	@$(SCRIPTS_DIR)/manage-audio-files.sh
