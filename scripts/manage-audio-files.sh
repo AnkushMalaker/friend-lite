@@ -165,6 +165,71 @@ test_audio_endpoint() {
     fi
 }
 
+# Function to delete all audio files
+delete_all_audio() {
+    echo -e "${RED}=== DELETE ALL AUDIO FILES ===${NC}"
+    echo -e "${YELLOW}⚠️  WARNING: This will permanently delete ALL audio files!${NC}"
+    echo -e "${YELLOW}This action cannot be undone.${NC}"
+    echo
+    
+    # Count total audio files first
+    TOTAL_FILES=$(kubectl exec -n $NAMESPACE $POD_NAME -- find $DATA_DIR -name "*.wav" -o -name "*.mp3" -o -name "*.m4a" -o -name "*.flac" 2>/dev/null | wc -l)
+    
+    if [ "$TOTAL_FILES" -eq 0 ]; then
+        echo -e "${BLUE}No audio files found to delete.${NC}"
+        return 0
+    fi
+    
+    echo -e "${YELLOW}Found $TOTAL_FILES audio files to delete.${NC}"
+    echo
+    
+    # Show some examples of files that will be deleted
+    echo -e "${YELLOW}Example files that will be deleted:${NC}"
+    kubectl exec -n $NAMESPACE $POD_NAME -- find $DATA_DIR -name "*.wav" -o -name "*.mp3" -o -name "*.m4a" -o -name "*.flac" 2>/dev/null | head -5
+    if [ "$TOTAL_FILES" -gt 5 ]; then
+        echo -e "${YELLOW}... and $((TOTAL_FILES - 5)) more files${NC}"
+    fi
+    echo
+    
+    # Confirmation
+    read -p "Are you ABSOLUTELY sure you want to delete ALL audio files? Type 'DELETE_ALL': " confirm
+    echo
+    
+    if [ "$confirm" != "DELETE_ALL" ]; then
+        echo -e "${BLUE}Operation cancelled. No files were deleted.${NC}"
+        return 0
+    fi
+    
+    echo -e "${RED}Deleting all audio files...${NC}"
+    
+    # Delete all audio files
+    DELETED_COUNT=0
+    kubectl exec -n $NAMESPACE $POD_NAME -- bash -c "
+        cd $DATA_DIR
+        find . -name '*.wav' -o -name '*.mp3' -o -name '*.m4a' -o -name '*.flac' | while read file; do
+            if [ -f \"\$file\" ]; then
+                echo \"Deleting: \$file\"
+                rm \"\$file\"
+                ((DELETED_COUNT++))
+            fi
+        done
+        echo \"Deleted \$DELETED_COUNT files\"
+    "
+    
+    # Verify deletion
+    REMAINING_FILES=$(kubectl exec -n $NAMESPACE $POD_NAME -- find $DATA_DIR -name "*.wav" -o -name "*.mp3" -o -name "*.m4a" -o -name "*.flac" 2>/dev/null | wc -l)
+    
+    if [ "$REMAINING_FILES" -eq 0 ]; then
+        echo -e "${GREEN}✅ Successfully deleted all audio files!${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Warning: $REMAINING_FILES files still remain${NC}"
+    fi
+    
+    # Show disk usage after deletion
+    echo -e "\n${YELLOW}Disk usage after deletion:${NC}"
+    show_disk_usage
+}
+
 # Main menu
 show_menu() {
     echo -e "${BLUE}=== Audio File Management Script ===${NC}"
@@ -175,9 +240,10 @@ show_menu() {
     echo "5. Show disk usage"
     echo "6. Test audio endpoint"
     echo "7. Run all operations"
-    echo "8. Exit"
+    echo "8. Delete ALL audio files (DANGEROUS)"
+    echo "9. Exit"
     echo
-    read -p "Select an option (1-8): " choice
+    read -p "Select an option (1-9): " choice
 }
 
 # Main execution
@@ -202,7 +268,8 @@ main() {
                     show_disk_usage
                     test_audio_endpoint
                     ;;
-                8) echo "Goodbye!"; exit 0 ;;
+                8) delete_all_audio ;;
+                9) echo "Goodbye!"; exit 0 ;;
                 *) echo -e "${RED}Invalid option${NC}" ;;
             esac
             echo
@@ -216,6 +283,7 @@ main() {
             "cleanup") cleanup_old_files ;;
             "usage") show_disk_usage ;;
             "test") test_audio_endpoint ;;
+            "delete") delete_all_audio ;;
             "all") 
                 list_audio_files
                 move_audio_files
@@ -223,7 +291,7 @@ main() {
                 show_disk_usage
                 test_audio_endpoint
                 ;;
-            *) echo "Usage: $0 [list|move|organize|cleanup|usage|test|all]" ;;
+            *) echo "Usage: $0 [list|move|organize|cleanup|usage|test|delete|all]" ;;
         esac
     fi
 }
