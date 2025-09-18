@@ -4,7 +4,7 @@
 
 ## System Overview
 
-Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, and extracts memories. The system features a FastAPI backend with WebSocket audio streaming, a modern React web dashboard with advanced search capabilities, and complete user authentication with role-based access control.
+Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, and extracts memories using a speech-driven architecture. The system features a FastAPI backend with WebSocket audio streaming, versioned transcript and memory processing, a modern React web dashboard with advanced search capabilities, and complete user authentication with role-based access control.
 
 **Core Implementation**: The complete system is implemented in `src/advanced_omi_backend/main.py` with supporting services in dedicated modules, using a modular router/controller architecture pattern.
 
@@ -67,13 +67,14 @@ graph TB
     %% Storage Systems
     subgraph "Storage"
         FS[File System<br/>Audio Files]
-        
+
         subgraph "MongoDB"
-            AC_COL[audio_chunks<br/>conversations]
+            AC_COL[audio_chunks<br/>All Audio Sessions]
+            CONV_COL[conversations<br/>Speech-Detected Only]
             USERS[users]
             CONV_REPO[ConversationRepository<br/>Clean Data Access]
         end
-        
+
         subgraph "Qdrant"
             MEM[Memory Vectors]
         end
@@ -769,13 +770,16 @@ flowchart TB
 
 ### Audio Ingestion & Processing
 1. **Client Authentication**: JWT token validation for WebSocket connection (email or user_id based)
-2. **Client ID Generation**: Automatic `user_id-device_name` format creation for client identification  
+2. **Client ID Generation**: Automatic `user_id-device_name` format creation for client identification
 3. **Permission Registration**: Client-user relationship tracking in permission dictionaries
 4. **Audio Streaming**: Real-time Opus/PCM packets over WebSocket with user context
 5. **Per-Client Processing**: Isolated audio queues and state management per user
-6. **Transcription Pipeline**: Configurable ASR service integration with user-scoped storage
-7. **Conversation Lifecycle**: Automatic timeout handling and memory processing
-8. **Audio Optimization**: Speech segment extraction and silence removal
+6. **Audio Session Storage**: All audio sessions stored in `audio_chunks` collection by `audio_uuid`
+7. **Speech Detection**: Automatic analysis of transcript content for meaningful speech
+8. **Conversation Creation**: User-facing conversations created in `conversations` collection only when speech detected
+9. **Transcription Pipeline**: Configurable ASR service integration with versioned storage
+10. **Conversation Lifecycle**: Automatic timeout handling and memory processing
+11. **Audio Optimization**: Speech segment extraction and silence removal
 
 #### Critical Timing Considerations
 **Transcription Manager Creation Race Condition**: When processing uploaded audio files, there's a timing dependency between:
@@ -792,13 +796,16 @@ flowchart TB
 4. Client audio closure triggers transcript completion
 
 ### Memory & Intelligence Processing
-1. **Conversation Completion**: End-of-session trigger for memory extraction
+1. **Conversation Completion**: End-of-session trigger for memory extraction (speech-detected conversations only)
 2. **Transcript Validation**: Multi-layer validation prevents empty/short transcripts from reaching LLM implemented in memory controller
 3. **User Resolution**: Client-ID to database user mapping for proper data association
-4. **LLM Processing**: Ollama-based conversation summarization with user context (only for validated transcripts)
-5. **Vector Storage**: Semantic embeddings stored in Qdrant keyed by user_id
-6. **Metadata Enhancement**: Client information and user email stored in metadata
-7. **Search & Retrieval**: User-scoped semantic memory search capabilities
+4. **Versioned Processing**: Multiple transcript and memory versions with provider/model tracking
+5. **LLM Processing**: Ollama-based conversation summarization with user context (only for validated transcripts)
+6. **Vector Storage**: Semantic embeddings stored in Qdrant keyed by user_id
+7. **Metadata Enhancement**: Client information and user email stored in metadata
+8. **Reprocessing Capabilities**: Re-run transcript or memory extraction with different parameters
+9. **Version Management**: Active version pointers with automatic legacy field population
+10. **Search & Retrieval**: User-scoped semantic memory search capabilities
 
 ### User Management & Security
 1. **Registration**: Admin-controlled user creation with email/password and auto-generated user_id
@@ -958,7 +965,12 @@ src/advanced_omi_backend/
 /api/
 ├── /users                    # User management (admin only)
 ├── /clients/active          # Active client monitoring
-├── /conversations           # Conversation CRUD operations
+├── /conversations           # Conversation CRUD operations (speech-detected only)
+│   ├── /{conversation_id}/reprocess-transcript  # Transcript reprocessing
+│   ├── /{conversation_id}/reprocess-memory      # Memory reprocessing
+│   ├── /{conversation_id}/versions              # Version history
+│   ├── /{conversation_id}/activate-transcript   # Switch transcript version
+│   └── /{conversation_id}/activate-memory       # Switch memory version
 ├── /memories               # Memory management and search
 │   ├── /admin              # Admin view (all users)
 │   └── /search             # Semantic memory search
@@ -984,7 +996,13 @@ src/advanced_omi_backend/
 - `GET /api/memories/search?query=` - Semantic memory search
 
 #### Audio & Conversations
-- `GET /api/conversations` - User conversations
+- `GET /api/conversations` - User conversations (speech-detected only)
+- `GET /api/conversations/{conversation_id}` - Specific conversation details
+- `POST /api/conversations/{conversation_id}/reprocess-transcript` - Re-run transcript processing
+- `POST /api/conversations/{conversation_id}/reprocess-memory` - Re-extract memories
+- `GET /api/conversations/{conversation_id}/versions` - Get version history
+- `POST /api/conversations/{conversation_id}/activate-transcript` - Switch transcript version
+- `POST /api/conversations/{conversation_id}/activate-memory` - Switch memory version
 - `POST /api/process-audio-files` - Batch audio file processing
 - WebSocket `/ws_omi` - Real-time Opus audio streaming with Wyoming protocol (OMI devices)
 - WebSocket `/ws_pcm` - Real-time PCM audio streaming with Wyoming protocol (all apps)
@@ -1004,11 +1022,36 @@ src/advanced_omi_backend/
       "client_id": "cd7994-laptop",
       "user_id": "507f1f77bcf86cd799439011",
       "connected_at": "2025-01-15T10:30:00Z",
-      "conversation_count": 3
+      "conversation_count": 3  // speech-detected conversations only
     }
   ],
   "active_clients_count": 1,
   "total_count": 1
+}
+
+// Conversation with versions response
+{
+  "conversation_id": "conv_12345",
+  "audio_uuid": "audio_67890",
+  "transcript": "Active transcript content",  // from active version
+  "active_transcript_version": "version_abc",
+  "active_memory_version": "version_def",
+  "transcript_versions": [
+    {
+      "version_id": "version_abc",
+      "provider": "deepgram",
+      "created_at": "2025-01-15T10:30:00Z",
+      "transcript": "Processed content"
+    }
+  ],
+  "memory_versions": [
+    {
+      "version_id": "version_def",
+      "provider": "friend_lite",
+      "created_at": "2025-01-15T10:32:00Z",
+      "memory_count": 5
+    }
+  ]
 }
 
 // Admin memories response
@@ -1039,4 +1082,4 @@ src/advanced_omi_backend/
 - **Error Handling**: Graceful degradation with detailed logging
 - **System Tracking**: Debug tracking and monitoring via SystemTracker
 
-This architecture supports a fully-featured conversation processing system with enterprise-grade authentication, real-time audio processing, and intelligent content analysis, all deployable via a single Docker Compose command. 
+This architecture supports a fully-featured conversation processing system with enterprise-grade authentication, real-time audio processing, speech-driven conversation creation, versioned transcript and memory processing, and intelligent content analysis, all deployable via a single Docker Compose command. 

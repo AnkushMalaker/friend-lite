@@ -74,6 +74,17 @@ export const conversationsApi = {
   getAll: () => api.get('/api/conversations'),
   getById: (id: string) => api.get(`/api/conversations/${id}`),
   delete: (id: string) => api.delete(`/api/conversations/${id}`),
+
+  // Reprocessing endpoints
+  reprocessTranscript: (conversationId: string) => api.post(`/api/conversations/${conversationId}/reprocess-transcript`),
+  reprocessMemory: (conversationId: string, transcriptVersionId: string = 'active') => api.post(`/api/conversations/${conversationId}/reprocess-memory`, null, {
+    params: { transcript_version_id: transcriptVersionId }
+  }),
+
+  // Version management
+  activateTranscriptVersion: (conversationId: string, versionId: string) => api.post(`/api/conversations/${conversationId}/activate-transcript/${versionId}`),
+  activateMemoryVersion: (conversationId: string, versionId: string) => api.post(`/api/conversations/${conversationId}/activate-memory/${versionId}`),
+  getVersionHistory: (conversationId: string) => api.get(`/api/conversations/${conversationId}/versions`),
 }
 
 export const memoriesApi = {
