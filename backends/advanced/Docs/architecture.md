@@ -4,7 +4,9 @@
 
 ## System Overview
 
+
 Friend-Lite is a comprehensive real-time conversation processing system that captures audio streams, performs speech-to-text transcription, and extracts memories. The system features a FastAPI backend with WebSocket audio streaming, versioned transcript and memory processing, a React web dashboard with search capabilities, and user authentication with role-based access control.
+
 
 **Core Implementation**: The complete system is implemented in `src/advanced_omi_backend/main.py` with supporting services in dedicated modules, using a modular router/controller architecture pattern.
 
@@ -1081,5 +1083,3 @@ src/advanced_omi_backend/
 - **Resource Tracking**: Memory usage, connection counts, processing queues
 - **Error Handling**: Graceful degradation with detailed logging
 - **System Tracking**: Debug tracking and monitoring via SystemTracker
-
-This architecture supports a fully-featured conversation processing system with enterprise-grade authentication, real-time audio processing, speech-driven conversation creation, versioned transcript and memory processing, and intelligent content analysis, all deployable via a single Docker Compose command. 
