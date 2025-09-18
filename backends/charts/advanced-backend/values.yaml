@@ -4,13 +4,13 @@ replicaCount: 1
 image:
   repository: advanced-backend
   pullPolicy: Always
-  tag: ""
+  tag: "latest"
 
 nameOverride: ""
 fullnameOverride: ""
 
 service:
-  type: NodePort
+  type: LoadBalancer
   port: 8000
   nodePort: 30270
 
@@ -27,32 +27,14 @@ ingress:
     nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
     nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
     nginx.ingress.kubernetes.io/enable-cors: "true"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-connect-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60s"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
-  hosts:
-    - host: friend-lite.192-168-1-42.nip.io
-      paths:
-        - path: /api
-          pathType: Prefix
-        - path: /auth
-          pathType: Prefix
-        - path: /users
-          pathType: Prefix
-        - path: /ws_pcm
-          pathType: Prefix
-        - path: /ws_omi
-          pathType: Prefix
-        - path: /ws
-          pathType: Prefix
-        - path: /health
-          pathType: Prefix
-        - path: /readiness
-          pathType: Prefix
-        - path: /audio
-          pathType: Prefix
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+   
+  # hosts: defined in ingress-values.yaml and overridden by Skaffold
   # tls:
   #   - secretName: friend-lite-tls
   #     hosts:
@@ -60,11 +42,11 @@ ingress:
 
 resources:
   limits:
-    cpu: 2000m
-    memory: 4Gi
-  requests:
-    cpu: 500m
+    cpu: 1000m
     memory: 2Gi
+  requests:
+    cpu: 200m
+    memory: 1Gi
 
 # Environment variables
 # Most environment variables come from the ConfigMap created from .env file
@@ -77,6 +59,7 @@ env:
   # Override only specific values if needed
   ENVIRONMENT: "dev"
   AUTH_ENABLED: "false"
+  CORS_ORIGINS: ""  # Set by ConfigMap generated from Makefile
   # Don't override OPENAI_API_KEY - it comes from ConfigMap
 
 # Volume mounts for persistent data

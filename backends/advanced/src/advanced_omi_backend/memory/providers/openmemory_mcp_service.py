@@ -7,6 +7,7 @@ OpenMemory's standardized memory management capabilities.
 """
 
 import logging
+import os
 import time
 import uuid
 from typing import Optional, List, Tuple, Any, Dict
@@ -40,12 +41,16 @@ class OpenMemoryMCPService(MemoryServiceBase):
     """
     
     def __init__(
-        self, 
-        server_url: str = "http://localhost:8765", 
-        client_name: str = "friend_lite",
-        user_id: str = "default",
-        timeout: int = 30
+        self,
+        server_url: Optional[str] = None,
+        client_name: Optional[str] = None,
+        user_id: Optional[str] = None,
+        timeout: Optional[int] = None,
     ):
+        self.server_url = server_url or os.getenv("OPENMEMORY_MCP_URL", "http://localhost:8765")
+        self.client_name = client_name or os.getenv("OPENMEMORY_CLIENT_NAME", "friend_lite")
+        self.user_id = user_id or os.getenv("OPENMEMORY_USER_ID", "default")
+        self.timeout = int(timeout or os.getenv("OPENMEMORY_TIMEOUT", "30"))
         """Initialize OpenMemory MCP service as a thin client.
         
         This service delegates all memory processing to the OpenMemory MCP server:
@@ -144,7 +149,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
             
             # Update MCP client user context for this operation
             original_user_id = self.mcp_client.user_id
-            self.mcp_client.user_id = "openmemory"  # Use consistent OpenMemory user ID
+            self.mcp_client.user_id = self.user_id  # Use configured user ID
             
             try:
                 # Thin client approach: Send raw transcript to OpenMemory MCP server
@@ -203,7 +208,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
         
         # Update MCP client user context for this operation
         original_user_id = self.mcp_client.user_id
-        self.mcp_client.user_id = "openmemory"  # Use consistent OpenMemory user ID
+        self.mcp_client.user_id = self.user_id  # Use configured user ID
         
         try:
             results = await self.mcp_client.search_memory(
@@ -253,7 +258,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
         
         # Update MCP client user context for this operation
         original_user_id = self.mcp_client.user_id
-        self.mcp_client.user_id = "openmemory"  # Use consistent OpenMemory user ID
+        self.mcp_client.user_id = self.user_id  # Use configured user ID
         
         try:
             results = await self.mcp_client.list_memories(limit=limit)
@@ -313,7 +318,7 @@ class OpenMemoryMCPService(MemoryServiceBase):
         
         # Update MCP client user context for this operation
         original_user_id = self.mcp_client.user_id
-        self.mcp_client.user_id = "openmemory"  # Use consistent OpenMemory user ID
+        self.mcp_client.user_id = self.user_id  # Use configured user ID
         
         try:
             count = await self.mcp_client.delete_all_memories()
