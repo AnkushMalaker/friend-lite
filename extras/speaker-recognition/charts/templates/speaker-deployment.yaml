@@ -16,6 +16,10 @@ spec:
       labels:
         app: {{ .Release.Name }}-speaker
     spec:
+      {{- if .Values.nodeSelector.enabled }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.nodeSelector.hostname }}
+      {{- end }}
       tolerations:
         - key: "gpu"
           operator: "Equal"
@@ -28,6 +32,11 @@ spec:
             - name: http
               containerPort: {{ .Values.speaker.service.port }}
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: friend-lite-config
+            - secretRef:
+                name: {{ .Values.secrets.name | default (printf "%s-secrets" .Release.Name) }}
           env:
             - name: HF_HOME
               value: /models
@@ -35,14 +44,14 @@ spec:
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-secrets
+                  name: speaker-recognition-secrets
                   key: HF_TOKEN
             {{- end }}
             {{- if .Values.secrets.deepgramApiKey }}
             - name: DEEPGRAM_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-secrets
+                  name: speaker-recognition-secrets
                   key: DEEPGRAM_API_KEY
             {{- end }}
             {{- range $key, $value := .Values.speaker.env }}
