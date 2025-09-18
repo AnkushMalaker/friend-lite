@@ -41,8 +41,6 @@ class OpenMemoryMCPService(MemoryServiceBase):
     """
     
     def __init__(
-        self, 
-    def __init__(
         self,
         server_url: Optional[str] = None,
         client_name: Optional[str] = None,
