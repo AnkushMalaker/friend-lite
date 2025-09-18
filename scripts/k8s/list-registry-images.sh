@@ -1,6 +1,11 @@
 #!/bin/bash
 
-REGISTRY="192.168.1.42:32000"
+# Load environment variables
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/load-env.sh"
+
+# Get registry from config.env
+REGISTRY="${CONTAINER_REGISTRY:-localhost:32000}"
 
 echo "📋 Images in registry $REGISTRY:"
 echo
