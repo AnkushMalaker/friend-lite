@@ -386,6 +386,77 @@ class AudioChunksRepository:
             logger.info(f"Updated memory processing status to {status} for {audio_uuid}")
         return result.modified_count > 0
 
+    async def update_transcription_status(
+        self, audio_uuid: str, status: str, error_message: Optional[str] = None, provider: Optional[str] = None
+    ):
+        """Update transcription processing status and completion timestamp.
+
+        Interface compatibility method - updates active transcript version.
+        """
+        chunk = await self.get_chunk(audio_uuid)
+        if not chunk:
+            return False
+
+        active_version = chunk.get("active_transcript_version")
+        if not active_version:
+            # Create initial transcript version if none exists
+            version_id = str(uuid.uuid4())
+            version_data = {
+                "version_id": version_id,
+                "transcript": "",
+                "segments": [],
+                "status": status,
+                "provider": provider,
+                "created_at": datetime.now(UTC).isoformat(),
+                "processing_run_id": None,
+                "raw_data": {},
+                "speakers_identified": []
+            }
+            if error_message:
+                version_data["error_message"] = error_message
+
+            update_doc = {
+                "active_transcript_version": version_id,
+                "transcription_status": status,
+                "transcription_updated_at": datetime.now(UTC).isoformat(),
+            }
+            if status == "COMPLETED":
+                update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
+
+            result = await self.col.update_one(
+                {"audio_uuid": audio_uuid},
+                {
+                    "$push": {"transcript_versions": version_data},
+                    "$set": update_doc
+                }
+            )
+        else:
+            # Update existing active version
+            update_doc = {
+                "transcript_versions.$[version].status": status,
+                "transcript_versions.$[version].updated_at": datetime.now(UTC).isoformat(),
+                "transcription_status": status,
+                "transcription_updated_at": datetime.now(UTC).isoformat(),
+            }
+            if status == "COMPLETED":
+                update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
+            if error_message:
+                update_doc["transcript_versions.$[version].error_message"] = error_message
+                update_doc["transcription_error"] = error_message
+            if provider:
+                update_doc["transcript_versions.$[version].provider"] = provider
+                update_doc["transcript_provider"] = provider
+
+            result = await self.col.update_one(
+                {"audio_uuid": audio_uuid},
+                {"$set": update_doc},
+                array_filters=[{"version.version_id": active_version}]
+            )
+
+        if result.modified_count > 0:
+            logger.info(f"Updated transcription status to {status} for {audio_uuid}")
+        return result.modified_count > 0
+
     # ========================================
     # SPEECH-DRIVEN CONVERSATIONS METHODS
     # ========================================

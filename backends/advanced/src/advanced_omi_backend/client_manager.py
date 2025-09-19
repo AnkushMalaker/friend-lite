@@ -26,24 +26,25 @@ class ClientManager:
     """
     Centralized manager for active client connections and client-user relationships.
 
-    This service provides thread-safe access to active client information
-    and client-user relationship management for use in API endpoints and other services.
+    This service provides atomic operations for client lifecycle management
+    and serves as the single source of truth for active client state.
     """
 
     def __init__(self):
         self._active_clients: Dict[str, "ClientState"] = {}
-        self._initialized = False
+        self._initialized = True  # Self-initializing, no external dict needed
+        logger.info("ClientManager initialized as single source of truth")
 
-    def initialize(self, active_clients_dict: Dict[str, "ClientState"]):
+    def initialize(self, active_clients_dict: Optional[Dict[str, "ClientState"]] = None):
         """
-        Initialize the client manager with a reference to the active_clients dict.
+        Legacy initialization method for backward compatibility.
 
-        This should be called from main.py during startup to provide access
-        to the global active_clients dictionary.
+        New design: ClientManager is self-initializing and doesn't need external dict.
+        This method is kept for compatibility but does nothing.
         """
-        self._active_clients = active_clients_dict
-        self._initialized = True
-        logger.info("ClientManager initialized with active_clients reference")
+        if active_clients_dict is not None:
+            logger.warning("ClientManager no longer uses external dictionaries - ignoring active_clients_dict")
+        logger.info("ClientManager initialization (legacy compatibility mode)")
 
     def is_initialized(self) -> bool:
         """Check if the client manager has been initialized."""
@@ -58,15 +59,7 @@ class ClientManager:
 
         Returns:
             ClientState object if found, None if client not found
-
-        Raises:
-            RuntimeError: If ClientManager is not initialized
         """
-        if not self._initialized:
-            logger.error("ClientManager not initialized, cannot get client")
-            raise RuntimeError(
-                "ClientManager not initialized - call initialize() first before accessing clients"
-            )
         return self._active_clients.get(client_id)
 
     def has_client(self, client_id: str) -> bool:
@@ -79,9 +72,6 @@ class ClientManager:
         Returns:
             True if client is active, False otherwise
         """
-        if not self._initialized:
-            logger.warning("ClientManager not initialized, cannot check client")
-            return False
         return client_id in self._active_clients
 
     def is_client_active(self, client_id: str) -> bool:
@@ -103,9 +93,6 @@ class ClientManager:
         Returns:
             Dictionary of client_id -> ClientState mappings
         """
-        if not self._initialized:
-            logger.warning("ClientManager not initialized, returning empty dict")
-            return {}
         return self._active_clients.copy()
 
     def get_client_count(self) -> int:
@@ -115,10 +102,119 @@ class ClientManager:
         Returns:
             Number of active clients
         """
-        if not self._initialized:
-            logger.warning("ClientManager not initialized, returning 0")
-            return 0
         return len(self._active_clients)
+
+    def create_client(self, client_id: str, ac_repository, chunk_dir, user_id: str, user_email: Optional[str] = None) -> "ClientState":
+        """
+        Atomically create and register a new client.
+
+        This method ensures that client creation and registration happen atomically,
+        eliminating race conditions.
+
+        Args:
+            client_id: Unique client identifier
+            ac_repository: Audio chunks repository
+            chunk_dir: Directory for audio chunks
+            user_id: User ID who owns this client
+            user_email: Optional user email
+
+        Returns:
+            Created ClientState object
+
+        Raises:
+            ValueError: If client_id already exists
+        """
+        if client_id in self._active_clients:
+            raise ValueError(f"Client {client_id} already exists")
+
+        # Import here to avoid circular imports
+        from advanced_omi_backend.client import ClientState
+
+        # Create client state
+        client_state = ClientState(client_id, ac_repository, chunk_dir, user_id, user_email)
+
+        # Atomically add to internal storage and register mapping
+        self._active_clients[client_id] = client_state
+        register_client_user_mapping(client_id, user_id)
+
+        logger.info(f"✅ Created and registered client {client_id} for user {user_id}")
+        return client_state
+
+    def remove_client(self, client_id: str) -> bool:
+        """
+        Atomically remove and deregister a client.
+
+        This method ensures that client removal and deregistration happen atomically.
+
+        Args:
+            client_id: Client identifier to remove
+
+        Returns:
+            True if client was removed, False if client didn't exist
+        """
+        if client_id not in self._active_clients:
+            logger.warning(f"Attempted to remove non-existent client {client_id}")
+            return False
+
+        # Get client state for cleanup
+        client_state = self._active_clients[client_id]
+
+        # Atomically remove from storage and deregister mapping
+        del self._active_clients[client_id]
+        unregister_client_user_mapping(client_id)
+
+        logger.info(f"✅ Removed and deregistered client {client_id}")
+        return True
+
+    async def remove_client_with_cleanup(self, client_id: str) -> bool:
+        """
+        Atomically remove client with full cleanup.
+
+        Args:
+            client_id: Client identifier to remove
+
+        Returns:
+            True if client was removed, False if client didn't exist
+        """
+        if client_id not in self._active_clients:
+            logger.warning(f"Attempted to remove non-existent client {client_id}")
+            return False
+
+        # Get client state for cleanup
+        client_state = self._active_clients[client_id]
+
+        # Call client's disconnect method for proper cleanup
+        await client_state.disconnect()
+
+        # Atomically remove from storage and deregister mapping
+        del self._active_clients[client_id]
+        unregister_client_user_mapping(client_id)
+
+        logger.info(f"✅ Removed and cleaned up client {client_id}")
+        return True
+
+    def get_all_client_ids(self) -> list[str]:
+        """
+        Get list of all active client IDs.
+
+        Returns:
+            List of active client IDs
+        """
+        return list(self._active_clients.keys())
+
+    def add_existing_client(self, client_id: str, client_state: "ClientState"):
+        """
+        Add an existing client state (for migration purposes).
+
+        Args:
+            client_id: Client identifier
+            client_state: Existing ClientState object
+        """
+        if client_id in self._active_clients:
+            logger.warning(f"Overwriting existing client {client_id}")
+
+        self._active_clients[client_id] = client_state
+        logger.info(f"Added existing client {client_id} to ClientManager")
 
     def get_client_info_summary(self) -> list:
         """
@@ -127,10 +223,6 @@ class ClientManager:
         Returns:
             List of client info dictionaries suitable for API responses
         """
-        if not self._initialized:
-            logger.warning("ClientManager not initialized, returning empty list")
-            return []
-
         client_info = []
         for client_id, client_state in self._active_clients.items():
             current_audio_uuid = client_state.current_audio_uuid

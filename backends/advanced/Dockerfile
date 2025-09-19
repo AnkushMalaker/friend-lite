@@ -40,4 +40,4 @@ COPY diarization_config.json* ./
 
 
 # Run the application
-CMD ["uv", "run", "python3", "src/advanced_omi_backend/main.py"]
+CMD ["uv", "run", "--extra", "deepgram", "python3", "src/advanced_omi_backend/main.py"]

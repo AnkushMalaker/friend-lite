@@ -6,19 +6,26 @@ import uuid
 from datetime import UTC, datetime
 from typing import Optional
 
-from wyoming.audio import AudioChunk
-
 from advanced_omi_backend.client_manager import get_client_manager
-from advanced_omi_backend.config import get_speech_detection_settings, get_conversation_stop_settings, load_diarization_settings_from_file
-from advanced_omi_backend.database import conversations_col, ConversationsRepository
+from advanced_omi_backend.config import (
+    get_conversation_stop_settings,
+    get_speech_detection_settings,
+    load_diarization_settings_from_file,
+)
+from advanced_omi_backend.database import ConversationsRepository, conversations_col
 from advanced_omi_backend.llm_client import async_generate
-from advanced_omi_backend.processors import AudioCroppingItem, MemoryProcessingItem, get_processor_manager
+from advanced_omi_backend.processors import (
+    AudioCroppingItem,
+    MemoryProcessingItem,
+    get_processor_manager,
+)
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
     get_transcription_provider,
 )
+from wyoming.audio import AudioChunk
 
 # ASR Configuration
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")  # Optional: 'deepgram' or 'parakeet'
@@ -151,10 +158,6 @@ class TranscriptionManager:
             return None
         return self.client_manager.get_client(self._client_id)
 
-    # REMOVED: Memory processing is now handled exclusively by conversation closure
-    # to prevent duplicate processing. The _queue_memory_processing method has been
-    # removed as part of the fix for double memory generation issue.
-
     async def connect(self, client_id: str | None = None):
         """Initialize transcription service for the client."""
         self._client_id = client_id
@@ -171,7 +174,7 @@ class TranscriptionManager:
             logger.error(f"Failed to connect to {self.provider.name} transcription service: {e}")
             raise
 
-    async def process_collected_audio(self, audio_duration_seconds: Optional[float] = None):
+    async def process_collected_audio(self):
         """Unified processing for all transcription providers."""
         logger.info(f"🚀 process_collected_audio called for client {self._client_id}")
         logger.info(
@@ -195,7 +198,7 @@ class TranscriptionManager:
 
         # Get transcript from provider
         try:
-            transcript_result = await self._get_transcript(audio_duration_seconds)
+            transcript_result = await self._get_transcript()
             # Process the result uniformly
             await self._process_transcript_result(transcript_result)
         except asyncio.CancelledError:
@@ -213,7 +216,7 @@ class TranscriptionManager:
                 coordinator = get_transcript_coordinator()
                 coordinator.signal_transcript_failed(self._current_audio_uuid, str(e))
 
-    async def _get_transcript(self, audio_duration_seconds: Optional[float] = None):
+    async def _get_transcript(self):
         """Get transcript from any provider using unified interface."""
         if not self.provider:
             logger.error("No transcription provider available")
@@ -281,13 +284,12 @@ class TranscriptionManager:
         try:
             # Store raw transcript data
             provider_name = self.provider.name if self.provider else "unknown"
-            logger.info(f"🔍 DEBUG: transcript_result type={type(transcript_result)}, content preview: {str(transcript_result)[:200]}")
+            logger.info(f"transcript_result type={type(transcript_result)}, content preview: {str(transcript_result)[:200]}")
             if self.chunk_repo:
-                logger.info(f"🔍 DEBUG: About to store raw transcript data for {self._current_audio_uuid}")
                 await self.chunk_repo.store_raw_transcript_data(
                     self._current_audio_uuid, transcript_result, provider_name
                 )
-                logger.info(f"🔍 DEBUG: Successfully stored raw transcript data for {self._current_audio_uuid}")
+                logger.info(f"Successfully stored raw transcript data for {self._current_audio_uuid}")
 
             # Normalize transcript result
             normalized_result = self._normalize_transcript_result(transcript_result)
@@ -490,14 +492,20 @@ class TranscriptionManager:
                                 await conversations_repo.activate_transcript_version(conversation_id, version_id)
                                 logger.info(f"✅ Created and activated initial transcript version {version_id} for conversation {conversation_id}")
 
-                        # Update conversation with speaker info and metadata (NOT transcript data - that's in versions)
+                        # Generate title and summary with speaker information
+                        title = await self._generate_title_with_speakers(segments_to_store)
+                        summary = await self._generate_summary_with_speakers(segments_to_store)
+
+                        # Update conversation with speaker info, title, summary and metadata
                         update_data = {
+                            "title": title,
+                            "summary": summary,
                             "speaker_names": speaker_names,
                             "updated_at": datetime.now(UTC)
                         }
                         await conversations_repo.update_conversation(conversation_id, update_data)
 
-                        logger.info(f"✅ Updated conversation {conversation_id} with {len(segments_to_store)} transcript segments and {len(speakers_found)} speakers")
+                        logger.info(f"✅ Updated conversation {conversation_id} with {len(segments_to_store)} transcript segments, {len(speakers_found)} speakers, and speaker-aware title/summary")
                     except Exception as e:
                         logger.error(f"Failed to update conversation {conversation_id} with transcript data: {e}")
 
@@ -625,19 +633,15 @@ class TranscriptionManager:
                 logger.error(f"No audio session found for {audio_uuid}")
                 return None
 
-            # Generate title and summary from transcript
-            title = await self._generate_title(transcript_data.get("text", ""))
-            summary = await self._generate_summary(transcript_data.get("text", ""))
-
-            # Create conversation data
+            # Create conversation data (title and summary will be generated after speaker recognition)
             conversation_id = str(uuid.uuid4())
             conversation_data = {
                 "conversation_id": conversation_id,
                 "audio_uuid": audio_uuid,
                 "user_id": audio_session["user_id"],
                 "client_id": audio_session["client_id"],
-                "title": title,
-                "summary": summary,
+                "title": "Processing...",  # Placeholder - will be updated after speaker recognition
+                "summary": "Processing...",  # Placeholder - will be updated after speaker recognition
 
                 # Versioned system (source of truth)
                 "transcript_versions": [],
@@ -727,6 +731,93 @@ Summary:"""
             logger.warning(f"Failed to generate LLM summary: {e}")
             # Fallback to simple summary generation
             return text[:120] + "..." if len(text) > 120 else text or "No content"
+
+    async def _generate_title_with_speakers(self, segments: list) -> str:
+        """Generate an LLM-powered title from conversation segments with speaker information."""
+        if not segments:
+            return "Conversation"
+
+        # Format conversation with speaker names
+        conversation_text = ""
+        for segment in segments[:10]:  # Use first 10 segments for title generation
+            speaker = segment.get("speaker", "")
+            text = segment.get("text", "").strip()
+            if text:
+                if speaker:
+                    conversation_text += f"{speaker}: {text}\n"
+                else:
+                    conversation_text += f"{text}\n"
+
+        if not conversation_text.strip():
+            return "Conversation"
+
+        try:
+            prompt = f"""Generate a concise title (max 40 characters) for this conversation:
+
+"{conversation_text[:500]}"
+
+Rules:
+- Maximum 40 characters
+- Include speaker names if relevant
+- Capture the main topic
+- Be specific and informative
+
+Title:"""
+
+            title = await async_generate(prompt, temperature=0.3)
+            title = title.strip().strip('"').strip("'")
+            return title[:40] + "..." if len(title) > 40 else title or "Conversation"
+
+        except Exception as e:
+            logger.warning(f"Failed to generate LLM title with speakers: {e}")
+            # Fallback to simple title generation
+            words = conversation_text.split()[:6]
+            title = " ".join(words)
+            return title[:40] + "..." if len(title) > 40 else title or "Conversation"
+
+    async def _generate_summary_with_speakers(self, segments: list) -> str:
+        """Generate an LLM-powered summary from conversation segments with speaker information."""
+        if not segments:
+            return "No content"
+
+        # Format conversation with speaker names
+        conversation_text = ""
+        speakers_in_conv = set()
+        for segment in segments:
+            speaker = segment.get("speaker", "")
+            text = segment.get("text", "").strip()
+            if text:
+                if speaker:
+                    conversation_text += f"{speaker}: {text}\n"
+                    speakers_in_conv.add(speaker)
+                else:
+                    conversation_text += f"{text}\n"
+
+        if not conversation_text.strip():
+            return "No content"
+
+        try:
+            prompt = f"""Generate a brief, informative summary (1-2 sentences, max 120 characters) for this conversation with speakers:
+
+"{conversation_text[:1000]}"
+
+Rules:
+- Maximum 120 characters
+- 1-2 complete sentences
+- Include speaker names when relevant (e.g., "John discusses X with Sarah")
+- Capture key topics and outcomes
+- Use present tense
+- Be specific and informative
+
+Summary:"""
+
+            summary = await async_generate(prompt, temperature=0.3)
+            return summary.strip().strip('"').strip("'") or "No content"
+
+        except Exception as e:
+            logger.warning(f"Failed to generate LLM summary with speakers: {e}")
+            # Fallback to simple summary generation
+            return conversation_text[:120] + "..." if len(conversation_text) > 120 else conversation_text or "No content"
 
     async def _queue_memory_processing(self, conversation_id: str):
         """Queue memory processing for a speech-detected conversation.
