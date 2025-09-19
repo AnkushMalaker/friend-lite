@@ -61,7 +61,6 @@ export default function Upload() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [processingPhase, setProcessingPhase] = useState<'idle' | 'starting' | 'active' | 'completed'>('idle')
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
-  const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([])
 
   // Polling configuration
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -158,7 +157,7 @@ export default function Upload() {
 
       // Filter for upload clients (identified by client_id pattern ending with 3-digit numbers like "-001", "-002")
       const uploadTasks: ProcessingTask[] = Object.entries(allTasks)
-        .filter(([clientId, taskData]) => {
+        .filter(([clientId]) => {
           // Upload clients have pattern like: "abc123-upload-001", "abc123-upload-002"
           return /.*-upload-\d{3}$/.test(clientId)
         })
@@ -170,7 +169,6 @@ export default function Upload() {
         }))
         .filter(task => Object.keys(task.stages).length > 0) // Only show clients with active processing
 
-      setProcessingTasks(uploadTasks)
 
       // Check if all clients are complete OR no upload tasks exist (meaning processing finished)
       const allComplete = uploadTasks.length > 0 && uploadTasks.every(task => task.status === 'complete')
