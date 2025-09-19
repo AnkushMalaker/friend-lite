@@ -387,7 +387,7 @@ class AudioChunksRepository:
         return result.modified_count > 0
 
     async def update_transcription_status(
-        self, audio_uuid: str, status: str, error_message: str = None, provider: str = None
+        self, audio_uuid: str, status: str, error_message: Optional[str] = None, provider: Optional[str] = None
     ):
         """Update transcription processing status and completion timestamp.
 
@@ -415,32 +415,36 @@ class AudioChunksRepository:
             if error_message:
                 version_data["error_message"] = error_message
 
+            update_doc = {
+                "active_transcript_version": version_id,
+                "transcription_status": status,
+                "transcription_updated_at": datetime.now(UTC).isoformat(),
+            }
+            if status == "COMPLETED":
+                update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
+
             result = await self.col.update_one(
                 {"audio_uuid": audio_uuid},
                 {
                     "$push": {"transcript_versions": version_data},
-                    "$set": {
-                        "active_transcript_version": version_id,
-                        "transcription_status": status,
-                        "transcription_updated_at": datetime.now(UTC).isoformat(),
-                    }
+                    "$set": update_doc
                 }
             )
         else:
             # Update existing active version
             update_doc = {
-                f"transcript_versions.$[version].status": status,
-                f"transcript_versions.$[version].updated_at": datetime.now(UTC),
+                "transcript_versions.$[version].status": status,
+                "transcript_versions.$[version].updated_at": datetime.now(UTC).isoformat(),
                 "transcription_status": status,
                 "transcription_updated_at": datetime.now(UTC).isoformat(),
             }
             if status == "COMPLETED":
                 update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
             if error_message:
-                update_doc[f"transcript_versions.$[version].error_message"] = error_message
+                update_doc["transcript_versions.$[version].error_message"] = error_message
                 update_doc["transcription_error"] = error_message
             if provider:
-                update_doc[f"transcript_versions.$[version].provider"] = provider
+                update_doc["transcript_versions.$[version].provider"] = provider
                 update_doc["transcript_provider"] = provider
 
             result = await self.col.update_one(

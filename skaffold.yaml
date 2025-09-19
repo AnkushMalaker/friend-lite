@@ -60,6 +60,8 @@ profiles:
           context: extras/speaker-recognition/webui
           docker:
             dockerfile: Dockerfile
+            buildArgs:
+              VITE_ALLOWED_HOSTS: "{{.VITE_ALLOWED_HOSTS}}"
     deploy:
       helm:
         releases:
@@ -71,17 +73,8 @@ profiles:
               speaker.image.tag: "{{.IMAGE_TAG_speaker_recognition}}"
               webui.image.repository: "{{.IMAGE_REPO_speaker_recognition_ui}}"
               webui.image.tag: "{{.IMAGE_TAG_speaker_recognition_ui}}"
-              secrets.hfToken: "{{.HF_TOKEN}}"
-              secrets.deepgramApiKey: "{{.DEEPGRAM_API_KEY}}"
-              speaker.env.SIMILARITY_THRESHOLD: "{{.SIMILARITY_THRESHOLD}}"
-              speaker.env.COMPUTE_MODE: "{{.COMPUTE_MODE}}"
-              speaker.env.SPEAKER_SERVICE_HOST: "{{.SPEAKER_SERVICE_HOST}}"
-              speaker.env.SPEAKER_SERVICE_PORT: "{{.SPEAKER_SERVICE_PORT}}"
-              webui.env.REACT_UI_HOST: "{{.REACT_UI_HOST}}"
-              webui.env.REACT_UI_PORT: "{{.REACT_UI_PORT}}"
-              webui.env.REACT_UI_HTTPS: "{{.REACT_UI_HTTPS}}"
-              webui.env.WEBUI_CORS_ORIGIN: "{{.WEBUI_CORS_ORIGIN}}"
-              ingress.hosts[0].host: "{{.REACT_UI_HOST}}"
+              # Node selector configuration
+              nodeSelector.hostname: "{{.SPEAKER_NODE}}"
               # Shared models configuration
               global.sharedModels.enabled: "true"
               global.sharedModels.useHostPath: "true"
@@ -129,8 +122,6 @@ profiles:
           context: backends/advanced/webui
           docker:
             dockerfile: Dockerfile
-            buildArgs:
-              VITE_BACKEND_URL: ""
 
     deploy:
       helm:
@@ -140,16 +131,22 @@ profiles:
             chartPath: backends/charts/advanced-backend
             namespace: "{{.APPLICATION_NAMESPACE}}"
             createNamespace: true
+            valuesFiles:
+              - backends/charts/advanced-backend/ingress-values.yaml
             setValueTemplates:
               image.repository: "{{.IMAGE_REPO_advanced_backend}}"
               image.tag: "{{.IMAGE_TAG_advanced_backend}}"
-              # Override specific Kubernetes-specific values
+              # Override specific Kubernetes-specific values (not in env file)
               env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend"
               env.QDRANT_BASE_URL: "qdrant.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local"
               persistence.storageClass: "openebs-hostpath"
               persistence.size: "10Gi"
               service.nodePort: "{{.BACKEND_NODEPORT}}"
-
+              # Ingress configuration
+              ingress.hosts[0].host: "{{.BACKEND_HOST}}"
+              ingress.hosts[1].host: "{{.EXTERNAL_DOMAIN}}"
+              # Node selector
+              nodeSelector.kubernetes\.io/hostname: anubis
 
           - name: webui
             chartPath: backends/charts/webui
@@ -158,6 +155,11 @@ profiles:
               image.repository: "{{.IMAGE_REPO_webui}}"
               image.tag: "{{.IMAGE_TAG_webui}}"
               service.nodePort: "{{.WEBUI_NODEPORT}}"
+              # Ingress configuration
+              ingress.hosts[0].host: "{{.WEBUI_HOST}}"
+              ingress.hosts[1].host: "{{.EXTERNAL_DOMAIN}}"
+              # Node selector
+              nodeSelector.kubernetes\.io/hostname: anubis
 
   - name: speaker-recognition-gtx1070
     build:
@@ -184,23 +186,10 @@ profiles:
               speaker.image.tag: "{{.IMAGE_TAG_speaker_recognition}}"
               webui.image.repository: "{{.IMAGE_REPO_speaker_recognition_ui}}"
               webui.image.tag: "{{.IMAGE_TAG_speaker_recognition_ui}}"
-              secrets.hfToken: "{{.HF_TOKEN}}"
-              secrets.deepgramApiKey: "{{.DEEPGRAM_API_KEY}}"
-              speaker.env.SIMILARITY_THRESHOLD: "{{.SIMILARITY_THRESHOLD}}"
-              speaker.env.COMPUTE_MODE: "{{.COMPUTE_MODE}}"
-              speaker.env.SPEAKER_SERVICE_HOST: "{{.SPEAKER_SERVICE_HOST}}"
-              speaker.env.SPEAKER_SERVICE_PORT: "{{.SPEAKER_SERVICE_PORT}}"
-              webui.env.REACT_UI_HOST: "{{.REACT_UI_HOST}}"
-              webui.env.REACT_UI_PORT: "{{.REACT_UI_PORT}}"
-              webui.env.REACT_UI_HTTPS: "{{.REACT_UI_HTTPS}}"
-              webui.env.WEBUI_CORS_ORIGIN: "{{.WEBUI_CORS_ORIGIN}}"
-              ingress.hosts[0].host: "{{.REACT_UI_HOST}}"
               # Shared models configuration
               global.sharedModels.enabled: "true"
               global.sharedModels.useHostPath: "true"
               global.sharedModels.size: "20Gi"
               global.sharedModels.hostPath: "/shared/models"
-              global.sharedModels.nodes[0]: "anubis"
-              global.sharedModels.nodes[1]: "babel"
 
 

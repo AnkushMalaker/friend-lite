@@ -28,7 +28,8 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
-          {{- range .paths }}
+          {{- $paths := .paths | default $.Values.ingress.commonPaths }}
+          {{- range $paths }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
             backend:

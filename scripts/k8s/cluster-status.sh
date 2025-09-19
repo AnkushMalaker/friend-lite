@@ -9,6 +9,10 @@
 
 set -e
 
+# Load environment variables
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/load-env.sh"
+
 NAMESPACE="${1:-all}"
 
 echo "🔍 Kubernetes Cluster Status Check"
@@ -123,23 +127,16 @@ fi
 # 10. Registry Status
 echo "🐳 REGISTRY STATUS"
 echo "------------------"
-if [ -f "skaffold.env" ]; then
-    REGISTRY_IP=$(grep "^REGISTRY=" skaffold.env | cut -d'=' -f2 | cut -d':' -f1 2>/dev/null || echo "unknown")
-    REGISTRY_PORT=$(grep "^REGISTRY=" skaffold.env | cut -d'=' -f2 | cut -d':' -f2 2>/dev/null || echo "unknown")
-else
-    REGISTRY_IP="skaffold.env not found"
-    REGISTRY_PORT="skaffold.env not found"
-fi
+# Get registry from config.env
+REGISTRY="${CONTAINER_REGISTRY:-localhost:32000}"
+REGISTRY_IP=$(echo "$REGISTRY" | cut -d':' -f1)
+REGISTRY_PORT=$(echo "$REGISTRY" | cut -d':' -f2)
 
-if [ "$REGISTRY_IP" != "skaffold.env not found" ] && [ "$REGISTRY_IP" != "unknown" ]; then
-    echo "Registry: $REGISTRY_IP:$REGISTRY_PORT"
-    if curl -s "http://$REGISTRY_IP:$REGISTRY_PORT/v2/" > /dev/null 2>&1; then
-        echo "✅ Registry accessible"
-    else
-        echo "❌ Registry not accessible"
-    fi
+echo "Registry: $REGISTRY"
+if curl -s "http://$REGISTRY/v2/" > /dev/null 2>&1; then
+    echo "✅ Registry accessible"
 else
-    echo "Registry configuration not found or invalid in skaffold.env"
+    echo "❌ Registry not accessible"
 fi
 echo ""
 
