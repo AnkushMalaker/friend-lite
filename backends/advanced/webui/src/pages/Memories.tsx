@@ -34,6 +34,7 @@ export default function Memories() {
   
   // System configuration state
   const [memoryProviderSupportsThreshold, setMemoryProviderSupportsThreshold] = useState(false)
+  const [memoryProvider, setMemoryProvider] = useState<string>('')
   
   const { user } = useAuth()
 
@@ -41,12 +42,15 @@ export default function Memories() {
     try {
       const response = await systemApi.getMetrics()
       const supports = response.data.memory_provider_supports_threshold || false
+      const provider = response.data.memory_provider || 'unknown'
       setMemoryProviderSupportsThreshold(supports)
-      console.log('🔧 Memory provider supports threshold:', supports)
+      setMemoryProvider(provider)
+      console.log('🔧 Memory provider:', provider, 'supports threshold:', supports)
     } catch (err: any) {
       console.error('❌ Failed to load system config:', err)
       // Default to false if we can't determine
       setMemoryProviderSupportsThreshold(false)
+      setMemoryProvider('unknown')
     }
   }
 
@@ -243,11 +247,20 @@ export default function Memories() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center space-x-2 mb-6">
-        <Brain className="h-6 w-6 text-blue-600" />
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-          Memory Management
-        </h1>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center space-x-2">
+          <Brain className="h-6 w-6 text-blue-600" />
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              Memory Management
+            </h1>
+            {memoryProvider && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Provider: {memoryProvider === 'friend_lite' ? 'Friend-Lite' : memoryProvider === 'openmemory_mcp' ? 'OpenMemory MCP' : memoryProvider}
+              </p>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Controls */}
