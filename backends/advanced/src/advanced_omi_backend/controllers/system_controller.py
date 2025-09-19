@@ -523,9 +523,14 @@ async def list_processing_jobs():
 async def process_files_with_content(
     job_id: str, file_data: list[tuple[str, bytes]], user: User, device_name: str
 ):
-    """Background task to process uploaded files using pre-read content."""
+    """Background task to process uploaded files using pre-read content.
+
+    Creates persistent clients that remain active in an upload session,
+    following the same code path as WebSocket clients.
+    """
     # Import here to avoid circular imports
-    from advanced_omi_backend.main import cleanup_client_state, create_client_state
+    from advanced_omi_backend.main import create_client_state, cleanup_client_state
+    import uuid
 
     audio_logger.info(
         f"🚀 process_files_with_content called for job {job_id} with {len(file_data)} files"
@@ -536,8 +541,13 @@ async def process_files_with_content(
         # Update job status to processing
         await job_tracker.update_job_status(job_id, JobStatus.PROCESSING)
 
+        # Process files one by one
+        processed_files = []
+
         for file_index, (filename, content) in enumerate(file_data):
-            client_id = None
+            # Generate client ID for this file
+            file_device_name = f"{device_name}-{file_index + 1:03d}"
+            client_id = generate_client_id(user, file_device_name)
             client_state = None
 
             try:
@@ -577,17 +587,21 @@ async def process_files_with_content(
                     )
                     continue
 
-                # Generate unique client ID for each file
+                # Use pre-generated client ID from upload session
                 file_device_name = f"{device_name}-{file_index + 1:03d}"
-                client_id = generate_client_id(user, file_device_name)
 
                 # Update job tracker with client ID
                 await job_tracker.update_file_status(
                     job_id, filename, FileStatus.PROCESSING, client_id=client_id
                 )
 
-                # Create client state
+                # Create persistent client state (will be tracked by ProcessorManager)
                 client_state = await create_client_state(client_id, user, file_device_name)
+
+
+                audio_logger.info(
+                    f"👤 [Job {job_id}] Created persistent client {client_id} for file {filename}"
+                )
 
                 # Process WAV file
                 with wave.open(io.BytesIO(content), "rb") as wav_file:
@@ -732,26 +746,29 @@ async def process_files_with_content(
                     job_id, filename, FileStatus.FAILED, error_message=error_msg
                 )
             finally:
-                # Always clean up client state to prevent accumulation
+                # Clean up client state immediately after upload completes (like WebSocket disconnect)
+                # ProcessorManager will continue tracking processing independently
                 if client_id and client_state:
                     try:
                         await cleanup_client_state(client_id)
-                        audio_logger.info(
-                            f"🧹 [Job {job_id}] Cleaned up client state for {client_id}"
-                        )
+                        audio_logger.info(f"🧹 Cleaned up client state for {client_id}")
                     except Exception as cleanup_error:
                         audio_logger.error(
-                            f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}"
+                            f"❌ Error cleaning up client state for {client_id}: {cleanup_error}"
                         )
 
         # Mark job as completed
         await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)
-        audio_logger.info(f"🎉 [Job {job_id}] All files processed")
+
+        audio_logger.info(
+            f"🎉 [Job {job_id}] All files processed successfully."
+        )
 
     except Exception as e:
         error_msg = f"Job processing failed: {str(e)}"
         audio_logger.error(f"💥 [Job {job_id}] {error_msg}")
         await job_tracker.update_job_status(job_id, JobStatus.FAILED, error_msg)
+
 
 
 # Configuration functions moved to config.py to avoid circular imports
@@ -1282,3 +1299,6 @@ async def get_client_processing_detail(client_id: str):
         return JSONResponse(
             status_code=500, content={"error": f"Failed to get client detail: {str(e)}"}
         )
+
+
+
