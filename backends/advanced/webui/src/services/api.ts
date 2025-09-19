@@ -131,6 +131,13 @@ export const systemApi = {
       headers: { 'Content-Type': 'text/plain' }
     }),
   reloadMemoryConfig: () => api.post('/api/admin/memory/config/reload'),
+
+  // Processing overview and detailed monitoring
+  getProcessorOverview: () => api.get('/api/processor/overview'),
+  getProcessorHistory: (page = 1, perPage = 50) =>
+    api.get('/api/processor/history', { params: { page, per_page: perPage } }),
+  getClientProcessingDetail: (clientId: string) =>
+    api.get(`/api/processor/clients/${clientId}`),
 }
 
 export const uploadApi = {

@@ -1139,23 +1139,146 @@ async def delete_all_user_memories(user: User):
     """Delete all memories for the current user."""
     try:
         from advanced_omi_backend.memory import get_memory_service
-        
+
         memory_service = get_memory_service()
-        
+
         # Delete all memories for the user
         deleted_count = await memory_service.delete_all_user_memories(user.user_id)
-        
+
         logger.info(f"Deleted {deleted_count} memories for user {user.user_id}")
-        
+
         return {
             "message": f"Successfully deleted {deleted_count} memories",
             "deleted_count": deleted_count,
             "user_id": user.user_id,
             "status": "success"
         }
-        
+
     except Exception as e:
         logger.error(f"Error deleting all memories for user {user.user_id}: {e}")
         return JSONResponse(
             status_code=500, content={"error": f"Failed to delete memories: {str(e)}"}
+        )
+
+
+async def get_processor_overview():
+    """Get comprehensive processor overview with pipeline stats."""
+    try:
+        processor_manager = get_processor_manager()
+        task_manager = get_task_manager()
+
+        # Get pipeline statistics
+        pipeline_stats = processor_manager.get_pipeline_statistics()
+
+        # Get system health metrics
+        task_health = task_manager.get_health_status()
+        queue_health = processor_manager.get_queue_health_status()
+
+        # Get recent activity
+        recent_activity = processor_manager.get_processing_history(limit=10)
+
+        overview = {
+            "pipeline_stats": pipeline_stats,
+            "system_health": {
+                "total_active_clients": len(processor_manager.active_file_sinks),
+                "total_processing_tasks": len(processor_manager.processing_tasks),
+                "task_manager_healthy": task_health.get("healthy", False),
+                "error_rate": task_health.get("recent_errors", 0) / max(task_health.get("completed_tasks", 1), 1),
+                "uptime_hours": time.time() / 3600  # Placeholder
+            },
+            "queue_health": queue_health,
+            "recent_activity": recent_activity[:5]  # Last 5 activities
+        }
+
+        return overview
+    except Exception as e:
+        logger.error(f"Error getting processor overview: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get processor overview: {str(e)}"}
+        )
+
+async def get_processor_history(page: int = 1, per_page: int = 50):
+    """Get paginated processing history."""
+    try:
+        processor_manager = get_processor_manager()
+
+        # Calculate offset
+        offset = (page - 1) * per_page
+
+        # Get full history and paginate
+        full_history = processor_manager.get_processing_history(limit=1000)  # Get more for pagination
+        total_items = len(full_history)
+
+        # Paginate
+        paginated_history = full_history[offset:offset + per_page]
+
+        return {
+            "history": paginated_history,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total_items,
+                "total_pages": (total_items + per_page - 1) // per_page
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting processor history: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get processor history: {str(e)}"}
+        )
+
+async def get_client_processing_detail(client_id: str):
+    """Get detailed processing information for specific client."""
+    try:
+        from advanced_omi_backend.client_manager import get_client_manager
+
+        processor_manager = get_processor_manager()
+        client_manager = get_client_manager()
+
+        # Get processing status first - this may have data even if client is inactive
+        processing_status = processor_manager.get_processing_status(client_id)
+
+        # Get task manager tasks for this client
+        task_manager = get_task_manager()
+        client_tasks = task_manager.get_tasks_for_client(client_id)
+
+        # Try to get client info, but don't fail if client is inactive
+        client = client_manager.get_client(client_id)
+
+        # If no client and no processing data, return 404
+        if not client and not processing_status.get("stages") and not client_tasks:
+            return JSONResponse(
+                status_code=404, content={"error": f"No data found for client {client_id}"}
+            )
+
+        detail = {
+            "client_id": client_id,
+            "client_info": {
+                "user_id": getattr(client, "user_id", "unknown") if client else "unknown",
+                "user_email": getattr(client, "user_email", "unknown") if client else "unknown",
+                "current_audio_uuid": getattr(client, "current_audio_uuid", None) if client else None,
+                "conversation_start_time": getattr(client, "conversation_start_time", None) if client else None,
+                "sample_rate": getattr(client, "sample_rate", None) if client else None,
+                "status": "active" if client else "inactive"
+            },
+            "processing_status": processing_status,
+            "active_tasks": [
+                {
+                    "task_id": f"{task.name}_{id(task.task)}",
+                    "task_name": task.name,
+                    "task_type": task.metadata.get("type", "unknown"),
+                    "created_at": datetime.fromtimestamp(task.created_at, UTC).isoformat(),
+                    "completed_at": datetime.fromtimestamp(task.completed_at, UTC).isoformat() if task.completed_at else None,
+                    "error": task.error,
+                    "cancelled": task.cancelled
+                }
+                for task in client_tasks
+            ]
+        }
+
+        return detail
+    except Exception as e:
+        logger.error(f"Error getting client processing detail for {client_id}: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get client detail: {str(e)}"}
         )

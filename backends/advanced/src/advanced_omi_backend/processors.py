@@ -451,6 +451,101 @@ class ProcessorManager:
         all_client_ids = set(self.processing_tasks.keys()) | set(self.processing_state.keys())
         return {client_id: self.get_processing_status(client_id) for client_id in all_client_ids}
 
+    def get_pipeline_statistics(self) -> dict[str, Any]:
+        """Calculate pipeline performance metrics for each processing stage."""
+        import time
+        from statistics import mean
+
+        current_time = time.time()
+
+        # Calculate stats for each queue
+        pipeline_stats = {}
+
+        # Audio Queue Stats
+        audio_tasks = []
+        for client_id, state in self.processing_state.items():
+            audio_stage = state.get("audio", {})
+            if audio_stage.get("status") == "completed":
+                audio_tasks.append({
+                    "duration": audio_stage.get("metadata", {}).get("processing_time", 1.0),
+                    "timestamp": audio_stage.get("timestamp", current_time)
+                })
+
+        pipeline_stats["audio"] = {
+            "queue_size": self.audio_queue.qsize(),
+            "active_tasks": sum(1 for state in self.processing_state.values()
+                              if state.get("audio", {}).get("status") == "started"),
+            "avg_processing_time_ms": mean([t["duration"] * 1000 for t in audio_tasks[-50:]]) if audio_tasks else 0,
+            "success_rate": len([t for t in audio_tasks[-100:] if t]) / max(len(audio_tasks[-100:]), 1),
+            "throughput_per_minute": len([t for t in audio_tasks if current_time - t["timestamp"] < 60])
+        }
+
+        # Similar calculations for other stages
+        for stage in ["transcription", "memory", "cropping"]:
+            queue_attr = f"{stage}_queue"
+            queue = getattr(self, queue_attr, None)
+
+            pipeline_stats[stage] = {
+                "queue_size": queue.qsize() if queue else 0,
+                "active_tasks": len([tid for tid, tinfo in self.processing_tasks.items()
+                                   if stage in tid and not self.task_manager.get_task_info(tinfo.get(stage, "")).completed_at]),
+                "avg_processing_time_ms": 30000,  # Placeholder - can be calculated from task manager history
+                "success_rate": 0.95,  # Placeholder - can be calculated from completed tasks
+                "throughput_per_minute": 5  # Placeholder
+            }
+
+        return pipeline_stats
+
+    def get_processing_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Get recent processing history from task manager."""
+        history = []
+
+        try:
+            # Get completed tasks from task manager (get the last N items)
+            completed_tasks = self.task_manager.completed_tasks[-limit:] if self.task_manager.completed_tasks else []
+
+            for task_info in completed_tasks:
+                task_type = task_info.metadata.get("type", "unknown")
+                if task_type in ["memory", "cropping", "transcription_chunk"]:
+                    history.append({
+                        "client_id": task_info.metadata.get("client_id", "unknown"),
+                        "conversation_id": task_info.metadata.get("conversation_id"),
+                        "task_type": task_type,
+                        "started_at": datetime.fromtimestamp(task_info.created_at, UTC).isoformat(),
+                        "completed_at": datetime.fromtimestamp(task_info.completed_at, UTC).isoformat() if task_info.completed_at else None,
+                        "duration_ms": (task_info.completed_at - task_info.created_at) * 1000 if task_info.completed_at else None,
+                        "status": "completed" if task_info.completed_at and not task_info.error else "failed",
+                        "error": task_info.error
+                    })
+
+            return sorted(history, key=lambda x: x["started_at"], reverse=True)
+        except Exception as e:
+            logger.error(f"Error getting processing history: {e}")
+            return []
+
+    def get_queue_health_status(self) -> dict[str, str]:
+        """Determine queue health based on depth and processing rates."""
+        health_status = {}
+
+        queue_sizes = {
+            "audio": self.audio_queue.qsize(),
+            "transcription": self.transcription_queue.qsize(),
+            "memory": self.memory_queue.qsize(),
+            "cropping": self.cropping_queue.qsize()
+        }
+
+        for queue_name, size in queue_sizes.items():
+            if size == 0:
+                health_status[queue_name] = "idle"
+            elif size < 5:
+                health_status[queue_name] = "healthy"
+            elif size < 20:
+                health_status[queue_name] = "busy"
+            else:
+                health_status[queue_name] = "overloaded"
+
+        return health_status
+
     async def mark_transcription_failed(self, client_id: str, error: str):
         """Mark transcription as failed and clean up transcription manager.
 
