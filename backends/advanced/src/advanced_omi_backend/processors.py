@@ -429,10 +429,23 @@ class ProcessorManager:
         # Check if all stages are complete
         all_complete = all(stage_info["completed"] for stage_info in stages.values())
 
+        # Get user_id for the client from ClientManager
+        from advanced_omi_backend.client_manager import get_client_owner
+        user_id = get_client_owner(client_id) or "Unknown"
+
+        # Determine client type (simple heuristic based on client_id pattern)
+        # Upload clients have pattern like: "abc123-upload-001", "abc123-upload-001-2", etc.
+        # They contain "-upload-" in their client_id
+        # Reprocessing clients have pattern like: "reprocess-{conversation_id}" and should be treated like upload clients
+        import re
+        client_type = "upload" if ("-upload-" in client_id or client_id.startswith("reprocess-")) else "websocket"
+
         return {
             "status": "complete" if all_complete else "processing",
             "stages": stages,
             "client_id": client_id,
+            "user_id": user_id,
+            "client_type": client_type,
         }
 
     def cleanup_processing_tasks(self, client_id: str):
@@ -444,6 +457,167 @@ class ProcessorManager:
         if client_id in self.processing_state:
             del self.processing_state[client_id]
             logger.debug(f"Cleaned up processing state for client {client_id}")
+
+    def _is_stale(self, client_id: str, max_idle_minutes: int = 30) -> bool:
+        """Check if a processing entry is stale (no activity for specified time).
+
+        Args:
+            client_id: Client ID to check
+            max_idle_minutes: Maximum idle time in minutes before considering stale
+
+        Returns:
+            True if the entry is stale and should be cleaned up
+        """
+        import time
+
+        max_idle_seconds = max_idle_minutes * 60
+        current_time = time.time()
+
+        # Check processing_state timestamps
+        if client_id in self.processing_state:
+            client_state = self.processing_state[client_id]
+            # Find the most recent timestamp across all stages
+            latest_timestamp = 0
+            for stage_info in client_state.values():
+                if isinstance(stage_info, dict) and "timestamp" in stage_info:
+                    latest_timestamp = max(latest_timestamp, stage_info["timestamp"])
+
+            if latest_timestamp > 0:
+                idle_time = current_time - latest_timestamp
+                return idle_time > max_idle_seconds
+
+        # If no processing_state or no valid timestamps, consider it stale
+        return True
+
+    def _cleanup_completed_entries(self):
+        """Clean up completed and stale processing entries independently of client lifecycle.
+
+        This method is called from existing processor timeout handlers to maintain
+        clean processing state without affecting active client sessions.
+        """
+        import time
+
+        clients_to_remove = []
+        current_time = time.time()
+
+        for client_id in list(self.processing_state.keys()):
+            try:
+                status = self.get_processing_status(client_id)
+
+                # Clean up if processing is complete OR if upload client is done (even with failed stages)
+                client_type = status.get("client_type", "websocket")
+
+                if status.get("status") == "complete":
+                    if client_type == "upload":
+                        # Upload clients: Clean up immediately when processing completes
+                        clients_to_remove.append((client_id, "completed_upload"))
+                        logger.info(f"Marking completed upload client for immediate cleanup: {client_id}")
+
+                        # Also trigger client state cleanup for upload clients
+                        try:
+                            from advanced_omi_backend.main import cleanup_client_state
+                            import asyncio
+
+                            # Schedule client cleanup
+                            asyncio.create_task(self._cleanup_upload_client_state(client_id))
+                        except Exception as cleanup_error:
+                            logger.error(f"Error scheduling upload client cleanup for {client_id}: {cleanup_error}")
+                    else:
+                        # WebSocket clients: Wait for grace period before cleanup
+                        completion_grace_period = 300  # 5 minutes
+
+                        # Check if all stages have been complete for grace period
+                        all_stages_old_enough = True
+                        for stage_info in status.get("stages", {}).values():
+                            if "timestamp" in stage_info:
+                                stage_age = current_time - stage_info["timestamp"]
+                                if stage_age < completion_grace_period:
+                                    all_stages_old_enough = False
+                                    break
+
+                        if all_stages_old_enough:
+                            clients_to_remove.append((client_id, "completed_websocket"))
+                            logger.info(f"Marking completed WebSocket client for cleanup: {client_id}")
+
+                elif client_type == "upload" and status.get("status") == "processing":
+                    # Upload clients: Also clean up if they're done processing (even with failed stages)
+                    # Check if all stages are either completed or have failed (i.e., no longer actively processing)
+                    stages = status.get("stages", {})
+                    all_stages_done = True
+
+                    for stage_name, stage_info in stages.items():
+                        if not stage_info.get("completed", False) and stage_info.get("status") not in ["failed", "completed"]:
+                            all_stages_done = False
+                            break
+
+                    if all_stages_done:
+                        clients_to_remove.append((client_id, "finished_upload"))
+                        logger.info(f"Marking finished upload client for cleanup: {client_id} (some stages may have failed)")
+
+                        # Also trigger client state cleanup for upload clients
+                        try:
+                            from advanced_omi_backend.main import cleanup_client_state
+                            import asyncio
+
+                            # Schedule client cleanup
+                            asyncio.create_task(self._cleanup_upload_client_state(client_id))
+                        except Exception as cleanup_error:
+                            logger.error(f"Error scheduling upload client cleanup for {client_id}: {cleanup_error}")
+
+                # Clean up if stale (no activity for 30+ minutes)
+                elif self._is_stale(client_id, max_idle_minutes=30):
+                    clients_to_remove.append((client_id, "stale"))
+                    logger.info(f"Marking stale processing entry for cleanup: {client_id}")
+
+            except Exception as e:
+                logger.error(f"Error checking processing status for {client_id}: {e}")
+                # If we can't check status, consider it for cleanup
+                clients_to_remove.append((client_id, "error"))
+
+        # Remove the identified entries
+        for client_id, reason in clients_to_remove:
+            try:
+                self._remove_processing_entry(client_id, reason)
+            except Exception as e:
+                logger.error(f"Error removing processing entry for {client_id}: {e}")
+
+    async def _cleanup_upload_client_state(self, client_id: str):
+        """Clean up client state for completed upload clients.
+
+        This method handles the client state cleanup that was previously done
+        in the background task's finally block, but now happens when processing completes.
+        """
+        try:
+            from advanced_omi_backend.main import cleanup_client_state
+
+            logger.info(f"🧹 Starting upload client state cleanup for {client_id}")
+            await cleanup_client_state(client_id)
+            logger.info(f"✅ Successfully cleaned up upload client state for {client_id}")
+
+        except Exception as e:
+            logger.error(f"❌ Error cleaning up upload client state for {client_id}: {e}", exc_info=True)
+
+    def _remove_processing_entry(self, client_id: str, reason: str = "cleanup"):
+        """Remove processing state and task tracking for a client.
+
+        Args:
+            client_id: Client ID to remove
+            reason: Reason for removal (for logging)
+        """
+        removed_items = []
+
+        if client_id in self.processing_state:
+            del self.processing_state[client_id]
+            removed_items.append("processing_state")
+
+        if client_id in self.processing_tasks:
+            del self.processing_tasks[client_id]
+            removed_items.append("processing_tasks")
+
+        if removed_items:
+            logger.info(f"🧹 Cleaned up processing entry for {client_id} ({reason}): {', '.join(removed_items)}")
+        else:
+            logger.debug(f"No processing entry found to clean up for {client_id} ({reason})")
 
     def get_all_processing_status(self) -> dict[str, Any]:
         """Get processing status for all clients."""
@@ -815,7 +989,7 @@ class ProcessorManager:
                         )
 
                 except asyncio.TimeoutError:
-                    # Periodic health check
+                    # Periodic health check and cleanup
                     active_clients = len(self.active_file_sinks)
                     queue_size = self.audio_queue.qsize()
                     if queue_size > 0 or active_clients > 0:
@@ -823,6 +997,12 @@ class ProcessorManager:
                             f"⏰ Audio processor timeout (periodic health check): {active_clients} active files, "
                             f"{queue_size} items in queue"
                         )
+
+                    # Perform cleanup of completed/stale processing entries
+                    try:
+                        self._cleanup_completed_entries()
+                    except Exception as cleanup_error:
+                        audio_logger.error(f"Error during processing entry cleanup: {cleanup_error}")
 
         except Exception as e:
             audio_logger.error(f"Fatal error in audio processor: {e}", exc_info=True)

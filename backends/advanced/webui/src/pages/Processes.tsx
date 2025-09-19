@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Activity, RefreshCw, Users, Clock, BarChart3 } from 'lucide-react'
+import { Activity, RefreshCw } from 'lucide-react'
 import { systemApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import ProcessPipelineView from '../components/processes/ProcessPipelineView'
@@ -45,26 +45,6 @@ interface ProcessingHistoryItem {
   error?: string
 }
 
-interface ClientProcessingDetail {
-  client_id: string
-  client_info: {
-    user_id: string
-    user_email: string
-    current_audio_uuid?: string
-    conversation_start_time?: string
-    sample_rate?: number
-  }
-  processing_status: any
-  active_tasks: Array<{
-    task_id: string
-    task_name: string
-    task_type: string
-    created_at: string
-    completed_at?: string
-    error?: string
-    cancelled: boolean
-  }>
-}
 
 export default function Processes() {
   const [overviewData, setOverviewData] = useState<ProcessorOverview | null>(null)

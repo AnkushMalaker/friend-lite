@@ -189,3 +189,5 @@ async def get_client_processing_detail_route(
 ):
     """Get detailed processing information for specific client. Admin only."""
     return await system_controller.get_client_processing_detail(client_id)
+
+
