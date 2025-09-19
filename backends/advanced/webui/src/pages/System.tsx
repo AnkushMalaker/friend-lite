@@ -144,9 +144,6 @@ export default function System() {
     return displayNames[service] || service.replace('_', ' ').toUpperCase()
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString()
-  }
 
   if (!isAdmin) {
     return (
