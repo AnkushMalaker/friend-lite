@@ -12,11 +12,10 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from wyoming.audio import AudioChunk
-
 from advanced_omi_backend.conversation_manager import get_conversation_manager
 from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.task_manager import get_task_manager
+from wyoming.audio import AudioChunk
 
 # Get loggers
 audio_logger = logging.getLogger("audio_processing")
@@ -66,7 +65,7 @@ class ClientState:
         # Debug tracking
         self.transaction_id: Optional[str] = None
 
-        audio_logger.info(f"Created simplified client state for {client_id}")
+        audio_logger.info(f"Created client state for {client_id}")
 
     def update_audio_received(self, chunk: AudioChunk):
         """Update state when audio is received."""

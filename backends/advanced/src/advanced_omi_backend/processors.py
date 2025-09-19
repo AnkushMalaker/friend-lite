@@ -16,7 +16,7 @@ from pathlib import Path
 # Import TranscriptionManager for type hints
 from typing import TYPE_CHECKING, Any, Optional
 
-from advanced_omi_backend.audio_cropping_utils import (
+from advanced_omi_backend.audio_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
 from advanced_omi_backend.client_manager import get_client_manager
@@ -150,8 +150,6 @@ class ProcessorManager:
 
     async def start(self):
         """Start all processors."""
-        logger.info("Starting application-level processors...")
-
         # Create processor tasks
         self.audio_processor_task = asyncio.create_task(
             self._audio_processor(), name="audio_processor"
@@ -179,8 +177,6 @@ class ProcessorManager:
         self.task_manager.track_task(
             self.cropping_processor_task, "cropping_processor", {"type": "processor"}
         )
-
-        logger.info("All processors started successfully")
 
     async def _should_process_memory(self, user_id: str, conversation_id: str) -> tuple[bool, str]:
         """
@@ -508,27 +504,12 @@ class ProcessorManager:
                     f"📊 Transcription manager state - has manager: {manager is not None}, type: {type(manager).__name__}"
                 )
 
-                # Get audio duration for flush timeout calculation
-                audio_duration = None
-                if client_id in self.active_audio_uuids:
-                    audio_uuid = self.active_audio_uuids[client_id]
-                    audio_logger.info(f"📌 Active audio UUID for flush: {audio_uuid}")
-                    # Try to estimate duration from file sink if available
-                    if client_id in self.active_file_sinks:
-                        try:
-                            sink = self.active_file_sinks[client_id]
-                            # Estimate duration based on samples written (if accessible)
-                            # For now, use None and let flush_final_transcript handle timeout
-                            audio_logger.info(f"📁 File sink exists for client {client_id}")
-                        except Exception as e:
-                            audio_logger.warning(f"⚠️ Error accessing file sink: {e}")
-
                 flush_start_time = time.time()
                 audio_logger.info(
                     f"📤 Calling flush_final_transcript for client {client_id} (manager: {manager})"
                 )
                 try:
-                    await manager.process_collected_audio(audio_duration)
+                    await manager.process_collected_audio()
                     flush_duration = time.time() - flush_start_time
                     audio_logger.info(
                         f"✅ ASR flush completed for client {client_id} in {flush_duration:.2f}s"
@@ -907,7 +888,7 @@ class ProcessorManager:
                             task_name,
                             {
                                 "client_id": item.client_id,
-                                "audio_uuid": item.audio_uuid,
+                                "conversation_id": item.conversation_id,
                                 "type": "memory",
                                 "timeout": 3600,  # 60 minutes
                             },
@@ -918,12 +899,12 @@ class ProcessorManager:
                             item.client_id,
                             "memory",
                             actual_task_id,
-                            {"audio_uuid": item.audio_uuid},
+                            {"conversation_id": item.conversation_id},
                         )
 
                     except Exception as e:
                         audio_logger.error(
-                            f"Error queuing memory processing for {item.audio_uuid}: {e}",
+                            f"Error queuing memory processing for {item.conversation_id}: {e}",
                             exc_info=True,
                         )
                     finally:
@@ -1017,7 +998,6 @@ class ProcessorManager:
                 audio_logger.info(f"✅ Memory service initialized for conversation {item.conversation_id}")
 
             # Process memory with timeout
-            audio_logger.info(f"🔥 About to call add_memory() for conversation {item.conversation_id}...")
             memory_result = await asyncio.wait_for(
                 self.memory_service.add_memory(
                     full_conversation,
@@ -1192,6 +1172,7 @@ class ProcessorManager:
                                 item.speech_segments,
                                 item.output_path,
                                 item.audio_uuid,
+                                self.repository,
                             )
                         )
 

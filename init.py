@@ -174,11 +174,6 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
             hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
             if hf_token and hf_token != 'your_huggingface_token_here':
                 cmd.extend(['--hf-token', hf_token])
-            
-            # Pass compute mode from existing config if available
-            compute_mode = read_env_value(speaker_env_path, 'COMPUTE_MODE')
-            if compute_mode and compute_mode in ['cpu', 'gpu']:
-                cmd.extend(['--compute-mode', compute_mode])
         
         # For openmemory-mcp, try to pass OpenAI API key from backend if available
         if service_name == 'openmemory-mcp':

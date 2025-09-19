@@ -5,8 +5,87 @@
 import asyncio
 import logging
 import os
+import time
+
+# Type import to avoid circular imports
+from typing import TYPE_CHECKING, Optional
+
+from wyoming.audio import AudioChunk
+
+if TYPE_CHECKING:
+    from advanced_omi_backend.client import ClientState
+    from advanced_omi_backend.database import AudioChunksRepository
 
 logger = logging.getLogger(__name__)
+
+# Import constants from main.py (these are defined there)
+MIN_SPEECH_SEGMENT_DURATION = float(os.getenv("MIN_SPEECH_SEGMENT_DURATION", "1.0"))  # seconds
+CROPPING_CONTEXT_PADDING = float(os.getenv("CROPPING_CONTEXT_PADDING", "0.1"))  # seconds
+
+
+async def process_audio_chunk(
+    audio_data: bytes,
+    client_id: str,
+    user_id: str,
+    user_email: str,
+    audio_format: dict,
+    client_state: Optional["ClientState"] = None
+) -> None:
+    """Process a single audio chunk through the standard pipeline.
+
+    This function encapsulates the common pattern used across all audio input sources:
+    1. Create AudioChunk with format details
+    2. Queue AudioProcessingItem to processor
+    3. Update client state if provided
+
+    Args:
+        audio_data: Raw audio bytes
+        client_id: Client identifier
+        user_id: User identifier
+        user_email: User email
+        audio_format: Dict containing {rate, width, channels, timestamp}
+        client_state: Optional ClientState for state updates
+    """
+
+    from advanced_omi_backend.processors import (
+        AudioProcessingItem,
+        get_processor_manager,
+    )
+
+    # Extract format details
+    rate = audio_format.get("rate", 16000)
+    width = audio_format.get("width", 2)
+    channels = audio_format.get("channels", 1)
+    timestamp = audio_format.get("timestamp")
+
+    # Use current time if no timestamp provided
+    if timestamp is None:
+        timestamp = int(time.time() * 1000)
+
+    # Create AudioChunk with format details
+    chunk = AudioChunk(
+        audio=audio_data,
+        rate=rate,
+        width=width,
+        channels=channels,
+        timestamp=timestamp
+    )
+
+    # Create AudioProcessingItem and queue for processing
+    processor_manager = get_processor_manager()
+    processing_item = AudioProcessingItem(
+        client_id=client_id,
+        user_id=user_id,
+        user_email=user_email,
+        audio_chunk=chunk,
+        timestamp=timestamp
+    )
+
+    await processor_manager.queue_audio(processing_item)
+
+    # Update client state if provided
+    if client_state is not None:
+        client_state.update_audio_received(chunk)
 
 
 async def _process_audio_cropping_with_relative_timestamps(
@@ -14,6 +93,7 @@ async def _process_audio_cropping_with_relative_timestamps(
     speech_segments: list[tuple[float, float]],
     output_path: str,
     audio_uuid: str,
+    chunk_repo: Optional['AudioChunksRepository'] = None,
 ) -> bool:
     """
     Process audio cropping with automatic relative timestamp conversion.
@@ -79,7 +159,8 @@ async def _process_audio_cropping_with_relative_timestamps(
         if success:
             # Update database with cropped file info (keep original absolute timestamps for reference)
             cropped_filename = output_path.split("/")[-1]
-            await chunk_repo.update_cropped_audio(audio_uuid, cropped_filename, speech_segments)
+            if chunk_repo is not None:
+                await chunk_repo.update_cropped_audio(audio_uuid, cropped_filename, speech_segments)
             logger.info(f"Successfully processed cropped audio: {cropped_filename}")
             return True
         else:
