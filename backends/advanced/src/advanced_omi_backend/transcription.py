@@ -6,19 +6,26 @@ import uuid
 from datetime import UTC, datetime
 from typing import Optional
 
-from wyoming.audio import AudioChunk
-
 from advanced_omi_backend.client_manager import get_client_manager
-from advanced_omi_backend.config import get_speech_detection_settings, get_conversation_stop_settings, load_diarization_settings_from_file
-from advanced_omi_backend.database import conversations_col, ConversationsRepository
+from advanced_omi_backend.config import (
+    get_conversation_stop_settings,
+    get_speech_detection_settings,
+    load_diarization_settings_from_file,
+)
+from advanced_omi_backend.database import ConversationsRepository, conversations_col
 from advanced_omi_backend.llm_client import async_generate
-from advanced_omi_backend.processors import AudioCroppingItem, MemoryProcessingItem, get_processor_manager
+from advanced_omi_backend.processors import (
+    AudioCroppingItem,
+    MemoryProcessingItem,
+    get_processor_manager,
+)
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
     get_transcription_provider,
 )
+from wyoming.audio import AudioChunk
 
 # ASR Configuration
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER")  # Optional: 'deepgram' or 'parakeet'
@@ -151,10 +158,6 @@ class TranscriptionManager:
             return None
         return self.client_manager.get_client(self._client_id)
 
-    # REMOVED: Memory processing is now handled exclusively by conversation closure
-    # to prevent duplicate processing. The _queue_memory_processing method has been
-    # removed as part of the fix for double memory generation issue.
-
     async def connect(self, client_id: str | None = None):
         """Initialize transcription service for the client."""
         self._client_id = client_id
@@ -171,7 +174,7 @@ class TranscriptionManager:
             logger.error(f"Failed to connect to {self.provider.name} transcription service: {e}")
             raise
 
-    async def process_collected_audio(self, audio_duration_seconds: Optional[float] = None):
+    async def process_collected_audio(self):
         """Unified processing for all transcription providers."""
         logger.info(f"🚀 process_collected_audio called for client {self._client_id}")
         logger.info(
@@ -195,7 +198,7 @@ class TranscriptionManager:
 
         # Get transcript from provider
         try:
-            transcript_result = await self._get_transcript(audio_duration_seconds)
+            transcript_result = await self._get_transcript()
             # Process the result uniformly
             await self._process_transcript_result(transcript_result)
         except asyncio.CancelledError:
@@ -213,7 +216,7 @@ class TranscriptionManager:
                 coordinator = get_transcript_coordinator()
                 coordinator.signal_transcript_failed(self._current_audio_uuid, str(e))
 
-    async def _get_transcript(self, audio_duration_seconds: Optional[float] = None):
+    async def _get_transcript(self):
         """Get transcript from any provider using unified interface."""
         if not self.provider:
             logger.error("No transcription provider available")
@@ -281,13 +284,12 @@ class TranscriptionManager:
         try:
             # Store raw transcript data
             provider_name = self.provider.name if self.provider else "unknown"
-            logger.info(f"🔍 DEBUG: transcript_result type={type(transcript_result)}, content preview: {str(transcript_result)[:200]}")
+            logger.info(f"transcript_result type={type(transcript_result)}, content preview: {str(transcript_result)[:200]}")
             if self.chunk_repo:
-                logger.info(f"🔍 DEBUG: About to store raw transcript data for {self._current_audio_uuid}")
                 await self.chunk_repo.store_raw_transcript_data(
                     self._current_audio_uuid, transcript_result, provider_name
                 )
-                logger.info(f"🔍 DEBUG: Successfully stored raw transcript data for {self._current_audio_uuid}")
+                logger.info(f"Successfully stored raw transcript data for {self._current_audio_uuid}")
 
             # Normalize transcript result
             normalized_result = self._normalize_transcript_result(transcript_result)

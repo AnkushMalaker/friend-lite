@@ -25,19 +25,6 @@ from typing import Optional
 
 import aiohttp
 
-# Import Beanie for user management
-from beanie import init_beanie
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-from friend_lite.decoder import OmiOpusDecoder
-from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo.errors import ConnectionFailure, PyMongoError
-from wyoming.audio import AudioChunk
-from wyoming.client import AsyncTcpClient
-
 # Import authentication components
 from advanced_omi_backend.auth import (
     bearer_backend,
@@ -55,16 +42,14 @@ from advanced_omi_backend.constants import (
 )
 from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.llm_client import async_health_check
-from advanced_omi_backend.memory import (
-    get_memory_service,
-    shutdown_memory_service,
-)
+from advanced_omi_backend.memory import get_memory_service, shutdown_memory_service
 from advanced_omi_backend.processors import (
     AudioProcessingItem,
     get_processor_manager,
     init_processor_manager,
 )
-from advanced_omi_backend.task_manager import init_task_manager
+from advanced_omi_backend.audio_utils import process_audio_chunk
+from advanced_omi_backend.task_manager import init_task_manager, get_task_manager
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import (
@@ -73,6 +58,26 @@ from advanced_omi_backend.users import (
     UserUpdate,
     register_client_to_user,
 )
+
+# Import Beanie for user management
+from beanie import init_beanie
+from dotenv import load_dotenv
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from friend_lite.decoder import OmiOpusDecoder
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import ConnectionFailure, PyMongoError
+from wyoming.audio import AudioChunk
+from wyoming.client import AsyncTcpClient
 
 ###############################################################################
 # SETUP
@@ -214,15 +219,14 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
 
 # Initialize repository and global state
 ac_repository = AudioChunksRepository(chunks_col)
-active_clients: dict[str, ClientState] = {}
 
 # Client-to-user mapping for reliable permission checking
 client_to_user_mapping: dict[str, str] = {}  # client_id -> user_id
 
-# Initialize client manager with active_clients reference
-from advanced_omi_backend.client_manager import init_client_manager
+# Initialize client manager (self-initializing, no external dict needed)
+from advanced_omi_backend.client_manager import get_client_manager
 
-init_client_manager(active_clients)
+client_manager = get_client_manager()
 
 # Initialize client utilities with the mapping dictionaries
 from advanced_omi_backend.client_manager import (
@@ -247,11 +251,10 @@ async def create_client_state(
     client_id: str, user: User, device_name: Optional[str] = None
 ) -> ClientState:
     """Create and register a new client state."""
-    client_state = ClientState(client_id, ac_repository, CHUNK_DIR, user.user_id, user.email)
-    active_clients[client_id] = client_state
-
-    # Register client-user mapping (for active clients)
-    register_client_user_mapping(client_id, user.user_id)
+    # Use ClientManager for atomic client creation and registration
+    client_state = client_manager.create_client(
+        client_id, ac_repository, CHUNK_DIR, user.user_id, user.email
+    )
 
     # Also track in persistent mapping (for database queries)
     track_client_user_relationship(client_id, user.user_id)
@@ -266,17 +269,17 @@ async def create_client_state(
 
 async def cleanup_client_state(client_id: str):
     """Clean up and remove client state."""
-    if client_id in active_clients:
-        client_state = active_clients[client_id]
-        await client_state.disconnect()
-        del active_clients[client_id]
+    # Use ClientManager for atomic client removal with cleanup
+    removed = await client_manager.remove_client_with_cleanup(client_id)
 
-    # Clean up any orphaned transcript events for this client
-    coordinator = get_transcript_coordinator()
-    coordinator.cleanup_transcript_events_for_client(client_id)
+    if removed:
+        # Clean up any orphaned transcript events for this client
+        coordinator = get_transcript_coordinator()
+        coordinator.cleanup_transcript_events_for_client(client_id)
 
-    # Unregister client-user mapping
-    unregister_client_user_mapping(client_id)
+        logger.info(f"Client {client_id} cleaned up successfully")
+    else:
+        logger.warning(f"Client {client_id} was not found for cleanup")
 
 
 ###############################################################################
@@ -316,17 +319,8 @@ async def lifespan(app: FastAPI):
     # Initialize processor manager
     processor_manager = init_processor_manager(CHUNK_DIR, ac_repository)
     await processor_manager.start()
-    application_logger.info("Application-level processors started")
 
-    # Skip memory service pre-initialization to avoid blocking FastAPI startup
-    # Memory service will be lazily initialized when first used
-    application_logger.info("Memory service will be initialized on first use (lazy loading)")
-
-    # SystemTracker is used for monitoring and debugging
-    application_logger.info("Using SystemTracker for monitoring and debugging")
-
-    application_logger.info("Application ready - using application-level processing architecture.")
-
+    logger.info("App ready")
     try:
         yield
     finally:
@@ -334,7 +328,7 @@ async def lifespan(app: FastAPI):
         application_logger.info("Shutting down application...")
 
         # Clean up all active clients
-        for client_id in list(active_clients.keys()):
+        for client_id in client_manager.get_all_client_ids():
             await cleanup_client_state(client_id)
 
         # Shutdown processor manager
@@ -343,9 +337,9 @@ async def lifespan(app: FastAPI):
         application_logger.info("Processor manager shut down")
 
         # Shutdown task manager
-        # task_manager = get_task_manager()
-        # await task_manager.shutdown()
-        # application_logger.info("Task manager shut down")
+        task_manager = get_task_manager()
+        await task_manager.shutdown()
+        application_logger.info("Task manager shut down")
 
         # Stop metrics collection and save final report
         application_logger.info("Metrics collection stopped")
@@ -585,31 +579,26 @@ async def ws_endpoint_omi(
                     audio_data = header.get("data", {})
                     chunk_timestamp = audio_data.get("timestamp", int(time.time()))
 
-                    chunk = AudioChunk(
-                        audio=pcm_data,
-                        rate=OMI_SAMPLE_RATE,
-                        width=OMI_SAMPLE_WIDTH,
-                        channels=OMI_CHANNELS,
-                        timestamp=chunk_timestamp,
-                    )
-
                     # Queue to application-level processor
                     if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
                         application_logger.info(
                             f"🚀 About to queue audio chunk #{packet_count} for client {client_id}"
                         )
-                    await processor_manager.queue_audio(
-                        AudioProcessingItem(
-                            client_id=client_id,
-                            user_id=user.user_id,
-                            user_email=user.email,
-                            audio_chunk=chunk,
-                            timestamp=chunk.timestamp,
-                        )
-                    )
 
-                    # Update client state for tracking purposes
-                    client_state.update_audio_received(chunk)
+                    # Process audio chunk through unified pipeline
+                    await process_audio_chunk(
+                        audio_data=pcm_data,
+                        client_id=client_id,
+                        user_id=user.user_id,
+                        user_email=user.email,
+                        audio_format={
+                            "rate": OMI_SAMPLE_RATE,
+                            "width": OMI_SAMPLE_WIDTH,
+                            "channels": OMI_CHANNELS,
+                            "timestamp": chunk_timestamp,
+                        },
+                        client_state=client_state,
+                    )
 
                     # Log every 1000th packet to avoid spam
                     if packet_count % 1000 == 0:
@@ -829,25 +818,15 @@ async def ws_endpoint_pcm(
                                             
                                             application_logger.debug(f"🎵 Received audio chunk #{packet_count}: {len(audio_data)} bytes")
                                             
-                                            # Process audio chunk
+                                            # Process audio chunk through unified pipeline
                                             audio_format = control_header.get("data", {})
-                                            chunk = AudioChunk(
-                                                audio=audio_data,
-                                                rate=audio_format.get("rate", 16000),
-                                                width=audio_format.get("width", 2),
-                                                channels=audio_format.get("channels", 1),
-                                                timestamp=audio_format.get("timestamp", int(time.time())),
-                                            )
-                                            
-                                            # Send to audio processing pipeline
-                                            await processor_manager.queue_audio(
-                                                AudioProcessingItem(
-                                                    client_id=client_id,
-                                                    user_id=user.user_id,
-                                                    user_email=user.email,
-                                                    audio_chunk=chunk,
-                                                    timestamp=chunk.timestamp,
-                                                )
+                                            await process_audio_chunk(
+                                                audio_data=audio_data,
+                                                client_id=client_id,
+                                                user_id=user.user_id,
+                                                user_email=user.email,
+                                                audio_format=audio_format,
+                                                client_state=None,  # No client state update needed for Wyoming protocol
                                             )
                                         else:
                                             application_logger.warning(f"Expected binary payload for audio-chunk, got: {payload_msg.keys()}")
@@ -870,24 +849,19 @@ async def ws_endpoint_pcm(
                             
                             application_logger.debug(f"🎵 Received raw audio chunk #{packet_count}: {len(audio_data)} bytes")
                             
-                            # Process raw audio chunk (assume PCM 16kHz mono)
-                            chunk = AudioChunk(
-                                audio=audio_data,
-                                rate=16000,
-                                width=2,
-                                channels=1,
-                                timestamp=int(time.time()),
-                            )
-                            
-                            # Send to audio processing pipeline  
-                            await processor_manager.queue_audio(
-                                AudioProcessingItem(
-                                    client_id=client_id,
-                                    user_id=user.user_id,
-                                    user_email=user.email,
-                                    audio_chunk=chunk,
-                                    timestamp=chunk.timestamp,
-                                )
+                            # Process raw audio chunk through unified pipeline (assume PCM 16kHz mono)
+                            await process_audio_chunk(
+                                audio_data=audio_data,
+                                client_id=client_id,
+                                user_id=user.user_id,
+                                user_email=user.email,
+                                audio_format={
+                                    "rate": 16000,
+                                    "width": 2,
+                                    "channels": 1,
+                                    "timestamp": int(time.time()),
+                                },
+                                client_state=None,  # No client state update needed for raw streaming
                             )
                         
                         else:
@@ -996,7 +970,7 @@ async def health_check():
                 transcription_provider.mode if transcription_provider else "none"
             ),
             "chunk_dir": str(CHUNK_DIR),
-            "active_clients": len(active_clients),
+            "active_clients": client_manager.get_client_count(),
             "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
             "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
             "llm_provider": os.getenv("LLM_PROVIDER"),

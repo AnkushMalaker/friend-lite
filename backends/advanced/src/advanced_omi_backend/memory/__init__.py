@@ -37,7 +37,6 @@ try:
     # Also import core implementation for direct access
     from .memory_service import MemoryService as CoreMemoryService
     test_new_memory_service = None  # Will be implemented if needed
-    memory_logger.info("✅ Successfully imported new memory service")
 except ImportError as e:
     memory_logger.error(f"Failed to import new memory service: {e}")
     raise

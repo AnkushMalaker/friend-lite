@@ -76,14 +76,9 @@ def get_memory_service() -> MemoryServiceBase:
             # Create appropriate service implementation
             _memory_service = create_memory_service(config)
             
-            # Initialize in background if possible
-            try:
-                loop = asyncio.get_event_loop()
-                if hasattr(_memory_service, '_initialized') and not _memory_service._initialized:
-                    loop.create_task(_memory_service.initialize())
-            except RuntimeError:
-                # No event loop running, will initialize on first use
-                pass
+            # Don't initialize here - let it happen lazily on first use
+            # This prevents orphaned tasks that cause "Task was destroyed but it is pending" errors
+            memory_logger.debug(f"Memory service created but not initialized: {type(_memory_service).__name__}")
                 
             memory_logger.info(f"✅ Global memory service created: {type(_memory_service).__name__}")
             
@@ -134,8 +129,9 @@ def get_service_info() -> dict:
     
     if _memory_service is not None:
         info["service_type"] = type(_memory_service).__name__
-        info["service_initialized"] = getattr(_memory_service, "_initialized", False)
-        
+        # All memory services should have _initialized attribute per the base class
+        info["service_initialized"] = _memory_service._initialized
+
         # Try to determine provider from service type
         if "OpenMemoryMCP" in info["service_type"]:
             info["memory_provider"] = "openmemory_mcp"
