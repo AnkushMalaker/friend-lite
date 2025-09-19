@@ -176,11 +176,13 @@ class MemoryService(MemoryServiceBase):
             created_ids: List[str] = []
 
             # If allow_update, try LLM-driven action proposal
+            update_processing_successful = False
             if allow_update and fact_memories_text:
                 memory_logger.info(f"🔍 Allowing update for {source_id}")
                 created_ids = await self._process_memory_updates(
                     fact_memories_text, embeddings, user_id, client_id, source_id, user_email
                 )
+                update_processing_successful = True
             else:
                 memory_logger.info(f"🔍 Not allowing update for {source_id}")
                 # Add all extracted memories normally
@@ -197,9 +199,15 @@ class MemoryService(MemoryServiceBase):
             if created_ids and db_helper:
                 await self._update_database_relationships(db_helper, source_id, created_ids)
 
+            # Success conditions:
+            # 1. Normal path: created_ids > 0 (memories were added/updated)
+            # 2. Update path: LLM successfully processed actions (even if all NONE)
             if created_ids:
                 memory_logger.info(f"✅ Upserted {len(created_ids)} memories for {source_id}")
                 return True, created_ids
+            elif update_processing_successful:
+                memory_logger.info(f"✅ Memory update processing completed for {source_id} - LLM decided no changes needed")
+                return True, []
 
             error_msg = f"❌ No memories created for {source_id}: memory_entries={len(memory_entries) if memory_entries else 0}, allow_update={allow_update}"
             memory_logger.error(error_msg)

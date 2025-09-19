@@ -122,7 +122,7 @@ npm run web
 ```bash
 # ASR Services
 cd extras/asr-services
-docker compose up parakeet   # Offline ASR with Parakeet
+docker compose up parakeet-asr   # Offline ASR with Parakeet
 
 # Speaker Recognition (with tests)
 cd extras/speaker-recognition
@@ -135,13 +135,6 @@ docker compose up --build
 ```
 
 ## Architecture Overview
-
-### Core Structure
-- **backends/advanced-backend/**: Primary FastAPI backend with real-time audio processing
-  - `src/main.py`: Central FastAPI application with WebSocket audio streaming
-  - `src/auth.py`: Email-based authentication with JWT tokens
-  - `src/memory/`: LLM-powered conversation memory system using mem0
-  - `webui/`: React-based web dashboard for conversation and user management
 
 ### Key Components
 - **Audio Pipeline**: Real-time Opus/PCM → Application-level processing → Deepgram/Mistral transcription → memory extraction
@@ -1213,12 +1206,6 @@ curl http://[gpu-machine-ip]:8085/health     # Speaker recognition
 - Monitor service access logs for unauthorized requests
 
 ### Troubleshooting Distributed Setup
-
-**Common Issues:**
-- **CORS errors**: Tailscale IPs are automatically supported, but verify CORS_ORIGINS if using custom IPs
-- **Service discovery**: Use `tailscale ip` to find machine IPs
-- **Port conflicts**: Ensure services use different ports on shared machines
-- **Authentication**: Services must be accessible without authentication for inter-service communication
 
 **Debugging Commands:**
 ```bash

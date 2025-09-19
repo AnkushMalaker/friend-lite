@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, RefreshCw, CheckCircle, XCircle, AlertCircle, Activity, Users, Database, Server, Volume2, Mic } from 'lucide-react'
+import { Settings, RefreshCw, CheckCircle, XCircle, AlertCircle, Activity, Users, Database, Volume2, Mic } from 'lucide-react'
 import { systemApi, speakerApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import MemorySettings from '../components/MemorySettings'
@@ -21,20 +21,6 @@ interface MetricsData {
   }
 }
 
-interface ProcessorStatus {
-  audio_queue_size: number
-  transcription_queue_size: number
-  memory_queue_size: number
-  active_tasks: number
-}
-
-interface ActiveClient {
-  id: string
-  user_id: string
-  connected_at: string
-  last_activity: string
-}
-
 interface DiarizationSettings {
   diarization_source: 'deepgram' | 'pyannote'
   similarity_threshold: number
@@ -49,8 +35,6 @@ export default function System() {
   const [healthData, setHealthData] = useState<HealthData | null>(null)
   const [readinessData, setReadinessData] = useState<any>(null)
   const [metricsData, setMetricsData] = useState<MetricsData | null>(null)
-  const [processorStatus, setProcessorStatus] = useState<ProcessorStatus | null>(null)
-  const [activeClients, setActiveClients] = useState<ActiveClient[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -74,12 +58,10 @@ export default function System() {
       setLoading(true)
       setError(null)
 
-      const [health, readiness, metrics, processor, clients] = await Promise.allSettled([
+      const [health, readiness, metrics] = await Promise.allSettled([
         systemApi.getHealth(),
         systemApi.getReadiness(),
         systemApi.getMetrics().catch(() => ({ data: null })), // Optional endpoint
-        systemApi.getProcessorStatus().catch(() => ({ data: null })), // Optional endpoint
-        systemApi.getActiveClients().catch(() => ({ data: [] })), // Optional endpoint
       ])
 
       if (health.status === 'fulfilled') {
@@ -90,12 +72,6 @@ export default function System() {
       }
       if (metrics.status === 'fulfilled' && metrics.value.data) {
         setMetricsData(metrics.value.data)
-      }
-      if (processor.status === 'fulfilled' && processor.value.data) {
-        setProcessorStatus(processor.value.data)
-      }
-      if (clients.status === 'fulfilled' && clients.value.data) {
-        setActiveClients(clients.value.data)
       }
 
       setLastUpdated(new Date())
@@ -168,9 +144,6 @@ export default function System() {
     return displayNames[service] || service.replace('_', ' ').toUpperCase()
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString()
-  }
 
   if (!isAdmin) {
     return (
@@ -282,41 +255,6 @@ export default function System() {
           </div>
         )}
 
-        {/* Processor Status */}
-        {processorStatus && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
-              <Server className="h-5 w-5 mr-2 text-blue-600" />
-              Processor Status
-            </h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">Audio Queue</div>
-                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                  {processorStatus.audio_queue_size}
-                </div>
-              </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">Transcription Queue</div>
-                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                  {processorStatus.transcription_queue_size}
-                </div>
-              </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">Memory Queue</div>
-                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                  {processorStatus.memory_queue_size}
-                </div>
-              </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">Active Tasks</div>
-                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                  {processorStatus.active_tasks}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Diarization Settings */}
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
@@ -538,39 +476,6 @@ export default function System() {
         {/* Speaker Configuration */}
         <SpeakerConfiguration />
 
-        {/* Active Clients */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
-            <Users className="h-5 w-5 mr-2 text-blue-600" />
-            Active Clients ({activeClients.length})
-          </h3>
-          {activeClients.length > 0 ? (
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {activeClients.map((client) => (
-                <div key={client.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-md">
-                  <div>
-                    <div className="font-medium text-gray-900 dark:text-gray-100">{client.id}</div>
-                    <div className="text-sm text-gray-600 dark:text-gray-400">
-                      User: {client.user_id}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-gray-600 dark:text-gray-400">
-                      Connected: {formatDate(client.connected_at)}
-                    </div>
-                    <div className="text-sm text-gray-600 dark:text-gray-400">
-                      Last: {formatDate(client.last_activity)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500 dark:text-gray-400 text-center py-4">
-              No active clients
-            </p>
-          )}
-        </div>
 
         {/* Debug Metrics */}
         {metricsData?.debug_tracker && (

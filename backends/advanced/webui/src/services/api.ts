@@ -131,10 +131,17 @@ export const systemApi = {
       headers: { 'Content-Type': 'text/plain' }
     }),
   reloadMemoryConfig: () => api.post('/api/admin/memory/config/reload'),
+
+  // Processing overview and detailed monitoring
+  getProcessorOverview: () => api.get('/api/processor/overview'),
+  getProcessorHistory: (page = 1, perPage = 50) =>
+    api.get('/api/processor/history', { params: { page, per_page: perPage } }),
+  getClientProcessingDetail: (clientId: string) =>
+    api.get(`/api/processor/clients/${clientId}`),
 }
 
 export const uploadApi = {
-  uploadAudioFiles: (files: FormData, onProgress?: (progress: number) => void) => 
+  uploadAudioFiles: (files: FormData, onProgress?: (progress: number) => void) =>
     api.post('/api/process-audio-files', files, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 300000, // 5 minutes
@@ -145,6 +152,27 @@ export const uploadApi = {
         }
       }
     }),
+
+  // Async upload using existing infrastructure - returns job IDs for monitoring
+  uploadAudioFilesAsync: (files: FormData, onUploadProgress?: (progress: number) => void) =>
+    api.post('/api/process-audio-files-async', files, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000, // 5 minutes for upload phase
+      onUploadProgress: (progressEvent) => {
+        if (onUploadProgress && progressEvent.total) {
+          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+          onUploadProgress(progress)
+        }
+      }
+    }),
+
+  // Get job status for a specific job
+  getJobStatus: (jobId: string) =>
+    api.get(`/api/process-audio-files/jobs/${jobId}`),
+
+  // Get status for multiple jobs
+  getJobStatuses: (jobIds: string[]) =>
+    Promise.all(jobIds.map(jobId => uploadApi.getJobStatus(jobId)))
 }
 
 export const chatApi = {
@@ -199,3 +227,5 @@ export const speakerApi = {
   // Check speaker service status (admin only)
   getSpeakerServiceStatus: () => api.get('/api/speaker-service-status'),
 }
+
+// Upload session API removed - functionality replaced by unified processor tasks polling

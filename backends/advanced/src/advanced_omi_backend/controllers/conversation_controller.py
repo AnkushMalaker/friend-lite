@@ -5,12 +5,14 @@ Conversation controller for handling conversation-related business logic.
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional
 
 from advanced_omi_backend.audio_utils import (
     _process_audio_cropping_with_relative_timestamps,
+    load_audio_file_as_chunk,
 )
 from advanced_omi_backend.client_manager import (
     ClientManager,
@@ -18,7 +20,8 @@ from advanced_omi_backend.client_manager import (
     get_user_clients_all,
 )
 from advanced_omi_backend.database import AudioChunksRepository, ProcessingRunsRepository, chunks_col, processing_runs_col, conversations_col, ConversationsRepository
-from advanced_omi_backend.users import User
+from advanced_omi_backend.processors import get_processor_manager, TranscriptionItem, MemoryProcessingItem
+from advanced_omi_backend.users import User, get_user_by_id
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -585,9 +588,10 @@ async def reprocess_transcript(conversation_id: str, user: User):
             )
 
         # Generate configuration hash for duplicate detection
+        transcription_provider = os.getenv("TRANSCRIPTION_PROVIDER", "deepgram")
         config_data = {
             "audio_path": str(full_audio_path),
-            "transcription_provider": "deepgram",  # This would come from settings
+            "transcription_provider": transcription_provider,
             "trigger": "manual_reprocess"
         }
         config_hash = hashlib.sha256(str(config_data).encode()).hexdigest()[:16]
@@ -613,18 +617,37 @@ async def reprocess_transcript(conversation_id: str, user: User):
                 status_code=500, content={"error": "Failed to create transcript version"}
             )
 
-        # TODO: Queue audio for reprocessing with ProcessorManager
-        # This is where we would integrate with the existing processor
-        # For now, we'll return the version ID for the caller to handle
+        # NEW: Load audio file and queue for transcription processing
+        try:
+            # Load audio file as AudioChunk
+            audio_chunk = await load_audio_file_as_chunk(full_audio_path)
 
-        logger.info(f"Created transcript reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
+            # Create TranscriptionItem for reprocessing
+            transcription_item = TranscriptionItem(
+                client_id=f"reprocess-{conversation_id}",
+                user_id=str(user.user_id),
+                audio_uuid=audio_uuid,
+                audio_chunk=audio_chunk
+            )
+
+            # Queue for transcription processing
+            processor_manager = get_processor_manager()
+            await processor_manager.queue_transcription(transcription_item)
+
+            logger.info(f"Queued transcript reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
+
+        except Exception as e:
+            logger.error(f"Error queuing transcript reprocessing: {e}")
+            return JSONResponse(
+                status_code=500, content={"error": f"Failed to queue reprocessing: {str(e)}"}
+            )
 
         return JSONResponse(content={
             "message": f"Transcript reprocessing started for conversation {conversation_id}",
             "run_id": run_id,
             "version_id": version_id,
             "config_hash": config_hash,
-            "status": "PENDING"
+            "status": "QUEUED"
         })
 
     except Exception as e:
@@ -673,9 +696,10 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
             )
 
         # Generate configuration hash for duplicate detection
+        memory_provider = os.getenv("MEMORY_PROVIDER", "friend_lite")
         config_data = {
             "transcript_version_id": transcript_version_id,
-            "memory_provider": "friend_lite",  # This would come from settings
+            "memory_provider": memory_provider,
             "trigger": "manual_reprocess"
         }
         config_hash = hashlib.sha256(str(config_data).encode()).hexdigest()[:16]
@@ -702,10 +726,34 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
                 status_code=500, content={"error": "Failed to create memory version"}
             )
 
-        # TODO: Queue memory extraction for processing
-        # This is where we would integrate with the existing memory processor
+        # NEW: Queue memory processing
+        try:
+            # Get user email for memory processing
+            user_obj = await get_user_by_id(str(user.user_id))
+            if not user_obj:
+                return JSONResponse(
+                    status_code=500, content={"error": "User not found for memory processing"}
+                )
 
-        logger.info(f"Created memory reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
+            # Create MemoryProcessingItem for reprocessing
+            memory_item = MemoryProcessingItem(
+                client_id=f"reprocess-{conversation_id}",
+                user_id=str(user.user_id),
+                user_email=user_obj.email,
+                conversation_id=conversation_id
+            )
+
+            # Queue for memory processing
+            processor_manager = get_processor_manager()
+            await processor_manager.queue_memory(memory_item)
+
+            logger.info(f"Queued memory reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
+
+        except Exception as e:
+            logger.error(f"Error queuing memory reprocessing: {e}")
+            return JSONResponse(
+                status_code=500, content={"error": f"Failed to queue memory reprocessing: {str(e)}"}
+            )
 
         return JSONResponse(content={
             "message": f"Memory reprocessing started for conversation {conversation_id}",
@@ -713,7 +761,7 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
             "version_id": version_id,
             "transcript_version_id": transcript_version_id,
             "config_hash": config_hash,
-            "status": "PENDING"
+            "status": "QUEUED"
         })
 
     except Exception as e:

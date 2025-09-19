@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { Upload as UploadIcon, File, X, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react'
-import { uploadApi } from '../services/api'
+import { uploadApi, systemApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 interface UploadFile {
@@ -10,11 +10,62 @@ interface UploadFile {
   error?: string
 }
 
+// Legacy JobStatus interface - kept for backward compatibility
+interface JobStatus {
+  job_id: string
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  total_files: number
+  processed_files: number
+  current_file?: string
+  progress_percent: number
+  files?: Array<{
+    filename: string
+    client_id: string
+    status: 'pending' | 'processing' | 'completed' | 'failed'
+    transcription_status?: string
+    memory_status?: string
+    error_message?: string
+  }>
+}
+
+// New unified processing interfaces
+interface ProcessingTask {
+  client_id: string
+  user_id: string
+  status: 'processing' | 'complete'
+  stages: Record<string, {
+    status?: string
+    completed?: boolean
+    error?: string
+    metadata?: any
+    timestamp?: number
+  }>
+}
+
+// UploadSessionData interface removed - replaced by unified processor tasks polling
+
+interface UploadSession {
+  job_id: string
+  file_names: string[]
+  started_at: number
+  upload_completed: boolean
+  total_files: number
+}
+
 export default function Upload() {
   const [files, setFiles] = useState<UploadFile[]>([])
-  const [isUploading, setIsUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
+
+  // Three-phase state management
+  const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'completed'>('idle')
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [processingPhase, setProcessingPhase] = useState<'idle' | 'starting' | 'active' | 'completed'>('idle')
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
+
+  // Polling configuration
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [refreshInterval, setRefreshInterval] = useState(2000) // 2s default for upload page
+  const [isPolling, setIsPolling] = useState(false)
 
   const { isAdmin } = useAuth()
 
@@ -61,10 +112,145 @@ export default function Upload() {
     handleFileSelect(e.dataTransfer.files)
   }, [])
 
+  // localStorage persistence
+  const saveSession = (session: UploadSession) => {
+    localStorage.setItem('upload_session', JSON.stringify(session))
+  }
+
+  const getStoredSession = (): UploadSession | null => {
+    const saved = localStorage.getItem('upload_session')
+    return saved ? JSON.parse(saved) : null
+  }
+
+  const clearStoredSession = () => {
+    localStorage.removeItem('upload_session')
+  }
+
+  // Resume session on page load
+  useEffect(() => {
+    const session = getStoredSession()
+    if (session) {
+      setProcessingPhase('active')
+      setIsPolling(true)
+      // Use unified polling without session dependency
+      pollProcessingStatus()
+    }
+  }, [])
+
+  // Polling effect
+  useEffect(() => {
+    if (!autoRefresh || !isPolling) return
+
+    const interval = setInterval(() => {
+      pollProcessingStatus()
+    }, refreshInterval)
+
+    return () => clearInterval(interval)
+  }, [autoRefresh, refreshInterval, isPolling])
+
+  // New unified polling approach - polls processor tasks directly without session dependency
+  const pollProcessingStatus = async () => {
+    try {
+      // Get all processor tasks
+      const tasksResponse = await systemApi.getProcessorTasks()
+      const allTasks = tasksResponse.data
+
+      // Filter for upload clients (identified by client_id pattern ending with 3-digit numbers like "-001", "-002")
+      const uploadTasks: ProcessingTask[] = Object.entries(allTasks)
+        .filter(([clientId]) => {
+          // Upload clients have pattern like: "abc123-upload-001", "abc123-upload-002"
+          return /.*-upload-\d{3}$/.test(clientId)
+        })
+        .map(([clientId, taskData]: [string, any]) => ({
+          client_id: clientId,
+          user_id: taskData?.user_id || 'Unknown',
+          status: taskData?.status || 'processing',
+          stages: taskData?.stages || {}
+        }))
+        .filter(task => Object.keys(task.stages).length > 0) // Only show clients with active processing
+
+
+      // Check if all clients are complete OR no upload tasks exist (meaning processing finished)
+      const allComplete = uploadTasks.length > 0 && uploadTasks.every(task => task.status === 'complete')
+      const noActiveTasks = uploadTasks.length === 0 && processingPhase === 'active'
+
+      if (allComplete || noActiveTasks) {
+        setIsPolling(false)
+        setProcessingPhase('completed')
+        clearStoredSession()
+
+        setFiles(prevFiles =>
+          prevFiles.map(f => ({
+            ...f,
+            status: 'success'
+          }))
+        )
+      } else if (uploadTasks.some(task => Object.values(task.stages).some(stage => stage.error))) {
+        // Check for any errors in processing stages
+        const hasErrors = uploadTasks.some(task =>
+          Object.values(task.stages).some(stage => stage.error)
+        )
+
+        if (hasErrors) {
+          setFiles(prevFiles =>
+            prevFiles.map(f => ({
+              ...f,
+              status: 'error',
+              error: 'Processing failed'
+            }))
+          )
+        }
+      }
+    } catch (error) {
+      console.error('Failed to poll processing status:', error)
+    }
+  }
+
+  // Legacy job polling for backward compatibility
+  const pollJobStatus = async (jobId: string) => {
+    try {
+      // Use new unified polling (no session dependency)
+      await pollProcessingStatus()
+
+      // Also get legacy job status for progress display (if available)
+      try {
+        const response = await uploadApi.getJobStatus(jobId)
+        const status: JobStatus = response.data
+        setJobStatus(status)
+      } catch (jobError) {
+        console.log('Legacy job status not available, using unified polling only')
+      }
+    } catch (error) {
+      console.error('Failed to poll unified processing status:', error)
+      // Fallback to legacy job polling
+      try {
+        const response = await uploadApi.getJobStatus(jobId)
+        const status: JobStatus = response.data
+        setJobStatus(status)
+
+        if (status.status === 'completed' || status.status === 'failed') {
+          setIsPolling(false)
+          setProcessingPhase('completed')
+          clearStoredSession()
+
+          setFiles(prevFiles =>
+            prevFiles.map(f => ({
+              ...f,
+              status: status.status === 'completed' ? 'success' : 'error'
+            }))
+          )
+        }
+      } catch (fallbackError) {
+        console.error('All polling methods failed:', fallbackError)
+      }
+    }
+  }
+
   const uploadFiles = async () => {
     if (files.length === 0) return
 
-    setIsUploading(true)
+    // Phase 1: File Upload
+    setUploadPhase('uploading')
     setUploadProgress(0)
 
     try {
@@ -74,38 +260,66 @@ export default function Upload() {
       })
 
       // Update all files to uploading status
-      setFiles(prevFiles => 
+      setFiles(prevFiles =>
         prevFiles.map(f => ({ ...f, status: 'uploading' as const }))
       )
 
-      await uploadApi.uploadAudioFiles(formData, (progress) => {
+      // Phase 1: Upload files and get job ID
+      const response = await uploadApi.uploadAudioFilesAsync(formData, (progress) => {
         setUploadProgress(progress)
       })
-      
-      // Mark all files as successful
-      setFiles(prevFiles => 
-        prevFiles.map(f => ({ ...f, status: 'success' as const }))
-      )
+
+      // Phase 2: Job Creation
+      setUploadPhase('completed')
+      setProcessingPhase('starting')
+
+      const jobData = response.data
+      const jobId = jobData.job_id || jobData.jobs?.[0]?.job_id
+
+      if (!jobId) {
+        throw new Error('No job ID received from server')
+      }
+
+      // Save session for disconnection handling
+      const session: UploadSession = {
+        job_id: jobId,
+        file_names: files.map(f => f.file.name),
+        started_at: Date.now(),
+        upload_completed: true,
+        total_files: files.length
+      }
+      saveSession(session)
+
+      // Phase 3: Start polling for processing status
+      setProcessingPhase('active')
+      setIsPolling(true)
+      pollJobStatus(jobId)
 
     } catch (error: any) {
       console.error('Upload failed:', error)
-      
+
+      setUploadPhase('idle')
+      setProcessingPhase('idle')
+
       // Mark all files as failed
-      setFiles(prevFiles => 
-        prevFiles.map(f => ({ 
-          ...f, 
-          status: 'error' as const, 
-          error: error.message || 'Upload failed' 
+      setFiles(prevFiles =>
+        prevFiles.map(f => ({
+          ...f,
+          status: 'error' as const,
+          error: error.message || 'Upload failed'
         }))
       )
-    } finally {
-      setIsUploading(false)
-      setUploadProgress(100)
     }
   }
 
   const clearCompleted = () => {
     setFiles(files.filter(f => f.status === 'pending' || f.status === 'uploading'))
+    if (processingPhase === 'completed') {
+      setProcessingPhase('idle')
+      setUploadPhase('idle')
+      setJobStatus(null)
+      clearStoredSession()
+    }
   }
 
   const formatFileSize = (bytes: number) => {
@@ -205,10 +419,13 @@ export default function Upload() {
               </button>
               <button
                 onClick={uploadFiles}
-                disabled={isUploading || files.every(f => f.status !== 'pending')}
+                disabled={uploadPhase !== 'idle' || processingPhase !== 'idle' || files.every(f => f.status !== 'pending')}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isUploading ? 'Uploading...' : 'Upload All'}
+                {uploadPhase === 'uploading' ? 'Uploading...' :
+                 processingPhase === 'starting' ? 'Starting...' :
+                 processingPhase === 'active' ? 'Processing...' :
+                 'Upload All'}
               </button>
             </div>
           </div>
@@ -261,12 +478,12 @@ export default function Upload() {
         </div>
       )}
 
-      {/* Upload Progress */}
-      {isUploading && (
+      {/* Phase 1: Upload Progress */}
+      {uploadPhase === 'uploading' && (
         <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
-              Processing audio files...
+              Uploading files... ({files.length} files)
             </span>
             <span className="text-sm text-blue-600 dark:text-blue-400">
               {uploadProgress}%
@@ -278,9 +495,124 @@ export default function Upload() {
               style={{ width: `${uploadProgress}%` }}
             />
           </div>
-          <p className="text-xs text-blue-600 dark:text-blue-400 mt-2">
-            Note: Processing may take up to 5 minutes depending on file size and quantity.
-          </p>
+        </div>
+      )}
+
+      {/* Phase 2: Job Creation */}
+      {processingPhase === 'starting' && (
+        <div className="mt-6 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-green-700 dark:text-green-300">
+              Files uploaded. Starting processing jobs...
+            </span>
+            <RefreshCw className="h-4 w-4 text-green-600 animate-spin" />
+          </div>
+        </div>
+      )}
+
+      {/* Phase 3: Processing Status with Configurable Refresh */}
+      {processingPhase === 'active' && jobStatus && (
+        <div className="mt-6 space-y-4">
+          {/* Refresh Controls */}
+          <div className="flex items-center justify-between p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+            <div className="flex items-center space-x-4">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">Auto-refresh</span>
+              </label>
+
+              <select
+                value={refreshInterval}
+                onChange={(e) => setRefreshInterval(Number(e.target.value))}
+                disabled={!autoRefresh}
+                className="text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+              >
+                <option value={500}>0.5s</option>
+                <option value={1000}>1s</option>
+                <option value={2000}>2s</option>
+                <option value={5000}>5s</option>
+                <option value={10000}>10s</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => pollProcessingStatus()}
+              className="flex items-center space-x-1 px-3 py-1 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
+            >
+              <RefreshCw className="h-4 w-4" />
+              <span>Refresh Now</span>
+            </button>
+          </div>
+
+          {/* Processing Status */}
+          <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-purple-700 dark:text-purple-300">
+                Processing file {jobStatus.processed_files + 1}/{jobStatus.total_files}
+                {jobStatus.current_file && `: ${jobStatus.current_file}`}
+              </span>
+              <span className="text-sm text-purple-600 dark:text-purple-400">
+                {Math.round(jobStatus.progress_percent)}%
+              </span>
+            </div>
+
+            <div className="w-full bg-purple-200 dark:bg-purple-800 rounded-full h-2 mb-2">
+              <div
+                className="bg-purple-600 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${jobStatus.progress_percent}%` }}
+              />
+            </div>
+
+            <p className="text-xs text-purple-600 dark:text-purple-400 mt-2">
+              Processing may take up to 3x audio duration + 60s. Status updates every {refreshInterval/1000}s.
+            </p>
+          </div>
+
+          {/* Per-File Status */}
+          {jobStatus.files && jobStatus.files.length > 0 && (
+            <div className="p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+              <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">File Processing Status</h4>
+              <div className="space-y-2">
+                {jobStatus.files.map((file, index) => (
+                  <div key={index} className="flex items-center justify-between">
+                    <span className="text-sm text-gray-700 dark:text-gray-300 truncate">
+                      {file.filename}
+                    </span>
+                    <div className="flex items-center space-x-2">
+                      <span className={`text-xs px-2 py-1 rounded-full ${
+                        file.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' :
+                        file.status === 'processing' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300' :
+                        file.status === 'failed' ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' :
+                        'bg-gray-100 text-gray-800 dark:bg-gray-900/40 dark:text-gray-300'
+                      }`}>
+                        {file.status.charAt(0).toUpperCase() + file.status.slice(1)}
+                      </span>
+                      {file.status === 'processing' && (
+                        <RefreshCw className="h-3 w-3 text-blue-500 animate-spin" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Completion Status */}
+      {processingPhase === 'completed' && (
+        <div className="mt-6 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+          <div className="flex items-center space-x-2">
+            <CheckCircle className="h-5 w-5 text-green-600" />
+            <span className="text-sm font-medium text-green-700 dark:text-green-300">
+              All files processed successfully! Check the Conversations tab to see results.
+            </span>
+          </div>
         </div>
       )}
 
@@ -290,10 +622,12 @@ export default function Upload() {
           📝 Upload Instructions
         </h3>
         <ul className="text-sm text-yellow-700 dark:text-yellow-300 space-y-1">
-          <li>• Audio files will be processed sequentially for transcription and memory extraction</li>
-          <li>• Processing time varies based on audio length (roughly 3x the audio duration + 60s)</li>
-          <li>• Large files or multiple files may cause timeout errors - this is normal</li>
-          <li>• Check the Conversations tab to see processed results</li>
+          <li>• <strong>Phase 1:</strong> Files upload quickly to server (progress bar shows transfer)</li>
+          <li>• <strong>Phase 2:</strong> Processing jobs created (immediate)</li>
+          <li>• <strong>Phase 3:</strong> Audio processing (transcription + memory extraction, ~3x audio duration)</li>
+          <li>• You can safely navigate away - processing continues in background</li>
+          <li>• Refresh rate is configurable (0.5s to 10s) during processing</li>
+          <li>• Check Conversations tab for final results</li>
           <li>• Supported formats: WAV, MP3, M4A, FLAC</li>
         </ul>
       </div>

@@ -273,6 +273,14 @@ async def cleanup_client_state(client_id: str):
     removed = await client_manager.remove_client_with_cleanup(client_id)
 
     if removed:
+        # Clean up processor manager task tracking
+        try:
+            processor_manager = get_processor_manager()
+            processor_manager.cleanup_processing_tasks(client_id)
+            logger.debug(f"Cleaned up processor tasks for client {client_id}")
+        except Exception as processor_cleanup_error:
+            logger.error(f"Error cleaning up processor tasks for {client_id}: {processor_cleanup_error}")
+
         # Clean up any orphaned transcript events for this client
         coordinator = get_transcript_coordinator()
         coordinator.cleanup_transcript_events_for_client(client_id)
@@ -320,6 +328,7 @@ async def lifespan(app: FastAPI):
     processor_manager = init_processor_manager(CHUNK_DIR, ac_repository)
     await processor_manager.start()
 
+
     logger.info("App ready")
     try:
         yield
@@ -330,6 +339,7 @@ async def lifespan(app: FastAPI):
         # Clean up all active clients
         for client_id in client_manager.get_all_client_ids():
             await cleanup_client_state(client_id)
+
 
         # Shutdown processor manager
         processor_manager = get_processor_manager()
