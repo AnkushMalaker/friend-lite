@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 
 from advanced_omi_backend.auth import current_superuser
 from advanced_omi_backend.controllers import user_controller
-from advanced_omi_backend.users import User, UserCreate
+from advanced_omi_backend.users import User, UserCreate, UserUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ async def create_user(user_data: UserCreate, current_user: User = Depends(curren
 
 
 @router.put("/{user_id}")
-async def update_user(user_id: str, user_data: UserCreate, current_user: User = Depends(current_superuser)):
+async def update_user(user_id: str, user_data: UserUpdate, current_user: User = Depends(current_superuser)):
     """Update a user. Admin only."""
     return await user_controller.update_user(user_id, user_data)
 
