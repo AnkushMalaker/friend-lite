@@ -64,6 +64,9 @@ from advanced_omi_backend.processors import (
     get_processor_manager,
     init_processor_manager,
 )
+
+from advanced_omi_backend.simple_queue import get_simple_queue
+
 from advanced_omi_backend.task_manager import init_task_manager
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import get_transcription_provider
@@ -317,6 +320,14 @@ async def lifespan(app: FastAPI):
     processor_manager = init_processor_manager(CHUNK_DIR, ac_repository)
     await processor_manager.start()
     application_logger.info("Application-level processors started")
+    
+    # Initialize simple queue system
+    try:
+        queue = await get_simple_queue()
+        application_logger.info("Simple queue system started")
+    except Exception as e:
+        application_logger.error(f"Failed to start simple queue: {e}")
+        # Don't raise as queue system is not critical for basic operation
 
     # Skip memory service pre-initialization to avoid blocking FastAPI startup
     # Memory service will be lazily initialized when first used
@@ -337,6 +348,14 @@ async def lifespan(app: FastAPI):
         for client_id in list(active_clients.keys()):
             await cleanup_client_state(client_id)
 
+        # Shutdown simple queue system
+        try:
+            if queue:
+                await queue.stop_worker()
+                application_logger.info("Simple queue system shut down")
+        except Exception as e:
+            application_logger.error(f"Error shutting down simple queue: {e}")
+        
         # Shutdown processor manager
         processor_manager = get_processor_manager()
         await processor_manager.shutdown()

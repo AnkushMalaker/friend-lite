@@ -133,6 +133,14 @@ export const systemApi = {
   reloadMemoryConfig: () => api.post('/api/admin/memory/config/reload'),
 }
 
+export const queueApi = {
+  getJobs: (params: URLSearchParams) => api.get(`/api/queue/jobs?${params}`),
+  getStats: () => api.get('/api/queue/stats'),
+  retryJob: (jobId: string, force: boolean = false) => 
+    api.post(`/api/queue/jobs/${jobId}/retry`, { force }),
+  cancelJob: (jobId: string) => api.delete(`/api/queue/jobs/${jobId}`),
+}
+
 export const uploadApi = {
   uploadAudioFiles: (files: FormData, onProgress?: (progress: number) => void) => 
     api.post('/api/process-audio-files', files, {
