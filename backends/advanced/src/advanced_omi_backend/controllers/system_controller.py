@@ -14,17 +14,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-from fastapi import BackgroundTasks, File, Query, UploadFile
-from fastapi.responses import JSONResponse
-from wyoming.audio import AudioChunk
-
 from advanced_omi_backend.client_manager import generate_client_id
-from advanced_omi_backend.config import load_diarization_settings_from_file, save_diarization_settings_to_file
+from advanced_omi_backend.config import (
+    load_diarization_settings_from_file,
+    save_diarization_settings_to_file,
+)
 from advanced_omi_backend.database import chunks_col
 from advanced_omi_backend.job_tracker import FileStatus, JobStatus, get_job_tracker
 from advanced_omi_backend.processors import AudioProcessingItem, get_processor_manager
+from advanced_omi_backend.audio_utils import process_audio_chunk
 from advanced_omi_backend.task_manager import get_task_manager
 from advanced_omi_backend.users import User
+from fastapi import BackgroundTasks, File, Query, UploadFile
+from fastapi.responses import JSONResponse
+from wyoming.audio import AudioChunk
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -232,8 +235,9 @@ async def process_audio_files(
                     # Ensure sample rate is 16kHz (resample if needed)
                     if sample_rate != 16000:
                         audio_logger.warning(
-                            f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz. Processing anyway."
+                            f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz."
                         )
+                        raise JSONResponse(status_code=400, content={"error": f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz. I'll implement this at some point sorry"})
 
                     # Process audio in larger chunks for faster file processing
                     # Use larger chunks (32KB) for optimal performance
@@ -250,25 +254,20 @@ async def process_audio_files(
                         )
                         chunk_timestamp = base_timestamp + int(chunk_offset_seconds)
 
-                        # Create AudioChunk
-                        chunk = AudioChunk(
-                            audio=chunk_data,
-                            rate=sample_rate,
-                            width=sample_width,
-                            channels=channels,
-                            timestamp=chunk_timestamp,
-                        )
-
-                        # Add to application-level processing queue
-
-                        audio_item = AudioProcessingItem(
+                        # Process audio chunk through unified pipeline
+                        await process_audio_chunk(
+                            audio_data=chunk_data,
                             client_id=client_id,
                             user_id=user.user_id,
                             user_email=user.email,
-                            audio_chunk=chunk,
-                            timestamp=chunk.timestamp,
+                            audio_format={
+                                "rate": sample_rate,
+                                "width": sample_width,
+                                "channels": channels,
+                                "timestamp": chunk_timestamp,
+                            },
+                            client_state=None,  # No client state needed for file upload
                         )
-                        await processor_manager.queue_audio(audio_item)
 
                         # Yield control occasionally to prevent blocking the event loop
                         if i % (chunk_size * 10) == 0:  # Every 10 chunks (~320KB)
@@ -622,22 +621,20 @@ async def process_files_with_content(
                         )
                         chunk_timestamp = base_timestamp + int(chunk_offset_seconds)
 
-                        chunk = AudioChunk(
-                            audio=chunk_data,
-                            rate=sample_rate,
-                            width=sample_width,
-                            channels=channels,
-                            timestamp=chunk_timestamp,
-                        )
-
-                        audio_item = AudioProcessingItem(
+                        # Process audio chunk through unified pipeline
+                        await process_audio_chunk(
+                            audio_data=chunk_data,
                             client_id=client_id,
                             user_id=user.user_id,
                             user_email=user.email,
-                            audio_chunk=chunk,
-                            timestamp=chunk.timestamp,
+                            audio_format={
+                                "rate": sample_rate,
+                                "width": sample_width,
+                                "channels": channels,
+                                "timestamp": chunk_timestamp,
+                            },
+                            client_state=None,  # No client state needed for file upload
                         )
-                        await processor_manager.queue_audio(audio_item)
 
                         if i % (chunk_size * 10) == 0:  # Yield control occasionally
                             await asyncio.sleep(0)
@@ -897,8 +894,10 @@ async def update_speaker_configuration(user: User, primary_speakers: list[dict])
 async def get_enrolled_speakers(user: User):
     """Get enrolled speakers from speaker recognition service."""
     try:
-        from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
-        
+        from advanced_omi_backend.speaker_recognition_client import (
+            SpeakerRecognitionClient,
+        )
+
         # Initialize speaker recognition client
         speaker_client = SpeakerRecognitionClient()
         
@@ -933,8 +932,10 @@ async def get_enrolled_speakers(user: User):
 async def get_speaker_service_status():
     """Check speaker recognition service health status."""
     try:
-        from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
-        
+        from advanced_omi_backend.speaker_recognition_client import (
+            SpeakerRecognitionClient,
+        )
+
         # Initialize speaker recognition client
         speaker_client = SpeakerRecognitionClient()
         
@@ -1012,7 +1013,7 @@ async def update_memory_config_raw(config_yaml: str):
     try:
         import yaml
         from advanced_omi_backend.memory_config_loader import get_config_loader
-        
+
         # First validate YAML syntax
         try:
             yaml.safe_load(config_yaml)
@@ -1062,7 +1063,7 @@ async def validate_memory_config(config_yaml: str):
     try:
         import yaml
         from advanced_omi_backend.memory_config_loader import MemoryConfigLoader
-        
+
         # Parse YAML
         try:
             parsed_config = yaml.safe_load(config_yaml)

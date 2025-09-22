@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from advanced_omi_backend.audio_cropping_utils import (
+from advanced_omi_backend.audio_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
 from advanced_omi_backend.client_manager import (
@@ -306,10 +306,29 @@ async def reprocess_audio_cropping(audio_uuid: str, user: User):
                 }
             )
 
+        # Get speech segments from the chunk
+        speech_segments = chunk.get("speech_segments", [])
+        if not speech_segments:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No speech segments found for this conversation"}
+            )
+
+        # Generate output path for cropped audio
+        cropped_filename = f"cropped_{audio_uuid}.wav"
+        output_path = Path("/app/data/audio_chunks") / cropped_filename
+
+        # Get repository for database updates
+        chunk_repo = AudioChunksRepository(chunks_col)
+
         # Reprocess the audio cropping
         try:
-            result = await asyncio.get_running_loop().run_in_executor(
-                None, _process_audio_cropping_with_relative_timestamps, str(full_audio_path), audio_uuid
+            result = await _process_audio_cropping_with_relative_timestamps(
+                str(full_audio_path),
+                speech_segments,
+                str(output_path),
+                audio_uuid,
+                chunk_repo
             )
 
             if result:
