@@ -50,7 +50,6 @@ from advanced_omi_backend.processors import (
 )
 from advanced_omi_backend.audio_utils import process_audio_chunk
 from advanced_omi_backend.task_manager import init_task_manager, get_task_manager
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import (
     User,
@@ -281,9 +280,6 @@ async def cleanup_client_state(client_id: str):
         except Exception as processor_cleanup_error:
             logger.error(f"Error cleaning up processor tasks for {client_id}: {processor_cleanup_error}")
 
-        # Clean up any orphaned transcript events for this client
-        coordinator = get_transcript_coordinator()
-        coordinator.cleanup_transcript_events_for_client(client_id)
 
         logger.info(f"Client {client_id} cleaned up successfully")
     else:

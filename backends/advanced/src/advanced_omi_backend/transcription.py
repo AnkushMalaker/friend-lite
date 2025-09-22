@@ -12,6 +12,7 @@ from advanced_omi_backend.config import (
     get_speech_detection_settings,
     load_diarization_settings_from_file,
 )
+from advanced_omi_backend.conversation_manager import get_conversation_manager
 from advanced_omi_backend.database import ConversationsRepository, conversations_col
 from advanced_omi_backend.llm_client import async_generate
 from advanced_omi_backend.processors import (
@@ -20,7 +21,6 @@ from advanced_omi_backend.processors import (
     get_processor_manager,
 )
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
     get_transcription_provider,
@@ -212,9 +212,8 @@ class TranscriptionManager:
                     await self.chunk_repo.update_transcription_status(
                         self._current_audio_uuid, "FAILED", error_message=str(e)
                     )
-                # Signal coordinator about failure
-                coordinator = get_transcript_coordinator()
-                coordinator.signal_transcript_failed(self._current_audio_uuid, str(e))
+                # Transcription failed
+                logger.error(f"Transcript failed for {self._current_audio_uuid}: {str(e)}")
 
     async def _get_transcript(self):
         """Get transcript from any provider using unified interface."""
@@ -270,12 +269,10 @@ class TranscriptionManager:
         """Process transcript result uniformly for all providers."""
         if not transcript_result or not self._current_audio_uuid:
             logger.info(f"⚠️ No transcript result to process for {self._current_audio_uuid}")
-            # Even with no transcript, signal completion to unblock memory processing
+            # No transcript to process
             if self._current_audio_uuid:
-                coordinator = get_transcript_coordinator()
-                coordinator.signal_transcript_ready(self._current_audio_uuid)
                 logger.info(
-                    f"⚠️ Signaled transcript completion (no data) for {self._current_audio_uuid}"
+                    f"⚠️ No transcript data for {self._current_audio_uuid}"
                 )
             return
 
@@ -297,11 +294,9 @@ class TranscriptionManager:
                 logger.warning(
                     f"No text in normalized transcript result for {self._current_audio_uuid}"
                 )
-                # Signal completion even with empty text to unblock memory processing
-                coordinator = get_transcript_coordinator()
-                coordinator.signal_transcript_ready(self._current_audio_uuid)
+                # Empty transcript text
                 logger.warning(
-                    f"⚠️ Signaled transcript completion (empty text) for {self._current_audio_uuid}"
+                    f"⚠️ Empty transcript text for {self._current_audio_uuid}"
                 )
                 return
 
@@ -324,30 +319,21 @@ class TranscriptionManager:
                     **{k: v for k, v in speech_analysis.items() if k != "has_speech"}
                 )
 
-            # Create conversation only if speech is detected
+            # Speech detection check - conversation will be created after speaker recognition
             conversation_id = None
-            if speech_analysis["has_speech"]:
-                conversation_id = await self._create_conversation(
-                    self._current_audio_uuid, transcript_data, speech_analysis
-                )
-                if conversation_id:
-                    logger.info(f"✅ Created conversation {conversation_id} for detected speech in {self._current_audio_uuid}")
-                else:
-                    logger.error(f"❌ Failed to create conversation for {self._current_audio_uuid}")
-            else:
+            if not speech_analysis["has_speech"]:
                 logger.info(f"⏭️ No speech detected in {self._current_audio_uuid}: {speech_analysis.get('reason', 'Unknown reason')}")
                 # Update transcript status to EMPTY for silent audio
                 if self.chunk_repo:
                     await self.chunk_repo.update_transcription_status(
                         self._current_audio_uuid, "EMPTY", provider=provider_name
                     )
-                # Signal completion but don't queue memory processing
-                coordinator = get_transcript_coordinator()
-                coordinator.signal_transcript_ready(self._current_audio_uuid)
+                # No speech detected, not queuing memory processing
+                logger.info(f"No speech detected for {self._current_audio_uuid}")
                 return
 
-            # SPEECH GAP ANALYSIS: Check for conversation closure (only if conversation exists)
-            if conversation_id:
+            # SPEECH GAP ANALYSIS: Check for conversation closure (only if speech detected)
+            if speech_analysis["has_speech"]:
                 analyzer = SpeechActivityAnalyzer(self._audio_timeline)
                 activity = analyzer.analyze_transcript_activity(transcript_data)
 
@@ -368,9 +354,8 @@ class TranscriptionManager:
                         f"closing conversation for {self._client_id}"
                     )
                     await self._trigger_conversation_close()
-                    # Signal completion and return (conversation closed)
-                    coordinator = get_transcript_coordinator()
-                    coordinator.signal_transcript_ready(self._current_audio_uuid)
+                    # Conversation closed due to inactivity
+                    logger.info(f"Conversation closed for {self._current_audio_uuid}")
                     return
                 else:
                     # Update last word time for next analysis
@@ -472,51 +457,30 @@ class TranscriptionManager:
                 for speaker in speakers_found:
                     await self.chunk_repo.add_speaker(self._current_audio_uuid, speaker)
 
-                # CRITICAL: Update conversation with transcript data
-                if conversation_id:
-                    try:
-                        conversations_repo = ConversationsRepository(conversations_col)
+                conversation_manager = get_conversation_manager()
+                conversation_id = await conversation_manager.create_conversation_with_processing(
+                    audio_uuid=self._current_audio_uuid,
+                    transcript_data=transcript_data,
+                    speech_analysis=speech_analysis,
+                    speaker_segments=segments_to_store,
+                    chunk_repo=self.chunk_repo
+                )
 
-                        # Check if this is the first transcript for this conversation
-                        conversation = await conversations_repo.get_conversation(conversation_id)
-                        if conversation and not conversation.get("active_transcript_version"):
-                            # This is the first transcript - create initial version
-                            version_id = await conversations_repo.create_transcript_version(
-                                conversation_id=conversation_id,
-                                segments=segments_to_store,
-                                provider="speech_detection",
-                                raw_data={}
-                            )
-                            if version_id:
-                                # Activate this version
-                                await conversations_repo.activate_transcript_version(conversation_id, version_id)
-                                logger.info(f"✅ Created and activated initial transcript version {version_id} for conversation {conversation_id}")
-
-                        # Generate title and summary with speaker information
-                        title = await self._generate_title_with_speakers(segments_to_store)
-                        summary = await self._generate_summary_with_speakers(segments_to_store)
-
-                        # Update conversation with speaker info, title, summary and metadata
-                        update_data = {
-                            "title": title,
-                            "summary": summary,
-                            "speaker_names": speaker_names,
-                            "updated_at": datetime.now(UTC)
-                        }
-                        await conversations_repo.update_conversation(conversation_id, update_data)
-
-                        logger.info(f"✅ Updated conversation {conversation_id} with {len(segments_to_store)} transcript segments, {len(speakers_found)} speakers, and speaker-aware title/summary")
-                    except Exception as e:
-                        logger.error(f"Failed to update conversation {conversation_id} with transcript data: {e}")
+                if not conversation_id:
+                    logger.error(f"❌ Failed to create conversation for {self._current_audio_uuid}")
+                    # Continue processing even if conversation creation fails
+            else:
+                # Edge case: speech detected but no segments processed
+                logger.warning(f"🚨 EDGE CASE: Speech detected but no segments processed for {self._current_audio_uuid}. Developer felt this edge case can never happen. Developer wants to sleep. 😴")
+                # If this actually happens, we should investigate why final_segments was empty
 
             # Update client state
             current_client = self._get_current_client()
             if current_client:
                 current_client.update_transcript_received()
 
-            # Signal transcript coordinator
-            coordinator = get_transcript_coordinator()
-            coordinator.signal_transcript_ready(self._current_audio_uuid)
+            # Transcript processing completed
+            logger.info(f"Transcript completed for {self._current_audio_uuid}")
 
             # Queue memory processing now that transcription is complete (only for conversations with speech)
             if conversation_id:
@@ -623,201 +587,6 @@ class TranscriptionManager:
                 }
 
         return {"has_speech": False, "reason": "No meaningful speech content detected"}
-
-    async def _create_conversation(self, audio_uuid: str, transcript_data: dict, speech_analysis: dict):
-        """Create conversation entry for detected speech."""
-        try:
-            # Get audio session info from audio_chunks
-            audio_session = await self.chunk_repo.get_chunk(audio_uuid)
-            if not audio_session:
-                logger.error(f"No audio session found for {audio_uuid}")
-                return None
-
-            # Create conversation data (title and summary will be generated after speaker recognition)
-            conversation_id = str(uuid.uuid4())
-            conversation_data = {
-                "conversation_id": conversation_id,
-                "audio_uuid": audio_uuid,
-                "user_id": audio_session["user_id"],
-                "client_id": audio_session["client_id"],
-                "title": "Processing...",  # Placeholder - will be updated after speaker recognition
-                "summary": "Processing...",  # Placeholder - will be updated after speaker recognition
-
-                # Versioned system (source of truth)
-                "transcript_versions": [],
-                "active_transcript_version": None,
-                "memory_versions": [],
-                "active_memory_version": None,
-
-                # Legacy compatibility fields (auto-populated on read)
-                # Note: These will be auto-populated from active versions when retrieved
-
-                "duration_seconds": speech_analysis.get("duration", 0.0),
-                "speech_start_time": speech_analysis.get("speech_start", 0.0),
-                "speech_end_time": speech_analysis.get("speech_end", 0.0),
-                "speaker_names": {},
-                "action_items": [],
-                "created_at": datetime.now(UTC),
-                "updated_at": datetime.now(UTC),
-                "session_start": datetime.fromtimestamp(audio_session.get("timestamp", 0), tz=UTC),
-                "session_end": datetime.now(UTC),
-            }
-
-            # Create conversation in conversations collection
-            conversations_repo = ConversationsRepository(conversations_col)
-            await conversations_repo.create_conversation(conversation_data)
-
-            # Mark audio_chunks as having speech and link to conversation
-            await self.chunk_repo.mark_conversation_created(audio_uuid, conversation_id)
-
-            logger.info(f"✅ Created conversation {conversation_id} for audio {audio_uuid} (speech detected)")
-            return conversation_id
-
-        except Exception as e:
-            logger.error(f"Failed to create conversation for {audio_uuid}: {e}", exc_info=True)
-            return None
-
-    async def _generate_title(self, text: str) -> str:
-        """Generate an LLM-powered title from conversation text."""
-        if not text or len(text.strip()) < 10:
-            return "Conversation"
-
-        try:
-            prompt = f"""Generate a concise, descriptive title (3-6 words) for this conversation transcript:
-
-"{text[:500]}"
-
-Rules:
-- Maximum 6 words
-- Capture the main topic or theme
-- No quotes or special characters
-- Examples: "Planning Weekend Trip", "Work Project Discussion", "Medical Appointment"
-
-Title:"""
-
-            title = await async_generate(prompt, temperature=0.3)
-            return title.strip().strip('"').strip("'") or "Conversation"
-
-        except Exception as e:
-            logger.warning(f"Failed to generate LLM title: {e}")
-            # Fallback to simple title generation
-            words = text.split()[:6]
-            title = " ".join(words)
-            return title[:40] + "..." if len(title) > 40 else title or "Conversation"
-
-    async def _generate_summary(self, text: str) -> str:
-        """Generate an LLM-powered summary from conversation text."""
-        if not text or len(text.strip()) < 10:
-            return "No content"
-
-        try:
-            prompt = f"""Generate a brief, informative summary (1-2 sentences, max 120 characters) for this conversation:
-
-"{text[:1000]}"
-
-Rules:
-- Maximum 120 characters
-- 1-2 complete sentences
-- Capture key topics and outcomes
-- Use present tense
-- Be specific and informative
-
-Summary:"""
-
-            summary = await async_generate(prompt, temperature=0.3)
-            return summary.strip().strip('"').strip("'") or "No content"
-
-        except Exception as e:
-            logger.warning(f"Failed to generate LLM summary: {e}")
-            # Fallback to simple summary generation
-            return text[:120] + "..." if len(text) > 120 else text or "No content"
-
-    async def _generate_title_with_speakers(self, segments: list) -> str:
-        """Generate an LLM-powered title from conversation segments with speaker information."""
-        if not segments:
-            return "Conversation"
-
-        # Format conversation with speaker names
-        conversation_text = ""
-        for segment in segments[:10]:  # Use first 10 segments for title generation
-            speaker = segment.get("speaker", "")
-            text = segment.get("text", "").strip()
-            if text:
-                if speaker:
-                    conversation_text += f"{speaker}: {text}\n"
-                else:
-                    conversation_text += f"{text}\n"
-
-        if not conversation_text.strip():
-            return "Conversation"
-
-        try:
-            prompt = f"""Generate a concise title (max 40 characters) for this conversation:
-
-"{conversation_text[:500]}"
-
-Rules:
-- Maximum 40 characters
-- Include speaker names if relevant
-- Capture the main topic
-- Be specific and informative
-
-Title:"""
-
-            title = await async_generate(prompt, temperature=0.3)
-            title = title.strip().strip('"').strip("'")
-            return title[:40] + "..." if len(title) > 40 else title or "Conversation"
-
-        except Exception as e:
-            logger.warning(f"Failed to generate LLM title with speakers: {e}")
-            # Fallback to simple title generation
-            words = conversation_text.split()[:6]
-            title = " ".join(words)
-            return title[:40] + "..." if len(title) > 40 else title or "Conversation"
-
-    async def _generate_summary_with_speakers(self, segments: list) -> str:
-        """Generate an LLM-powered summary from conversation segments with speaker information."""
-        if not segments:
-            return "No content"
-
-        # Format conversation with speaker names
-        conversation_text = ""
-        speakers_in_conv = set()
-        for segment in segments:
-            speaker = segment.get("speaker", "")
-            text = segment.get("text", "").strip()
-            if text:
-                if speaker:
-                    conversation_text += f"{speaker}: {text}\n"
-                    speakers_in_conv.add(speaker)
-                else:
-                    conversation_text += f"{text}\n"
-
-        if not conversation_text.strip():
-            return "No content"
-
-        try:
-            prompt = f"""Generate a brief, informative summary (1-2 sentences, max 120 characters) for this conversation with speakers:
-
-"{conversation_text[:1000]}"
-
-Rules:
-- Maximum 120 characters
-- 1-2 complete sentences
-- Include speaker names when relevant (e.g., "John discusses X with Sarah")
-- Capture key topics and outcomes
-- Use present tense
-- Be specific and informative
-
-Summary:"""
-
-            summary = await async_generate(prompt, temperature=0.3)
-            return summary.strip().strip('"').strip("'") or "No content"
-
-        except Exception as e:
-            logger.warning(f"Failed to generate LLM summary with speakers: {e}")
-            # Fallback to simple summary generation
-            return conversation_text[:120] + "..." if len(conversation_text) > 120 else conversation_text or "No content"
 
     async def _queue_memory_processing(self, conversation_id: str):
         """Queue memory processing for a speech-detected conversation.
