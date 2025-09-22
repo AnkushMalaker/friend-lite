@@ -112,8 +112,6 @@ speakers_col = db["speakers"]
 SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
-# Conversation timeout configuration
-NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
 # Audio cropping configuration
 AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
@@ -977,7 +975,6 @@ async def health_check():
             ),
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": client_manager.get_client_count(),
-            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
             "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
             "llm_provider": os.getenv("LLM_PROVIDER"),
             "llm_model": os.getenv("OPENAI_MODEL"),

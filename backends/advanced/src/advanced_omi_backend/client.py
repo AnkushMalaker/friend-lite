@@ -5,9 +5,7 @@ state, timestamps, and speech segments. All processing is handled at the
 application level by the ProcessorManager.
 """
 
-import asyncio
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -15,13 +13,9 @@ from typing import Dict, List, Optional, Tuple
 from advanced_omi_backend.conversation_manager import get_conversation_manager
 from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.task_manager import get_task_manager
-from wyoming.audio import AudioChunk
 
 # Get loggers
 audio_logger = logging.getLogger("audio_processing")
-
-# Configuration constants
-NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
 
 class ClientState:
@@ -67,11 +61,6 @@ class ClientState:
 
         audio_logger.info(f"Created client state for {client_id}")
 
-    def update_audio_received(self, chunk: AudioChunk):
-        """Update state when audio is received."""
-        # Check if we should start a new conversation
-        if self.should_start_new_conversation():
-            asyncio.create_task(self.start_new_conversation())
 
     def set_current_audio_uuid(self, audio_uuid: str):
         """Set the current audio UUID when processor creates a new file."""
@@ -104,19 +93,8 @@ class ClientState:
             audio_logger.warning(f"Speech end recorded for {audio_uuid} but no start time found")
 
     def update_transcript_received(self):
-        """Update timestamp when transcript is received (for timeout detection)."""
+        """Update timestamp when transcript is received."""
         self.last_transcript_time = time.time()
-
-    def should_start_new_conversation(self) -> bool:
-        """Check if we should start a new conversation based on timeout."""
-        if self.last_transcript_time is None:
-            return False
-
-        current_time = time.time()
-        time_since_last_transcript = current_time - self.last_transcript_time
-        timeout_seconds = NEW_CONVERSATION_TIMEOUT_MINUTES * 60
-
-        return time_since_last_transcript > timeout_seconds
 
     async def close_current_conversation(self):
         """Close the current conversation and queue necessary processing."""
@@ -161,20 +139,6 @@ class ClientState:
         else:
             audio_logger.warning(f"⚠️ Conversation closure had issues for {self.current_audio_uuid}")
 
-    async def start_new_conversation(self):
-        """Start a new conversation by closing current and resetting state."""
-        await self.close_current_conversation()
-
-        # Reset conversation state
-        self.current_audio_uuid = None
-        self.conversation_start_time = time.time()
-        self.last_transcript_time = None
-        self.conversation_closed = False
-
-        audio_logger.info(
-            f"Client {self.client_id}: Started new conversation due to "
-            f"{NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout"
-        )
 
     async def disconnect(self):
         """Clean disconnect of client state."""

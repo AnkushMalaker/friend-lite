@@ -87,10 +87,6 @@ async def process_audio_chunk(
 
     await processor_manager.queue_audio(processing_item)
 
-    # Update client state if provided
-    if client_state is not None:
-        client_state.update_audio_received(chunk)
-
 
 async def load_audio_file_as_chunk(audio_path: Path) -> AudioChunk:
     """Load existing audio file into Wyoming AudioChunk format for reprocessing.

@@ -215,54 +215,54 @@ export default function System() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Services Status */}
-        {healthData?.services && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
-              <Database className="h-5 w-5 mr-2 text-blue-600" />
-              Services Status
-            </h3>
-            <div className="space-y-3">
-              {Object.entries(healthData.services).map(([service, status]) => (
-                <div key={service} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-md">
-                  <div className="flex items-center space-x-3">
-                    {getStatusIcon(status.healthy)}
-                    <span className="font-medium text-gray-900 dark:text-gray-100">
-                      {getServiceDisplayName(service)}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    {status.message && (
-                      <span className="text-sm text-gray-600 dark:text-gray-400 block">
-                        {status.message}
-                      </span>
-                    )}
-                    {(status as any).status && (
-                      <span className="text-xs text-gray-500 dark:text-gray-500">
-                        {(status as any).status}
-                      </span>
-                    )}
-                    {(status as any).provider && (
-                      <span className="text-xs text-blue-600 dark:text-blue-400">
-                        ({(status as any).provider})
-                      </span>
-                    )}
-                  </div>
+      {/* Services Status - Full Width */}
+      {healthData?.services && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+            <Database className="h-5 w-5 mr-2 text-blue-600" />
+            Services Status
+          </h3>
+          <div className="space-y-3">
+            {Object.entries(healthData.services).map(([service, status]) => (
+              <div key={service} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-md">
+                <div className="flex items-center space-x-3">
+                  {getStatusIcon(status.healthy)}
+                  <span className="font-medium text-gray-900 dark:text-gray-100">
+                    {getServiceDisplayName(service)}
+                  </span>
                 </div>
-              ))}
-            </div>
+                <div className="text-right">
+                  {status.message && (
+                    <span className="text-sm text-gray-600 dark:text-gray-400 block">
+                      {status.message}
+                    </span>
+                  )}
+                  {(status as any).status && (
+                    <span className="text-xs text-gray-500 dark:text-gray-500">
+                      {(status as any).status}
+                    </span>
+                  )}
+                  {(status as any).provider && (
+                    <span className="text-xs text-blue-600 dark:text-blue-400">
+                      ({(status as any).provider})
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
-        )}
+        </div>
+      )}
 
-
+      {/* Diarization & Speaker Settings - Always Horizontal */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* Diarization Settings */}
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
             <Volume2 className="h-5 w-5 mr-2 text-blue-600" />
             Diarization Settings
           </h3>
-          
+
           <div className="space-y-4">
             {/* Diarization Source Selector */}
             <div>
@@ -304,7 +304,7 @@ export default function System() {
                 </label>
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                {diarizationSettings.diarization_source === 'deepgram' 
+                {diarizationSettings.diarization_source === 'deepgram'
                   ? 'Deepgram handles diarization automatically. The parameters below apply only to speaker identification.'
                   : 'Pyannote provides local diarization with full parameter control.'
                 }
@@ -321,7 +321,7 @@ export default function System() {
                       Note: Deepgram Diarization Mode
                     </h4>
                     <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
-                      Ignored parameters hidden: speaker count, collar, timing settings. 
+                      Ignored parameters hidden: speaker count, collar, timing settings.
                       Only similarity threshold applies to speaker identification.
                     </p>
                   </div>
@@ -475,37 +475,36 @@ export default function System() {
 
         {/* Speaker Configuration */}
         <SpeakerConfiguration />
+      </div>
 
-
-        {/* Debug Metrics */}
-        {metricsData?.debug_tracker && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
-              Debug Metrics
-            </h3>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">Total Files</div>
-                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                  {metricsData.debug_tracker.total_files}
-                </div>
+      {/* Debug Metrics */}
+      {metricsData?.debug_tracker && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+            Debug Metrics
+          </h3>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
+              <div className="text-sm text-gray-600 dark:text-gray-400">Total Files</div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                {metricsData.debug_tracker.total_files}
               </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">Processed</div>
-                <div className="text-2xl font-bold text-green-600">
-                  {metricsData.debug_tracker.processed_files}
-                </div>
+            </div>
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
+              <div className="text-sm text-gray-600 dark:text-gray-400">Processed</div>
+              <div className="text-2xl font-bold text-green-600">
+                {metricsData.debug_tracker.processed_files}
               </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">Failed</div>
-                <div className="text-2xl font-bold text-red-600">
-                  {metricsData.debug_tracker.failed_files}
-                </div>
+            </div>
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
+              <div className="text-sm text-gray-600 dark:text-gray-400">Failed</div>
+              <div className="text-2xl font-bold text-red-600">
+                {metricsData.debug_tracker.failed_files}
               </div>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Memory Configuration - Full Width Section */}
       <div className="mt-6">
