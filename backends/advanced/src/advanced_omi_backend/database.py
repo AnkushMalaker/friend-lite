@@ -520,38 +520,6 @@ class AudioChunksRepository:
 
         return await cursor.to_list(length=None)
 
-    async def update_transcription_status(
-        self, audio_uuid: str, status: str, error_message: str = None, provider: str = None
-    ):
-        """Update transcription status and completion timestamp.
-        
-        Args:
-            audio_uuid: UUID of the audio chunk
-            status: New status ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'EMPTY')
-            error_message: Optional error message if status is 'FAILED'
-            provider: Optional provider name for successful transcriptions
-        """
-        update_doc = {
-            "transcription_status": status,
-            "updated_at": datetime.now(UTC).isoformat()
-        }
-        
-        if status == "COMPLETED":
-            update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
-            if provider:
-                update_doc["transcription_provider"] = provider
-        elif status == "FAILED" and error_message:
-            update_doc["transcription_error"] = error_message
-        elif status == "EMPTY":
-            update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
-            if provider:
-                update_doc["transcription_provider"] = provider
-            
-        result = await self.col.update_one(
-            {"audio_uuid": audio_uuid}, {"$set": update_doc}
-        )
-        return result.modified_count > 0
-
 
 class ConversationsRepository:
     """Repository for user-facing conversations (speech-driven architecture)."""
