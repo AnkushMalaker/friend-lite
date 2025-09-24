@@ -706,6 +706,50 @@ class ConversationsRepository:
             logger.info(f"Activated transcript version {version_id} for conversation {conversation_id}")
         return result.modified_count > 0
 
+    async def update_transcript_version(
+        self, 
+        conversation_id: str, 
+        version_id: str, 
+        transcript: str = None, 
+        segments: list = None, 
+        processing_time_seconds: float = None,
+        provider: str = None,
+        model: str = None
+    ) -> bool:
+        """Update a specific transcript version with processing results."""
+        update_fields = {}
+        
+        if transcript is not None:
+            update_fields["transcript_versions.$.transcript"] = transcript
+        if segments is not None:
+            update_fields["transcript_versions.$.segments"] = segments
+        if processing_time_seconds is not None:
+            update_fields["transcript_versions.$.processing_time_seconds"] = processing_time_seconds
+        if provider is not None:
+            update_fields["transcript_versions.$.provider"] = provider
+        if model is not None:
+            update_fields["transcript_versions.$.model"] = model
+            
+        # Always update the completion timestamp
+        update_fields["transcript_versions.$.completed_at"] = datetime.now(UTC).isoformat()
+        update_fields["transcript_versions.$.status"] = "completed"
+        
+        if not update_fields:
+            return False
+            
+        result = await self.col.update_one(
+            {
+                "conversation_id": conversation_id,
+                "transcript_versions.version_id": version_id
+            },
+            {"$set": update_fields}
+        )
+        
+        if result.modified_count > 0:
+            logger.info(f"Updated transcript version {version_id} for conversation {conversation_id}")
+            return True
+        return False
+
     async def activate_memory_version(self, conversation_id: str, version_id: str) -> bool:
         """Activate a specific memory version in conversation."""
         # First verify the version exists

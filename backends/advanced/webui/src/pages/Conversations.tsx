@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { MessageSquare, RefreshCw, Calendar, User, Play, Pause, MoreVertical, RotateCcw, Zap, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { conversationsApi, BACKEND_URL } from '../services/api'
+import ConversationVersionHeader from '../components/ConversationVersionHeader'
 
 interface Conversation {
   conversation_id?: string
@@ -28,6 +29,12 @@ interface Conversation {
   memory_processing_status?: string
   transcription_status?: string
   action_items?: any[]
+  version_info?: {
+    transcript_count: number
+    memory_count: number
+    active_transcript_version?: string
+    active_memory_version?: string
+  }
 }
 
 // Speaker color palette for consistent colors across conversations
@@ -345,6 +352,18 @@ export default function Conversations() {
               key={conversation.audio_uuid}
               className="bg-gray-50 dark:bg-gray-700 rounded-lg p-6 border border-gray-200 dark:border-gray-600"
             >
+              {/* Version Selector Header - Only show for conversations with conversation_id */}
+              {conversation.conversation_id && (
+                <ConversationVersionHeader 
+                  conversationId={conversation.conversation_id}
+                  versionInfo={conversation.version_info}
+                  onVersionChange={() => {
+                    // Refresh the conversation data when version changes
+                    loadConversations();
+                  }}
+                />
+              )}
+              
               {/* Conversation Header */}
               <div className="flex justify-between items-start mb-4">
                 <div className="flex flex-col space-y-2">
@@ -506,7 +525,7 @@ export default function Conversations() {
 
                 {/* Transcript Content - Conditionally Rendered */}
                 {expandedTranscripts.has(conversation.audio_uuid) && (
-                  <div className="animate-in slide-in-from-top-2 duration-300 ease-out">
+                  <div className="animate-in slide-in-from-top-2 duration-300 ease-out space-y-4">
                     {conversation.transcript && conversation.transcript.length > 0 ? (
                       <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
                         <div className="space-y-1">
@@ -584,6 +603,7 @@ export default function Conversations() {
                         No transcript available
                       </div>
                     )}
+                    
                   </div>
                 )}
               </div>
