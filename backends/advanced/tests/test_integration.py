@@ -501,14 +501,9 @@ class IntegrationTestRunner:
                     env = os.environ.copy()
                     env['DOCKER_BUILDKIT'] = '0'
                     logger.info("🔨 Running Docker build command...")
-                    build_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "build"], capture_output=True, text=True, env=env)
-                    logger.info(f"📋 Build command stdout: {build_result.stdout}")
-                    if build_result.stderr:
-                        logger.warning(f"📋 Build command stderr: {build_result.stderr}")
+                    build_result = subprocess.run(["docker", "compose", "-f", "docker-compose-test.yml", "build"], env=env)
                     if build_result.returncode != 0:
                         logger.error(f"❌ Build failed with exit code {build_result.returncode}")
-                        logger.error(f"📋 Build stderr: {build_result.stderr}")
-                        logger.error(f"📋 Build stdout: {build_result.stdout}")
                         raise RuntimeError("Docker compose build failed")
                 cmd = ["docker", "compose", "-f", "docker-compose-test.yml", "up", "-d", "--no-build"]
             else:
@@ -524,18 +519,10 @@ class IntegrationTestRunner:
             env = os.environ.copy()
             env['DOCKER_BUILDKIT'] = '0'
             logger.info(f"🚀 Running Docker compose command: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
-            
-            # Always log the command outputs for debugging
-            logger.info(f"📋 Docker compose command stdout:\n{result.stdout}")
-            if result.stderr:
-                logger.warning(f"📋 Docker compose command stderr:\n{result.stderr}")
-            logger.info(f"📋 Docker compose exit code: {result.returncode}")
+            result = subprocess.run(cmd, env=env, timeout=300)
             
             if result.returncode != 0:
                 logger.error(f"❌ Failed to start services with exit code {result.returncode}")
-                logger.error(f"❌ Command stderr: {result.stderr}")
-                logger.error(f"❌ Command stdout: {result.stdout}")
                 
                 # Check individual container logs for better error details
                 logger.error("🔍 Checking individual container logs for details...")
