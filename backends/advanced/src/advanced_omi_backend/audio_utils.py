@@ -6,6 +6,10 @@ import asyncio
 import logging
 import os
 import time
+import wave
+import io
+import numpy as np
+from pathlib import Path
 
 # Type import to avoid circular imports
 from typing import TYPE_CHECKING, Optional
@@ -83,9 +87,68 @@ async def process_audio_chunk(
 
     await processor_manager.queue_audio(processing_item)
 
-    # Update client state if provided
-    if client_state is not None:
-        client_state.update_audio_received(chunk)
+
+async def load_audio_file_as_chunk(audio_path: Path) -> AudioChunk:
+    """Load existing audio file into Wyoming AudioChunk format for reprocessing.
+
+    Args:
+        audio_path: Path to the audio file on disk
+
+    Returns:
+        AudioChunk object ready for processing
+
+    Raises:
+        FileNotFoundError: If audio file doesn't exist
+        ValueError: If audio file format is invalid
+    """
+    try:
+        # Read the audio file
+        with open(audio_path, 'rb') as f:
+            file_content = f.read()
+
+        # Process WAV file using existing pattern from system_controller.py
+        with wave.open(io.BytesIO(file_content), "rb") as wav_file:
+            sample_rate = wav_file.getframerate()
+            sample_width = wav_file.getsampwidth()
+            channels = wav_file.getnchannels()
+            audio_data = wav_file.readframes(wav_file.getnframes())
+
+            # Convert to mono if stereo (same logic as system_controller.py)
+            if channels == 2:
+                if sample_width == 2:
+                    audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                    audio_array = audio_array.reshape(-1, 2)
+                    audio_data = np.mean(audio_array, axis=1, dtype=np.int16).tobytes()
+                    channels = 1
+                else:
+                    raise ValueError(f"Unsupported sample width for stereo: {sample_width}")
+
+            # Validate format matches expected (16kHz, mono, 16-bit)
+            if sample_rate != 16000:
+                raise ValueError(f"Audio file has sample rate {sample_rate}Hz, expected 16kHz")
+            if channels != 1:
+                raise ValueError(f"Audio file has {channels} channels, expected mono")
+            if sample_width != 2:
+                raise ValueError(f"Audio file has {sample_width}-byte samples, expected 2 bytes")
+
+            # Create AudioChunk with current timestamp
+            chunk = AudioChunk(
+                audio=audio_data,
+                rate=sample_rate,
+                width=sample_width,
+                channels=channels,
+                timestamp=int(time.time() * 1000)
+            )
+
+            logger.info(f"Loaded audio file {audio_path} as AudioChunk ({len(audio_data)} bytes)")
+            return chunk
+
+    except FileNotFoundError:
+        logger.error(f"Audio file not found: {audio_path}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading audio file {audio_path}: {e}")
+        raise ValueError(f"Invalid audio file format: {e}")
 
 
 async def _process_audio_cropping_with_relative_timestamps(

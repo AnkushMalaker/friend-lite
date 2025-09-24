@@ -166,3 +166,28 @@ async def reload_memory_config(current_user: User = Depends(current_superuser)):
 async def delete_all_user_memories(current_user: User = Depends(current_active_user)):
     """Delete all memories for the current user."""
     return await system_controller.delete_all_user_memories(current_user)
+
+
+@router.get("/processor/overview")
+async def get_processor_overview_route(current_user: User = Depends(current_superuser)):
+    """Get comprehensive processor overview with pipeline stats. Admin only."""
+    return await system_controller.get_processor_overview()
+
+@router.get("/processor/history")
+async def get_processor_history_route(
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(50, ge=1, le=100, description="Items per page"),
+    current_user: User = Depends(current_superuser)
+):
+    """Get paginated processing history. Admin only."""
+    return await system_controller.get_processor_history(page, per_page)
+
+@router.get("/processor/clients/{client_id}")
+async def get_client_processing_detail_route(
+    client_id: str,
+    current_user: User = Depends(current_superuser)
+):
+    """Get detailed processing information for specific client. Admin only."""
+    return await system_controller.get_client_processing_detail(client_id)
+
+

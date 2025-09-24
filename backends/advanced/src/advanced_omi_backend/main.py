@@ -50,7 +50,6 @@ from advanced_omi_backend.processors import (
 )
 from advanced_omi_backend.audio_utils import process_audio_chunk
 from advanced_omi_backend.task_manager import init_task_manager, get_task_manager
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import (
     User,
@@ -113,8 +112,6 @@ speakers_col = db["speakers"]
 SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
-# Conversation timeout configuration
-NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
 # Audio cropping configuration
 AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
@@ -273,9 +270,14 @@ async def cleanup_client_state(client_id: str):
     removed = await client_manager.remove_client_with_cleanup(client_id)
 
     if removed:
-        # Clean up any orphaned transcript events for this client
-        coordinator = get_transcript_coordinator()
-        coordinator.cleanup_transcript_events_for_client(client_id)
+        # Clean up processor manager task tracking
+        try:
+            processor_manager = get_processor_manager()
+            processor_manager.cleanup_processing_tasks(client_id)
+            logger.debug(f"Cleaned up processor tasks for client {client_id}")
+        except Exception as processor_cleanup_error:
+            logger.error(f"Error cleaning up processor tasks for {client_id}: {processor_cleanup_error}")
+
 
         logger.info(f"Client {client_id} cleaned up successfully")
     else:
@@ -320,6 +322,7 @@ async def lifespan(app: FastAPI):
     processor_manager = init_processor_manager(CHUNK_DIR, ac_repository)
     await processor_manager.start()
 
+
     logger.info("App ready")
     try:
         yield
@@ -330,6 +333,7 @@ async def lifespan(app: FastAPI):
         # Clean up all active clients
         for client_id in client_manager.get_all_client_ids():
             await cleanup_client_state(client_id)
+
 
         # Shutdown processor manager
         processor_manager = get_processor_manager()
@@ -971,7 +975,6 @@ async def health_check():
             ),
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": client_manager.get_client_count(),
-            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
             "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
             "llm_provider": os.getenv("LLM_PROVIDER"),
             "llm_model": os.getenv("OPENAI_MODEL"),
