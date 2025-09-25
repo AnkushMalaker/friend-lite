@@ -51,12 +51,13 @@ simple-speaker-web = "simple_speaker_recognition.web.app:main"
 
 [dependency-groups]
 cpu = [
-    "faiss-cpu>=1.8",
+    "faiss-cpu>=1.9",
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
+    "numpy>=1.26,<2",
 ]
 gpu = [
-    "faiss-cpu>=1.8",  # Use CPU FAISS for compatibility, GPU PyTorch for performance
+    "faiss-cpu>=1.9",  # Use CPU FAISS for compatibility, GPU PyTorch for performance
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
 ]
