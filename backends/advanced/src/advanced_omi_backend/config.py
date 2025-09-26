@@ -40,7 +40,7 @@ DEFAULT_CONVERSATION_STOP_SETTINGS = {
 # Default audio storage settings
 DEFAULT_AUDIO_STORAGE_SETTINGS = {
     "audio_base_path": "/app/data",  # Main audio directory (where volume is mounted)
-    "audio_chunks_path": "/app/data/audio_chunks",  # Full path to audio chunks subfolder
+    "audio_chunks_path": "/app/audio_chunks",  # Full path to audio chunks subfolder
 }
 
 # Global cache for diarization settings

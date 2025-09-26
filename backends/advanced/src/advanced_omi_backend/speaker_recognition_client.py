@@ -57,17 +57,21 @@ class SpeakerRecognitionClient:
             Dictionary containing segments with matched text and speaker identification
         """
         if not self.enabled:
+            logger.info(f"🎤 Speaker recognition disabled, returning empty result")
             return {}
 
         try:
-            logger.info(f"Diarizing, identifying, and matching words for {audio_path}")
+            logger.info(f"🎤 DEBUG: diarize_identify_match called with audio_path: {audio_path}, user_id: {user_id}")
+            logger.info(f"🎤 DEBUG: Service URL: {self.service_url}")
+            logger.info(f"🎤 DEBUG: Audio file exists: {Path(audio_path).exists()}")
+            logger.info(f"🎤 Diarizing, identifying, and matching words for {audio_path}")
 
             # Read diarization source from existing config system
             from advanced_omi_backend.config import load_diarization_settings_from_file
             config = load_diarization_settings_from_file()
             diarization_source = config.get("diarization_source", "pyannote")
-            
-            logger.info(f"Using diarization source: {diarization_source}")
+
+            logger.info(f"🎤 Using diarization source: {diarization_source}")
 
             async with aiohttp.ClientSession() as session:
                 # Prepare the audio file for upload
@@ -116,28 +120,39 @@ class SpeakerRecognitionClient:
                         endpoint = "/v1/diarize-identify-match"
 
                     # Make the request to the consolidated endpoint
+                    request_url = f"{self.service_url}{endpoint}"
+                    logger.info(f"🎤 DEBUG: Making request to speaker service URL: {request_url}")
+
                     async with session.post(
-                        f"{self.service_url}{endpoint}",
+                        request_url,
                         data=form_data,
                         timeout=aiohttp.ClientTimeout(total=120),
                     ) as response:
+                        logger.info(f"🎤 DEBUG: Speaker service response status: {response.status}")
+
                         if response.status != 200:
+                            response_text = await response.text()
                             logger.warning(
-                                f"Speaker service returned status {response.status}: {await response.text()}"
+                                f"🎤 Speaker service returned status {response.status}: {response_text}"
                             )
                             return {}
 
                         result = await response.json()
+                        logger.info(f"🎤 DEBUG: Speaker service ({diarization_source}) response: {result}")
                         logger.info(
-                            f"Speaker service ({diarization_source}) returned response with enhancement data"
+                            f"🎤 Speaker service ({diarization_source}) returned response with enhancement data"
                         )
                         return result
 
         except aiohttp.ClientError as e:
-            logger.warning(f"Failed to connect to speaker recognition service: {e}")
+            logger.warning(f"🎤 Failed to connect to speaker recognition service at {self.service_url}: {e}")
+            import traceback
+            logger.warning(f"🎤 Connection error traceback: {traceback.format_exc()}")
             return {}
         except Exception as e:
-            logger.error(f"Error during diarize-identify-match: {e}")
+            logger.error(f"🎤 Error during diarize-identify-match: {e}")
+            import traceback
+            logger.error(f"🎤 Error traceback: {traceback.format_exc()}")
             return {}
 
     async def diarize_and_identify(

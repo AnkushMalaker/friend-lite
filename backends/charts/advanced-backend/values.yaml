@@ -59,7 +59,7 @@ env:
   # Override only specific values if needed
   ENVIRONMENT: "dev"
   AUTH_ENABLED: "false"
-  CORS_ORIGINS: ""  # Set by ConfigMap generated from Makefile
+  # CORS_ORIGINS is set by ConfigMap generated from Makefile - don't override here
   # Don't override OPENAI_API_KEY - it comes from ConfigMap
 
 # Volume mounts for persistent data
