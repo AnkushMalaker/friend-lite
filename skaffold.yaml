@@ -137,7 +137,7 @@ profiles:
               image.repository: "{{.IMAGE_REPO_advanced_backend}}"
               image.tag: "{{.IMAGE_TAG_advanced_backend}}"
               # Override specific Kubernetes-specific values (not in env file)
-              env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend"
+              env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend-lite"
               env.QDRANT_BASE_URL: "qdrant.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local"
               persistence.storageClass: "openebs-hostpath"
               persistence.size: "10Gi"

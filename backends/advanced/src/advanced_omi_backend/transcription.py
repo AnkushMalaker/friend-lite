@@ -150,7 +150,9 @@ class TranscriptionManager:
         # Optional speaker recognition
         self.speaker_client = SpeakerRecognitionClient()
         if self.speaker_client.enabled:
-            logger.info("Speaker recognition integration enabled")
+            logger.info(f"🎤 Speaker recognition integration enabled with service URL: {self.speaker_client.service_url}")
+        else:
+            logger.info("🎤 Speaker recognition integration disabled")
 
     def _get_current_client(self):
         """Get the current client state using ClientManager."""
@@ -380,13 +382,27 @@ class TranscriptionManager:
 
             # ONLY process speaker diarization if speech was detected
             final_segments = []
+            logger.info(f"🎤 DEBUG: Starting speaker recognition check - enabled: {self.speaker_client.enabled}, audio_uuid: {self._current_audio_uuid}, chunk_repo: {self.chunk_repo is not None}")
+
             if self.speaker_client.enabled and self._current_audio_uuid and self.chunk_repo:
                 try:
+                    logger.info(f"🎤 DEBUG: Fetching chunk data for audio_uuid: {self._current_audio_uuid}")
                     # Get audio file path from database
                     chunk_data = await self.chunk_repo.get_chunk(self._current_audio_uuid)
+                    logger.info(f"🎤 DEBUG: Chunk data retrieved: {chunk_data is not None}")
+
                     if chunk_data and "audio_path" in chunk_data:
                         audio_path = chunk_data["audio_path"]
+                        # Fix: Use the correct path where audio files are actually stored
+                        # CHUNK_DIR is "./audio_chunks" relative to the app directory
                         full_audio_path = f"/app/audio_chunks/{audio_path}"
+
+                        # Check if audio file actually exists
+                        import os
+                        file_exists = os.path.exists(full_audio_path)
+                        logger.info(f"🎤 DEBUG: Audio path from DB: {audio_path}")
+                        logger.info(f"🎤 DEBUG: Full audio path: {full_audio_path}")
+                        logger.info(f"🎤 DEBUG: Audio file exists: {file_exists}")
 
                         logger.info(
                             f"🎤 Getting speaker diarization with word matching for: {full_audio_path}"
@@ -395,11 +411,15 @@ class TranscriptionManager:
                         # Get user_id from client state
                         current_client = self._get_current_client()
                         user_id = current_client.user_id if current_client else None
+                        logger.info(f"🎤 DEBUG: User ID for speaker recognition: {user_id}")
 
                         # Call new speaker service endpoint
+                        logger.info(f"🎤 DEBUG: Calling speaker service with audio path: {full_audio_path}")
                         speaker_result = await self.speaker_client.diarize_identify_match(
                             full_audio_path, transcript_data, user_id=user_id
                         )
+                        logger.info(f"🎤 DEBUG: Speaker service response type: {type(speaker_result)}")
+                        logger.info(f"🎤 DEBUG: Speaker service response: {speaker_result}")
 
                         if speaker_result and speaker_result.get("segments"):
                             final_segments = speaker_result["segments"]
@@ -410,12 +430,16 @@ class TranscriptionManager:
                             for i, seg in enumerate(final_segments[:3]):
                                 logger.info(f"🔍 DEBUG: Segment {i}: text='{seg.get('text', 'MISSING')}', speaker={seg.get('speaker', 'UNKNOWN')}")
                         else:
-                            logger.info("🎤 Speaker service returned no segments")
+                            logger.info("🎤 Speaker service returned no segments or empty response")
                     else:
-                        logger.warning("No audio path found for speaker diarization")
+                        logger.warning(f"🎤 DEBUG: No audio path found in chunk data. Chunk data keys: {list(chunk_data.keys()) if chunk_data else 'None'}")
 
                 except Exception as e:
-                    logger.warning(f"Speaker diarization with matching failed: {e}")
+                    logger.warning(f"🎤 Speaker diarization with matching failed: {e}")
+                    import traceback
+                    logger.warning(f"🎤 Speaker diarization traceback: {traceback.format_exc()}")
+            else:
+                logger.info(f"🎤 DEBUG: Skipping speaker recognition - enabled: {self.speaker_client.enabled}, audio_uuid: {self._current_audio_uuid}, chunk_repo: {self.chunk_repo is not None}")
 
             # Only store segments if we got them from speaker service
             if not final_segments:
@@ -633,6 +657,10 @@ class TranscriptionManager:
                 logger.error(f"No audio session found for {audio_uuid}")
                 return None
 
+            # Debug timestamp
+            raw_timestamp = audio_session.get("timestamp", 0)
+            logger.info(f"🔍 TIMESTAMP DEBUG: Raw timestamp: {raw_timestamp}, converted: {raw_timestamp / 1000}")
+
             # Create conversation data (title and summary will be generated after speaker recognition)
             conversation_id = str(uuid.uuid4())
             conversation_data = {
@@ -659,7 +687,7 @@ class TranscriptionManager:
                 "action_items": [],
                 "created_at": datetime.now(UTC),
                 "updated_at": datetime.now(UTC),
-                "session_start": datetime.fromtimestamp(audio_session.get("timestamp", 0), tz=UTC),
+                "session_start": datetime.fromtimestamp(audio_session.get("timestamp", 0) / 1000, tz=UTC),
                 "session_end": datetime.now(UTC),
             }
 
