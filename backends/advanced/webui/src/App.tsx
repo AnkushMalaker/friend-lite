@@ -10,6 +10,7 @@ import Users from './pages/Users'
 import System from './pages/System'
 import Upload from './pages/Upload'
 import LiveRecord from './pages/LiveRecord'
+import Processes from './pages/Processes'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { ErrorBoundary, PageErrorBoundary } from './components/ErrorBoundary'
 
@@ -66,6 +67,11 @@ function App() {
                 <Route path="upload" element={
                   <PageErrorBoundary>
                     <Upload />
+                  </PageErrorBoundary>
+                } />
+                <Route path="processes" element={
+                  <PageErrorBoundary>
+                    <Processes />
                   </PageErrorBoundary>
                 } />
               </Route>

@@ -17,13 +17,13 @@ import concurrent.futures
 import json
 import os
 import time
-import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import Optional
 
 import aiohttp
+from advanced_omi_backend.audio_utils import process_audio_chunk
 
 # Import authentication components
 from advanced_omi_backend.auth import (
@@ -44,13 +44,10 @@ from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.llm_client import async_health_check
 from advanced_omi_backend.memory import get_memory_service, shutdown_memory_service
 from advanced_omi_backend.processors import (
-    AudioProcessingItem,
     get_processor_manager,
     init_processor_manager,
 )
-from advanced_omi_backend.audio_utils import process_audio_chunk
-from advanced_omi_backend.task_manager import init_task_manager, get_task_manager
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
+from advanced_omi_backend.task_manager import get_task_manager, init_task_manager
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import (
     User,
@@ -76,8 +73,6 @@ from fastapi.staticfiles import StaticFiles
 from friend_lite.decoder import OmiOpusDecoder
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConnectionFailure, PyMongoError
-from wyoming.audio import AudioChunk
-from wyoming.client import AsyncTcpClient
 
 ###############################################################################
 # SETUP
@@ -113,10 +108,9 @@ speakers_col = db["speakers"]
 SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
-# Conversation timeout configuration
-NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
-# Audio cropping configuration
+# Pipeline stage configuration
+SPEAKER_RECOGNITION_ENABLED = bool(os.getenv("SPEAKER_SERVICE_URL"))  # Enabled if service URL is set
 AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
 MIN_SPEECH_SEGMENT_DURATION = float(os.getenv("MIN_SPEECH_SEGMENT_DURATION", "1.0"))  # seconds
 CROPPING_CONTEXT_PADDING = float(
@@ -147,9 +141,6 @@ QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 QDRANT_PORT = os.getenv("QDRANT_PORT", "6333")
 
 # Speaker service configuration
-
-# Track pending WebSocket connections to prevent race conditions
-pending_connections: set[str] = set()
 
 # Thread pool executors
 _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -273,9 +264,14 @@ async def cleanup_client_state(client_id: str):
     removed = await client_manager.remove_client_with_cleanup(client_id)
 
     if removed:
-        # Clean up any orphaned transcript events for this client
-        coordinator = get_transcript_coordinator()
-        coordinator.cleanup_transcript_events_for_client(client_id)
+        # Clean up processor manager task tracking
+        try:
+            processor_manager = get_processor_manager()
+            processor_manager.cleanup_processing_tasks(client_id)
+            logger.debug(f"Cleaned up processor tasks for client {client_id}")
+        except Exception as processor_cleanup_error:
+            logger.error(f"Error cleaning up processor tasks for {client_id}: {processor_cleanup_error}")
+
 
         logger.info(f"Client {client_id} cleaned up successfully")
     else:
@@ -316,9 +312,15 @@ async def lifespan(app: FastAPI):
     await task_manager.start()
     application_logger.info("Task manager started")
 
-    # Initialize processor manager
-    processor_manager = init_processor_manager(CHUNK_DIR, ac_repository)
+    # Initialize processor manager with pipeline configuration
+    processor_manager = init_processor_manager(
+        CHUNK_DIR,
+        ac_repository,
+        speaker_recognition_enabled=SPEAKER_RECOGNITION_ENABLED,
+        cropping_enabled=AUDIO_CROPPING_ENABLED
+    )
     await processor_manager.start()
+
 
     logger.info("App ready")
     try:
@@ -330,6 +332,7 @@ async def lifespan(app: FastAPI):
         # Clean up all active clients
         for client_id in client_manager.get_all_client_ids():
             await cleanup_client_state(client_id)
+
 
         # Shutdown processor manager
         processor_manager = get_processor_manager()
@@ -505,10 +508,6 @@ async def ws_endpoint_omi(
     device_name: Optional[str] = Query(None),
 ):
     """Accepts WebSocket connections with Wyoming protocol, decodes OMI Opus audio, and processes per-client."""
-    # Generate pending client_id to track connection even if auth fails
-    pending_client_id = f"pending_{uuid.uuid4()}"
-    pending_connections.add(pending_client_id)
-
     client_id = None
     client_state = None
 
@@ -524,8 +523,6 @@ async def ws_endpoint_omi(
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
 
-        # Remove from pending now that we have real client_id
-        pending_connections.discard(pending_client_id)
         application_logger.info(
             f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
         )
@@ -597,7 +594,6 @@ async def ws_endpoint_omi(
                             "channels": OMI_CHANNELS,
                             "timestamp": chunk_timestamp,
                         },
-                        client_state=client_state,
                     )
 
                     # Log every 1000th packet to avoid spam
@@ -646,8 +642,6 @@ async def ws_endpoint_omi(
     except Exception as e:
         application_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
-        # Clean up pending connection tracking
-        pending_connections.discard(pending_client_id)
 
         # Ensure cleanup happens even if client_id is None
         if client_id:
@@ -669,9 +663,6 @@ async def ws_endpoint_pcm(
     ws: WebSocket, token: Optional[str] = Query(None), device_name: Optional[str] = Query(None)
 ):
     """Accepts WebSocket connections, processes PCM audio per-client."""
-    # Generate pending client_id to track connection even if auth fails
-    pending_client_id = f"pending_{uuid.uuid4()}"
-    pending_connections.add(pending_client_id)
 
     client_id = None
     client_state = None
@@ -683,19 +674,16 @@ async def ws_endpoint_pcm(
             await ws.close(code=1008, reason="Authentication required")
             return
 
-        # Accept WebSocket AFTER authentication succeeds (fixes race condition)
         await ws.accept()
 
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
 
-        # Remove from pending now that we have real client_id
-        pending_connections.discard(pending_client_id)
         application_logger.info(
             f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
         )
 
-        # Send ready message to client (similar to speaker recognition service)
+        # Send ready message to client
         try:
             ready_msg = json.dumps({"type": "ready", "message": "WebSocket connection established"}) + "\n"
             await ws.send_text(ready_msg)
@@ -733,20 +721,8 @@ async def ws_endpoint_pcm(
                             f"{audio_format.get('width')}bytes, "
                             f"{audio_format.get('channels')}ch"
                         )
-                        
-                        # Create transcription manager early for this client
-                        processor_manager = get_processor_manager()
-                        try:
-                            application_logger.debug(f"📋 Creating transcription manager for {client_id}")
-                            await processor_manager.ensure_transcription_manager(client_id)
-                            application_logger.info(
-                                f"🔌 Created transcription manager for {client_id} on audio-start"
-                            )
-                        except Exception as tm_error:
-                            application_logger.error(
-                                f"❌ Failed to create transcription manager for {client_id}: {tm_error}", exc_info=True
-                            )
-                        
+
+                        # Transcription manager already created during client init - no need to create again
                         application_logger.info(f"🎵 Switching to audio streaming mode for {client_id}")
                         continue  # Continue to audio streaming mode
                     
@@ -764,7 +740,7 @@ async def ws_endpoint_pcm(
                         
                 else:
                     # Audio streaming mode - receive raw bytes (like speaker recognition)
-                    application_logger.debug(f"🎵 Audio streaming mode for {client_id} - waiting for audio data")
+                    application_logger.info(f"🎵 Audio streaming mode ENTERED for {client_id} - waiting for audio data")
                     
                     try:
                         # Receive raw audio bytes or check for control messages
@@ -815,9 +791,11 @@ async def ws_endpoint_pcm(
                                             audio_data = payload_msg["bytes"]
                                             packet_count += 1
                                             total_bytes += len(audio_data)
-                                            
-                                            application_logger.debug(f"🎵 Received audio chunk #{packet_count}: {len(audio_data)} bytes")
-                                            
+
+                                            # Log first 5 chunks and every 1000th chunk
+                                            if packet_count <= 5 or packet_count % 1000 == 0:
+                                                application_logger.info(f"Received audio chunk #{packet_count}: {len(audio_data)} bytes for {client_id}")
+
                                             # Process audio chunk through unified pipeline
                                             audio_format = control_header.get("data", {})
                                             await process_audio_chunk(
@@ -826,7 +804,6 @@ async def ws_endpoint_pcm(
                                                 user_id=user.user_id,
                                                 user_email=user.email,
                                                 audio_format=audio_format,
-                                                client_state=None,  # No client state update needed for Wyoming protocol
                                             )
                                         else:
                                             application_logger.warning(f"Expected binary payload for audio-chunk, got: {payload_msg.keys()}")
@@ -861,7 +838,6 @@ async def ws_endpoint_pcm(
                                     "channels": 1,
                                     "timestamp": int(time.time()),
                                 },
-                                client_state=None,  # No client state update needed for raw streaming
                             )
                         
                         else:
@@ -927,9 +903,6 @@ async def ws_endpoint_pcm(
             f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True
         )
     finally:
-        # Clean up pending connection tracking
-        pending_connections.discard(pending_client_id)
-
         # Ensure cleanup happens even if client_id is None
         if client_id:
             try:
@@ -971,7 +944,6 @@ async def health_check():
             ),
             "chunk_dir": str(CHUNK_DIR),
             "active_clients": client_manager.get_client_count(),
-            "new_conversation_timeout_minutes": NEW_CONVERSATION_TIMEOUT_MINUTES,
             "audio_cropping_enabled": AUDIO_CROPPING_ENABLED,
             "llm_provider": os.getenv("LLM_PROVIDER"),
             "llm_model": os.getenv("OPENAI_MODEL"),

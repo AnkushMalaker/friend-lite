@@ -7,21 +7,18 @@ application level by the ProcessorManager.
 
 import asyncio
 import logging
-import os
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from advanced_omi_backend.audio_processing_types import AudioProcessingItem
 from advanced_omi_backend.conversation_manager import get_conversation_manager
 from advanced_omi_backend.database import AudioChunksRepository
-from advanced_omi_backend.task_manager import get_task_manager
-from wyoming.audio import AudioChunk
+from advanced_omi_backend.processors import get_processor_manager
 
 # Get loggers
 audio_logger = logging.getLogger("audio_processing")
-
-# Configuration constants
-NEW_CONVERSATION_TIMEOUT_MINUTES = float(os.getenv("NEW_CONVERSATION_TIMEOUT_MINUTES", "1.5"))
 
 
 class ClientState:
@@ -61,17 +58,20 @@ class ClientState:
 
         # Audio configuration - sample rate for this client's audio stream
         self.sample_rate: Optional[int] = None
+        self.channels: int = 1
+        self.sample_width: int = 2  # 2 bytes = 16-bit
 
         # Debug tracking
         self.transaction_id: Optional[str] = None
 
+        # New unified pipeline fields
+        self.audio_buffer: List[bytes] = []
+        self.is_recording: bool = False
+        self._processing_started: bool = False  # Prevent duplicate processing
+        self._processing_lock = asyncio.Lock()
+
         audio_logger.info(f"Created client state for {client_id}")
 
-    def update_audio_received(self, chunk: AudioChunk):
-        """Update state when audio is received."""
-        # Check if we should start a new conversation
-        if self.should_start_new_conversation():
-            asyncio.create_task(self.start_new_conversation())
 
     def set_current_audio_uuid(self, audio_uuid: str):
         """Set the current audio UUID when processor creates a new file."""
@@ -104,19 +104,8 @@ class ClientState:
             audio_logger.warning(f"Speech end recorded for {audio_uuid} but no start time found")
 
     def update_transcript_received(self):
-        """Update timestamp when transcript is received (for timeout detection)."""
+        """Update timestamp when transcript is received."""
         self.last_transcript_time = time.time()
-
-    def should_start_new_conversation(self) -> bool:
-        """Check if we should start a new conversation based on timeout."""
-        if self.last_transcript_time is None:
-            return False
-
-        current_time = time.time()
-        time_since_last_transcript = current_time - self.last_transcript_time
-        timeout_seconds = NEW_CONVERSATION_TIMEOUT_MINUTES * 60
-
-        return time_since_last_transcript > timeout_seconds
 
     async def close_current_conversation(self):
         """Close the current conversation and queue necessary processing."""
@@ -161,20 +150,6 @@ class ClientState:
         else:
             audio_logger.warning(f"⚠️ Conversation closure had issues for {self.current_audio_uuid}")
 
-    async def start_new_conversation(self):
-        """Start a new conversation by closing current and resetting state."""
-        await self.close_current_conversation()
-
-        # Reset conversation state
-        self.current_audio_uuid = None
-        self.conversation_start_time = time.time()
-        self.last_transcript_time = None
-        self.conversation_closed = False
-
-        audio_logger.info(
-            f"Client {self.client_id}: Started new conversation due to "
-            f"{NEW_CONVERSATION_TIMEOUT_MINUTES}min timeout"
-        )
 
     async def disconnect(self):
         """Clean disconnect of client state."""
@@ -187,12 +162,62 @@ class ClientState:
         # Close current conversation
         await self.close_current_conversation()
 
-        # Cancel any tasks for this client
-        task_manager = get_task_manager()
-        await task_manager.cancel_tasks_for_client(self.client_id)
+        # Clean up client resources
+        processor_manager = get_processor_manager()
+        await processor_manager.cleanup_client_tasks(self.client_id)
 
         # Clean up state
         self.speech_segments.clear()
         self.current_speech_start.clear()
 
         audio_logger.info(f"Client {self.client_id} disconnected and cleaned up")
+
+    # New unified pipeline methods
+    def start_audio_session(self) -> str:
+        """Start a new audio recording session."""
+        self.current_audio_uuid = str(uuid.uuid4())
+        self.conversation_start_time = time.time()
+        self.is_recording = True
+        self._processing_started = False  # Reset processing flag for new session
+        self.audio_buffer.clear()
+
+        audio_logger.debug(f"Started audio session {self.current_audio_uuid} for client {self.client_id}")
+        return self.current_audio_uuid
+
+    def add_audio_chunk(self, audio_data: bytes):
+        """Add audio chunk to current session buffer."""
+        if self.is_recording:
+            self.audio_buffer.append(audio_data)
+
+    async def signal_audio_end(self) -> Optional[AudioProcessingItem]:
+        """Signal end of audio input and return processing item.
+
+        Implements safe duplicate processing prevention using lock and flag.
+        """
+        async with self._processing_lock:
+            # Check if already processing (prevent duplicates)
+            if self._processing_started or not self.is_recording or not self.audio_buffer:
+                audio_logger.debug(f"Audio end signaled but no processing needed for {self.client_id}")
+                return None
+
+            # IMMEDIATELY mark as processed to prevent race condition
+            self._processing_started = True
+            self.is_recording = False
+
+            # Create processing item from buffered audio
+            processing_item = AudioProcessingItem.from_websocket(
+                audio_chunks=self.audio_buffer.copy(),
+                client_id=self.client_id,
+                user_id=self.user_id,
+                user_email=self.user_email,
+                sample_rate=self.sample_rate or 16000
+            )
+
+            # Update audio_uuid to match the processing item
+            self.current_audio_uuid = processing_item.audio_uuid
+
+            # Clear buffer after creating processing item
+            self.audio_buffer.clear()
+
+            audio_logger.debug(f"Audio session ended for client {self.client_id}, created processing item")
+            return processing_item

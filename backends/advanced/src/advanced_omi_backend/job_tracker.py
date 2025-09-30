@@ -32,6 +32,57 @@ class FileStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class JobType(str, Enum):
+    BATCH = "batch"          # File processing jobs (existing)
+    PIPELINE = "pipeline"    # Audio processing pipeline (new)
+
+
+class AudioSource(str, Enum):
+    WEBSOCKET = "websocket"
+    FILE_UPLOAD = "file_upload"
+
+
+class PipelineStage(str, Enum):
+    AUDIO = "audio"
+    TRANSCRIPTION = "transcription"
+    SPEAKER_RECOGNITION = "speaker_recognition"
+    MEMORY = "memory"
+    CROPPING = "cropping"
+
+
+class StageEvent(str, Enum):
+    ENQUEUE = "enqueue"      # Item queued by producer
+    DEQUEUE = "dequeue"      # Item dequeued by consumer
+    COMPLETE = "complete"    # Processing finished
+    ERROR = "error"          # Processing failed
+
+
+@dataclass
+class PipelineStageInfo:
+    """Information about a pipeline processing stage."""
+    stage: PipelineStage
+    status: FileStatus = FileStatus.PENDING
+    enqueue_time: Optional[datetime] = None
+    dequeue_time: Optional[datetime] = None
+    complete_time: Optional[datetime] = None
+    error_message: Optional[str] = None
+    metadata: Dict = field(default_factory=dict)
+
+    @property
+    def queue_lag_seconds(self) -> Optional[float]:
+        """Time between enqueue and dequeue"""
+        if self.enqueue_time and self.dequeue_time:
+            return (self.dequeue_time - self.enqueue_time).total_seconds()
+        return None
+
+    @property
+    def processing_lag_seconds(self) -> Optional[float]:
+        """Time between dequeue and complete"""
+        if self.dequeue_time and self.complete_time:
+            return (self.complete_time - self.dequeue_time).total_seconds()
+        return None
+
+
 @dataclass
 class FileProcessingInfo:
     filename: str
@@ -60,6 +111,16 @@ class ProcessingJob:
     error_message: Optional[str] = None
     current_file_index: int = 0
 
+    # New fields for pipeline support
+    job_type: JobType = JobType.BATCH
+    audio_source: Optional[AudioSource] = None
+    pipeline_stages: List[PipelineStageInfo] = field(default_factory=list)  # For PIPELINE jobs
+
+    # Pipeline-specific identifiers
+    client_id: Optional[str] = None         # For websocket jobs
+    audio_uuid: Optional[str] = None        # Links to audio processing
+    conversation_id: Optional[str] = None   # Links to conversation (set later)
+
     @property
     def total_files(self) -> int:
         return len(self.files)
@@ -76,9 +137,31 @@ class ProcessingJob:
 
     @property
     def progress_percent(self) -> float:
-        if self.total_files == 0:
-            return 0.0
-        return (self.processed_files / self.total_files) * 100
+        if self.job_type == JobType.BATCH:
+            if self.total_files == 0:
+                return 0.0
+            return (self.processed_files / self.total_files) * 100
+        elif self.job_type == JobType.PIPELINE:
+            return self.pipeline_progress_percent
+        return 0.0
+
+    @property
+    def pipeline_progress_percent(self) -> float:
+        """Progress for pipeline jobs"""
+        if self.job_type == JobType.PIPELINE and self.pipeline_stages:
+            completed = len([s for s in self.pipeline_stages
+                           if s.status in [FileStatus.COMPLETED, FileStatus.FAILED]])
+            return (completed / len(self.pipeline_stages)) * 100
+        return 0.0
+
+    @property
+    def current_stage(self) -> Optional[PipelineStageInfo]:
+        """Get currently processing pipeline stage"""
+        if self.job_type == JobType.PIPELINE:
+            for stage in self.pipeline_stages:
+                if stage.status == FileStatus.PROCESSING:
+                    return stage
+        return None
 
     @property
     def current_file(self) -> Optional[FileProcessingInfo]:
@@ -87,34 +170,66 @@ class ProcessingJob:
         return None
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "job_id": self.job_id,
+            "job_type": self.job_type.value,
             "status": self.status.value,
-            "total_files": self.total_files,
-            "processed_files": self.processed_files,
-            "current_file": self.current_file.filename if self.current_file else None,
             "progress_percent": round(self.progress_percent, 1),
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "error_message": self.error_message,
-            "files": [
-                {
-                    "filename": f.filename,
-                    "duration_seconds": f.duration_seconds,
-                    "size_bytes": f.size_bytes,
-                    "status": f.status.value,
-                    "client_id": f.client_id,
-                    "audio_uuid": f.audio_uuid,
-                    "transcription_status": f.transcription_status,
-                    "memory_status": f.memory_status,
-                    "error_message": f.error_message,
-                    "started_at": f.started_at.isoformat() if f.started_at else None,
-                    "completed_at": f.completed_at.isoformat() if f.completed_at else None,
-                }
-                for f in self.files
-            ],
         }
+
+        # Add batch-specific fields
+        if self.job_type == JobType.BATCH:
+            result.update({
+                "total_files": self.total_files,
+                "processed_files": self.processed_files,
+                "current_file": self.current_file.filename if self.current_file else None,
+                "files": [
+                    {
+                        "filename": f.filename,
+                        "duration_seconds": f.duration_seconds,
+                        "size_bytes": f.size_bytes,
+                        "status": f.status.value,
+                        "client_id": f.client_id,
+                        "audio_uuid": f.audio_uuid,
+                        "transcription_status": f.transcription_status,
+                        "memory_status": f.memory_status,
+                        "error_message": f.error_message,
+                        "started_at": f.started_at.isoformat() if f.started_at else None,
+                        "completed_at": f.completed_at.isoformat() if f.completed_at else None,
+                    }
+                    for f in self.files
+                ],
+            })
+
+        # Add pipeline-specific fields
+        if self.job_type == JobType.PIPELINE:
+            result.update({
+                "audio_source": self.audio_source.value if self.audio_source else None,
+                "client_id": self.client_id,
+                "audio_uuid": self.audio_uuid,
+                "conversation_id": self.conversation_id,
+                "current_stage": self.current_stage.stage.value if self.current_stage else None,
+                "pipeline_stages": [
+                    {
+                        "stage": stage.stage.value,
+                        "status": stage.status.value,
+                        "enqueue_time": stage.enqueue_time.isoformat() if stage.enqueue_time else None,
+                        "dequeue_time": stage.dequeue_time.isoformat() if stage.dequeue_time else None,
+                        "complete_time": stage.complete_time.isoformat() if stage.complete_time else None,
+                        "queue_lag_seconds": stage.queue_lag_seconds,
+                        "processing_lag_seconds": stage.processing_lag_seconds,
+                        "error_message": stage.error_message,
+                        "metadata": stage.metadata,
+                    }
+                    for stage in self.pipeline_stages
+                ],
+            })
+
+        return result
 
 
 class JobTracker:
@@ -251,6 +366,150 @@ class JobTracker:
                 job
                 for job in self.jobs.values()
                 if job.status in [JobStatus.QUEUED, JobStatus.PROCESSING]
+            ]
+
+    # New pipeline-specific methods
+    async def create_pipeline_job(
+        self,
+        audio_source: AudioSource,
+        user_id: str,
+        identifier: str,  # client_id for websocket, filename for file_upload
+        audio_uuid: str,
+        stages: List[str] = None
+    ) -> str:
+        """Create a new pipeline processing job."""
+        job_id = str(uuid.uuid4())
+
+        if stages is None:
+            stages = ["audio", "transcription", "memory", "cropping"]
+
+        pipeline_stages = [
+            PipelineStageInfo(stage=PipelineStage(stage))
+            for stage in stages
+        ]
+
+        job = ProcessingJob(
+            job_id=job_id,
+            user_id=user_id,
+            device_name=identifier,  # client_id or filename
+            job_type=JobType.PIPELINE,
+            audio_source=audio_source,
+            client_id=identifier if audio_source == AudioSource.WEBSOCKET else None,
+            audio_uuid=audio_uuid,
+            pipeline_stages=pipeline_stages
+        )
+
+        async with self._lock:
+            self.jobs[job_id] = job
+
+        logger.info(f"Created pipeline job {job_id} for {audio_source.value} processing")
+        return job_id
+
+    async def track_stage_event(
+        self,
+        job_id: str,
+        stage: str,
+        event: StageEvent,
+        metadata: Dict = None
+    ):
+        """Track pipeline stage events (enqueue/dequeue/complete/error)."""
+        async with self._lock:
+            if job_id not in self.jobs:
+                logger.warning(f"Job {job_id} not found for stage tracking")
+                return
+
+            job = self.jobs[job_id]
+            if job.job_type != JobType.PIPELINE:
+                logger.warning(f"Job {job_id} is not a pipeline job")
+                return
+
+            # Find the stage
+            stage_info = None
+            for s in job.pipeline_stages:
+                if s.stage.value == stage:
+                    stage_info = s
+                    break
+
+            if not stage_info:
+                logger.warning(f"Stage {stage} not found in job {job_id}")
+                return
+
+            # Update stage based on event
+            now = datetime.now(timezone.utc)
+
+            if event == StageEvent.ENQUEUE:
+                stage_info.enqueue_time = now
+                stage_info.status = FileStatus.PENDING
+                if job.status == JobStatus.QUEUED:
+                    job.status = JobStatus.PROCESSING
+                    job.started_at = now
+
+            elif event == StageEvent.DEQUEUE:
+                stage_info.dequeue_time = now
+                stage_info.status = FileStatus.PROCESSING
+
+            elif event == StageEvent.COMPLETE:
+                stage_info.complete_time = now
+                stage_info.status = FileStatus.COMPLETED
+
+            elif event == StageEvent.ERROR:
+                stage_info.complete_time = now
+                stage_info.status = FileStatus.FAILED
+                stage_info.error_message = metadata.get("error") if metadata else None
+
+            if metadata:
+                stage_info.metadata.update(metadata)
+
+        logger.info(f"📊 Job {job_id}: {stage} → {event.value}")
+
+    async def complete_pipeline_job(self, job_id: str, conversation_id: str = None):
+        """Mark pipeline job as completed."""
+        async with self._lock:
+            if job_id in self.jobs:
+                job = self.jobs[job_id]
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.now(timezone.utc)
+                if conversation_id:
+                    job.conversation_id = conversation_id
+
+    async def get_pipeline_metrics(self) -> Dict:
+        """Get pipeline performance metrics."""
+        async with self._lock:
+            pipeline_jobs = [j for j in self.jobs.values() if j.job_type == JobType.PIPELINE]
+
+            metrics = {
+                "total_pipeline_jobs": len(pipeline_jobs),
+                "active_pipeline_jobs": len([j for j in pipeline_jobs if j.status == JobStatus.PROCESSING]),
+                "stage_metrics": {}
+            }
+
+            # Calculate per-stage metrics
+            for stage in PipelineStage:
+                stage_data = []
+                for job in pipeline_jobs:
+                    for stage_info in job.pipeline_stages:
+                        if stage_info.stage == stage:
+                            stage_data.append(stage_info)
+
+                if stage_data:
+                    queue_lags = [s.queue_lag_seconds for s in stage_data if s.queue_lag_seconds]
+                    processing_lags = [s.processing_lag_seconds for s in stage_data if s.processing_lag_seconds]
+
+                    metrics["stage_metrics"][stage.value] = {
+                        "avg_queue_lag_seconds": sum(queue_lags) / len(queue_lags) if queue_lags else 0,
+                        "avg_processing_lag_seconds": sum(processing_lags) / len(processing_lags) if processing_lags else 0,
+                        "total_processed": len([s for s in stage_data if s.status == FileStatus.COMPLETED]),
+                        "total_failed": len([s for s in stage_data if s.status == FileStatus.FAILED])
+                    }
+
+            return metrics
+
+    async def get_active_pipeline_jobs(self) -> List[ProcessingJob]:
+        """Get all active pipeline jobs."""
+        async with self._lock:
+            return [
+                job for job in self.jobs.values()
+                if job.job_type == JobType.PIPELINE and job.status == JobStatus.PROCESSING
             ]
 
 

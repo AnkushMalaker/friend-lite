@@ -223,7 +223,7 @@ export default function Memories() {
       return (
         <div className="space-y-1">
           {lines.map((line, index) => (
-            <div key={index} className="text-gray-900 dark:text-gray-100">
+            <div key={`line-${index}-${line.substring(0, 20)}`} className="text-gray-900 dark:text-gray-100">
               {line}
             </div>
           ))}

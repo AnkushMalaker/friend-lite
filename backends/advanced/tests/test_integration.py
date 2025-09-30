@@ -28,12 +28,11 @@ Test Environment:
 - Provider selection via TRANSCRIPTION_PROVIDER environment variable
 """
 
-import asyncio
 import json
 import logging
 import os
 import shutil
-import socket
+import signal
 import subprocess
 import sys
 import time
@@ -56,6 +55,18 @@ logger = logging.getLogger(__name__)
 # Ensure immediate output
 logger.handlers[0].flush() if logger.handlers else None
 from dotenv import load_dotenv
+
+# Global interrupt flag for graceful shutdown
+_interrupted = False
+
+def signal_handler(signum, frame):
+    """Handle SIGINT (Ctrl+C) gracefully."""
+    global _interrupted
+    logger.info("🛑 Interrupt signal received - initiating graceful shutdown...")
+    _interrupted = True
+
+# Set up signal handler
+signal.signal(signal.SIGINT, signal_handler)
 
 # Test Configuration Flags
 # REBUILD=True: Force rebuild of containers (useful when code changes)
@@ -105,6 +116,20 @@ else:  # Default to deepgram
     TEST_ENV_VARS = TEST_ENV_VARS_DEEPGRAM
 
 tests_dir = Path(__file__).parent
+
+def interruptible_sleep(duration):
+    """Sleep function that can be interrupted by signal."""
+    global _interrupted
+    end_time = time.time() + duration
+    while time.time() < end_time and not _interrupted:
+        remaining = end_time - time.time()
+        sleep_time = min(0.5, remaining)  # Check interrupt every 0.5 seconds
+        if sleep_time <= 0:
+            break
+        time.sleep(sleep_time)
+
+    if _interrupted:
+        raise KeyboardInterrupt("Test interrupted by user")
 
 # Test constants
 BACKEND_URL = "http://localhost:8001"  # Test backend port
@@ -268,67 +293,76 @@ class IntegrationTestRunner:
         logger.info("🔍 Waiting for Parakeet ASR service to be ready...")
         
         start_time = time.time()
-        while time.time() - start_time < MAX_STARTUP_WAIT:
-            try:
-                # Check container status directly instead of HTTP health check
-                # This avoids the curl dependency issue in the container
-                result = subprocess.run(
-                    ["docker", "ps", "--filter", "name=asr-services-parakeet-asr-test-1", "--format", "{{.Status}}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                
-                if result.returncode == 0 and result.stdout.strip():
-                    status = result.stdout.strip()
-                    logger.debug(f"Container status: {status}")
-                    
-                    # Early exit on unhealthy containers
-                    if "(unhealthy)" in status:
-                        raise RuntimeError(f"Parakeet ASR container is unhealthy: {status}")
-                    if "Exited" in status or "Dead" in status:
-                        raise RuntimeError(f"Parakeet ASR container failed: {status}")
-                    
-                    # Look for 'Up' status and ideally '(healthy)' status
-                    if "Up" in status:
-                        # If container is healthy, we can skip the HTTP check
-                        if "(healthy)" in status:
-                            logger.info("✓ Parakeet ASR container is healthy")
-                            return
-                        # Additional check: try to connect to the service
-                        try:
-                            import requests
+        try:
+            while time.time() - start_time < MAX_STARTUP_WAIT:
+                # Check for interrupt
+                if _interrupted:
+                    raise KeyboardInterrupt("ASR service readiness check interrupted")
 
-                            # Use the same URL that the backend will use
-                            response = requests.get(f"{PARAKEET_ASR_URL}/health", timeout=5)
-                            if response.status_code == 200:
-                                health_data = response.json()
-                                if health_data.get("status") == "healthy":
-                                    logger.info("✓ Parakeet ASR service is healthy and accessible")
-                                    return
-                                elif health_data.get("status") == "unhealthy":
-                                    raise RuntimeError(f"Parakeet ASR service reports unhealthy: {health_data}")
+                try:
+                    # Check container status directly instead of HTTP health check
+                    # This avoids the curl dependency issue in the container
+                    result = subprocess.run(
+                        ["docker", "ps", "--filter", "name=asr-services-parakeet-asr-test-1", "--format", "{{.Status}}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+
+                    if result.returncode == 0 and result.stdout.strip():
+                        status = result.stdout.strip()
+                        logger.debug(f"Container status: {status}")
+
+                        # Early exit on unhealthy containers
+                        if "(unhealthy)" in status:
+                            raise RuntimeError(f"Parakeet ASR container is unhealthy: {status}")
+                        if "Exited" in status or "Dead" in status:
+                            raise RuntimeError(f"Parakeet ASR container failed: {status}")
+
+                        # Look for 'Up' status and ideally '(healthy)' status
+                        if "Up" in status:
+                            # If container is healthy, we can skip the HTTP check
+                            if "(healthy)" in status:
+                                logger.info("✓ Parakeet ASR container is healthy")
+                                return
+                            # Additional check: try to connect to the service
+                            try:
+                                import requests
+
+                                # Use the same URL that the backend will use
+                                response = requests.get(f"{PARAKEET_ASR_URL}/health", timeout=5)
+                                if response.status_code == 200:
+                                    health_data = response.json()
+                                    if health_data.get("status") == "healthy":
+                                        logger.info("✓ Parakeet ASR service is healthy and accessible")
+                                        return
+                                    elif health_data.get("status") == "unhealthy":
+                                        raise RuntimeError(f"Parakeet ASR service reports unhealthy: {health_data}")
+                                    else:
+                                        logger.debug(f"Service responding but not ready: {health_data}")
+                                elif response.status_code >= 500:
+                                    raise RuntimeError(f"Parakeet ASR service error: HTTP {response.status_code}")
+                                elif response.status_code >= 400:
+                                    logger.warning(f"Parakeet ASR client error: HTTP {response.status_code}")
                                 else:
-                                    logger.debug(f"Service responding but not ready: {health_data}")
-                            elif response.status_code >= 500:
-                                raise RuntimeError(f"Parakeet ASR service error: HTTP {response.status_code}")
-                            elif response.status_code >= 400:
-                                logger.warning(f"Parakeet ASR client error: HTTP {response.status_code}")
-                            else:
-                                logger.debug(f"Health check failed with status {response.status_code}")
-                        except requests.exceptions.ConnectionError as e:
-                            logger.debug(f"Connection failed, but container is up: {e}")
-                        except Exception as e:
-                            logger.debug(f"HTTP health check failed, but container is up: {e}")
+                                    logger.debug(f"Health check failed with status {response.status_code}")
+                            except requests.exceptions.ConnectionError as e:
+                                logger.debug(f"Connection failed, but container is up: {e}")
+                            except Exception as e:
+                                logger.debug(f"HTTP health check failed, but container is up: {e}")
+                        else:
+                            logger.debug(f"Container not ready yet: {status}")
                     else:
-                        logger.debug(f"Container not ready yet: {status}")
-                else:
-                    logger.debug("Container not found or not running")
+                        logger.debug("Container not found or not running")
                     
-            except Exception as e:
-                logger.debug(f"Container status check failed: {e}")
-                
-            time.sleep(2)
+                except Exception as e:
+                    logger.debug(f"Container status check failed: {e}")
+
+                interruptible_sleep(2)
+
+        except KeyboardInterrupt:
+            logger.info("🛑 ASR service readiness check interrupted by user")
+            raise
             
         raise RuntimeError("Parakeet ASR service failed to become ready within timeout")
         
@@ -576,88 +610,96 @@ class IntegrationTestRunner:
             "readiness": False
         }
         
-        while time.time() - start_time < MAX_STARTUP_WAIT:
-            try:
-                # 1. Check backend basic health
-                if not services_status["backend"]:
-                    try:
-                        health_response = requests.get(f"{BACKEND_URL}/health", timeout=5)
-                        if health_response.status_code == 200:
-                            logger.info("✓ Backend health check passed")
-                            services_status["backend"] = True
-                        elif health_response.status_code >= 500:
-                            raise RuntimeError(f"Backend service error: HTTP {health_response.status_code}")
-                        elif health_response.status_code >= 400:
-                            logger.warning(f"Backend client error: HTTP {health_response.status_code}")
-                    except requests.exceptions.RequestException:
-                        pass
-                
-                # 2. Check MongoDB connection via backend health check
-                if not services_status["mongo"] and services_status["backend"]:
-                    try:
-                        health_response = requests.get(f"{BACKEND_URL}/health", timeout=5)
-                        if health_response.status_code == 200:
-                            data = health_response.json()
-                            mongo_health = data.get("services", {}).get("mongodb", {})
-                            if mongo_health.get("healthy", False):
-                                logger.info("✓ MongoDB connection validated via backend health check")
-                                services_status["mongo"] = True
-                    except Exception:
-                        pass
-                
-                # 3. Check comprehensive readiness (includes Qdrant validation)
-                if not services_status["readiness"] and services_status["backend"] and services_status["auth"]:
-                    try:
-                        readiness_response = requests.get(f"{BACKEND_URL}/readiness", timeout=5)
-                        if readiness_response.status_code == 200:
-                            data = readiness_response.json()
-                            logger.info(f"📋 Readiness report: {json.dumps(data, indent=2)}")
-                            
-                            # Validate readiness data - backend validates Qdrant internally
-                            if data.get("status") in ["healthy", "ready"]:
-                                logger.info("✓ Backend reports all services ready (including Qdrant)")
-                                services_status["readiness"] = True
-                            elif data.get("status") == "unhealthy":
-                                raise RuntimeError(f"Backend reports unhealthy status: {data}")
-                            else:
-                                logger.warning(f"⚠️ Backend readiness check not fully healthy: {data}")
-                        elif readiness_response.status_code >= 500:
-                            raise RuntimeError(f"Backend readiness error: HTTP {readiness_response.status_code}")
-                        elif readiness_response.status_code >= 400:
-                            logger.warning(f"Backend readiness client error: HTTP {readiness_response.status_code}")
-                                
-                    except requests.exceptions.RequestException as e:
-                        logger.debug(f"Readiness endpoint not ready yet: {e}")
-                
-                # 4. Check authentication endpoint
-                if not services_status["auth"] and services_status["backend"]:
-                    try:
-                        # Just check that the auth endpoint exists (will return error without credentials)
-                        auth_response = requests.post(f"{BACKEND_URL}/auth/jwt/login", timeout=3)
-                        # Expecting 422 (validation error) not connection error
-                        if auth_response.status_code in [422, 400]:
-                            logger.info("✓ Authentication endpoint accessible")
-                            services_status["auth"] = True
-                    except requests.exceptions.RequestException:
-                        pass
-                
-                # 5. Final validation - all services ready
-                if all(services_status.values()):
-                    logger.info("🎉 All services validated and ready!")
-                    return True
-                
-                # Log current status
-                ready_services = [name for name, status in services_status.items() if status]
-                pending_services = [name for name, status in services_status.items() if not status]
-                
-                elapsed = time.time() - start_time
-                logger.info(f"⏳ Health check progress ({elapsed:.1f}s): ✓ {ready_services} | ⏳ {pending_services}")
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Health check error: {e}")
-                
-            time.sleep(3)
-            
+        try:
+            while time.time() - start_time < MAX_STARTUP_WAIT:
+                # Check for interrupt
+                if _interrupted:
+                    raise KeyboardInterrupt("Service readiness check interrupted")
+
+                try:
+                    # 1. Check backend basic health
+                    if not services_status["backend"]:
+                        try:
+                            health_response = requests.get(f"{BACKEND_URL}/health", timeout=5)
+                            if health_response.status_code == 200:
+                                logger.info("✓ Backend health check passed")
+                                services_status["backend"] = True
+                            elif health_response.status_code >= 500:
+                                raise RuntimeError(f"Backend service error: HTTP {health_response.status_code}")
+                            elif health_response.status_code >= 400:
+                                logger.warning(f"Backend client error: HTTP {health_response.status_code}")
+                        except requests.exceptions.RequestException:
+                            pass
+                    # 2. Check MongoDB connection via backend health check
+                    if not services_status["mongo"] and services_status["backend"]:
+                        try:
+                            health_response = requests.get(f"{BACKEND_URL}/health", timeout=5)
+                            if health_response.status_code == 200:
+                                data = health_response.json()
+                                mongo_health = data.get("services", {}).get("mongodb", {})
+                                if mongo_health.get("healthy", False):
+                                    logger.info("✓ MongoDB connection validated via backend health check")
+                                    services_status["mongo"] = True
+                        except Exception:
+                            pass
+
+                    # 3. Check comprehensive readiness (includes Qdrant validation)
+                    if not services_status["readiness"] and services_status["backend"] and services_status["auth"]:
+                        try:
+                            readiness_response = requests.get(f"{BACKEND_URL}/readiness", timeout=5)
+                            if readiness_response.status_code == 200:
+                                data = readiness_response.json()
+                                logger.info(f"📋 Readiness report: {json.dumps(data, indent=2)}")
+
+                                # Validate readiness data - backend validates Qdrant internally
+                                if data.get("status") in ["healthy", "ready"]:
+                                    logger.info("✓ Backend reports all services ready (including Qdrant)")
+                                    services_status["readiness"] = True
+                                elif data.get("status") == "unhealthy":
+                                    raise RuntimeError(f"Backend reports unhealthy status: {data}")
+                                else:
+                                    logger.warning(f"⚠️ Backend readiness check not fully healthy: {data}")
+                            elif readiness_response.status_code >= 500:
+                                raise RuntimeError(f"Backend readiness error: HTTP {readiness_response.status_code}")
+                            elif readiness_response.status_code >= 400:
+                                logger.warning(f"Backend readiness client error: HTTP {readiness_response.status_code}")
+
+                        except requests.exceptions.RequestException as e:
+                            logger.debug(f"Readiness endpoint not ready yet: {e}")
+
+                    # 4. Check authentication endpoint
+                    if not services_status["auth"] and services_status["backend"]:
+                        try:
+                            # Just check that the auth endpoint exists (will return error without credentials)
+                            auth_response = requests.post(f"{BACKEND_URL}/auth/jwt/login", timeout=3)
+                            # Expecting 422 (validation error) not connection error
+                            if auth_response.status_code in [422, 400]:
+                                logger.info("✓ Authentication endpoint accessible")
+                                services_status["auth"] = True
+                        except requests.exceptions.RequestException:
+                            pass
+
+                    # 5. Final validation - all services ready
+                    if all(services_status.values()):
+                        logger.info("🎉 All services validated and ready!")
+                        return True
+
+                    # Log current status
+                    ready_services = [name for name, status in services_status.items() if status]
+                    pending_services = [name for name, status in services_status.items() if not status]
+
+                    elapsed = time.time() - start_time
+                    logger.info(f"⏳ Health check progress ({elapsed:.1f}s): ✓ {ready_services} | ⏳ {pending_services}")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Health check error: {e}")
+
+                interruptible_sleep(3)
+
+        except KeyboardInterrupt:
+            logger.info("🛑 Service readiness check interrupted by user")
+            raise
+
         # Final status report
         logger.error("❌ Service readiness timeout!")
         failed_services = []
@@ -735,7 +777,7 @@ class IntegrationTestRunner:
             
             logger.info("📤 Sending upload request...")
             response = requests.post(
-                f"{BACKEND_URL}/api/process-audio-files",
+                f"{BACKEND_URL}/api/process-audio-files-async",
                 files=files,
                 data=data,
                 headers=headers,
@@ -749,80 +791,90 @@ class IntegrationTestRunner:
             
         result = response.json()
         logger.info(f"📤 Upload response: {json.dumps(result, indent=2)}")
-        
-        # Extract client_id from response
-        client_id = None
-        if result.get('conversations'):
-            client_id = result['conversations'][0].get('client_id')
-        elif result.get('processed_files'):
-            client_id = result['processed_files'][0].get('client_id')
-        elif result.get('files'):
-            client_id = result['files'][0].get('client_id')
-            
-        if not client_id:
-            raise RuntimeError("No client_id in upload response")
-            
-        logger.info(f"📤 Generated client_id: {client_id}")
-        return client_id
-        
+
+        job_id = result['job_id']
+        logger.info(f"📤 Async processing started with job_id: {job_id}")
+
+        # Wait for async processing to complete, then get client_id from conversations
+        return self.wait_for_async_processing_completion(job_id)
+
+    def wait_for_async_processing_completion(self, job_id: str) -> str:
+        """Wait for async processing to complete and return client_id."""
+        logger.info(f"⏳ Waiting for async job {job_id} to complete...")
+
+        # Wait for job completion
+        start_time = time.time()
+        try:
+            while time.time() - start_time < 240:  # 4 minutes max as requested
+                # Check for interrupt
+                if _interrupted:
+                    raise KeyboardInterrupt("Job status polling interrupted")
+
+                try:
+                    # Check job status
+                    response = requests.get(
+                        f"{BACKEND_URL}/api/process-audio-files/jobs/{job_id}",
+                        headers={"Authorization": f"Bearer {self.token}"},
+                        timeout=10
+                    )
+
+                    if response.status_code == 200:
+                        job_data = response.json()
+                        status = job_data.get("status")
+
+                        logger.info(f"📊 Job {job_id} status: {status} (full response: {job_data})")
+
+                        if status == "completed":
+                            logger.info(f"✅ Job {job_id} completed successfully")
+                            break
+                        elif status == "failed":
+                            error_msg = job_data.get("error_message", "Unknown error")
+                            raise RuntimeError(f"Job {job_id} failed: {error_msg}")
+
+                        interruptible_sleep(3)
+                    else:
+                        logger.warning(f"API returned status code {response.status_code}: {response.text}")
+
+                except Exception as e:
+                    logger.warning(f"Error checking job status: {e}")
+                    interruptible_sleep(3)
+            else:
+                # Job did not complete within timeout
+                raise RuntimeError(f"Job {job_id} did not complete within 240s")
+
+        except KeyboardInterrupt:
+            logger.info("🛑 Job status polling interrupted by user")
+            raise
+
+        # Now get conversations to find the client_id
+        logger.info("🔍 Getting conversations to find client_id...")
+        response = requests.get(
+            f"{BACKEND_URL}/api/conversations",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            conversations = data.get("conversations", {})
+
+            # Get the most recent conversation (should be our uploaded file)
+            if conversations:
+                for client_id, conv_list in conversations.items():
+                    if conv_list:
+                        logger.info(f"📤 Found client_id: {client_id}")
+                        return client_id
+
+        raise RuntimeError("No conversations found after async processing")
+
     def verify_processing_results(self, client_id: str):
         """Verify that audio was processed correctly."""
         logger.info(f"🔍 Verifying processing results for client: {client_id}")
-        
-        # Use backend API instead of direct MongoDB connection
-        
-        # First, wait for processing to complete using processor status endpoint
-        logger.info("🔍 Waiting for processing to complete...")
-        start_time = time.time()
-        processing_complete = False
-        
-        while time.time() - start_time < 60:  # Wait up to 60 seconds for processing
-            try:
-                # Check processor status for this client
-                response = requests.get(
-                    f"{BACKEND_URL}/api/processor/tasks/{client_id}",
-                    headers={"Authorization": f"Bearer {self.token}"},
-                    timeout=10
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    stages = data.get("stages", {})
-                    
-                    # Check if transcription stage is complete
-                    transcription_stage = stages.get("transcription", {})
-                    if transcription_stage.get("completed", False):
-                        logger.info(f"✅ Transcription processing completed for client_id: {client_id}")
-                        processing_complete = True
-                        break
-                    
-                    # Check for errors
-                    if transcription_stage.get("error"):
-                        logger.error(f"❌ Transcription error: {transcription_stage.get('error')}")
-                        break
-                    
-                    # Show processing status
-                    logger.info(f"📊 Processing status: {data.get('status', 'unknown')}")
-                    for stage_name, stage_info in stages.items():
-                        completed = stage_info.get("completed", False)
-                        error = stage_info.get("error")
-                        status = "✅" if completed else "❌" if error else "⏳"
-                        logger.info(f"  {status} {stage_name}: {'completed' if completed else 'error' if error else 'processing'}")
-                        
-                else:
-                    logger.warning(f"❌ Processor status API call failed with status: {response.status_code}")
-                    
-            except Exception as e:
-                logger.warning(f"❌ Error calling processor status API: {e}")
-                
-            logger.info(f"⏳ Still waiting for processing... ({time.time() - start_time:.1f}s)")
-            time.sleep(3)
-        
-        if not processing_complete:
-            logger.error(f"❌ Processing did not complete within timeout for client_id: {client_id}")
-            # Don't fail immediately, try to get conversation anyway
-        
-        # Now get the conversation via API
+
+        # Skip legacy processor status check - batch job completion already confirms processing is done
+        logger.info("✅ Skipping legacy processor status check (unified pipeline - batch job completed)")
+
+        # Get the conversation via API
         logger.info("🔍 Retrieving conversation...")
         conversation = None
         
@@ -1149,68 +1201,12 @@ class IntegrationTestRunner:
             return []
     
     def wait_for_memory_processing(self, client_id: str, timeout: int = 120):
-        """Wait for memory processing to complete using processor status API."""
-        logger.info(f"⏳ Waiting for memory processing to complete for client: {client_id}")
-        
-        start_time = time.time()
-        memory_processing_complete = False
-        
-        # First, wait for memory processing completion using processor status API
-        while time.time() - start_time < timeout:
-            try:
-                # Check processor status for this client (same pattern as transcription)
-                response = requests.get(
-                    f"{BACKEND_URL}/api/processor/tasks/{client_id}",
-                    headers={"Authorization": f"Bearer {self.token}"},
-                    timeout=10
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    # DEBUG: Log full API response to see exactly what we're getting
-                    logger.info(f"🔍 Full processor status API response: {data}")
-                    
-                    stages = data.get("stages", {})
-                    
-                    # Check if memory stage is complete
-                    memory_stage = stages.get("memory", {})
-                    logger.info(f"🧠 Memory stage data: {memory_stage}")
-                    
-                    if memory_stage.get("completed", False):
-                        logger.info(f"✅ Memory processing completed for client_id: {client_id}")
-                        memory_processing_complete = True
-                        break
-                    
-                    # Check for errors
-                    if memory_stage.get("error"):
-                        logger.error(f"❌ Memory processing error: {memory_stage.get('error')}")
-                        break
-                    
-                    # Show processing status for memory stage
-                    logger.info(f"📊 Memory processing status: {data.get('status', 'unknown')}")
-                    for stage_name, stage_info in stages.items():
-                        if stage_name == "memory":  # Focus on memory stage
-                            completed = stage_info.get("completed", False)
-                            error = stage_info.get("error")
-                            status = "✅" if completed else "❌" if error else "⏳"
-                            logger.info(f"  {status} {stage_name}: {'completed' if completed else 'error' if error else 'processing'}")
-                            # DEBUG: Show all fields in memory stage
-                            logger.info(f"    All memory stage fields: {stage_info}")
-                            
-                else:
-                    logger.warning(f"❌ Processor status API call failed with status: {response.status_code}")
-                    
-            except Exception as e:
-                logger.warning(f"❌ Error calling processor status API: {e}")
-                
-            logger.info(f"⏳ Still waiting for memory processing... ({time.time() - start_time:.1f}s)")
-            time.sleep(3)
-        
-        if not memory_processing_complete:
-            logger.warning(f"⚠️ Memory processing did not complete within {timeout}s, trying to fetch existing memories anyway")
-        
-        # Now fetch the memories from the API
+        """Fetch memories directly - batch job completion already confirms processing is done."""
+        logger.info(f"✅ Skipping legacy memory polling (unified pipeline - batch job completed)")
+        logger.info(f"🔍 Fetching memories for client: {client_id}")
+
+        # Batch job completion already confirms all processing is done
+        # Just fetch the memories from the API
         memories = self.get_memories_from_api()
         
         # Filter by client_id for test isolation in fresh mode, or get all user memories in reuse mode
@@ -1337,7 +1333,7 @@ class IntegrationTestRunner:
             memories_used_total.extend(memories_used)
             
             # Small delay between messages
-            time.sleep(1)
+            interruptible_sleep(1)
         
         logger.info(f"✅ Chat conversation completed. Total memories used: {len(set(memories_used_total))}")
         return True

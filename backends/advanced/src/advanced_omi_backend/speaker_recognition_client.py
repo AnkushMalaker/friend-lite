@@ -137,7 +137,7 @@ class SpeakerRecognitionClient:
             logger.warning(f"Failed to connect to speaker recognition service: {e}")
             return {}
         except Exception as e:
-            logger.error(f"Error during diarize-identify-match: {e}")
+            logger.error(f"Error during diarize-identify-match: {e}", exc_info=True)
             return {}
 
     async def diarize_and_identify(
@@ -210,7 +210,7 @@ class SpeakerRecognitionClient:
             logger.warning(f"Failed to connect to speaker recognition service: {e}")
             return {}
         except Exception as e:
-            logger.error(f"Error during speaker diarization and identification: {e}")
+            logger.error(f"Error during speaker diarization and identification: {e}", exc_info=True)
             return {}
 
     async def identify_speakers(self, audio_path: str, segments: List[Dict]) -> Dict[str, str]:
@@ -289,7 +289,7 @@ class SpeakerRecognitionClient:
             logger.warning(f"Failed to connect to speaker recognition service: {e}")
             return {}
         except Exception as e:
-            logger.error(f"Error during speaker identification: {e}")
+            logger.error(f"Error during speaker identification: {e}", exc_info=True)
             return {}
 
     def _process_diarization_result(
@@ -344,7 +344,7 @@ class SpeakerRecognitionClient:
             return speaker_mapping
 
         except Exception as e:
-            logger.error(f"Error processing diarization result: {e}")
+            logger.error(f"Error processing diarization result: {e}", exc_info=True)
             return {}
 
     async def get_enrolled_speakers(self, user_id: Optional[str] = None) -> Dict:
@@ -384,7 +384,7 @@ class SpeakerRecognitionClient:
             logger.warning(f"Failed to connect to speaker recognition service: {e}")
             return {"speakers": []}
         except Exception as e:
-            logger.error(f"Error getting enrolled speakers: {e}")
+            logger.error(f"Error getting enrolled speakers: {e}", exc_info=True)
             return {"speakers": []}
 
     async def health_check(self) -> bool:
@@ -423,5 +423,5 @@ class SpeakerRecognitionClient:
                 return False
 
         except Exception as e:
-            logger.error(f"Error during speaker service health check: {e}")
+            logger.error(f"Error during speaker service health check: {e}", exc_info=True)
             return False

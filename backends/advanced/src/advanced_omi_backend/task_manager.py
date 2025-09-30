@@ -1,15 +1,16 @@
-"""Background task manager for tracking and managing all async tasks.
+"""Pipeline tracker for monitoring audio processing pipeline performance.
 
-This module provides centralized task management to prevent orphaned tasks
-and ensure proper cleanup of all background operations.
+This module tracks pipeline events by audio_uuid to provide visibility into
+queue depths, processing lag, and bottlenecks across the entire audio pipeline.
 """
 
 import asyncio
 import logging
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +28,70 @@ class TaskInfo:
     cancelled: bool = False
 
 
-class BackgroundTaskManager:
-    """Manages all background tasks in the application."""
+@dataclass
+class PipelineEvent:
+    """Pipeline event for tracking audio processing flow."""
+
+    audio_uuid: str
+    conversation_id: Optional[str]
+    event_type: Literal["enqueue", "dequeue", "complete", "failed"]
+    stage: Literal["audio", "transcription", "memory", "cropping"]
+    timestamp: float
+    queue_size: int
+    processing_time_ms: Optional[float] = None
+    client_id: Optional[str] = None  # For debugging only
+    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class QueueMetrics:
+    """Aggregated metrics for a pipeline stage."""
+
+    stage: str
+    current_depth: int = 0
+    total_enqueued: int = 0
+    total_dequeued: int = 0
+    total_completed: int = 0
+    total_failed: int = 0
+    avg_queue_time_ms: float = 0.0
+    avg_processing_time_ms: float = 0.0
+    last_updated: float = field(default_factory=time.time)
+
+
+class PipelineTracker:
+    """Tracks pipeline events and performance across audio processing stages."""
 
     def __init__(self):
+        # Task tracking (still needed for memory/cropping async tasks)
         self.tasks: Dict[str, TaskInfo] = {}
         self.completed_tasks: List[TaskInfo] = []
         self.max_completed_history = 1000  # Keep last N completed tasks
         self._cleanup_task: Optional[asyncio.Task] = None
         self._shutdown = False
 
+        # Pipeline event tracking by audio_uuid
+        self.audio_sessions: Dict[str, deque[PipelineEvent]] = defaultdict(lambda: deque(maxlen=100))
+        self.conversation_mapping: Dict[str, str] = {}  # conversation_id -> audio_uuid
+        self.queue_metrics: Dict[str, QueueMetrics] = {
+            "audio": QueueMetrics("audio"),
+            "transcription": QueueMetrics("transcription"),
+            "memory": QueueMetrics("memory"),
+            "cropping": QueueMetrics("cropping")
+        }
+
+        # Event history cleanup
+        self.max_events_per_session = 100
+        self.session_cleanup_age_hours = 6
+
     async def start(self):
-        """Start the task manager."""
-        logger.info("Starting BackgroundTaskManager")
+        """Start the pipeline tracker."""
+        logger.info("Starting PipelineTracker")
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
     async def shutdown(self):
-        """Shutdown the task manager and cancel all tasks."""
-        logger.info("Shutting down BackgroundTaskManager")
+        """Shutdown the pipeline tracker and cancel all tasks."""
+        logger.info("Shutting down PipelineTracker")
         self._shutdown = True
 
         # Cancel cleanup task
@@ -72,7 +119,7 @@ class BackgroundTaskManager:
             except asyncio.TimeoutError:
                 logger.warning("Some tasks did not complete within shutdown timeout")
 
-        logger.info("BackgroundTaskManager shutdown complete")
+        logger.info("PipelineTracker shutdown complete")
 
     def track_task(
         self, task: asyncio.Task, name: str, metadata: Optional[Dict[str, Any]] = None
@@ -128,8 +175,8 @@ class BackgroundTaskManager:
             self.completed_tasks = self.completed_tasks[-self.max_completed_history :]
 
     async def _periodic_cleanup(self):
-        """Periodically clean up completed tasks and check for timeouts."""
-        logger.info("Started periodic task cleanup")
+        """Periodically clean up old pipeline events and completed tasks."""
+        logger.info("Started periodic pipeline cleanup")
 
         try:
             while not self._shutdown:
@@ -138,30 +185,37 @@ class BackgroundTaskManager:
                     await asyncio.sleep(30)
 
                     current_time = time.time()
-                    timed_out_tasks = []
+                    cleanup_age_seconds = self.session_cleanup_age_hours * 3600
 
-                    # Check for timed out tasks
-                    for task_id, task_info in list(self.tasks.items()):
-                        timeout = task_info.metadata.get("timeout")
-                        if timeout:
-                            age = current_time - task_info.created_at
-                            if age > timeout and not task_info.task.done():
-                                logger.warning(
-                                    f"Task {task_info.name} exceeded timeout "
-                                    f"({age:.1f}s > {timeout}s), cancelling"
-                                )
-                                task_info.task.cancel()
-                                timed_out_tasks.append(task_info.name)
+                    # Clean up old pipeline events
+                    sessions_to_remove = []
+                    for audio_uuid, events in list(self.audio_sessions.items()):
+                        if events and (current_time - events[-1].timestamp) > cleanup_age_seconds:
+                            sessions_to_remove.append(audio_uuid)
+
+                    for audio_uuid in sessions_to_remove:
+                        del self.audio_sessions[audio_uuid]
+                        logger.debug(f"Cleaned up old pipeline events for audio session {audio_uuid}")
+
+                    # Clean up old conversation mappings
+                    conversations_to_remove = []
+                    for conv_id, audio_uuid in list(self.conversation_mapping.items()):
+                        if audio_uuid not in self.audio_sessions:
+                            conversations_to_remove.append(conv_id)
+
+                    for conv_id in conversations_to_remove:
+                        del self.conversation_mapping[conv_id]
 
                     # Log statistics
                     active_count = len(self.tasks)
                     completed_count = len(self.completed_tasks)
+                    active_sessions = len(self.audio_sessions)
 
-                    if active_count > 0 or timed_out_tasks:
+                    if active_count > 0 or active_sessions > 10:
                         logger.info(
-                            f"Task manager stats: {active_count} active, "
-                            f"{completed_count} completed, "
-                            f"{len(timed_out_tasks)} timed out"
+                            f"Pipeline tracker stats: {active_count} active tasks, "
+                            f"{completed_count} completed tasks, "
+                            f"{active_sessions} active audio sessions"
                         )
 
                         # Log details of long-running tasks
@@ -208,80 +262,222 @@ class BackgroundTaskManager:
             counts[task_type] = counts.get(task_type, 0) + 1
         return counts
 
-    def get_tasks_for_client(self, client_id: str) -> List[TaskInfo]:
-        """Get all active tasks for a specific client."""
-        client_tasks = []
-        for task_info in self.tasks.values():
-            if task_info.metadata.get("client_id") == client_id:
-                client_tasks.append(task_info)
-        return client_tasks
+    # Pipeline event tracking methods
 
-    async def cancel_tasks_for_client(self, client_id: str, timeout: float = 30.0):
-        """Cancel client-specific tasks, but preserve processing tasks that should continue independently."""
-        client_tasks = self.get_tasks_for_client(client_id)
-        if not client_tasks:
-            return
+    def track_enqueue(self, stage: str, audio_uuid: str, queue_size: int, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Track when an item is enqueued to a processing stage."""
+        if metadata is None:
+            metadata = {}
 
-        # Define task types that should continue after client disconnect
-        # These tasks represent ongoing processing that should complete independently
-        PROCESSING_TASK_TYPES = {
-            "transcription_chunk",  # Individual transcription tasks
-            "memory",  # Memory processing tasks
-            "cropping",  # Audio cropping tasks
-        }
-
-        # Filter tasks to only cancel non-processing tasks
-        tasks_to_cancel = []
-        tasks_to_preserve = []
-
-        for task_info in client_tasks:
-            task_type = task_info.metadata.get("type", "")
-            # Check if this is a processing task that should continue
-            is_processing_task = any(task_type.startswith(pt) for pt in PROCESSING_TASK_TYPES)
-
-            if is_processing_task:
-                tasks_to_preserve.append(task_info)
-            else:
-                tasks_to_cancel.append(task_info)
-
-        if tasks_to_preserve:
-            logger.info(
-                f"Preserving {len(tasks_to_preserve)} processing tasks for client {client_id} to continue independently"
-            )
-            for task_info in tasks_to_preserve:
-                logger.debug(
-                    f"  Preserving task: {task_info.name} (type: {task_info.metadata.get('type')})"
-                )
-
-        if not tasks_to_cancel:
-            logger.info(f"No non-processing tasks to cancel for client {client_id}")
-            return
-
-        logger.info(
-            f"Cancelling {len(tasks_to_cancel)} non-processing tasks for client {client_id}"
+        event = PipelineEvent(
+            audio_uuid=audio_uuid,
+            conversation_id=self.conversation_mapping.get(audio_uuid),
+            event_type="enqueue",
+            stage=stage,
+            timestamp=time.time(),
+            queue_size=queue_size,
+            client_id=metadata.get("client_id"),
+            user_id=metadata.get("user_id"),
+            metadata=metadata
         )
 
-        # Cancel only non-processing tasks
-        for task_info in tasks_to_cancel:
-            if not task_info.task.done():
-                logger.debug(
-                    f"  Cancelling task: {task_info.name} (type: {task_info.metadata.get('type')})"
-                )
-                task_info.task.cancel()
-                task_info.cancelled = True
+        self.audio_sessions[audio_uuid].append(event)
 
-        # Wait for cancelled tasks to complete
-        tasks = [info.task for info in tasks_to_cancel if not info.task.done()]
-        if tasks:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"Some tasks for client {client_id} did not complete within timeout")
+        # Update queue metrics
+        if stage in self.queue_metrics:
+            metrics = self.queue_metrics[stage]
+            metrics.total_enqueued += 1
+            metrics.current_depth = queue_size
+            metrics.last_updated = event.timestamp
+
+        logger.debug(f"📥 Pipeline enqueue: {stage} for {audio_uuid} (queue depth: {queue_size})")
+
+    def track_dequeue(self, stage: str, audio_uuid: str, queue_size: int, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Track when an item is dequeued from a processing stage."""
+        if metadata is None:
+            metadata = {}
+
+        event = PipelineEvent(
+            audio_uuid=audio_uuid,
+            conversation_id=self.conversation_mapping.get(audio_uuid),
+            event_type="dequeue",
+            stage=stage,
+            timestamp=time.time(),
+            queue_size=queue_size,
+            client_id=metadata.get("client_id"),
+            user_id=metadata.get("user_id"),
+            metadata=metadata
+        )
+
+        self.audio_sessions[audio_uuid].append(event)
+
+        # Calculate queue time if we have an enqueue event
+        events = self.audio_sessions[audio_uuid]
+        enqueue_event = None
+        for e in reversed(events):
+            if e.stage == stage and e.event_type == "enqueue":
+                enqueue_event = e
+                break
+
+        queue_time_ms = 0.0
+        if enqueue_event:
+            queue_time_ms = (event.timestamp - enqueue_event.timestamp) * 1000
+            event.metadata["queue_time_ms"] = queue_time_ms
+
+        # Update queue metrics
+        if stage in self.queue_metrics:
+            metrics = self.queue_metrics[stage]
+            metrics.total_dequeued += 1
+            metrics.current_depth = queue_size
+            metrics.last_updated = event.timestamp
+
+            # Update average queue time
+            if queue_time_ms > 0:
+                if metrics.avg_queue_time_ms == 0:
+                    metrics.avg_queue_time_ms = queue_time_ms
+                else:
+                    metrics.avg_queue_time_ms = (metrics.avg_queue_time_ms + queue_time_ms) / 2
+
+        logger.debug(f"📤 Pipeline dequeue: {stage} for {audio_uuid} (queue time: {queue_time_ms:.1f}ms)")
+
+    def track_complete(self, stage: str, audio_uuid: str, processing_time_ms: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Track when processing completes for a stage."""
+        if metadata is None:
+            metadata = {}
+
+        event = PipelineEvent(
+            audio_uuid=audio_uuid,
+            conversation_id=self.conversation_mapping.get(audio_uuid),
+            event_type="complete",
+            stage=stage,
+            timestamp=time.time(),
+            queue_size=0,  # Not applicable for completion
+            processing_time_ms=processing_time_ms,
+            client_id=metadata.get("client_id"),
+            user_id=metadata.get("user_id"),
+            metadata=metadata
+        )
+
+        self.audio_sessions[audio_uuid].append(event)
+
+        # Update queue metrics
+        if stage in self.queue_metrics:
+            metrics = self.queue_metrics[stage]
+            metrics.total_completed += 1
+            metrics.last_updated = event.timestamp
+
+            # Update average processing time
+            if processing_time_ms is not None:
+                if metrics.avg_processing_time_ms == 0:
+                    metrics.avg_processing_time_ms = processing_time_ms
+                else:
+                    metrics.avg_processing_time_ms = (metrics.avg_processing_time_ms + processing_time_ms) / 2
+
+        logger.debug(f"✅ Pipeline complete: {stage} for {audio_uuid} (processing time: {processing_time_ms or 0:.1f}ms)")
+
+    def track_failed(self, stage: str, audio_uuid: str, error: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Track when processing fails for a stage."""
+        if metadata is None:
+            metadata = {}
+
+        metadata["error"] = error
+
+        event = PipelineEvent(
+            audio_uuid=audio_uuid,
+            conversation_id=self.conversation_mapping.get(audio_uuid),
+            event_type="failed",
+            stage=stage,
+            timestamp=time.time(),
+            queue_size=0,  # Not applicable for failure
+            client_id=metadata.get("client_id"),
+            user_id=metadata.get("user_id"),
+            metadata=metadata
+        )
+
+        self.audio_sessions[audio_uuid].append(event)
+
+        # Update queue metrics
+        if stage in self.queue_metrics:
+            metrics = self.queue_metrics[stage]
+            metrics.total_failed += 1
+            metrics.last_updated = event.timestamp
+
+        logger.warning(f"❌ Pipeline failed: {stage} for {audio_uuid} - {error}")
+
+    def link_conversation(self, audio_uuid: str, conversation_id: str) -> None:
+        """Link a conversation ID to an audio UUID for tracking."""
+        self.conversation_mapping[conversation_id] = audio_uuid
+
+        # Update all events for this audio session to include conversation_id
+        if audio_uuid in self.audio_sessions:
+            for event in self.audio_sessions[audio_uuid]:
+                event.conversation_id = conversation_id
+
+        logger.debug(f"🔗 Linked conversation {conversation_id} to audio {audio_uuid}")
+
+    def get_pipeline_events(self, audio_uuid: str) -> List[PipelineEvent]:
+        """Get all pipeline events for a specific audio session."""
+        return list(self.audio_sessions.get(audio_uuid, []))
+
+    def get_conversation_events(self, conversation_id: str) -> List[PipelineEvent]:
+        """Get all pipeline events for a specific conversation."""
+        audio_uuid = self.conversation_mapping.get(conversation_id)
+        if audio_uuid:
+            return self.get_pipeline_events(audio_uuid)
+        return []
+
+    def get_queue_lag(self, stage: str) -> float:
+        """Get average queue lag in milliseconds for a stage."""
+        metrics = self.queue_metrics.get(stage)
+        return metrics.avg_queue_time_ms if metrics else 0.0
+
+    def get_processing_lag(self, stage: str) -> float:
+        """Get average processing lag in milliseconds for a stage."""
+        metrics = self.queue_metrics.get(stage)
+        return metrics.avg_processing_time_ms if metrics else 0.0
+
+    def get_bottleneck_analysis(self) -> Dict[str, Any]:
+        """Analyze pipeline bottlenecks and return recommendations."""
+        bottlenecks = []
+        slowest_stage = None
+        slowest_time = 0.0
+
+        for stage, metrics in self.queue_metrics.items():
+            total_time = metrics.avg_queue_time_ms + metrics.avg_processing_time_ms
+
+            if total_time > slowest_time:
+                slowest_time = total_time
+                slowest_stage = stage
+
+            # Identify bottlenecks (arbitrary thresholds for now)
+            if metrics.avg_queue_time_ms > 5000:  # 5 second queue time
+                severity = "high" if metrics.avg_queue_time_ms > 15000 else "medium"
+                bottlenecks.append({
+                    "stage": stage,
+                    "type": "queue_lag",
+                    "severity": severity,
+                    "avg_queue_time_ms": metrics.avg_queue_time_ms,
+                    "current_depth": metrics.current_depth
+                })
+
+            if metrics.avg_processing_time_ms > 10000:  # 10 second processing time
+                severity = "high" if metrics.avg_processing_time_ms > 30000 else "medium"
+                bottlenecks.append({
+                    "stage": stage,
+                    "type": "processing_lag",
+                    "severity": severity,
+                    "avg_processing_time_ms": metrics.avg_processing_time_ms
+                })
+
+        return {
+            "bottlenecks": bottlenecks,
+            "slowest_stage": slowest_stage,
+            "slowest_stage_total_time_ms": slowest_time,
+            "overall_health": "healthy" if not bottlenecks else "degraded"
+        }
 
     def get_health_status(self) -> Dict[str, Any]:
-        """Get health status of the task manager."""
+        """Get health status of the pipeline tracker including pipeline metrics."""
         current_time = time.time()
         active_tasks = self.get_active_tasks()
 
@@ -303,7 +499,21 @@ class BackgroundTaskManager:
             elif task_info.cancelled:
                 recent_cancelled += 1
 
+        # Pipeline health
+        bottleneck_analysis = self.get_bottleneck_analysis()
+        pipeline_health = {
+            stage: {
+                "queue_depth": metrics.current_depth,
+                "avg_queue_time_ms": metrics.avg_queue_time_ms,
+                "avg_processing_time_ms": metrics.avg_processing_time_ms,
+                "total_processed": metrics.total_completed,
+                "total_failed": metrics.total_failed
+            }
+            for stage, metrics in self.queue_metrics.items()
+        }
+
         status = {
+            # Legacy task tracking
             "active_tasks": len(active_tasks),
             "completed_tasks": len(self.completed_tasks),
             "task_counts_by_type": self.get_task_count_by_type(),
@@ -312,26 +522,41 @@ class BackgroundTaskManager:
             "average_task_age": sum(task_ages) / len(task_ages) if task_ages else 0,
             "recent_errors": recent_errors,
             "recent_cancelled": recent_cancelled,
+
+            # Pipeline tracking
+            "active_sessions": len(self.audio_sessions),
+            "active_conversations": len(self.conversation_mapping),
+            "pipeline_health": pipeline_health,
+            "bottlenecks": bottleneck_analysis["bottlenecks"],
+            "overall_pipeline_health": bottleneck_analysis["overall_health"],
+
+            # Overall health
             "healthy": len(active_tasks) < 1000
-            and (oldest_task[1] < 3600 if oldest_task else True),
+            and (oldest_task[1] < 3600 if oldest_task else True)
+            and bottleneck_analysis["overall_health"] == "healthy",
         }
 
         return status
 
 
-# Global task manager instance
-_task_manager: Optional[BackgroundTaskManager] = None
+# Global pipeline tracker instance
+_pipeline_tracker: Optional[PipelineTracker] = None
 
 
-def init_task_manager() -> BackgroundTaskManager:
-    """Initialize the global task manager."""
-    global _task_manager
-    _task_manager = BackgroundTaskManager()
-    return _task_manager
+def init_pipeline_tracker() -> PipelineTracker:
+    """Initialize the global pipeline tracker."""
+    global _pipeline_tracker
+    _pipeline_tracker = PipelineTracker()
+    return _pipeline_tracker
 
 
-def get_task_manager() -> BackgroundTaskManager:
-    """Get the global task manager instance."""
-    if _task_manager is None:
-        raise RuntimeError("BackgroundTaskManager not initialized. Call init_task_manager first.")
-    return _task_manager
+def get_pipeline_tracker() -> PipelineTracker:
+    """Get the global pipeline tracker instance."""
+    if _pipeline_tracker is None:
+        raise RuntimeError("PipelineTracker not initialized. Call init_pipeline_tracker first.")
+    return _pipeline_tracker
+
+
+# Backward compatibility aliases
+init_task_manager = init_pipeline_tracker
+get_task_manager = get_pipeline_tracker
