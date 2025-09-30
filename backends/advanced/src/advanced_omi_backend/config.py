@@ -13,6 +13,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Data directory paths
+DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
+CHUNK_DIR = Path("./audio_chunks")  # Mounted to ./data/audio_chunks by Docker
+
 # Default diarization settings
 DEFAULT_DIARIZATION_SETTINGS = {
     "diarization_source": "pyannote",
