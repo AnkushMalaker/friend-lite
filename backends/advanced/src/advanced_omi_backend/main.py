@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 import aiohttp
+from advanced_omi_backend.audio_utils import process_audio_chunk
 
 # Import authentication components
 from advanced_omi_backend.auth import (
@@ -48,8 +49,7 @@ from advanced_omi_backend.processors import (
     get_processor_manager,
     init_processor_manager,
 )
-from advanced_omi_backend.audio_utils import process_audio_chunk
-from advanced_omi_backend.task_manager import init_task_manager, get_task_manager
+from advanced_omi_backend.task_manager import get_task_manager, init_task_manager
 from advanced_omi_backend.transcription_providers import get_transcription_provider
 from advanced_omi_backend.users import (
     User,
@@ -144,9 +144,6 @@ QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "qdrant")
 QDRANT_PORT = os.getenv("QDRANT_PORT", "6333")
 
 # Speaker service configuration
-
-# Track pending WebSocket connections to prevent race conditions
-pending_connections: set[str] = set()
 
 # Thread pool executors
 _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -509,10 +506,6 @@ async def ws_endpoint_omi(
     device_name: Optional[str] = Query(None),
 ):
     """Accepts WebSocket connections with Wyoming protocol, decodes OMI Opus audio, and processes per-client."""
-    # Generate pending client_id to track connection even if auth fails
-    pending_client_id = f"pending_{uuid.uuid4()}"
-    pending_connections.add(pending_client_id)
-
     client_id = None
     client_state = None
 
@@ -528,8 +521,6 @@ async def ws_endpoint_omi(
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
 
-        # Remove from pending now that we have real client_id
-        pending_connections.discard(pending_client_id)
         application_logger.info(
             f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
         )
@@ -650,8 +641,6 @@ async def ws_endpoint_omi(
     except Exception as e:
         application_logger.error(f"❌ WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
-        # Clean up pending connection tracking
-        pending_connections.discard(pending_client_id)
 
         # Ensure cleanup happens even if client_id is None
         if client_id:
@@ -673,9 +662,6 @@ async def ws_endpoint_pcm(
     ws: WebSocket, token: Optional[str] = Query(None), device_name: Optional[str] = Query(None)
 ):
     """Accepts WebSocket connections, processes PCM audio per-client."""
-    # Generate pending client_id to track connection even if auth fails
-    pending_client_id = f"pending_{uuid.uuid4()}"
-    pending_connections.add(pending_client_id)
 
     client_id = None
     client_state = None
@@ -687,19 +673,16 @@ async def ws_endpoint_pcm(
             await ws.close(code=1008, reason="Authentication required")
             return
 
-        # Accept WebSocket AFTER authentication succeeds (fixes race condition)
         await ws.accept()
 
         # Generate proper client_id using user and device_name
         client_id = generate_client_id(user, device_name)
 
-        # Remove from pending now that we have real client_id
-        pending_connections.discard(pending_client_id)
         application_logger.info(
             f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
         )
 
-        # Send ready message to client (similar to speaker recognition service)
+        # Send ready message to client
         try:
             ready_msg = json.dumps({"type": "ready", "message": "WebSocket connection established"}) + "\n"
             await ws.send_text(ready_msg)
@@ -931,9 +914,6 @@ async def ws_endpoint_pcm(
             f"❌ PCM WebSocket error for client {client_id}: {e}", exc_info=True
         )
     finally:
-        # Clean up pending connection tracking
-        pending_connections.discard(pending_client_id)
-
         # Ensure cleanup happens even if client_id is None
         if client_id:
             try:

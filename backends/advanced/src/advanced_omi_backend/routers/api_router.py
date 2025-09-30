@@ -17,6 +17,7 @@ from .modules import (
     system_router,
     user_router,
 )
+from advanced_omi_backend import unified_system_routes
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -31,6 +32,9 @@ router.include_router(client_router)
 router.include_router(conversation_router)
 router.include_router(memory_router)
 router.include_router(system_router)
+
+# Include unified pipeline routes
+router.include_router(unified_system_routes.router)
 
 
 logger.info("API router initialized with all sub-modules")

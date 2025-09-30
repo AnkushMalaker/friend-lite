@@ -2,32 +2,25 @@
 System controller for handling system-related business logic.
 """
 
-import asyncio
 import io
-import json
 import logging
 import os
 import shutil
 import time
 import wave
 from datetime import UTC, datetime
-from pathlib import Path
 
-import numpy as np
-from advanced_omi_backend.client_manager import generate_client_id
+from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.config import (
     load_diarization_settings_from_file,
     save_diarization_settings_to_file,
 )
-from advanced_omi_backend.database import chunks_col
-from advanced_omi_backend.job_tracker import FileStatus, JobStatus, get_job_tracker
-from advanced_omi_backend.processors import AudioProcessingItem, get_processor_manager
-from advanced_omi_backend.audio_utils import process_audio_chunk
+from advanced_omi_backend.job_tracker import get_job_tracker
+from advanced_omi_backend.processors import get_processor_manager
 from advanced_omi_backend.task_manager import get_task_manager
 from advanced_omi_backend.users import User
-from fastapi import BackgroundTasks, File, Query, UploadFile
+from fastapi import BackgroundTasks, UploadFile
 from fastapi.responses import JSONResponse
-from wyoming.audio import AudioChunk
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -68,53 +61,7 @@ async def get_auth_config():
     }
 
 
-async def get_all_processing_tasks():
-    """Get all active processing tasks."""
-    try:
-        processor_manager = get_processor_manager()
-        return processor_manager.get_all_processing_status()
-    except Exception as e:
-        logger.error(f"Error getting processing tasks: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": f"Failed to get processing tasks: {str(e)}"}
-        )
-
-
-async def get_processing_task_status(client_id: str):
-    """Get processing task status for a specific client."""
-    try:
-        processor_manager = get_processor_manager()
-        processing_status = processor_manager.get_processing_status(client_id)
-
-        # Check if transcription is marked as started but not completed, and verify with database
-        stages = processing_status.get("stages", {})
-        transcription_stage = stages.get("transcription", {})
-
-        """This is a hack to update it the DB INCASE a process failed
-        if transcription_stage.get("status") == "started" and not transcription_stage.get("completed", False):
-            # Check if transcription is actually complete by checking the database
-            try:
-                chunk = await chunks_col.find_one({"client_id": client_id})
-                if chunk and chunk.get("transcript") and len(chunk.get("transcript", [])) > 0:
-                    # Transcription is complete! Update the processor state
-                    processor_manager.track_processing_stage(
-                        client_id,
-                        "transcription",
-                        "completed",
-                        {"audio_uuid": chunk.get("audio_uuid"), "segments": len(chunk.get("transcript", []))}
-                    )
-                    logger.info(f"Detected transcription completion for client {client_id} ({len(chunk.get('transcript', []))} segments)")
-                    # Get updated status
-                    processing_status = processor_manager.get_processing_status(client_id)
-            except Exception as e:
-                logger.debug(f"Error checking transcription completion: {e}")
-        """
-        return processing_status
-    except Exception as e:
-        logger.error(f"Error getting processing task status for {client_id}: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": f"Failed to get processing task status: {str(e)}"}
-        )
+# Legacy controller methods removed - unified pipeline uses job-based tracking
 
 
 async def get_processor_status():
@@ -142,14 +89,34 @@ async def get_processor_status():
             "timestamp": int(time.time()),
         }
 
-        # Get task manager status if available
+        # Get pipeline tracker status with enhanced metrics
         try:
-            task_manager = get_task_manager()
-            if task_manager:
-                task_status = task_manager.get_health_status()
-                status["task_manager"] = task_status
+            pipeline_tracker = get_task_manager()  # Uses backward compatibility alias
+            if pipeline_tracker:
+                pipeline_status = pipeline_tracker.get_health_status()
+                status["pipeline_tracker"] = pipeline_status
+
+                # Add pipeline-specific metrics
+                status["pipeline_health"] = {
+                    stage: {
+                        "queue_depth": metrics.current_depth,
+                        "avg_queue_time_ms": metrics.avg_queue_time_ms,
+                        "avg_processing_time_ms": metrics.avg_processing_time_ms,
+                        "total_processed": metrics.total_completed,
+                        "total_failed": metrics.total_failed,
+                        "status": "healthy" if metrics.avg_queue_time_ms < 5000 else "degraded"
+                    }
+                    for stage, metrics in pipeline_tracker.queue_metrics.items()
+                }
+
+                # Add bottleneck analysis
+                bottleneck_analysis = pipeline_tracker.get_bottleneck_analysis()
+                status["bottlenecks"] = bottleneck_analysis["bottlenecks"]
+                status["overall_pipeline_health"] = bottleneck_analysis["overall_health"]
+
         except Exception as e:
-            status["task_manager"] = {"error": str(e)}
+            status["pipeline_tracker"] = {"error": str(e)}
+            status["pipeline_health"] = {"error": str(e)}
 
         return status
 
@@ -158,276 +125,6 @@ async def get_processor_status():
         return JSONResponse(
             status_code=500, content={"error": f"Failed to get processor status: {str(e)}"}
         )
-
-
-async def process_audio_files(
-    user: User, files: list[UploadFile], device_name: str, auto_generate_client: bool
-):
-    """Process uploaded audio files through the transcription pipeline."""
-    # Need to import here because we import the routes into main, causing circular imports
-    from advanced_omi_backend.main import cleanup_client_state, create_client_state
-
-    # Process files through complete transcription pipeline like WebSocket clients
-    try:
-        if not files:
-            return JSONResponse(status_code=400, content={"error": "No files provided"})
-
-        processed_files = []
-        processed_conversations = []
-
-        for file_index, file in enumerate(files):
-            client_id = None
-            client_state = None
-
-            try:
-                # Validate file type (only WAV for now)
-                if not file.filename or not file.filename.lower().endswith(".wav"):
-                    processed_files.append(
-                        {
-                            "filename": file.filename or "unknown",
-                            "status": "error",
-                            "error": "Only WAV files are currently supported",
-                        }
-                    )
-                    continue
-
-                # Generate unique client ID for each file to create separate conversations
-                file_device_name = f"{device_name}-{file_index + 1:03d}"
-                client_id = generate_client_id(user, file_device_name)
-
-                # Create separate client state for this file
-                client_state = await create_client_state(client_id, user, file_device_name)
-
-                audio_logger.info(
-                    f"📁 Processing file {file_index + 1}/{len(files)}: {file.filename} with client_id: {client_id}"
-                )
-
-                processor_manager = get_processor_manager()
-
-                # Read file content
-                content = await file.read()
-
-                # Process WAV file
-                with wave.open(io.BytesIO(content), "rb") as wav_file:
-                    # Get audio parameters
-                    sample_rate = wav_file.getframerate()
-                    sample_width = wav_file.getsampwidth()
-                    channels = wav_file.getnchannels()
-
-                    # Read all audio data
-                    audio_data = wav_file.readframes(wav_file.getnframes())
-
-                    # Convert to mono if stereo
-                    if channels == 2:
-                        # Convert stereo to mono by averaging channels
-                        if sample_width == 2:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                        else:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int32)
-
-                        # Reshape to separate channels and average
-                        audio_array = audio_array.reshape(-1, 2)
-                        audio_data = (
-                            np.mean(audio_array, axis=1).astype(audio_array.dtype).tobytes()
-                        )
-                        channels = 1
-
-                    # Ensure sample rate is 16kHz (resample if needed)
-                    if sample_rate != 16000:
-                        audio_logger.warning(
-                            f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz."
-                        )
-                        raise JSONResponse(status_code=400, content={"error": f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz. I'll implement this at some point sorry"})
-
-                    # Process audio in larger chunks for faster file processing
-                    # Use larger chunks (32KB) for optimal performance
-                    chunk_size = 32 * 1024  # 32KB chunks
-                    base_timestamp = int(time.time())
-
-                    for i in range(0, len(audio_data), chunk_size):
-                        chunk_data = audio_data[i : i + chunk_size]
-
-                        # Calculate relative timestamp for this chunk
-                        chunk_offset_bytes = i
-                        chunk_offset_seconds = chunk_offset_bytes / (
-                            sample_rate * sample_width * channels
-                        )
-                        chunk_timestamp = base_timestamp + int(chunk_offset_seconds)
-
-                        # Process audio chunk through unified pipeline
-                        await process_audio_chunk(
-                            audio_data=chunk_data,
-                            client_id=client_id,
-                            user_id=user.user_id,
-                            user_email=user.email,
-                            audio_format={
-                                "rate": sample_rate,
-                                "width": sample_width,
-                                "channels": channels,
-                                "timestamp": chunk_timestamp,
-                            },
-                            client_state=None,  # No client state needed for file upload
-                        )
-
-                        # Yield control occasionally to prevent blocking the event loop
-                        if i % (chunk_size * 10) == 0:  # Every 10 chunks (~320KB)
-                            await asyncio.sleep(0)
-
-                    processed_files.append(
-                        {
-                            "filename": file.filename,
-                            "sample_rate": sample_rate,
-                            "channels": channels,
-                            "duration_seconds": len(audio_data)
-                            / (sample_rate * sample_width * channels),
-                            "size_bytes": len(audio_data),
-                            "client_id": client_id,
-                            "status": "processed",
-                        }
-                    )
-
-                    audio_logger.info(
-                        f"✅ Processed audio file: {file.filename} ({len(audio_data)} bytes)"
-                    )
-
-                # Wait briefly for transcription manager to be created by background processor
-                audio_logger.info(
-                    f"⏳ Waiting for transcription manager to be created for client {client_id}"
-                )
-                await asyncio.sleep(2.0)  # Give transcription processor time to create manager
-
-                # Close client audio to trigger transcription completion (flush_final_transcript)
-                audio_logger.info(
-                    f"📞 About to call close_client_audio for upload client {client_id}"
-                )
-                processor_manager = get_processor_manager()
-                audio_logger.info(f"📞 Got processor manager, calling close_client_audio now...")
-                await processor_manager.close_client_audio(client_id)
-                audio_logger.info(
-                    f"🔚 Successfully called close_client_audio for upload client {client_id}"
-                )
-
-                # Wait for this file's transcription processing to complete
-                audio_logger.info(f"📁 Waiting for transcription to process file: {file.filename}")
-
-                # Wait for chunks to be processed by the audio saver
-                await asyncio.sleep(1.0)
-
-                # Wait for file processing to complete using task tracking
-                # Increase timeout based on file duration (3x duration + 60s buffer)
-                audio_duration = len(audio_data) / (sample_rate * sample_width * channels)
-                max_wait_time = max(
-                    120, int(audio_duration * 3) + 60
-                )  # At least 2 minutes, or 3x duration + 60s
-                wait_interval = 2.0  # Reduced from 0.5s to 2s to reduce polling spam
-                elapsed_time = 0
-
-                audio_logger.info(
-                    f"📁 Audio duration: {audio_duration:.1f}s, max wait time: {max_wait_time}s"
-                )
-
-                # Use concrete task tracking instead of database polling
-                while elapsed_time < max_wait_time:
-                    try:
-                        # Check processing status using task tracking
-                        processing_status = processor_manager.get_processing_status(client_id)
-
-                        # Check if transcription stage is complete
-                        stages = processing_status.get("stages", {})
-                        transcription_stage = stages.get("transcription", {})
-
-                        # If transcription is marked as started but not completed, check database
-                        if transcription_stage.get(
-                            "status"
-                        ) == "started" and not transcription_stage.get("completed", False):
-                            # Check if transcription is actually complete by checking the database
-                            try:
-                                chunk = await chunks_col.find_one({"client_id": client_id})
-                                if (
-                                    chunk
-                                    and chunk.get("transcript")
-                                    and len(chunk.get("transcript", [])) > 0
-                                ):
-                                    # Transcription is complete! Update the processor state
-                                    processor_manager.track_processing_stage(
-                                        client_id,
-                                        "transcription",
-                                        "completed",
-                                        {
-                                            "audio_uuid": chunk.get("audio_uuid"),
-                                            "segments": len(chunk.get("transcript", [])),
-                                        },
-                                    )
-                                    audio_logger.info(
-                                        f"📁 Transcription completed for file: {file.filename} ({len(chunk.get('transcript', []))} segments)"
-                                    )
-                                    break
-                            except Exception as e:
-                                audio_logger.debug(f"Error checking transcription completion: {e}")
-
-                        if transcription_stage.get("completed", False):
-                            audio_logger.info(
-                                f"📁 Transcription completed for file: {file.filename}"
-                            )
-                            break
-
-                        # Check for errors
-                        if transcription_stage.get("error"):
-                            audio_logger.warning(
-                                f"📁 Transcription error for file: {file.filename}: {transcription_stage.get('error')}"
-                            )
-                            break
-
-                    except Exception as e:
-                        audio_logger.debug(f"Error checking processing status: {e}")
-
-                    await asyncio.sleep(wait_interval)
-                    elapsed_time += wait_interval
-
-                if elapsed_time >= max_wait_time:
-                    audio_logger.warning(f"📁 Transcription timed out for file: {file.filename}")
-
-                # Signal end of conversation - trigger memory processing
-                await client_state.close_current_conversation()
-
-                # Give cleanup time to complete
-                await asyncio.sleep(0.5)
-
-                # Track conversation created
-                conversation_info = {
-                    "client_id": client_id,
-                    "filename": file.filename,
-                    "status": "completed" if elapsed_time < max_wait_time else "timed_out",
-                }
-                processed_conversations.append(conversation_info)
-
-            except Exception as e:
-                audio_logger.error(f"Error processing file {file.filename}: {e}")
-                processed_files.append(
-                    {"filename": file.filename or "unknown", "status": "error", "error": str(e)}
-                )
-            finally:
-                # Always clean up client state to prevent accumulation
-                if client_id and client_state:
-                    try:
-                        await cleanup_client_state(client_id)
-                        audio_logger.info(f"🧹 Cleaned up client state for {client_id}")
-                    except Exception as cleanup_error:
-                        audio_logger.error(
-                            f"❌ Error cleaning up client state for {client_id}: {cleanup_error}"
-                        )
-
-        return {
-            "message": f"Processed {len(files)} files",
-            "files": processed_files,
-            "conversations": processed_conversations,
-            "successful": len([f for f in processed_files if f.get("status") != "error"]),
-            "failed": len([f for f in processed_files if f.get("status") == "error"]),
-        }
-
-    except Exception as e:
-        audio_logger.error(f"Error in process_audio_files: {e}")
-        return JSONResponse(status_code=500, content={"error": f"File processing failed: {str(e)}"})
 
 
 def get_audio_duration(file_content: bytes) -> float:
@@ -465,21 +162,32 @@ async def process_audio_files_async(
                     content={"error": f"Failed to read file {file.filename}: {str(e)}"},
                 )
 
-        # Create job
+        # Use unified processing pipeline
+        from advanced_omi_backend.unified_file_upload import (
+            process_files_unified_background,
+        )
+
         job_tracker = get_job_tracker()
         filenames = [filename for filename, _ in file_data]
-        job_id = await job_tracker.create_job(user.user_id, device_name, filenames)
+        batch_job_id = await job_tracker.create_job(user.user_id, device_name, filenames)
 
-        # Start background processing with file contents
-        background_tasks.add_task(process_files_with_content, job_id, file_data, user, device_name)
+        # Start background processing using unified pipeline
+        background_tasks.add_task(
+            process_files_unified_background,
+            batch_job_id,
+            file_data,
+            user,
+            device_name
+        )
 
-        audio_logger.info(f"🚀 Started async processing job {job_id} with {len(files)} files")
+        audio_logger.info(f"🚀 Started unified async processing: batch_job_id={batch_job_id}, files={len(files)}")
 
         return {
-            "job_id": job_id,
-            "message": f"Started processing {len(files)} files",
-            "status_url": f"/api/process-audio-files/jobs/{job_id}",
+            "job_id": batch_job_id,
+            "message": f"Started processing {len(files)} files using unified pipeline",
+            "status_url": f"/api/process-audio-files/jobs/{batch_job_id}",
             "total_files": len(files),
+            "pipeline_type": "unified"
         }
 
     except Exception as e:
@@ -520,255 +228,7 @@ async def list_processing_jobs():
         return JSONResponse(status_code=500, content={"error": f"Failed to list jobs: {str(e)}"})
 
 
-async def process_files_with_content(
-    job_id: str, file_data: list[tuple[str, bytes]], user: User, device_name: str
-):
-    """Background task to process uploaded files using pre-read content.
-
-    Creates persistent clients that remain active in an upload session,
-    following the same code path as WebSocket clients.
-    """
-    # Import here to avoid circular imports
-    from advanced_omi_backend.main import create_client_state, cleanup_client_state
-    import uuid
-
-    audio_logger.info(
-        f"🚀 process_files_with_content called for job {job_id} with {len(file_data)} files"
-    )
-    job_tracker = get_job_tracker()
-
-    try:
-        # Update job status to processing
-        await job_tracker.update_job_status(job_id, JobStatus.PROCESSING)
-
-        # Process files one by one
-        processed_files = []
-
-        for file_index, (filename, content) in enumerate(file_data):
-            # Generate client ID for this file
-            file_device_name = f"{device_name}-{file_index + 1:03d}"
-            client_id = generate_client_id(user, file_device_name)
-            client_state = None
-
-            try:
-                audio_logger.info(
-                    f"🔧 [Job {job_id}] Processing file {file_index + 1}/{len(file_data)}: {filename}, content type: {type(content)}, size: {len(content)}"
-                )
-                # Set current file
-                await job_tracker.set_current_file(job_id, filename)
-                await job_tracker.update_file_status(job_id, filename, FileStatus.PROCESSING)
-
-                audio_logger.info(
-                    f"🚀 [Job {job_id}] Processing file {file_index + 1}/{len(file_data)}: {filename}"
-                )
-
-                # Check duration and skip if too long
-                audio_logger.info(
-                    f"🔍 [Job {job_id}] About to check duration for {filename}, content size: {len(content)} bytes"
-                )
-                try:
-                    duration = get_audio_duration(content)
-                    audio_logger.info(
-                        f"🔍 [Job {job_id}] Duration check successful: {duration:.2f}s for {filename}"
-                    )
-                except Exception as duration_error:
-                    audio_logger.error(
-                        f"❌ [Job {job_id}] Duration check failed for {filename}: {duration_error}"
-                    )
-                    raise
-                # Duration limit removed - process files of any reasonable length
-                audio_logger.info(f"📊 File duration: {duration/60:.1f} minutes")
-
-                # Validate file type
-                if not filename or not filename.lower().endswith(".wav"):
-                    error_msg = "Only WAV files are currently supported"
-                    await job_tracker.update_file_status(
-                        job_id, filename, FileStatus.FAILED, error_message=error_msg
-                    )
-                    continue
-
-                # Use pre-generated client ID from upload session
-                file_device_name = f"{device_name}-{file_index + 1:03d}"
-
-                # Update job tracker with client ID
-                await job_tracker.update_file_status(
-                    job_id, filename, FileStatus.PROCESSING, client_id=client_id
-                )
-
-                # Create persistent client state (will be tracked by ProcessorManager)
-                client_state = await create_client_state(client_id, user, file_device_name)
-
-
-                audio_logger.info(
-                    f"👤 [Job {job_id}] Created persistent client {client_id} for file {filename}"
-                )
-
-                # Process WAV file
-                with wave.open(io.BytesIO(content), "rb") as wav_file:
-                    sample_rate = wav_file.getframerate()
-                    sample_width = wav_file.getsampwidth()
-                    channels = wav_file.getnchannels()
-                    audio_data = wav_file.readframes(wav_file.getnframes())
-
-                    # Convert to mono if stereo
-                    if channels == 2:
-                        if sample_width == 2:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                        else:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int32)
-                        audio_array = audio_array.reshape(-1, 2)
-                        audio_data = (
-                            np.mean(audio_array, axis=1).astype(audio_array.dtype).tobytes()
-                        )
-                        channels = 1
-
-                    # Process audio in chunks
-                    processor_manager = get_processor_manager()
-                    chunk_size = 32 * 1024
-                    base_timestamp = int(time.time())
-
-                    for i in range(0, len(audio_data), chunk_size):
-                        chunk_data = audio_data[i : i + chunk_size]
-                        chunk_offset_bytes = i
-                        chunk_offset_seconds = chunk_offset_bytes / (
-                            sample_rate * sample_width * channels
-                        )
-                        chunk_timestamp = base_timestamp + int(chunk_offset_seconds)
-
-                        # Process audio chunk through unified pipeline
-                        await process_audio_chunk(
-                            audio_data=chunk_data,
-                            client_id=client_id,
-                            user_id=user.user_id,
-                            user_email=user.email,
-                            audio_format={
-                                "rate": sample_rate,
-                                "width": sample_width,
-                                "channels": channels,
-                                "timestamp": chunk_timestamp,
-                            },
-                            client_state=None,  # No client state needed for file upload
-                        )
-
-                        if i % (chunk_size * 10) == 0:  # Yield control occasionally
-                            await asyncio.sleep(0)
-
-                # Wait briefly for transcription manager to be created
-                await asyncio.sleep(2.0)
-
-                # Close client audio to trigger transcription completion
-                await processor_manager.close_client_audio(client_id)
-
-                # Wait for processing to complete with dynamic timeout
-                max_wait_time = max(120, int(duration * 2) + 60)  # 2x duration + 60s buffer
-                wait_interval = 2.0
-                elapsed_time = 0
-
-                audio_logger.info(
-                    f"⏳ [Job {job_id}] Waiting for transcription (max {max_wait_time}s)"
-                )
-
-                # Track whether memory processing has been triggered to avoid duplicate calls
-                memory_triggered = False
-
-                while elapsed_time < max_wait_time:
-                    try:
-                        # Check database for completion status
-                        chunk = await chunks_col.find_one({"client_id": client_id})
-                        if chunk:
-                            transcription_status = chunk.get("transcription_status", "PENDING")
-                            memory_status = chunk.get("memory_processing_status", "PENDING")
-
-                            # Update job tracker with current status
-                            await job_tracker.update_file_status(
-                                job_id,
-                                filename,
-                                FileStatus.PROCESSING,
-                                audio_uuid=chunk.get("audio_uuid"),
-                                transcription_status=transcription_status,
-                                memory_status=memory_status,
-                            )
-
-                            # Check if transcription failed - immediately fail the job
-                            if transcription_status == "FAILED":
-                                audio_logger.error(
-                                    f"❌ [Job {job_id}] Transcription failed, marking file as failed: {filename}"
-                                )
-                                await job_tracker.update_file_status(
-                                    job_id, filename, FileStatus.FAILED, 
-                                    error_message="Transcription failed"
-                                )
-                                break  # Exit monitoring loop for this file
-                            
-                            # Check if transcription is complete to trigger memory processing
-                            elif transcription_status in ["COMPLETED", "EMPTY"]:
-                                # Trigger memory processing if not already done
-                                if memory_status == "PENDING" and not memory_triggered:
-                                    audio_logger.info(
-                                        f"🚀 [Job {job_id}] Transcription complete, triggering memory processing: {filename}"
-                                    )
-                                    await client_state.close_current_conversation()
-                                    memory_triggered = True
-                                    # Continue to next iteration to check memory status
-                                    continue
-
-                                # Check if memory processing is also complete
-                                if memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
-                                    audio_logger.info(
-                                        f"✅ [Job {job_id}] File processing completed: {filename}"
-                                    )
-                                    await job_tracker.update_file_status(
-                                        job_id, filename, FileStatus.COMPLETED
-                                    )
-                                    break
-
-                    except Exception as e:
-                        audio_logger.debug(f"Error checking processing status: {e}")
-
-                    await asyncio.sleep(wait_interval)
-                    elapsed_time += wait_interval
-
-                if elapsed_time >= max_wait_time:
-                    error_msg = f"Processing timed out after {max_wait_time}s"
-                    audio_logger.warning(f"⏰ [Job {job_id}] {error_msg}: {filename}")
-                    await job_tracker.update_file_status(
-                        job_id, filename, FileStatus.FAILED, error_message=error_msg
-                    )
-
-                # Signal end of conversation - trigger memory processing
-                await client_state.close_current_conversation()
-                await asyncio.sleep(0.5)
-
-            except Exception as e:
-                error_msg = f"Error processing file: {str(e)}"
-                audio_logger.error(f"❌ [Job {job_id}] {error_msg}")
-                await job_tracker.update_file_status(
-                    job_id, filename, FileStatus.FAILED, error_message=error_msg
-                )
-            finally:
-                # Clean up client state immediately after upload completes (like WebSocket disconnect)
-                # ProcessorManager will continue tracking processing independently
-                if client_id and client_state:
-                    try:
-                        await cleanup_client_state(client_id)
-                        audio_logger.info(f"🧹 Cleaned up client state for {client_id}")
-                    except Exception as cleanup_error:
-                        audio_logger.error(
-                            f"❌ Error cleaning up client state for {client_id}: {cleanup_error}"
-                        )
-
-        # Mark job as completed
-        await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)
-
-        audio_logger.info(
-            f"🎉 [Job {job_id}] All files processed successfully."
-        )
-
-    except Exception as e:
-        error_msg = f"Job processing failed: {str(e)}"
-        audio_logger.error(f"💥 [Job {job_id}] {error_msg}")
-        await job_tracker.update_job_status(job_id, JobStatus.FAILED, error_msg)
-
+# Legacy function removed - now using unified pipeline via process_files_unified_background()
 
 
 # Configuration functions moved to config.py to avoid circular imports
@@ -1179,13 +639,49 @@ async def delete_all_user_memories(user: User):
 
 
 async def get_processor_overview():
-    """Get comprehensive processor overview with pipeline stats."""
+    """Get comprehensive processor overview with job-tracker-based pipeline stats."""
     try:
         processor_manager = get_processor_manager()
         task_manager = get_task_manager()
+        job_tracker = get_job_tracker()
+        client_manager = get_client_manager()
 
-        # Get pipeline statistics
-        pipeline_stats = processor_manager.get_pipeline_statistics()
+        # Get pipeline metrics from job tracker
+        job_metrics = await job_tracker.get_pipeline_metrics()
+
+        # Get actual queue sizes and active processing status
+        # active_tasks should show if something is ACTUALLY being processed, not just if worker is alive
+        # Use queue size > 0 as indicator that stage is actively processing
+        pipeline_stats = {
+            "audio": {
+                "queue_size": processor_manager.audio_queue.qsize(),
+                "active_tasks": 1 if processor_manager.audio_queue.qsize() > 0 else 0,
+                "avg_processing_time_ms": job_metrics.get("stage_metrics", {}).get("audio", {}).get("avg_processing_lag_seconds", 0) * 1000,
+                "success_rate": _calculate_success_rate(job_metrics.get("stage_metrics", {}).get("audio", {})),
+                "throughput_per_minute": job_metrics.get("stage_metrics", {}).get("audio", {}).get("total_processed", 0) / 60
+            },
+            "transcription": {
+                "queue_size": processor_manager.transcription_queue.qsize(),
+                "active_tasks": 1 if processor_manager.transcription_queue.qsize() > 0 else 0,
+                "avg_processing_time_ms": job_metrics.get("stage_metrics", {}).get("transcription", {}).get("avg_processing_lag_seconds", 0) * 1000,
+                "success_rate": _calculate_success_rate(job_metrics.get("stage_metrics", {}).get("transcription", {})),
+                "throughput_per_minute": job_metrics.get("stage_metrics", {}).get("transcription", {}).get("total_processed", 0) / 60
+            },
+            "memory": {
+                "queue_size": processor_manager.memory_queue.qsize(),
+                "active_tasks": 1 if processor_manager.memory_queue.qsize() > 0 else 0,
+                "avg_processing_time_ms": job_metrics.get("stage_metrics", {}).get("memory", {}).get("avg_processing_lag_seconds", 0) * 1000,
+                "success_rate": _calculate_success_rate(job_metrics.get("stage_metrics", {}).get("memory", {})),
+                "throughput_per_minute": job_metrics.get("stage_metrics", {}).get("memory", {}).get("total_processed", 0) / 60
+            },
+            "cropping": {
+                "queue_size": processor_manager.cropping_queue.qsize(),
+                "active_tasks": 1 if processor_manager.cropping_queue.qsize() > 0 else 0,
+                "avg_processing_time_ms": job_metrics.get("stage_metrics", {}).get("cropping", {}).get("avg_processing_lag_seconds", 0) * 1000,
+                "success_rate": _calculate_success_rate(job_metrics.get("stage_metrics", {}).get("cropping", {})),
+                "throughput_per_minute": job_metrics.get("stage_metrics", {}).get("cropping", {}).get("total_processed", 0) / 60
+            }
+        }
 
         # Get system health metrics
         task_health = task_manager.get_health_status()
@@ -1194,14 +690,20 @@ async def get_processor_overview():
         # Get recent activity
         recent_activity = processor_manager.get_processing_history(limit=10)
 
+        # Calculate uptime from process start (approximation using task manager start time)
+        process_start_time = task_health.get("start_time", time.time())
+        uptime_seconds = time.time() - process_start_time
+        uptime_hours = uptime_seconds / 3600
+
         overview = {
             "pipeline_stats": pipeline_stats,
+            "job_tracker_metrics": job_metrics,  # Include raw job tracker data
             "system_health": {
-                "total_active_clients": len(processor_manager.active_file_sinks),
-                "total_processing_tasks": len(processor_manager.processing_tasks),
+                "total_active_clients": len(client_manager._active_clients),
+                "total_processing_tasks": job_metrics.get("active_pipeline_jobs", 0) + job_metrics.get("active_batch_jobs", 0),
                 "task_manager_healthy": task_health.get("healthy", False),
                 "error_rate": task_health.get("recent_errors", 0) / max(task_health.get("completed_tasks", 1), 1),
-                "uptime_hours": time.time() / 3600  # Placeholder
+                "uptime_hours": uptime_hours
             },
             "queue_health": queue_health,
             "recent_activity": recent_activity[:5]  # Last 5 activities
@@ -1209,10 +711,22 @@ async def get_processor_overview():
 
         return overview
     except Exception as e:
-        logger.error(f"Error getting processor overview: {e}")
+        logger.error(f"Error getting processor overview: {e}", exc_info=True)
         return JSONResponse(
             status_code=500, content={"error": f"Failed to get processor overview: {str(e)}"}
         )
+
+
+def _calculate_success_rate(stage_data: dict) -> float:
+    """Helper to calculate success rate from stage metrics."""
+    if not stage_data:
+        return 1.0
+    total_processed = stage_data.get("total_processed", 0)
+    total_failed = stage_data.get("total_failed", 0)
+    total = total_processed + total_failed
+    if total == 0:
+        return 1.0
+    return total_processed / total
 
 async def get_processor_history(page: int = 1, per_page: int = 50):
     """Get paginated processing history."""
@@ -1252,9 +766,6 @@ async def get_client_processing_detail(client_id: str):
         processor_manager = get_processor_manager()
         client_manager = get_client_manager()
 
-        # Get processing status first - this may have data even if client is inactive
-        processing_status = processor_manager.get_processing_status(client_id)
-
         # Get task manager tasks for this client
         task_manager = get_task_manager()
         client_tasks = task_manager.get_tasks_for_client(client_id)
@@ -1262,8 +773,8 @@ async def get_client_processing_detail(client_id: str):
         # Try to get client info, but don't fail if client is inactive
         client = client_manager.get_client(client_id)
 
-        # If no client and no processing data, return 404
-        if not client and not processing_status.get("stages") and not client_tasks:
+        # If no client and no task data, return 404
+        if not client and not client_tasks:
             return JSONResponse(
                 status_code=404, content={"error": f"No data found for client {client_id}"}
             )
@@ -1278,7 +789,6 @@ async def get_client_processing_detail(client_id: str):
                 "sample_rate": getattr(client, "sample_rate", None) if client else None,
                 "status": "active" if client else "inactive"
             },
-            "processing_status": processing_status,
             "active_tasks": [
                 {
                     "task_id": f"{task.name}_{id(task.task)}",
@@ -1299,6 +809,227 @@ async def get_client_processing_detail(client_id: str):
         return JSONResponse(
             status_code=500, content={"error": f"Failed to get client detail: {str(e)}"}
         )
+
+
+# New Pipeline-Specific Endpoints
+
+async def get_pipeline_bottlenecks():
+    """Get pipeline bottleneck analysis with recommendations."""
+    try:
+        from advanced_omi_backend.task_manager import get_task_manager
+
+        pipeline_tracker = get_task_manager()
+        bottleneck_analysis = pipeline_tracker.get_bottleneck_analysis()
+
+        return {
+            "analysis_timestamp": int(time.time()),
+            "bottlenecks": [
+                {
+                    **bottleneck,
+                    "recommendation": _get_bottleneck_recommendation(bottleneck)
+                }
+                for bottleneck in bottleneck_analysis["bottlenecks"]
+            ],
+            "slowest_stage": bottleneck_analysis.get("slowest_stage"),
+            "slowest_stage_total_time_ms": bottleneck_analysis.get("slowest_stage_total_time_ms", 0),
+            "overall_pipeline_health": bottleneck_analysis["overall_health"],
+            "healthy_stages": [
+                stage for stage, metrics in pipeline_tracker.queue_metrics.items()
+                if metrics.avg_queue_time_ms < 5000 and metrics.avg_processing_time_ms < 10000
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting pipeline bottlenecks: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get bottlenecks: {str(e)}"}
+        )
+
+
+async def get_pipeline_health():
+    """Get comprehensive pipeline health metrics."""
+    try:
+        from advanced_omi_backend.task_manager import get_task_manager
+
+        pipeline_tracker = get_task_manager()
+        processor_manager = get_processor_manager()
+
+        # Calculate end-to-end metrics
+        active_sessions = len(pipeline_tracker.audio_sessions)
+        completed_today = sum(
+            metrics.total_completed for metrics in pipeline_tracker.queue_metrics.values()
+        )
+
+        # Calculate average end-to-end time (estimated)
+        stage_times = [
+            metrics.avg_processing_time_ms + metrics.avg_queue_time_ms
+            for metrics in pipeline_tracker.queue_metrics.values()
+            if metrics.avg_processing_time_ms > 0
+        ]
+        avg_end_to_end_time = sum(stage_times) if stage_times else 0
+
+        return {
+            "overall_status": pipeline_tracker.get_bottleneck_analysis()["overall_health"],
+            "active_sessions": active_sessions,
+            "completed_today": completed_today,
+            "average_end_to_end_time_ms": avg_end_to_end_time,
+            "stage_performance": {
+                stage: {
+                    "avg_time_ms": metrics.avg_processing_time_ms + metrics.avg_queue_time_ms,
+                    "success_rate": (
+                        metrics.total_completed / (metrics.total_completed + metrics.total_failed)
+                        if (metrics.total_completed + metrics.total_failed) > 0 else 1.0
+                    ) * 100,
+                    "status": _get_stage_health_status(metrics)
+                }
+                for stage, metrics in pipeline_tracker.queue_metrics.items()
+            },
+            "trends": {
+                "throughput_trend": "stable",  # Could be calculated from historical data
+                "latency_trend": "stable",     # Could be calculated from historical data
+                "error_rate_trend": "stable"  # Could be calculated from historical data
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting pipeline health: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get pipeline health: {str(e)}"}
+        )
+
+
+async def get_queue_metrics():
+    """Get real-time queue metrics and performance data."""
+    try:
+        from advanced_omi_backend.task_manager import get_task_manager
+
+        pipeline_tracker = get_task_manager()
+        processor_manager = get_processor_manager()
+
+        return {
+            "timestamp": int(time.time()),
+            "queues": {
+                stage: {
+                    "current_depth": metrics.current_depth,
+                    "total_enqueued": metrics.total_enqueued,
+                    "total_dequeued": metrics.total_dequeued,
+                    "total_completed": metrics.total_completed,
+                    "total_failed": metrics.total_failed,
+                    "avg_queue_time_ms": metrics.avg_queue_time_ms,
+                    "avg_processing_time_ms": metrics.avg_processing_time_ms,
+                    "health_status": _get_stage_health_status(metrics),
+                    "last_updated": int(metrics.last_updated)
+                }
+                for stage, metrics in pipeline_tracker.queue_metrics.items()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting queue metrics: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get queue metrics: {str(e)}"}
+        )
+
+
+async def get_session_pipeline(audio_uuid: str):
+    """Get detailed pipeline timeline for a specific audio session."""
+    try:
+        from advanced_omi_backend.task_manager import get_task_manager
+
+        pipeline_tracker = get_task_manager()
+        events = pipeline_tracker.get_pipeline_events(audio_uuid)
+
+        if not events:
+            return JSONResponse(
+                status_code=404, content={"error": f"No pipeline events found for audio UUID: {audio_uuid}"}
+            )
+
+        # Calculate stage status
+        stages = {}
+        for event in events:
+            stage = event.stage
+            if stage not in stages:
+                stages[stage] = {"status": "pending", "events": []}
+
+            stages[stage]["events"].append({
+                "event_type": event.event_type,
+                "timestamp": int(event.timestamp),
+                "queue_size": event.queue_size,
+                "processing_time_ms": event.processing_time_ms,
+                "metadata": event.metadata
+            })
+
+            if event.event_type == "complete":
+                stages[stage]["status"] = "completed"
+                stages[stage]["processing_time_ms"] = event.processing_time_ms
+            elif event.event_type == "failed":
+                stages[stage]["status"] = "failed"
+                stages[stage]["error"] = event.metadata.get("error", "Unknown error")
+            elif event.event_type == "dequeue" and stages[stage]["status"] == "pending":
+                stages[stage]["status"] = "in_progress"
+
+        return {
+            "audio_uuid": audio_uuid,
+            "conversation_id": events[0].conversation_id if events else None,
+            "status": "completed" if all(s.get("status") == "completed" for s in stages.values()) else "processing",
+            "created_at": int(events[0].timestamp) if events else None,
+            "stages": stages,
+            "timeline": [
+                {
+                    "timestamp": int(event.timestamp),
+                    "event": event.event_type,
+                    "stage": event.stage,
+                    "queue_size": event.queue_size,
+                    "processing_time_ms": event.processing_time_ms
+                }
+                for event in events
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting session pipeline for {audio_uuid}: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to get session pipeline: {str(e)}"}
+        )
+
+
+# Helper functions for pipeline analysis
+
+def _get_bottleneck_recommendation(bottleneck: dict) -> str:
+    """Generate recommendations for pipeline bottlenecks."""
+    stage = bottleneck.get("stage", "")
+    bottleneck_type = bottleneck.get("type", "")
+
+    if bottleneck_type == "queue_lag":
+        if stage == "memory":
+            return "Consider scaling LLM processing or increasing memory timeout"
+        elif stage == "transcription":
+            return "Consider additional transcription workers or check Deepgram quota"
+        elif stage == "audio":
+            return "Check audio processing performance and file I/O"
+        elif stage == "cropping":
+            return "Audio cropping backlog - consider parallel processing"
+        else:
+            return f"Queue lag detected in {stage} - consider scaling resources"
+    elif bottleneck_type == "processing_lag":
+        if stage == "memory":
+            return "Memory extraction taking too long - check LLM performance"
+        elif stage == "transcription":
+            return "Transcription processing slow - check provider performance"
+        else:
+            return f"Processing lag in {stage} - optimize or scale processing"
+    else:
+        return f"Performance issue detected in {stage} stage"
+
+
+def _get_stage_health_status(metrics) -> str:
+    """Determine health status for a pipeline stage."""
+    if metrics.avg_queue_time_ms > 15000:  # 15+ second queue time
+        return "critical"
+    elif metrics.avg_queue_time_ms > 5000:  # 5+ second queue time
+        return "degraded"
+    elif metrics.avg_processing_time_ms > 30000:  # 30+ second processing
+        return "degraded"
+    elif metrics.total_failed > 0 and metrics.total_completed == 0:
+        return "failing"
+    else:
+        return "healthy"
 
 
 

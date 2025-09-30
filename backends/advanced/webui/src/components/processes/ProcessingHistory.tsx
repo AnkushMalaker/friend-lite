@@ -142,7 +142,7 @@ export default function ProcessingHistory({ initialData = [], refreshTrigger }: 
         ) : (
           history.map((item, index) => (
             <div
-              key={`${item.client_id}-${item.started_at}-${index}`}
+              key={`${item.client_id}-${item.conversation_id || 'no-conv'}-${item.started_at}-${item.task_type}-${index}`}
               className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-md"
             >
               <div className="flex items-center space-x-3 flex-1 min-w-0">

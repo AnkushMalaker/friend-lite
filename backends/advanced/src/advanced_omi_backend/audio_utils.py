@@ -3,17 +3,17 @@
 ###############################################################################
 
 import asyncio
+import io
 import logging
 import os
 import time
 import wave
-import io
-import numpy as np
 from pathlib import Path
 
 # Type import to avoid circular imports
 from typing import TYPE_CHECKING, Optional
 
+import numpy as np
 from wyoming.audio import AudioChunk
 
 if TYPE_CHECKING:
@@ -51,41 +51,24 @@ async def process_audio_chunk(
         client_state: Optional ClientState for state updates
     """
 
-    from advanced_omi_backend.processors import (
-        AudioProcessingItem,
-        get_processor_manager,
-    )
+    from advanced_omi_backend.audio_processing_types import AudioProcessingItem
+    from advanced_omi_backend.processors import get_processor_manager
 
     # Extract format details
     rate = audio_format.get("rate", 16000)
-    width = audio_format.get("width", 2)
-    channels = audio_format.get("channels", 1)
-    timestamp = audio_format.get("timestamp")
 
-    # Use current time if no timestamp provided
-    if timestamp is None:
-        timestamp = int(time.time() * 1000)
-
-    # Create AudioChunk with format details
-    chunk = AudioChunk(
-        audio=audio_data,
-        rate=rate,
-        width=width,
-        channels=channels,
-        timestamp=timestamp
-    )
-
-    # Create AudioProcessingItem and queue for processing
+    # Create unified AudioProcessingItem for WebSocket processing
     processor_manager = get_processor_manager()
-    processing_item = AudioProcessingItem(
+    processing_item = AudioProcessingItem.from_websocket(
+        audio_chunks=[audio_data],  # Single chunk as list
         client_id=client_id,
         user_id=user_id,
         user_email=user_email,
-        audio_chunk=chunk,
-        timestamp=timestamp
+        sample_rate=rate
     )
 
-    await processor_manager.queue_audio(processing_item)
+    # Submit to unified pipeline
+    await processor_manager.submit_audio_for_processing(processing_item)
 
 
 async def load_audio_file_as_chunk(audio_path: Path) -> AudioChunk:

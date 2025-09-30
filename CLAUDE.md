@@ -74,16 +74,40 @@ cp .env.template .env  # Configure API keys
 # Manual test execution (for debugging)
 source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY
 uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+
+# Leave test containers running for debugging (don't auto-cleanup)
+CLEANUP_CONTAINERS=false source .env && export DEEPGRAM_API_KEY && export OPENAI_API_KEY
+uv run pytest tests/test_integration.py::test_full_pipeline_integration -v -s
+
+# Manual cleanup when needed
+docker compose -f docker-compose-test.yml down -v
 ```
+
+#### Test Configuration Flags
+- **CLEANUP_CONTAINERS** (default: true): Automatically stop and remove test containers after test completion
+  - Set to `false` for debugging: `CLEANUP_CONTAINERS=false ./run-test.sh`
+- **REBUILD** (default: true): Force rebuild containers with latest code changes
+- **FRESH_RUN** (default: true): Start with clean database and fresh containers
+- **TRANSCRIPTION_PROVIDER** (default: deepgram): Choose transcription provider (deepgram or parakeet)
+
+#### Test Environment Variables
+Tests use isolated test environment with overridden credentials:
+- **Test Database**: `test_db` (MongoDB on port 27018, separate from production)
+- **Test Ports**: Backend (8001), Qdrant (6337/6338), WebUI (3001)
+- **Test Credentials**:
+  - `AUTH_SECRET_KEY`: test-jwt-signing-key-for-integration-tests
+  - `ADMIN_EMAIL`: test-admin@example.com
+  - `ADMIN_PASSWORD`: test-admin-password-123
+- **API Keys**: Loaded from `.env` file (DEEPGRAM_API_KEY, OPENAI_API_KEY)
+- **Test Settings**: `DISABLE_SPEAKER_RECOGNITION=true` to prevent segment duplication
 
 #### Test Script Features
 - **Environment Compatibility**: Works with both local .env files and CI environment variables
-- **Simplified Configuration**: Uses environment variables directly, no temporary .env.test files
-- **Docker Cleanup**: Uses lightweight Alpine container for reliable permission-free cleanup
-- **Automatic Cleanup**: Stops and removes test containers after execution
+- **Isolated Test Environment**: Separate ports and database prevent conflicts with running services
+- **Automatic Cleanup**: Configurable via CLEANUP_CONTAINERS flag (default: true)
 - **Colored Output**: Clear progress indicators and error reporting
 - **Timeout Protection**: 15-minute timeout for advanced backend, 30-minute for speaker recognition
-- **Fresh Testing**: Uses CACHED_MODE=False for clean test environments
+- **Fresh Testing**: Clean database and containers for each test run
 
 ### Mobile App Development
 ```bash
@@ -119,7 +143,8 @@ docker compose up --build
 ### Key Components
 - **Audio Pipeline**: Real-time Opus/PCM → Application-level processing → Deepgram/Mistral transcription → memory extraction
 - **Wyoming Protocol**: WebSocket communication uses Wyoming protocol (JSONL + binary) for structured audio sessions
-- **Application-Level Processing**: Centralized processors for audio, transcription, memory, and cropping
+- **Unified Pipeline**: Job-based tracking system for all audio processing (WebSocket and file uploads)
+- **Job Tracker**: Tracks pipeline jobs with stage events (audio → transcription → memory) and completion status
 - **Task Management**: BackgroundTaskManager tracks all async tasks to prevent orphaned processes
 - **Unified Transcription**: Deepgram/Mistral transcription with fallback to offline ASR services
 - **Memory System**: Pluggable providers (Friend-Lite native or OpenMemory MCP)

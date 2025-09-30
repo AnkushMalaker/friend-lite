@@ -38,19 +38,27 @@ def clean_and_validate_xml(xml_str: str) -> str:
     """
     Clean common XML issues and validate structure.
     """
+    import logging
+    logger = logging.getLogger("memory_service")
+
+    logger.info("🔍 clean_and_validate_xml: Starting...")
     xml_str = xml_str.strip()
-    
+
+    logger.info(f"🔍 clean_and_validate_xml: XML length: {len(xml_str)} chars")
     # Print raw XML for debugging
     print("Raw XML content:")
     print("=" * 50)
+    logger.info("🔍 clean_and_validate_xml: About to print repr...")
     print(repr(xml_str))
     print("=" * 50)
+    logger.info("🔍 clean_and_validate_xml: About to print formatted lines...")
     print("Formatted XML content:")
     lines = xml_str.split('\n')
     for i, line in enumerate(lines, 1):
         print(f"{i:2d}: {line}")
     print("=" * 50)
-    
+    logger.info("🔍 clean_and_validate_xml: Print complete, returning...")
+
     return xml_str
 
 def extract_assistant_xml_from_openai_response(response) -> str:
@@ -72,14 +80,25 @@ def parse_memory_xml(xml_str: str) -> List[MemoryItem]:
     - UPDATE items no longer *require* <old_memory>. If missing, old_memory=None.
     - <old_memory> is still forbidden for non-UPDATE events.
     """
+    import logging
+    logger = logging.getLogger("memory_service")
+
+    logger.info("🔍 parse_memory_xml: Starting XML parsing...")
+
     # First extract XML if it's embedded in other content
+    logger.info("🔍 parse_memory_xml: Calling extract_xml_from_content...")
     xml_str = extract_xml_from_content(xml_str)
+    logger.info(f"🔍 parse_memory_xml: extract_xml_from_content returned {len(xml_str)} chars")
 
     # Clean and validate
+    logger.info("🔍 parse_memory_xml: Calling clean_and_validate_xml...")
     xml_str = clean_and_validate_xml(xml_str)
+    logger.info(f"🔍 parse_memory_xml: clean_and_validate_xml returned {len(xml_str)} chars")
 
     try:
+        logger.info("🔍 parse_memory_xml: Calling ET.fromstring...")
         root = ET.fromstring(xml_str.strip())
+        logger.info("🔍 parse_memory_xml: ET.fromstring completed successfully")
     except ET.ParseError as e:
         print(f"\nXML Parse Error: {e}")
         print("This usually means:")
@@ -89,9 +108,11 @@ def parse_memory_xml(xml_str: str) -> List[MemoryItem]:
         print("- Missing quotes around attribute values")
         raise MemoryXMLParseError(f"Invalid XML: {e}") from e
 
+    logger.info(f"🔍 parse_memory_xml: Root tag is '{root.tag}'")
     if root.tag != "result":
         raise MemoryXMLParseError("Root element must be <result>.")
 
+    logger.info("🔍 parse_memory_xml: Looking for memory section...")
     memory = root.find("memory")
     if memory is None:
         raise MemoryXMLParseError("<memory> section is required.")
@@ -99,7 +120,9 @@ def parse_memory_xml(xml_str: str) -> List[MemoryItem]:
     items: List[MemoryItem] = []
     seen_ids = set()
 
-    for item in memory.findall("item"):
+    logger.info(f"🔍 parse_memory_xml: Found {len(memory.findall('item'))} items to process")
+    for idx, item in enumerate(memory.findall("item")):
+        logger.info(f"🔍 parse_memory_xml: Processing item {idx + 1}...")
         # Attributes
         item_id = item.get("id")
         event = item.get("event")
@@ -136,10 +159,13 @@ def parse_memory_xml(xml_str: str) -> List[MemoryItem]:
                 raise MemoryXMLParseError(f"<old_memory> must only appear for UPDATE (id {item_id}).")
 
         items.append(MemoryItem(id=item_id, event=event, text=text_val, old_memory=old_val))
+        logger.info(f"🔍 parse_memory_xml: Item {idx + 1} processed successfully")
 
+    logger.info(f"🔍 parse_memory_xml: Processed {len(items)} total items")
     if not items:
         raise MemoryXMLParseError("No <item> elements found in <memory>.")
 
+    logger.info("🔍 parse_memory_xml: Returning parsed items")
     return items
 
 

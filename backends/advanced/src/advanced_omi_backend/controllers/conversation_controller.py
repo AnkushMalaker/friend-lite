@@ -20,7 +20,8 @@ from advanced_omi_backend.client_manager import (
     get_user_clients_all,
 )
 from advanced_omi_backend.database import AudioChunksRepository, ProcessingRunsRepository, chunks_col, processing_runs_col, conversations_col, ConversationsRepository
-from advanced_omi_backend.processors import get_processor_manager, TranscriptionItem, MemoryProcessingItem
+from advanced_omi_backend.processors import get_processor_manager
+from advanced_omi_backend.audio_processing_types import TranscriptionItem, MemoryProcessingItem
 from advanced_omi_backend.users import User, get_user_by_id
 from fastapi.responses import JSONResponse
 
@@ -737,10 +738,11 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
 
             # Create MemoryProcessingItem for reprocessing
             memory_item = MemoryProcessingItem(
-                client_id=f"reprocess-{conversation_id}",
+                conversation_id=conversation_id,
                 user_id=str(user.user_id),
                 user_email=user_obj.email,
-                conversation_id=conversation_id
+                client_id=conversation["client_id"],
+                transcript_version_id=transcript_version_id  # Use specified version
             )
 
             # Queue for memory processing

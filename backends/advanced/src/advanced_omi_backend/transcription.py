@@ -15,11 +15,8 @@ from advanced_omi_backend.config import (
 from advanced_omi_backend.conversation_manager import get_conversation_manager
 from advanced_omi_backend.database import ConversationsRepository, conversations_col
 from advanced_omi_backend.llm_client import async_generate
-from advanced_omi_backend.processors import (
-    AudioCroppingItem,
-    MemoryProcessingItem,
-    get_processor_manager,
-)
+from advanced_omi_backend.processors import get_processor_manager
+from advanced_omi_backend.audio_processing_types import MemoryProcessingItem, CroppingItem
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
@@ -117,7 +114,7 @@ class SpeechActivityAnalyzer:
 class TranscriptionManager:
     """Manages transcription using any configured transcription provider."""
 
-    def __init__(self, chunk_repo=None, processor_manager=None):
+    def __init__(self, chunk_repo=None, processor_manager=None, skip_memory_queuing=False):
         self.provider: Optional[BaseTranscriptionProvider] = get_transcription_provider(
             TRANSCRIPTION_PROVIDER
         )
@@ -132,6 +129,7 @@ class TranscriptionManager:
             processor_manager  # Reference to processor manager for completion tracking
         )
         self._client_id = None
+        self._skip_memory_queuing = skip_memory_queuing  # For unified pipeline integration
 
         # Collection state tracking
         self._collecting = False
@@ -174,8 +172,12 @@ class TranscriptionManager:
             logger.error(f"Failed to connect to {self.provider.name} transcription service: {e}")
             raise
 
-    async def process_collected_audio(self):
-        """Unified processing for all transcription providers."""
+    async def process_collected_audio(self) -> Optional[str]:
+        """Unified processing for all transcription providers.
+
+        Returns:
+            conversation_id if conversation was created, None otherwise
+        """
         logger.info(f"🚀 process_collected_audio called for client {self._client_id}")
         logger.info(
             f"📊 Current state - buffer size: {len(self._audio_buffer) if self._audio_buffer else 0}, collecting: {self._collecting}"
@@ -183,7 +185,7 @@ class TranscriptionManager:
 
         if not self.provider:
             logger.error("No transcription provider available")
-            return
+            return None
 
         # Cancel collection timeout task first to prevent interference
         if self._collection_task and not self._collection_task.done():
@@ -199,8 +201,9 @@ class TranscriptionManager:
         # Get transcript from provider
         try:
             transcript_result = await self._get_transcript()
-            # Process the result uniformly
-            await self._process_transcript_result(transcript_result)
+            # Process the result uniformly and get conversation_id
+            conversation_id = await self._process_transcript_result(transcript_result)
+            return conversation_id
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -214,6 +217,7 @@ class TranscriptionManager:
                     )
                 # Transcription failed
                 logger.error(f"Transcript failed for {self._current_audio_uuid}: {str(e)}")
+            return None
 
     async def _get_transcript(self):
         """Get transcript from any provider using unified interface."""
@@ -265,8 +269,12 @@ class TranscriptionManager:
             return self._audio_buffer[0].rate
         return None
 
-    async def _process_transcript_result(self, transcript_result):
-        """Process transcript result uniformly for all providers."""
+    async def _process_transcript_result(self, transcript_result) -> Optional[str]:
+        """Process transcript result uniformly for all providers.
+
+        Returns:
+            conversation_id if conversation was created, None otherwise
+        """
         if not transcript_result or not self._current_audio_uuid:
             logger.info(f"⚠️ No transcript result to process for {self._current_audio_uuid}")
             # No transcript to process
@@ -274,7 +282,7 @@ class TranscriptionManager:
                 logger.info(
                     f"⚠️ No transcript data for {self._current_audio_uuid}"
                 )
-            return
+            return None
 
         start_time = time.time()
 
@@ -298,7 +306,7 @@ class TranscriptionManager:
                 logger.warning(
                     f"⚠️ Empty transcript text for {self._current_audio_uuid}"
                 )
-                return
+                return None
 
             # Get speaker diarization with word matching (if available)
             final_segments = []
@@ -330,7 +338,7 @@ class TranscriptionManager:
                     )
                 # No speech detected, not queuing memory processing
                 logger.info(f"No speech detected for {self._current_audio_uuid}")
-                return
+                return None
 
             # SPEECH GAP ANALYSIS: Check for conversation closure (only if speech detected)
             if speech_analysis["has_speech"]:
@@ -356,7 +364,7 @@ class TranscriptionManager:
                     await self._trigger_conversation_close()
                     # Conversation closed due to inactivity
                     logger.info(f"Conversation closed for {self._current_audio_uuid}")
-                    return
+                    return None
                 else:
                     # Update last word time for next analysis
                     if activity['last_word_time']:
@@ -497,18 +505,7 @@ class TranscriptionManager:
                     self._current_audio_uuid, status, provider=provider_name
                 )
 
-            # Mark transcription as completed
-            if self.processor_manager and self._client_id:
-                self.processor_manager.track_processing_stage(
-                    self._client_id,
-                    "transcription",
-                    "completed",
-                    {
-                        "audio_uuid": self._current_audio_uuid,
-                        "segments": len(final_segments),
-                        "provider": provider_name,
-                    },
-                )
+            # Legacy track_processing_stage call removed - unified pipeline uses job-based tracking
 
         except Exception as e:
             logger.error(f"Error processing transcript result: {e}")
@@ -523,6 +520,8 @@ class TranscriptionManager:
             logger.info(
                 f"⏱️ Total transcript processing time: {total_duration:.2f}s for client {self._client_id}"
             )
+
+        return conversation_id
 
     def _normalize_transcript_result(self, transcript_result):
         """Normalize transcript result to consistent format."""
@@ -594,6 +593,11 @@ class TranscriptionManager:
         Args:
             conversation_id: The conversation ID to process (not audio_uuid)
         """
+        # Skip if running within unified pipeline (it handles memory queuing)
+        if self._skip_memory_queuing:
+            logger.info(f"⏭️  Skipping internal memory queuing for {conversation_id} (unified pipeline handles it)")
+            return
+
         try:
             # Get conversation data from conversations collection
             conversations_repo = ConversationsRepository(conversations_col)
@@ -638,10 +642,11 @@ class TranscriptionManager:
             processor_manager = get_processor_manager()
             await processor_manager.queue_memory(
                 MemoryProcessingItem(
-                    client_id=self._client_id,
+                    conversation_id=conversation_id,
                     user_id=conversation["user_id"],
                     user_email=audio_session["user_email"],
-                    conversation_id=conversation_id,
+                    client_id=self._client_id,
+                    transcript_version_id=None  # Use active version
                 )
             )
 
@@ -698,7 +703,7 @@ class TranscriptionManager:
             # Queue cropping with processor manager
             processor_manager = get_processor_manager()
             await processor_manager.queue_cropping(
-                AudioCroppingItem(
+                CroppingItem(
                     client_id=self._client_id,
                     user_id=current_client.user_id,
                     audio_uuid=self._current_audio_uuid,

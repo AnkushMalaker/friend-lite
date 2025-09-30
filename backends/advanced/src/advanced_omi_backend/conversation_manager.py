@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 from advanced_omi_backend.database import ConversationsRepository, conversations_col
 from advanced_omi_backend.llm_client import async_generate
 from advanced_omi_backend.processors import get_processor_manager
+from advanced_omi_backend.task_manager import get_pipeline_tracker
 
 audio_logger = logging.getLogger("audio")
 
@@ -73,6 +74,10 @@ class ConversationManager:
             # Mark audio_chunks as having speech and link to conversation
             await chunk_repo.mark_conversation_created(audio_uuid, conversation_id)
 
+            # Link conversation to pipeline tracker for performance monitoring
+            pipeline_tracker = get_pipeline_tracker()
+            pipeline_tracker.link_conversation(audio_uuid, conversation_id)
+
             audio_logger.info(f"✅ Created conversation {conversation_id} for audio {audio_uuid} (speech detected)")
             return conversation_id
 
@@ -111,16 +116,9 @@ class ConversationManager:
             # Get processor manager
             processor_manager = get_processor_manager()
 
-            # Step 1: Close audio file in processor (only if transcription not already completed)
-            # Check if transcription is already completed to avoid double-flushing
-            processing_status = processor_manager.get_processing_status(client_id)
-            transcription_completed = processing_status.get("stages", {}).get("transcription", {}).get("completed", False)
-            
-            if not transcription_completed:
-                audio_logger.info(f"🔄 Transcription not completed, calling close_client_audio for {client_id}")
-                await processor_manager.close_client_audio(client_id)
-            else:
-                audio_logger.info(f"✅ Transcription already completed, skipping close_client_audio for {client_id}")
+            # Step 1: Close audio file in processor
+            audio_logger.info(f"🔄 Calling close_client_audio for {client_id}")
+            await processor_manager.close_client_audio(client_id)
 
             # Step 2: Memory processing is now handled by transcription completion
             # This eliminates race conditions and event coordination issues

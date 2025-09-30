@@ -5,8 +5,10 @@
 - **GET /readiness**: Service dependency validation (MongoDB, Qdrant, etc.)
 - **GET /api/metrics**: System metrics and debug tracker status (Admin only)
 - **GET /api/processor/status**: Processor queue status and health (Admin only)
-- **GET /api/processor/tasks**: All active processing tasks (Admin only)
-- **GET /api/processor/tasks/{client_id}**: Processing task status for specific client (Admin only)
+- **GET /api/process-audio-files/jobs/{job_id}**: Get batch job status (Admin only)
+- **GET /api/process-audio-files/jobs**: List all active batch jobs (Admin only)
+
+**Note**: Legacy client-based tracking endpoints (`/api/processor/tasks/*`) have been removed. Use job-based tracking via `/api/process-audio-files/jobs/*` endpoints instead.
 
 ## WebSocket Endpoints
 - **WS /ws_pcm**: Primary audio streaming endpoint (Wyoming protocol + raw PCM fallback)

@@ -74,8 +74,8 @@ export default function Upload() {
   const handleFileSelect = (selectedFiles: FileList | null) => {
     if (!selectedFiles) return
 
-    const audioFiles = Array.from(selectedFiles).filter(file => 
-      file.type.startsWith('audio/') || 
+    const audioFiles = Array.from(selectedFiles).filter(file =>
+      file.type.startsWith('audio/') ||
       file.name.toLowerCase().endsWith('.wav') ||
       file.name.toLowerCase().endsWith('.mp3') ||
       file.name.toLowerCase().endsWith('.m4a') ||
@@ -89,6 +89,13 @@ export default function Upload() {
     }))
 
     setFiles(prevFiles => [...prevFiles, ...newFiles])
+
+    // Reset phases when adding files after completion
+    if (processingPhase === 'completed') {
+      setProcessingPhase('idle')
+      setUploadPhase('idle')
+      setJobStatus(null)
+    }
   }
 
   const removeFile = (id: string) => {
@@ -148,58 +155,32 @@ export default function Upload() {
     return () => clearInterval(interval)
   }, [autoRefresh, refreshInterval, isPolling])
 
-  // New unified polling approach - polls processor tasks directly without session dependency
+  // Job-based polling - polls active pipeline jobs
   const pollProcessingStatus = async () => {
     try {
-      // Get all processor tasks
-      const tasksResponse = await systemApi.getProcessorTasks()
-      const allTasks = tasksResponse.data
+      // Get active pipeline jobs (response has {active_jobs: count, jobs: array})
+      const jobsResponse = await systemApi.getActivePipelineJobs()
+      const jobsArray = jobsResponse.data.jobs || []
 
-      // Filter for upload clients (identified by client_id pattern ending with 3-digit numbers like "-001", "-002")
-      const uploadTasks: ProcessingTask[] = Object.entries(allTasks)
-        .filter(([clientId]) => {
-          // Upload clients have pattern like: "abc123-upload-001", "abc123-upload-002"
-          return /.*-upload-\d{3}$/.test(clientId)
-        })
-        .map(([clientId, taskData]: [string, any]) => ({
-          client_id: clientId,
-          user_id: taskData?.user_id || 'Unknown',
-          status: taskData?.status || 'processing',
-          stages: taskData?.stages || {}
-        }))
-        .filter(task => Object.keys(task.stages).length > 0) // Only show clients with active processing
+      // Check if processing is complete
+      const allComplete = jobsArray.length > 0 && jobsArray.every((job: any) => job.status === 'completed')
+      const noActiveJobs = jobsArray.length === 0 && processingPhase === 'active'
 
-
-      // Check if all clients are complete OR no upload tasks exist (meaning processing finished)
-      const allComplete = uploadTasks.length > 0 && uploadTasks.every(task => task.status === 'complete')
-      const noActiveTasks = uploadTasks.length === 0 && processingPhase === 'active'
-
-      if (allComplete || noActiveTasks) {
+      if (allComplete || noActiveJobs) {
         setIsPolling(false)
         setProcessingPhase('completed')
         clearStoredSession()
 
+        // Check for errors in completed jobs
+        const hasErrors = jobsArray.some((job: any) => job.status === 'failed' || job.failed_files > 0)
+
         setFiles(prevFiles =>
           prevFiles.map(f => ({
             ...f,
-            status: 'success'
+            status: hasErrors ? 'error' : 'success',
+            error: hasErrors ? 'Processing failed' : undefined
           }))
         )
-      } else if (uploadTasks.some(task => Object.values(task.stages).some(stage => stage.error))) {
-        // Check for any errors in processing stages
-        const hasErrors = uploadTasks.some(task =>
-          Object.values(task.stages).some(stage => stage.error)
-        )
-
-        if (hasErrors) {
-          setFiles(prevFiles =>
-            prevFiles.map(f => ({
-              ...f,
-              status: 'error',
-              error: 'Processing failed'
-            }))
-          )
-        }
       }
     } catch (error) {
       console.error('Failed to poll processing status:', error)

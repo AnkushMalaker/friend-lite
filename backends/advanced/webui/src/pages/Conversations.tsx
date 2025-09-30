@@ -530,13 +530,13 @@ export default function Conversations() {
                           const speakerColor = speakerColorMap[speaker];
                           const segmentId = `${conversation.audio_uuid}-${index}`;
                           const isPlaying = playingSegment === segmentId;
-                          const audioPath = debugMode 
-                            ? conversation.audio_path 
+                          const audioPath = debugMode
+                            ? conversation.audio_path
                             : conversation.cropped_audio_path || conversation.audio_path;
-                          
+
                           return (
-                            <div 
-                              key={index} 
+                            <div
+                              key={`${conversation.audio_uuid}-segment-${index}-${segment.start}-${segment.end}`} 
                               className={`text-sm leading-relaxed flex items-start space-x-2 py-1 px-2 rounded transition-colors ${
                                 isPlaying ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700'
                               }`}
@@ -594,8 +594,8 @@ export default function Conversations() {
                   <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">🎤 Identified Speakers:</h4>
                   <div className="flex flex-wrap gap-2">
                     {conversation.speakers_identified.map((speaker, index) => (
-                      <span 
-                        key={index}
+                      <span
+                        key={`${conversation.audio_uuid}-speaker-${index}-${speaker}`}
                         className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded-md text-sm"
                       >
                         {speaker}
