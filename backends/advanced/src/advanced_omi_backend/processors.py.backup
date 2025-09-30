@@ -903,3 +903,367 @@ def get_processor_manager() -> ProcessorManager:
     if _processor_manager is None:
         raise RuntimeError("ProcessorManager not initialized. Call init_processor_manager first.")
     return _processor_manager
+                        self.memory_queue.task_done()
+                        break
+
+                    try:
+                        # Create background task for memory processing
+                        task = asyncio.create_task(self._process_memory_item(item))
+
+                        # Track task with 5 minute timeout
+                        task_name = f"memory_{item.client_id}_{item.conversation_id}"
+                        actual_task_id = self.task_manager.track_task(
+                            task,
+                            task_name,
+                            {
+                                "client_id": item.client_id,
+                                "conversation_id": item.conversation_id,
+                                "type": "memory",
+                                "timeout": 3600,  # 60 minutes
+                            },
+                        )
+
+                        # Register task with client for tracking (use the actual task_id from TaskManager)
+                        self.track_processing_task(
+                            item.client_id,
+                            "memory",
+                            actual_task_id,
+                            {"conversation_id": item.conversation_id},
+                        )
+
+                    except Exception as e:
+                        audio_logger.error(
+                            f"Error queuing memory processing for {item.conversation_id}: {e}",
+                            exc_info=True,
+                        )
+                    finally:
+                        self.memory_queue.task_done()
+
+                except asyncio.TimeoutError:
+                    # Periodic health check
+                    queue_size = self.memory_queue.qsize()
+                    audio_logger.debug(f"Memory processor health: {queue_size} items in queue")
+
+        except Exception as e:
+            audio_logger.error(f"Fatal error in memory processor: {e}", exc_info=True)
+        finally:
+            audio_logger.info("Memory processor stopped")
+
+    async def _process_memory_item(self, item: MemoryProcessingItem):
+        """Process a single memory item (speech-driven conversations architecture)."""
+        start_time = time.time()
+        audio_logger.info(f"🚀 MEMORY PROCESSING STARTED for conversation {item.conversation_id} at {start_time}")
+
+        # Track memory processing start
+        self.track_processing_stage(
+            item.client_id,
+            "memory",
+            "started",
+            {"conversation_id": item.conversation_id, "started_at": start_time},
+        )
+
+        try:
+            # Get conversation data using Beanie (speech-driven architecture)
+            conversation_model = await Conversation.find_one(Conversation.conversation_id == item.conversation_id)
+
+            if not conversation_model:
+                audio_logger.warning(
+                    f"No conversation found for {item.conversation_id}, skipping memory processing"
+                )
+                return None
+
+            # Extract conversation text from transcript segments
+            full_conversation = ""
+            transcript = conversation_model.transcript
+            if transcript:
+                dialogue_lines = []
+                for segment in transcript:
+                    text = segment.get("text", "").strip()
+                    if text:
+                        speaker = segment.get("speaker", "Unknown")
+                        dialogue_lines.append(f"{speaker}: {text}")
+                full_conversation = "\n".join(dialogue_lines)
+            else:
+                audio_logger.warning(
+                    f"No transcript found in conversation {item.conversation_id}, skipping memory processing"
+                )
+                return None
+            if len(full_conversation) < 10:  # Minimum length check
+                audio_logger.warning(
+                    f"Conversation too short for memory processing ({len(full_conversation)} chars): conversation {item.conversation_id}"
+                )
+                return None
+
+            # Debug tracking removed for cleaner architecture
+
+            # Check if memory processing should proceed based on primary speakers configuration
+            should_process, filter_reason = await self._should_process_memory(item.user_id, item.conversation_id)
+            audio_logger.info(f"🎯 Speaker filter decision for conversation {item.conversation_id}: {filter_reason}")
+
+            if not should_process:
+                # Update memory processing status to skipped
+                await self._update_memory_status(item.conversation_id, "skipped")
+
+                # Track completion
+                self.track_processing_stage(
+                    item.client_id,
+                    "memory",
+                    "completed",
+                    {
+                        "conversation_id": item.conversation_id,
+                        "status": "skipped",
+                        "reason": filter_reason,
+                        "completed_at": time.time(),
+                    },
+                )
+                audio_logger.info(f"⏭️ Skipped memory processing for conversation {item.conversation_id}: {filter_reason}")
+                return None
+
+            # Lazy import memory service
+            if self.memory_service is None:
+                audio_logger.info(f"🔧 Initializing memory service for conversation {item.conversation_id}...")
+                self.memory_service = get_memory_service()
+                audio_logger.info(f"✅ Memory service initialized for conversation {item.conversation_id}")
+
+            # Process memory with timeout
+            memory_result = await asyncio.wait_for(
+                self.memory_service.add_memory(
+                    full_conversation,
+                    item.client_id,
+                    item.conversation_id,  # Use conversation_id instead of audio_uuid
+                    item.user_id,
+                    item.user_email,
+                    allow_update=True,
+                ),
+                timeout=3600,  # 60 minutes
+            )
+
+            if memory_result:
+                # Check if this was a successful result with actual memories created
+                success, created_memory_ids = memory_result
+                logger.info(f"Memory result: {memory_result}")
+
+                if success and created_memory_ids:
+                    # Memories were actually created
+                    audio_logger.info(
+                        f"✅ Successfully processed memory for conversation {item.conversation_id} - created {len(created_memory_ids)} memories"
+                    )
+
+                    # Add memory references to conversations collection using Beanie (speech-driven architecture)
+                    try:
+                        conversation_model = await Conversation.find_one(Conversation.conversation_id == item.conversation_id)
+                        if conversation_model:
+                            # Add memory references to conversation
+                            memory_refs = [{"memory_id": mid, "created_at": datetime.now(UTC).isoformat(), "status": "created"} for mid in created_memory_ids]
+                            conversation_model.memories.extend(memory_refs)
+
+                            # Memory processing status is managed through memory versions
+                            await conversation_model.save()
+
+                            audio_logger.info(
+                                f"📝 Added {len(created_memory_ids)} memories to conversation {item.conversation_id}"
+                            )
+                        else:
+                            audio_logger.warning(f"Conversation {item.conversation_id} not found when adding memories")
+                    except Exception as e:
+                        audio_logger.warning(f"Failed to add memory references: {e}")
+
+                    # Track memory processing completion
+                    self.track_processing_stage(
+                        item.client_id,
+                        "memory",
+                        "completed",
+                        {
+                            "conversation_id": item.conversation_id,
+                            "memories_created": len(created_memory_ids),
+                            "processing_time": time.time() - start_time,
+                        },
+                    )
+                elif success and not created_memory_ids:
+                    # Successful processing but no memories created (likely empty transcript)
+                    audio_logger.info(
+                        f"✅ Memory processing completed for conversation {item.conversation_id} but no memories created (likely empty transcript)"
+                    )
+
+                    # Update database memory processing status to skipped
+                    await self._update_memory_status(item.conversation_id, "skipped")
+
+                    # Track memory processing completion (even though no memories created)
+                    self.track_processing_stage(
+                        item.client_id,
+                        "memory",
+                        "completed",
+                        {
+                            "conversation_id": item.conversation_id,
+                            "memories_created": 0,
+                            "processing_time": time.time() - start_time,
+                            "status": "skipped",
+                        },
+                    )
+                else:
+                    # This shouldn't happen, but handle it gracefully
+                    audio_logger.warning(
+                        f"⚠️ Unexpected memory result for conversation {item.conversation_id}: success={success}, ids={created_memory_ids}"
+                    )
+
+                    # Update database memory processing status to failed
+                    await self._update_memory_status(item.conversation_id, "failed")
+
+                    # Track memory processing failure
+                    self.track_processing_stage(
+                        item.client_id,
+                        "memory",
+                        "failed",
+                        {
+                            "conversation_id": item.conversation_id,
+                            "error": f"Unexpected result: success={success}, ids={created_memory_ids}",
+                            "processing_time": time.time() - start_time,
+                        },
+                    )
+
+            else:
+                audio_logger.warning(f"⚠️ Memory service returned False for conversation {item.conversation_id}")
+
+                # Update database memory processing status to failed
+                await self._update_memory_status(item.conversation_id, "failed")
+
+                # Track memory processing failure
+                self.track_processing_stage(
+                    item.client_id,
+                    "memory",
+                    "failed",
+                    {
+                        "conversation_id": item.conversation_id,
+                        "error": "Memory service returned False",
+                        "processing_time": time.time() - start_time,
+                    },
+                )
+
+        except asyncio.TimeoutError:
+            audio_logger.error(f"Memory processing timed out for conversation {item.conversation_id}")
+
+            # Update database memory processing status to failed
+            await self._update_memory_status(item.conversation_id, "failed")
+
+            # Track memory processing timeout failure
+            self.track_processing_stage(
+                item.client_id,
+                "memory",
+                "failed",
+                {
+                    "conversation_id": item.conversation_id,
+                    "error": "Processing timeout (5 minutes)",
+                    "processing_time": time.time() - start_time,
+                },
+            )
+
+        except Exception as e:
+            audio_logger.error(f"Error processing memory for conversation {item.conversation_id}: {e}")
+
+            # Update database memory processing status to failed
+            await self._update_memory_status(item.conversation_id, "failed")
+
+            # Track memory processing exception failure
+            self.track_processing_stage(
+                item.client_id,
+                "memory",
+                "failed",
+                {
+                    "conversation_id": item.conversation_id,
+                    "error": f"Exception: {str(e)}",
+                    "processing_time": time.time() - start_time,
+                },
+            )
+
+        end_time = time.time()
+        processing_time_ms = (end_time - start_time) * 1000
+        audio_logger.info(
+            f"🏁 MEMORY PROCESSING COMPLETED for conversation {item.conversation_id} in {processing_time_ms:.1f}ms (end time: {end_time})"
+        )
+
+    async def _cropping_processor(self):
+        """Process audio cropping requests."""
+        audio_logger.info("Audio cropping processor started")
+
+        try:
+            while not self.shutdown_flag:
+                try:
+                    item = await asyncio.wait_for(self.cropping_queue.get(), timeout=30.0)
+
+                    if item is None:  # Shutdown signal
+                        self.cropping_queue.task_done()
+                        break
+
+                    try:
+                        # Create background task for cropping
+                        task = asyncio.create_task(
+                            _process_audio_cropping_with_relative_timestamps(
+                                item.original_path,
+                                item.speech_segments,
+                                item.output_path,
+                                item.audio_uuid,
+                                self.repository,
+                            )
+                        )
+
+                        # Track task
+                        task_name = f"cropping_{item.client_id}_{item.audio_uuid}"
+                        actual_task_id = self.task_manager.track_task(
+                            task,
+                            task_name,
+                            {
+                                "client_id": item.client_id,
+                                "audio_uuid": item.audio_uuid,
+                                "type": "cropping",
+                                "segments": len(item.speech_segments),
+                            },
+                        )
+
+                        # Register task with client for tracking (use the actual task_id from TaskManager)
+                        self.track_processing_task(
+                            item.client_id,
+                            "cropping",
+                            actual_task_id,
+                            {"audio_uuid": item.audio_uuid, "segments": len(item.speech_segments)},
+                        )
+
+                        audio_logger.info(
+                            f"✂️ Queued audio cropping for {item.audio_uuid} "
+                            f"with {len(item.speech_segments)} segments"
+                        )
+
+                    except Exception as e:
+                        audio_logger.error(
+                            f"Error queuing audio cropping for {item.audio_uuid}: {e}",
+                            exc_info=True,
+                        )
+                    finally:
+                        self.cropping_queue.task_done()
+
+                except asyncio.TimeoutError:
+                    # Periodic health check
+                    queue_size = self.cropping_queue.qsize()
+                    audio_logger.debug(f"Cropping processor health: {queue_size} items in queue")
+
+        except Exception as e:
+            audio_logger.error(f"Fatal error in cropping processor: {e}", exc_info=True)
+        finally:
+            audio_logger.info("Audio cropping processor stopped")
+
+
+# Global processor manager instance
+_processor_manager: Optional[ProcessorManager] = None
+
+
+def init_processor_manager(chunk_dir: Path, db_helper: AudioChunksRepository):
+    """Initialize the global processor manager."""
+    global _processor_manager
+    _processor_manager = ProcessorManager(chunk_dir, db_helper)
+    return _processor_manager
+
+
+def get_processor_manager() -> ProcessorManager:
+    """Get the global processor manager instance."""
+    if _processor_manager is None:
+        raise RuntimeError("ProcessorManager not initialized. Call init_processor_manager first.")
+    return _processor_manager

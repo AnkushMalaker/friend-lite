@@ -3,7 +3,7 @@ import axios from 'axios'
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
   // If explicitly set in environment, use that
-  if (import.meta.env.VITE_BACKEND_URL !== undefined) {
+  if (import.meta.env.VITE_BACKEND_URL !== undefined && import.meta.env.VITE_BACKEND_URL !== '') {
     return import.meta.env.VITE_BACKEND_URL
   }
   

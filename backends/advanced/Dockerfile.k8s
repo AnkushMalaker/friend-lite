@@ -36,9 +36,10 @@ COPY . .
 # Copy memory config (created by init.sh from template)
 COPY memory_config.yaml ./
 
+# Copy and make K8s startup script executable
+COPY start-k8s.sh ./
+RUN chmod +x start-k8s.sh
 
-# Run the application
-# CMD ["uv", "run", "python3", "src/advanced_omi_backend/main.py"]
-
-# don't sync if deploying prebuilt image to k8s
-CMD ["uv", "run", "--no-sync", "python3", "src/advanced_omi_backend/main.py"]
+# Run the application with workers
+# K8s startup script starts both FastAPI backend and RQ workers with --no-sync
+CMD ["./start-k8s.sh"]

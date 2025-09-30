@@ -1,13 +1,17 @@
 # Test Environment Configuration
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env.test from the tests directory
+test_env_path = Path(__file__).parent / ".env.test"
+load_dotenv(test_env_path)
 
 # API Configuration
-API_URL = os.getenv('API_URL', 'http://localhost:8001')
+API_URL = os.getenv('BACKEND_URL', 'http://localhost:8001')  # Use BACKEND_URL from test.env
 API_BASE = f"{API_URL}/api"
 
+WEB_URL = os.getenv('FRONTEND_URL', 'http://localhost:3001')  # Use FRONTEND_URL from test.env
 # Admin user credentials (Robot Framework format)
 ADMIN_USER = {
     "email": os.getenv('ADMIN_EMAIL', 'test-admin@example.com'),
@@ -27,30 +31,7 @@ TEST_USER = {
 TEST_USER_EMAIL = "test@example.com"
 TEST_USER_PASSWORD = "test-password"
 
-# Test Data
-SAMPLE_CONVERSATIONS = [
-    {
-        "id": "conv_001",
-        "transcript": "This is a test conversation about AI development.",
-        "created_at": "2025-01-15T10:00:00Z"
-    },
-    {
-        "id": "conv_002",
-        "transcript": "Another test conversation discussing machine learning.",
-        "created_at": "2025-01-15T11:00:00Z"
-    }
-]
 
-SAMPLE_MEMORIES = [
-    {
-        "text": "User prefers AI discussions in the morning",
-        "importance": 0.8
-    },
-    {
-        "text": "User is interested in machine learning applications",
-        "importance": 0.7
-    }
-]
 
 # API Endpoints
 ENDPOINTS = {
@@ -62,6 +43,11 @@ ENDPOINTS = {
     "memory_search": "/api/memories/search",
     "users": "/api/users"
 }
+
+# API Keys (loaded from test.env)
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
+HF_TOKEN = os.getenv('HF_TOKEN')
 
 # Test Configuration
 TEST_CONFIG = {

@@ -158,7 +158,8 @@ export default function System() {
   const getServiceDisplayName = (service: string) => {
     const displayNames: Record<string, string> = {
       'mongodb': 'MONGODB',
-      'audioai': 'AUDIOAI', 
+      'redis': 'REDIS & RQ WORKERS',
+      'audioai': 'AUDIOAI',
       'mem0': 'MEM0',
       'memory_service': 'MEMORY SERVICE',
       'speech_to_text': 'SPEECH TO TEXT',
@@ -274,6 +275,12 @@ export default function System() {
                       <span className="text-xs text-blue-600 dark:text-blue-400">
                         ({(status as any).provider})
                       </span>
+                    )}
+                    {service === 'redis' && (status as any).worker_count !== undefined && (
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                        Workers: {(status as any).worker_count} total
+                        ({(status as any).active_workers || 0} active, {(status as any).idle_workers || 0} idle)
+                      </div>
                     )}
                   </div>
                 </div>

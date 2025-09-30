@@ -9,8 +9,9 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from advanced_omi_backend.auth import current_active_user
-from advanced_omi_backend.simple_queue import get_simple_queue
+from advanced_omi_backend.rq_queue import get_jobs, get_job_stats, get_queue_health, redis_conn
 from advanced_omi_backend.users import User
+from rq.job import Job
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/queue", tags=["queue"])
@@ -20,67 +21,100 @@ router = APIRouter(prefix="/queue", tags=["queue"])
 async def list_jobs(
     limit: int = Query(20, ge=1, le=100, description="Number of jobs to return"),
     offset: int = Query(0, ge=0, description="Number of jobs to skip"),
-    status: str = Query(None, description="Filter by job status"),
-    job_type: str = Query(None, description="Filter by job type"),
-    priority: str = Query(None, description="Filter by job priority"),
+    queue_name: str = Query(None, description="Filter by queue name"),
     current_user: User = Depends(current_active_user)
 ):
     """List jobs with pagination and filtering."""
     try:
-        # Build filters dict
-        filters = {}
-        if status:
-            filters["status"] = status
-        if job_type:
-            filters["job_type"] = job_type
-        if priority:
-            filters["priority"] = priority
+        result = get_jobs(limit=limit, offset=offset, queue_name=queue_name)
 
-        queue = await get_simple_queue()
-        result = await queue.get_jobs(limit=limit, offset=offset, filters=filters)
-        
-            # Filter jobs by user if not admin
+        # Filter jobs by user if not admin
         if not current_user.is_superuser:
-            result["jobs"] = [
-                job for job in result["jobs"]
-                if job["user_id"] == str(current_user.user_id)
-            ]
-            result["pagination"]["total"] = len(result["jobs"])
-        
+            # Filter based on user_id in job kwargs (where RQ stores job parameters)
+            user_jobs = []
+            for job in result["jobs"]:
+                job_kwargs = job.get("kwargs", {})
+                if job_kwargs.get("user_id") == str(current_user.user_id):
+                    user_jobs.append(job)
+
+            result["jobs"] = user_jobs
+            result["pagination"]["total"] = len(user_jobs)
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Failed to list jobs: {e}")
         return {"error": "Failed to list jobs", "jobs": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
 
+@router.get("/jobs/{job_id}")
+async def get_job(
+    job_id: str,
+    current_user: User = Depends(current_active_user)
+):
+    """Get detailed job information including result."""
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+
+        # Check user permission (non-admins can only see their own jobs)
+        if not current_user.is_superuser:
+            job_user_id = job.kwargs.get("user_id") if job.kwargs else None
+            if job_user_id != str(current_user.user_id):
+                raise HTTPException(status_code=403, detail="Access forbidden")
+
+        # Determine status from registries
+        status = "unknown"
+        if job.is_queued:
+            status = "queued"
+        elif job.is_started:
+            status = "processing"
+        elif job.is_finished:
+            status = "completed"
+        elif job.is_failed:
+            status = "failed"
+        elif job.is_deferred:
+            status = "retrying"
+
+        return {
+            "job_id": job.id,
+            "status": status,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+            "description": job.description or "",
+            "func_name": job.func_name if hasattr(job, 'func_name') else "",
+            "args": job.args,
+            "kwargs": job.kwargs,
+            "result": job.result,
+            "error_message": str(job.exc_info) if job.exc_info else None,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get job {job_id}: {e}")
+        raise HTTPException(status_code=404, detail="Job not found")
+
+
 @router.get("/stats")
-async def get_queue_stats(
+async def get_queue_stats_endpoint(
     current_user: User = Depends(current_active_user)
 ):
     """Get queue statistics."""
     try:
-        queue = await get_simple_queue()
-        stats = await queue.get_job_stats()
+        stats = get_job_stats()
         return stats
-        
+
     except Exception as e:
         logger.error(f"Failed to get queue stats: {e}")
-        return {"queued": 0, "processing": 0, "completed": 0, "failed": 0}
+        return {"total_jobs": 0, "queued_jobs": 0, "processing_jobs": 0, "completed_jobs": 0, "failed_jobs": 0, "cancelled_jobs": 0, "retrying_jobs": 0}
 
 
 @router.get("/health")
-async def get_queue_health():
+async def get_queue_health_endpoint():
     """Get queue system health status."""
     try:
-        queue = await get_simple_queue()
-        
-        return {
-            "status": "healthy" if queue.running else "stopped",
-            "worker_running": queue.running,
-            "message": "Simple queue is operational" if queue.running else "Simple queue worker not running"
-        }
-        
+        health = get_queue_health()
+        return health
+
     except Exception as e:
         logger.error(f"Failed to get queue health: {e}")
         return {
@@ -89,59 +123,7 @@ async def get_queue_health():
         }
 
 
-class FlushJobsRequest(BaseModel):
-    older_than_hours: int = 24
-    statuses: Optional[List[str]] = None
-
-
-class FlushAllJobsRequest(BaseModel):
-    confirm: bool = False
-
-
-@router.post("/flush")
-async def flush_inactive_jobs(
-    request: FlushJobsRequest,
-    current_user: User = Depends(current_active_user)
-):
-    """Flush inactive jobs from the database (admin only)."""
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-    try:
-        queue = await get_simple_queue()
-        result = await queue.flush_inactive_jobs(
-            older_than_hours=request.older_than_hours,
-            statuses=request.statuses
-        )
-        return result
-
-    except Exception as e:
-        logger.error(f"Failed to flush inactive jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to flush jobs: {str(e)}")
-
-
-@router.post("/flush-all")
-async def flush_all_jobs(
-    request: FlushAllJobsRequest,
-    current_user: User = Depends(current_active_user)
-):
-    """Flush ALL jobs from the database (admin only). USE WITH EXTREME CAUTION!"""
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-    try:
-        if not request.confirm:
-            raise HTTPException(
-                status_code=400,
-                detail="Must set confirm=true to flush all jobs. This is a destructive operation."
-            )
-
-        queue = await get_simple_queue()
-        result = await queue.flush_all_jobs(confirm=request.confirm)
-        return result
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to flush all jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to flush all jobs: {str(e)}")
+# Note: RQ handles job cleanup automatically through job registries
+# Completed jobs are automatically moved to finished_job_registry
+# and can be configured to auto-expire. Manual flush endpoints
+# can be added later if needed.

@@ -14,6 +14,7 @@ import {
   Trash2,
   AlertTriangle
 } from 'lucide-react';
+import { queueApi } from '../services/api';
 
 interface QueueJob {
   job_id: string;
@@ -128,26 +129,15 @@ const Queue: React.FC = () => {
       if (filters.priority) params.append('priority', filters.priority);
 
       console.log('📡 Fetching jobs with params:', params.toString());
-      const response = await fetch(`/api/queue/jobs?${params}`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ fetchJobs success, got', data.jobs?.length, 'jobs');
-        setJobs(data.jobs);
-        setPagination(prev => ({
-          ...prev,
-          total: data.pagination.total,
-          has_more: data.pagination.has_more
-        }));
-      } else if (response.status === 401) {
-        console.warn('🔐 Auth error in fetchJobs, redirecting to login');
-        localStorage.removeItem('token');
-        window.location.href = '/login';
-      } else {
-        console.error('❌ Error fetching jobs:', response.status, response.statusText);
-      }
+      const response = await queueApi.getJobs(params);
+      const data = response.data;
+      console.log('✅ fetchJobs success, got', data.jobs?.length, 'jobs');
+      setJobs(data.jobs);
+      setPagination(prev => ({
+        ...prev,
+        total: data.pagination.total,
+        has_more: data.pagination.has_more
+      }));
     } catch (error) {
       console.error('❌ Error fetching jobs:', error);
     }
@@ -156,21 +146,10 @@ const Queue: React.FC = () => {
   const fetchStats = async () => {
     try {
       console.log('📊 fetchStats starting...');
-      const response = await fetch('/api/queue/stats', {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ fetchStats success, total jobs:', data.total_jobs);
-        setStats(data);
-      } else if (response.status === 401) {
-        console.warn('🔐 Auth error in fetchStats, redirecting to login');
-        localStorage.removeItem('token');
-        window.location.href = '/login';
-      } else {
-        console.error('❌ Error fetching stats:', response.status, response.statusText);
-      }
+      const response = await queueApi.getStats();
+      const data = response.data;
+      console.log('✅ fetchStats success, total jobs:', data.total_jobs);
+      setStats(data);
     } catch (error) {
       console.error('❌ Error fetching stats:', error);
     }
@@ -178,21 +157,8 @@ const Queue: React.FC = () => {
 
   const retryJob = async (jobId: string) => {
     try {
-      const response = await fetch(`/api/queue/jobs/${jobId}/retry`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ force: false })
-      });
-
-      if (response.ok) {
-        fetchJobs();
-      } else if (response.status === 401) {
-        localStorage.removeItem('token');
-        window.location.href = '/login';
-      }
+      await queueApi.retryJob(jobId, false);
+      fetchJobs();
     } catch (error) {
       console.error('Error retrying job:', error);
     }
@@ -202,17 +168,8 @@ const Queue: React.FC = () => {
     if (!confirm('Are you sure you want to cancel this job?')) return;
 
     try {
-      const response = await fetch(`/api/queue/jobs/${jobId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-
-      if (response.ok) {
-        fetchJobs();
-      } else if (response.status === 401) {
-        localStorage.removeItem('token');
-        window.location.href = '/login';
-      }
+      await queueApi.cancelJob(jobId);
+      fetchJobs();
     } catch (error) {
       console.error('Error cancelling job:', error);
     }

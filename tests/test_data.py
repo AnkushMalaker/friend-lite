@@ -2,20 +2,6 @@
 Test data for Robot Framework tests
 """
 
-# API Configuration
-BASE_URL = "http://localhost:8001"
-API_TIMEOUT = 30
-
-# Test Users
-ADMIN_USER = {
-    "email": "admin-test@example.com",
-    "password": "admin-test-password-123"
-}
-
-TEST_USER = {
-    "email": "test@example.com",
-    "password": "test-password"
-}
 
 # Test Data
 SAMPLE_CONVERSATIONS = [
@@ -42,20 +28,8 @@ SAMPLE_MEMORIES = [
     }
 ]
 
-# API Endpoints
-ENDPOINTS = {
-    "health": "/health",
-    "readiness": "/readiness",
-    "auth": "/auth/jwt/login",
-    "conversations": "/api/conversations",
-    "memories": "/api/memories",
-    "memory_search": "/api/memories/search",
-    "users": "/api/users"
-}
+TEST_AUDIO_FILE = "tests/test_data/DIY_Experts_Glass_Blowing_16khz_mono_4min.wav"
+TEST_DEVICE_NAME = "Robot-test-device"
 
-# Test Configuration
-TEST_CONFIG = {
-    "retry_count": 3,
-    "retry_delay": 1,
-    "default_timeout": 30
-}
+# Expected content for transcript quality verification
+EXPECTED_TRANSCRIPT = "glass blowing"

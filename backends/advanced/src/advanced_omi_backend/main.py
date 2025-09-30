@@ -51,7 +51,7 @@ from advanced_omi_backend.processors import (
 from advanced_omi_backend.audio_utils import process_audio_chunk
 from advanced_omi_backend.task_manager import init_task_manager, get_task_manager
 
-from advanced_omi_backend.simple_queue import get_simple_queue
+from advanced_omi_backend.rq_queue import redis_conn
 
 from advanced_omi_backend.task_manager import init_task_manager
 from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
@@ -297,13 +297,16 @@ async def lifespan(app: FastAPI):
     # Startup
     application_logger.info("Starting application...")
 
-    # Initialize Beanie for user management
+    # Initialize Beanie for all document models
     try:
+        from advanced_omi_backend.models.conversation import Conversation
+        from advanced_omi_backend.models.audio_session import AudioSession
+
         await init_beanie(
             database=mongo_client.get_default_database("friend-lite"),
-            document_models=[User],
+            document_models=[User, Conversation, AudioSession],
         )
-        application_logger.info("Beanie initialized for user management")
+        application_logger.info("Beanie initialized for all document models")
     except Exception as e:
         application_logger.error(f"Failed to initialize Beanie: {e}")
         raise
@@ -325,13 +328,14 @@ async def lifespan(app: FastAPI):
     await processor_manager.start()
     application_logger.info("Application-level processors started")
     
-    # Initialize simple queue system
+    # Initialize Redis connection for RQ
     try:
-        queue = await get_simple_queue()
-        application_logger.info("Simple queue system started")
+        redis_conn.ping()
+        application_logger.info("Redis connection established for RQ")
+        application_logger.info("RQ workers can be started with: rq worker transcription memory default")
     except Exception as e:
-        application_logger.error(f"Failed to start simple queue: {e}")
-        # Don't raise as queue system is not critical for basic operation
+        application_logger.error(f"Failed to connect to Redis for RQ: {e}")
+        application_logger.warning("RQ queue system will not be available - check Redis connection")
 
     # Skip memory service pre-initialization to avoid blocking FastAPI startup
     # Memory service will be lazily initialized when first used
@@ -353,13 +357,8 @@ async def lifespan(app: FastAPI):
         for client_id in client_manager.get_all_client_ids():
             await cleanup_client_state(client_id)
 
-        # Shutdown simple queue system
-        try:
-            if queue:
-                await queue.stop_worker()
-                application_logger.info("Simple queue system shut down")
-        except Exception as e:
-            application_logger.error(f"Error shutting down simple queue: {e}")
+        # RQ workers shut down automatically when process ends
+        # No special cleanup needed for Redis connections
         
         # Shutdown processor manager
         processor_manager = get_processor_manager()
@@ -1038,6 +1037,47 @@ async def health_check():
             "status": f"❌ Connection Failed: {str(e)}",
             "healthy": False,
             "critical": True,
+        }
+        overall_healthy = False
+        critical_services_healthy = False
+
+    # Check Redis and RQ Workers (critical for queue processing)
+    try:
+        from advanced_omi_backend.rq_queue import redis_conn
+        from rq import Worker
+
+        # Test Redis connection
+        await asyncio.wait_for(asyncio.to_thread(redis_conn.ping), timeout=5.0)
+
+        # Count active workers
+        workers = Worker.all(connection=redis_conn)
+        worker_count = len(workers)
+        active_workers = len([w for w in workers if w.state == 'busy'])
+        idle_workers = worker_count - active_workers
+
+        health_status["services"]["redis"] = {
+            "status": "✅ Connected",
+            "healthy": True,
+            "critical": True,
+            "worker_count": worker_count,
+            "active_workers": active_workers,
+            "idle_workers": idle_workers
+        }
+    except asyncio.TimeoutError:
+        health_status["services"]["redis"] = {
+            "status": "❌ Connection Timeout (5s)",
+            "healthy": False,
+            "critical": True,
+            "worker_count": 0
+        }
+        overall_healthy = False
+        critical_services_healthy = False
+    except Exception as e:
+        health_status["services"]["redis"] = {
+            "status": f"❌ Connection Failed: {str(e)}",
+            "healthy": False,
+            "critical": True,
+            "worker_count": 0
         }
         overall_healthy = False
         critical_services_healthy = False
