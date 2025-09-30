@@ -10,6 +10,7 @@ services:
     ports:
       - "8001:8000"  # Avoid conflict with dev on 8000
     volumes:
+      - ./src:/app/src  # Mount source code for easier development
       - ./data/test_audio_chunks:/app/audio_chunks
       - ./data/test_debug_dir:/app/debug_dir
       - ./data/test_data:/app/data
@@ -38,6 +39,7 @@ services:
       - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
       # Disable speaker recognition in test environment to prevent segment duplication
       - DISABLE_SPEAKER_RECOGNITION=true
+      - CORS_ORIGINS=http://localhost:3001,http://localhost:8001,https://localhost:3001,https://localhost:8001
     depends_on:
       qdrant-test:
         condition: service_started
@@ -48,7 +50,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 30s
     restart: unless-stopped
 
   webui-test:

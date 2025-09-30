@@ -41,12 +41,12 @@ async def get_conversations(current_user: User = Depends(current_active_user)):
 
 
 @router.get("/{conversation_id}")
-async def get_conversation(
+async def get_conversation_detail(
     conversation_id: str,
     current_user: User = Depends(current_active_user)
 ):
-    """Get a specific conversation by conversation_id."""
-    return await conversation_controller.get_conversation_by_id(conversation_id, current_user)
+    """Get a specific conversation with full transcript details."""
+    return await conversation_controller.get_conversation(conversation_id, current_user)
 
 
 @router.get("/{audio_uuid}/cropped")

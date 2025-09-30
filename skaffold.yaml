@@ -107,6 +107,18 @@ profiles:
               persistence.size: "10Gi"
               persistence.storageClass: "openebs-hostpath"
 
+          - name: redis
+            remoteChart: oci://registry-1.docker.io/bitnamicharts/redis
+            version: "22.0.7"
+            namespace: "{{.INFRASTRUCTURE_NAMESPACE}}"
+            setValueTemplates:
+              auth.enabled: "false"  # Disable authentication for simplicity
+              master.persistence.enabled: "true"
+              master.persistence.size: "2Gi"
+              master.persistence.storageClass: "openebs-hostpath"
+              master.service.nameOverride: "redis"
+              replica.replicaCount: "0"  # Single instance for development
+
   # Application profile - frequently updated
   - name: advanced-backend
     build:
@@ -139,6 +151,7 @@ profiles:
               # Override specific Kubernetes-specific values (not in env file)
               env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend-lite"
               env.QDRANT_BASE_URL: "qdrant.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local"
+              env.REDIS_URL: "redis://redis-master.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:6379/0"
               persistence.storageClass: "openebs-hostpath"
               persistence.size: "10Gi"
               service.nodePort: "{{.BACKEND_NODEPORT}}"

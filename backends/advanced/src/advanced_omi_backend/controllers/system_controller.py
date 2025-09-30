@@ -9,6 +9,7 @@ import logging
 import os
 import shutil
 import time
+import uuid
 import wave
 from datetime import UTC, datetime
 from pathlib import Path
@@ -191,12 +192,11 @@ async def process_audio_files(
                     )
                     continue
 
-                # Generate unique client ID for each file to create separate conversations
-                file_device_name = f"{device_name}-{file_index + 1:03d}"
-                client_id = generate_client_id(user, file_device_name)
+                # Use the same client_id for all files from this device
+                client_id = generate_client_id(user, device_name)
 
                 # Create separate client state for this file
-                client_state = await create_client_state(client_id, user, file_device_name)
+                client_state = await create_client_state(client_id, user, device_name)
 
                 audio_logger.info(
                     f"📁 Processing file {file_index + 1}/{len(files)}: {file.filename} with client_id: {client_id}"
@@ -307,85 +307,86 @@ async def process_audio_files(
                     f"🔚 Successfully called close_client_audio for upload client {client_id}"
                 )
 
-                # Wait for this file's transcription processing to complete
-                audio_logger.info(f"📁 Waiting for transcription to process file: {file.filename}")
+                # Wait for audio chunks to be saved to database
+                audio_logger.info(f"📁 Waiting for audio chunks to be saved for file: {file.filename}")
+                await asyncio.sleep(2.0)
 
-                # Wait for chunks to be processed by the audio saver
-                await asyncio.sleep(1.0)
+                # Find the saved audio chunk to get audio_uuid and file path
+                chunk = await chunks_col.find_one({"client_id": client_id})
+                if not chunk:
+                    audio_logger.error(f"❌ No audio chunk found for client {client_id}")
+                    raise Exception(f"No audio chunk found for client {client_id}")
 
-                # Wait for file processing to complete using task tracking
-                # Increase timeout based on file duration (3x duration + 60s buffer)
-                audio_duration = len(audio_data) / (sample_rate * sample_width * channels)
-                max_wait_time = max(
-                    120, int(audio_duration * 3) + 60
-                )  # At least 2 minutes, or 3x duration + 60s
-                wait_interval = 2.0  # Reduced from 0.5s to 2s to reduce polling spam
-                elapsed_time = 0
+                audio_uuid = chunk.get("audio_uuid")
+                audio_file_path = chunk.get("audio_file_path")
+                conversation_id = chunk.get("conversation_id")
 
-                audio_logger.info(
-                    f"📁 Audio duration: {audio_duration:.1f}s, max wait time: {max_wait_time}s"
+                if not audio_file_path or not os.path.exists(audio_file_path):
+                    audio_logger.error(f"❌ Audio file not found: {audio_file_path}")
+                    raise Exception(f"Audio file not found: {audio_file_path}")
+
+                audio_logger.info(f"🔄 Starting RQ-based transcription for {file.filename}")
+                audio_logger.info(f"   Audio UUID: {audio_uuid}")
+                audio_logger.info(f"   Audio file: {audio_file_path}")
+                audio_logger.info(f"   Conversation ID: {conversation_id}")
+
+                # Use RQ-based transcription instead of streaming transcription
+                from advanced_omi_backend.rq_queue import enqueue_transcript_processing
+
+                # Generate version ID for this transcription
+                version_id = str(uuid.uuid4())
+
+                # Enqueue the transcription job using RQ
+                rq_job = enqueue_transcript_processing(
+                    conversation_id=conversation_id,
+                    audio_uuid=audio_uuid,
+                    audio_path=audio_file_path,
+                    version_id=version_id,
+                    user_id=str(user.user_id),
+                    trigger="initial",
+                    priority="normal"
                 )
 
-                # Use concrete task tracking instead of database polling
+                audio_logger.info(f"✅ Enqueued RQ transcription job: {rq_job.id}")
+
+                # Wait for RQ job to complete
+                audio_duration = len(audio_data) / (sample_rate * sample_width * channels)
+                max_wait_time = max(120, int(audio_duration * 2) + 30)  # 2x duration + 30s buffer
+                wait_interval = 2.0
+                elapsed_time = 0
+
+                audio_logger.info(f"⏳ Waiting for RQ transcription to complete (max {max_wait_time}s)")
+
+                transcription_completed = False
                 while elapsed_time < max_wait_time:
                     try:
-                        # Check processing status using task tracking
-                        processing_status = processor_manager.get_processing_status(client_id)
+                        # Check RQ job status
+                        job_status = rq_job.get_status()
 
-                        # Check if transcription stage is complete
-                        stages = processing_status.get("stages", {})
-                        transcription_stage = stages.get("transcription", {})
-
-                        # If transcription is marked as started but not completed, check database
-                        if transcription_stage.get(
-                            "status"
-                        ) == "started" and not transcription_stage.get("completed", False):
-                            # Check if transcription is actually complete by checking the database
-                            try:
-                                chunk = await chunks_col.find_one({"client_id": client_id})
-                                if (
-                                    chunk
-                                    and chunk.get("transcript")
-                                    and len(chunk.get("transcript", [])) > 0
-                                ):
-                                    # Transcription is complete! Update the processor state
-                                    processor_manager.track_processing_stage(
-                                        client_id,
-                                        "transcription",
-                                        "completed",
-                                        {
-                                            "audio_uuid": chunk.get("audio_uuid"),
-                                            "segments": len(chunk.get("transcript", [])),
-                                        },
-                                    )
-                                    audio_logger.info(
-                                        f"📁 Transcription completed for file: {file.filename} ({len(chunk.get('transcript', []))} segments)"
-                                    )
-                                    break
-                            except Exception as e:
-                                audio_logger.debug(f"Error checking transcription completion: {e}")
-
-                        if transcription_stage.get("completed", False):
-                            audio_logger.info(
-                                f"📁 Transcription completed for file: {file.filename}"
-                            )
-                            break
-
-                        # Check for errors
-                        if transcription_stage.get("error"):
-                            audio_logger.warning(
-                                f"📁 Transcription error for file: {file.filename}: {transcription_stage.get('error')}"
-                            )
+                        if job_status == "finished":
+                            result = rq_job.result
+                            if result and result.get("success"):
+                                audio_logger.info(f"✅ RQ transcription completed for {file.filename}")
+                                transcription_completed = True
+                                break
+                            else:
+                                audio_logger.error(f"❌ RQ transcription failed for {file.filename}: {result}")
+                                break
+                        elif job_status == "failed":
+                            audio_logger.error(f"❌ RQ transcription job failed for {file.filename}")
                             break
 
                     except Exception as e:
-                        audio_logger.debug(f"Error checking processing status: {e}")
+                        audio_logger.debug(f"Error checking RQ job status: {e}")
 
                     await asyncio.sleep(wait_interval)
                     elapsed_time += wait_interval
 
-                if elapsed_time >= max_wait_time:
-                    audio_logger.warning(f"📁 Transcription timed out for file: {file.filename}")
+                if not transcription_completed:
+                    if elapsed_time >= max_wait_time:
+                        audio_logger.warning(f"⏰ RQ transcription timed out for {file.filename}")
+                    else:
+                        audio_logger.warning(f"❌ RQ transcription failed for {file.filename}")
 
                 # Signal end of conversation - trigger memory processing
                 await client_state.close_current_conversation()
@@ -577,9 +578,8 @@ async def process_files_with_content(
                     )
                     continue
 
-                # Generate unique client ID for each file
-                file_device_name = f"{device_name}-{file_index + 1:03d}"
-                client_id = generate_client_id(user, file_device_name)
+                # Use the same client_id for all files from this device
+                client_id = generate_client_id(user, device_name)
 
                 # Update job tracker with client ID
                 await job_tracker.update_file_status(
@@ -587,7 +587,7 @@ async def process_files_with_content(
                 )
 
                 # Create client state
-                client_state = await create_client_state(client_id, user, file_device_name)
+                client_state = await create_client_state(client_id, user, device_name)
 
                 # Process WAV file
                 with wave.open(io.BytesIO(content), "rb") as wav_file:

@@ -12,7 +12,7 @@ from advanced_omi_backend.config import (
     get_speech_detection_settings,
     load_diarization_settings_from_file,
 )
-from advanced_omi_backend.database import ConversationsRepository, conversations_col
+from advanced_omi_backend.models.conversation import Conversation
 from advanced_omi_backend.llm_client import async_generate
 from advanced_omi_backend.processors import (
     AudioCroppingItem,
@@ -496,40 +496,37 @@ class TranscriptionManager:
                 for speaker in speakers_found:
                     await self.chunk_repo.add_speaker(self._current_audio_uuid, speaker)
 
-                # CRITICAL: Update conversation with transcript data
+                # CRITICAL: Update conversation with transcript data using Beanie
                 if conversation_id:
                     try:
-                        conversations_repo = ConversationsRepository(conversations_col)
-
                         # Check if this is the first transcript for this conversation
-                        conversation = await conversations_repo.get_conversation(conversation_id)
-                        if conversation and not conversation.get("active_transcript_version"):
-                            # This is the first transcript - create initial version
-                            version_id = await conversations_repo.create_transcript_version(
-                                conversation_id=conversation_id,
-                                segments=segments_to_store,
-                                provider="speech_detection",
-                                raw_data={}
+                        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+                        if conversation_model and not conversation_model.active_transcript_version:
+                            # This is the first transcript - create initial version using Beanie model method
+                            version_id = str(uuid.uuid4())
+                            speaker_segment_models = [Conversation.SpeakerSegment(**seg) for seg in segments_to_store]
+                            conversation_model.add_transcript_version(
+                                version_id=version_id,
+                                transcript="",  # Empty for now, segments contain the text
+                                segments=speaker_segment_models,
+                                provider=Conversation.TranscriptProvider.SPEECH_DETECTION,
+                                metadata={}
                             )
-                            if version_id:
-                                # Activate this version
-                                await conversations_repo.activate_transcript_version(conversation_id, version_id)
-                                logger.info(f"✅ Created and activated initial transcript version {version_id} for conversation {conversation_id}")
+                            await conversation_model.save()
+                            logger.info(f"✅ Created and activated initial transcript version {version_id} for conversation {conversation_id}")
 
                         # Generate title and summary with speaker information
                         title = await self._generate_title_with_speakers(segments_to_store)
                         summary = await self._generate_summary_with_speakers(segments_to_store)
 
-                        # Update conversation with speaker info, title, summary and metadata
-                        update_data = {
-                            "title": title,
-                            "summary": summary,
-                            "speaker_names": speaker_names,
-                            "updated_at": datetime.now(UTC)
-                        }
-                        await conversations_repo.update_conversation(conversation_id, update_data)
+                        # Update conversation with speaker info, title, summary using Beanie
+                        if conversation_model:
+                            conversation_model.title = title
+                            conversation_model.summary = summary
+                            conversation_model.speaker_names = speaker_names
+                            await conversation_model.save()
 
-                        logger.info(f"✅ Updated conversation {conversation_id} with {len(segments_to_store)} transcript segments, {len(speakers_found)} speakers, and speaker-aware title/summary")
+                            logger.info(f"✅ Updated conversation {conversation_id} with {len(segments_to_store)} transcript segments, {len(speakers_found)} speakers, and speaker-aware title/summary")
                     except Exception as e:
                         logger.error(f"Failed to update conversation {conversation_id} with transcript data: {e}")
 
@@ -691,9 +688,9 @@ class TranscriptionManager:
                 "session_end": datetime.now(UTC),
             }
 
-            # Create conversation in conversations collection
-            conversations_repo = ConversationsRepository(conversations_col)
-            await conversations_repo.create_conversation(conversation_data)
+            # Create conversation using Beanie
+            conversation_model = Conversation(**conversation_data)
+            await conversation_model.insert()
 
             # Mark audio_chunks as having speech and link to conversation
             await self.chunk_repo.mark_conversation_created(audio_uuid, conversation_id)
@@ -854,17 +851,16 @@ Summary:"""
             conversation_id: The conversation ID to process (not audio_uuid)
         """
         try:
-            # Get conversation data from conversations collection
-            conversations_repo = ConversationsRepository(conversations_col)
-            conversation = await conversations_repo.get_conversation(conversation_id)
-            if not conversation:
+            # Get conversation data using Beanie
+            conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+            if not conversation_model:
                 logger.warning(
                     f"No conversation found for memory processing {conversation_id}"
                 )
                 return
 
             # Get audio session data to get user info
-            audio_session = await self.chunk_repo.get_chunk(conversation["audio_uuid"])
+            audio_session = await self.chunk_repo.get_chunk(conversation_model.audio_uuid)
             if not audio_session:
                 logger.warning(
                     f"No audio session found for conversation {conversation_id}"
@@ -873,14 +869,14 @@ Summary:"""
 
             # Check if we have required data
             if not all(
-                [conversation_id, conversation.get("user_id"), audio_session.get("user_email")]
+                [conversation_id, conversation_model.user_id, audio_session.get("user_email")]
             ):
                 logger.warning(
                     f"Memory processing skipped - missing required data for conversation {conversation_id}"
                 )
                 logger.warning(f"    - conversation_id: {bool(conversation_id)}")
                 logger.warning(
-                    f"    - user_id: {bool(conversation.get('user_id'))}"
+                    f"    - user_id: {bool(conversation_model.user_id)}"
                 )
                 logger.warning(
                     f"    - user_email: {bool(audio_session.get('user_email'))}"

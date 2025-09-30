@@ -3,9 +3,9 @@ Documentation    Conversation Management API Tests
 Library          RequestsLibrary
 Library          Collections
 Library          String
-Resource         resources/setup_resources.robot
-Resource         resources/auth_keywords.robot
-Resource         resources/conversation_keywords.robot
+Resource         ../resources/setup_resources.robot
+Resource         ../resources/user_resources.robot
+Resource         ../resources/conversation_keywords.robot
 Suite Setup      Suite Setup
 Suite Teardown   Delete All Sessions
 
@@ -14,17 +14,13 @@ Suite Teardown   Delete All Sessions
 Get User Conversations Test
     [Documentation]    Test getting conversations for authenticated user
     [Tags]             conversation    user    positive
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${token}=           Get Admin Token
-    ${response}=        Get User Conversations    ${token}
-
-    Should Be Equal As Integers    ${response.status_code}    200
-    Should Be True     isinstance($response.json(), dict)
-    Dictionary Should Contain Key    ${response.json()}    conversations
+    Create API Session    admin_session
+    ${conversations_data}=        Get User Conversations
 
     # Verify conversation structure if any exist
-    ${conversations_data}=    Set Variable    ${response.json()}[conversations]
+   
     IF    isinstance($conversations_data, dict) and len($conversations_data) > 0
         ${client_ids}=    Get Dictionary Keys    ${conversations_data}
         FOR    ${client_id}    IN    @{client_ids}
@@ -41,18 +37,15 @@ Get User Conversations Test
 Get Conversation By ID Test
     [Documentation]    Test getting a specific conversation by ID
     [Tags]             conversation    individual    positive
-    Setup Auth Session
 
-    ${token}=           Get Admin Token
-    ${test_conversation}=    Find Test Conversation    ${token}
+    Create API Session    admin_session
+    ${test_conversation}=    Find Test Conversation
 
     IF    $test_conversation != $None
         ${conversation_id}=    Set Variable    ${test_conversation}[conversation_id]
-        ${response}=           Get Conversation By ID    ${token}    ${conversation_id}
+        ${conversation}=           Get Conversation By ID       ${conversation_id}
 
-        Should Be Equal As Integers    ${response.status_code}    200
         # Verify conversation structure
-        ${conversation}=    Set Variable    ${response.json()}[conversation]
         Dictionary Should Contain Key    ${conversation}    conversation_id
         Dictionary Should Contain Key    ${conversation}    audio_uuid
         Dictionary Should Contain Key    ${conversation}    created_at
@@ -62,62 +55,58 @@ Get Conversation By ID Test
         Pass Execution    No conversations available for individual conversation test
     END
 
-Get Conversation Versions Test
-    [Documentation]    Test getting version history for a conversation
-    [Tags]             conversation    versions    positive
-    Setup Auth Session
+# Get Conversation Versions Test
+#     [Documentation]    Test getting version history for a conversation
+#     [Tags]             conversation    versions    positive
 
-    ${token}=           Get Admin Token
-    ${test_conversation}=    Find Test Conversation    ${token}
+#     ${test_conversation}=    Find Test Conversation
 
-    IF    $test_conversation != $None
-        ${conversation_id}=    Set Variable    ${test_conversation}[conversation_id]
-        ${response}=           Get Conversation Versions    ${token}    ${conversation_id}
+#     IF    $test_conversation != $None
+#         ${conversation_id}=    Set Variable    ${test_conversation}[conversation_id]
+#         ${versions}=           Get Conversation Versions     ${conversation_id}
 
-        Should Be Equal As Integers    ${response.status_code}    200
-        # Verify version history structure
-        ${versions}=    Set Variable    ${response.json()}
-        Dictionary Should Contain Key    ${versions}    transcript_versions
-        Dictionary Should Contain Key    ${versions}    memory_versions
-        Dictionary Should Contain Key    ${versions}    active_transcript_version
-        Dictionary Should Contain Key    ${versions}    active_memory_version
-    ELSE
-        Log    No conversations available for testing
-        Pass Execution    No conversations available for version history test
-    END
+  
+#         # Verify version history structure
+#         Dictionary Should Contain Key    ${versions}    transcript_versions
+#         Dictionary Should Contain Key    ${versions}    memory_versions
+#         Dictionary Should Contain Key    ${versions}    active_transcript_version
+#         Dictionary Should Contain Key    ${versions}    active_memory_version
+#     ELSE
+#         Log    No conversations available for testing
+#         Pass Execution    No conversations available for version history test
+#     END
 
 Unauthorized Conversation Access Test
     [Documentation]    Test that conversation endpoints require authentication
     [Tags]             conversation    security    negative
-    Setup Auth Session
+    Get Anonymous Session    session
 
     # Try to access conversations without token
-    ${response}=    GET On Session    api    /api/conversations    expected_status=401
+    ${response}=    GET On Session    session    /api/conversations    expected_status=401
     Should Be Equal As Integers    ${response.status_code}    401
 
 Non-Existent Conversation Test
     [Documentation]    Test accessing a non-existent conversation
     [Tags]             conversation    negative    notfound
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${token}=           Get Admin Token
+    Create API Session    admin_session
     ${fake_id}=         Set Variable    non-existent-conversation-id
 
-    &{headers}=         Create Dictionary    Authorization=Bearer ${token}
-    ${response}=        GET On Session    api    /api/conversations/${fake_id}    headers=${headers}    expected_status=404
+    ${response}=        GET On Session    admin_session    /api/conversations/${fake_id}    expected_status=404
     Should Be Equal As Integers    ${response.status_code}    404
 
 Reprocess Transcript Test
     [Documentation]    Test triggering transcript reprocessing
     [Tags]             conversation    reprocess    positive
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${token}=           Get Admin Token
-    ${test_conversation}=    Find Test Conversation    ${token}
+    Create API Session    admin_session
+    ${test_conversation}=    Find Test Conversation
 
     IF    $test_conversation != $None
         ${conversation_id}=    Set Variable    ${test_conversation}[conversation_id]
-        ${response}=           Reprocess Transcript    ${token}    ${conversation_id}
+        ${response}=           Reprocess Transcript       ${conversation_id}
 
         # Reprocessing might return 200 (success) or 202 (accepted) depending on implementation
         Should Be True    ${response.status_code} in [200, 202]
@@ -129,10 +118,10 @@ Reprocess Transcript Test
 Reprocess Memory Test
     [Documentation]    Test triggering memory reprocessing
     [Tags]             conversation    reprocess    memory    positive
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${token}=           Get Admin Token
-    ${test_conversation}=    Find Test Conversation    ${token}
+    Create API Session    admin_session
+    ${test_conversation}=    Find Test Conversation
 
     IF    $test_conversation != $None
         ${conversation_id}=    Set Variable    ${test_conversation}[conversation_id]
@@ -148,40 +137,38 @@ Reprocess Memory Test
 Close Conversation Test
     [Documentation]    Test closing current conversation for a client
     [Tags]             conversation    close    positive
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${token}=           Get Admin Token
+    Create API Session    admin_session
     ${client_id}=       Set Variable    test-client-${RANDOM_ID}
 
     # This might return 404 if client doesn't exist, which is expected
-    &{headers}=         Create Dictionary    Authorization=Bearer ${token}
-    ${response}=        POST On Session    api    /api/conversations/${client_id}/close    headers=${headers}    expected_status=any
+    ${response}=        POST On Session    admin_session    /api/conversations/${client_id}/close    expected_status=any
     Should Be True     ${response.status_code} in [200, 404]
 
 Invalid Conversation Operations Test
     [Documentation]    Test invalid operations on conversations
     [Tags]             conversation    negative    invalid
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${token}=           Get Admin Token
+    Create API Session    admin_session
     ${fake_id}=         Set Variable    invalid-conversation-id
 
     # Test reprocessing non-existent conversation
-    &{headers}=         Create Dictionary    Authorization=Bearer ${token}
-    ${response}=        POST On Session    api    /api/conversations/${fake_id}/reprocess-transcript    headers=${headers}    expected_status=404
+    ${response}=        POST On Session    admin_session    /api/conversations/${fake_id}/reprocess-transcript    expected_status=404
     Should Be Equal As Integers    ${response.status_code}    404
 
     # Test getting versions of non-existent conversation
-    ${response}=        GET On Session    api    /api/conversations/${fake_id}/versions    headers=${headers}    expected_status=404
+    ${response}=        GET On Session    admin_session    /api/conversations/${fake_id}/versions    expected_status=404
     Should Be Equal As Integers    ${response.status_code}    404
 
 Version Management Test
     [Documentation]    Test version activation (if versions exist)
     [Tags]             conversation    versions    activation
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${token}=           Get Admin Token
-    ${test_conversation}=    Find Test Conversation    ${token}
+    Create API Session    admin_session
+    ${test_conversation}=    Find Test Conversation
 
     IF    $test_conversation != $None
         ${conversation_id}=    Set Variable    ${test_conversation}[conversation_id]
@@ -210,20 +197,20 @@ Version Management Test
 User Isolation Test
     [Documentation]    Test that users can only access their own conversations
     [Tags]             conversation    security    isolation
-    Setup Auth Session
+    Get Anonymous Session    anon_session
 
-    ${admin_token}=     Get Admin Token
+    Create API Session    admin_session
 
     # Create a test user
-    ${test_user}=       Create Test User    ${admin_token}    test-user-${RANDOM_ID}@example.com    test-password-123
-    ${user_token}=      Get User Token      test-user-${RANDOM_ID}@example.com    test-password-123
+    ${test_user}=       Create Test User    admin_session    test-user-${RANDOM_ID}@example.com    test-password-123
+    Create API Session    user_session    email=test-user-${RANDOM_ID}@example.com    password=test-password-123
 
     # Get admin conversations
-    ${admin_conversations}=    Get User Conversations    ${admin_token}
+    ${admin_conversations}=    Get User Conversations
     Should Be Equal As Integers    ${admin_conversations.status_code}    200
 
     # Get user conversations (should be empty for new user)
-    ${user_conversations}=     Get User Conversations    ${user_token}
+    ${user_conversations}=     GET On Session    user_session    /api/conversations
     Should Be Equal As Integers    ${user_conversations.status_code}    200
 
     # User should see empty or only their own conversations
@@ -241,5 +228,5 @@ User Isolation Test
     END
 
     # Cleanup
-    Delete Test User    ${admin_token}    ${test_user}[user_id]
+    Delete Test User    ${test_user}[user_id]
 

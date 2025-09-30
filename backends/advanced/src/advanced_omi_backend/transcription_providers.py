@@ -206,14 +206,24 @@ class DeepgramProvider(BatchTranscriptionProvider):
 
                         alternative = result["results"]["channels"][0]["alternatives"][0]
 
-                        # Use diarized transcript if available
-                        if "paragraphs" in alternative and alternative["paragraphs"].get(
-                            "transcript"
-                        ):
+                        # Extract segments from diarized utterances if available
+                        segments = []
+                        if "paragraphs" in alternative and alternative["paragraphs"].get("paragraphs"):
                             transcript = alternative["paragraphs"]["transcript"].strip()
                             logger.info(
                                 f"Deepgram diarized transcription successful: {len(transcript)} characters"
                             )
+
+                            # Extract speaker segments from utterances
+                            for paragraph in alternative["paragraphs"]["paragraphs"]:
+                                for sentence in paragraph.get("sentences", []):
+                                    segments.append({
+                                        "text": sentence.get("text", "").strip(),
+                                        "speaker": f"Speaker {paragraph.get('speaker', 'unknown')}",
+                                        "start": sentence.get("start", 0),
+                                        "end": sentence.get("end", 0),
+                                        "confidence": None  # Deepgram doesn't provide segment-level confidence
+                                    })
                         else:
                             transcript = alternative.get("transcript", "").strip()
                             logger.info(
@@ -255,12 +265,12 @@ class DeepgramProvider(BatchTranscriptionProvider):
 
                                 # Keep raw transcript and word data without formatting
                                 logger.info(
-                                    f"Keeping raw transcript with word-level data: {len(transcript)} characters"
+                                    f"Keeping raw transcript with word-level data: {len(transcript)} characters, {len(segments)} segments"
                                 )
                                 return {
                                     "text": transcript,
                                     "words": words,
-                                    "segments": [],
+                                    "segments": segments,
                                 }
                             else:
                                 # No word-level data, return basic transcript
@@ -820,5 +830,27 @@ def get_transcription_provider(
             )
         logger.info(f"Using offline Parakeet transcription provider in {mode} mode")
         return ParakeetProvider(parakeet_url)
+
+    # Auto-select provider based on available configuration (when provider_name is None)
+    if provider_name is None:
+        # Check TRANSCRIPTION_PROVIDER environment variable first
+        env_provider = os.getenv("TRANSCRIPTION_PROVIDER")
+        if env_provider:
+            # Recursively call with the specified provider
+            return get_transcription_provider(env_provider, mode)
+
+        # Auto-select: prefer Deepgram if available, fallback to Parakeet
+        if deepgram_key:
+            logger.info(f"Auto-selected Deepgram transcription provider in {mode} mode")
+            if mode == "streaming":
+                return DeepgramStreamingProvider(deepgram_key)
+            else:
+                return DeepgramProvider(deepgram_key)
+        elif parakeet_url:
+            logger.info(f"Auto-selected Parakeet transcription provider in {mode} mode")
+            return ParakeetProvider(parakeet_url)
+        else:
+            logger.warning("No transcription provider configured (DEEPGRAM_API_KEY or PARAKEET_ASR_URL required)")
+            return None
     else:
         return None

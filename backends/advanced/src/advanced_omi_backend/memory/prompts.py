@@ -229,7 +229,7 @@ You are a memory summarization system that records and preserves the complete in
 ## Summary of the agent's execution history
 
 **Task Objective**: Scrape blog post titles and full content from the OpenAI blog.
-**Progress Status**: 10\% \complete — 5 out of 50 blog posts processed.
+**Progress Status**: 10% complete — 5 out of 50 blog posts processed.
 
 1. **Agent Action**: Opened URL "https://openai.com"  
    **Action Result**:  

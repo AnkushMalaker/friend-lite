@@ -73,9 +73,9 @@ def extract_json_from_text(response_text: str) -> Optional[Dict[str, Any]]:
     # Try to find JSON using comprehensive regex patterns
     json_patterns = [
         # Look for memory format: {"memory": [...]}
-        r'\{"memory"\s*:\s*\[.*?\]\s*\}',
+        r'\{"memory"\\s*:\\s*\[.*?\]\\s*\}',
         # Look for facts format: {"facts": [...]}
-        r'\{"facts"\s*:\s*\[.*?\]\s*\}',
+        r'\{"facts"\\s*:\\s*\[.*?\]\\s*\}',
         # Look for any JSON object containing memory or facts
         r'\{[^{}]*"(?:memory|facts)"[^{}]*\}',
         # Look for any balanced JSON object
@@ -108,7 +108,7 @@ def extract_json_from_text(response_text: str) -> Optional[Dict[str, Any]]:
 
     # Try to extract just the facts or memory array if JSON object parsing fails
     for key in ["memory", "facts"]:
-        array_pattern = f'"{key}"\s*:\s*(\[.*?\])'
+        array_pattern = f'"{key}"\\s*:\\s*(\\[.*?\\])'
         try:
             match = re.search(array_pattern, response_text, re.DOTALL)
             if match:
