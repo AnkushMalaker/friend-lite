@@ -141,19 +141,7 @@ export const systemApi = {
 }
 
 export const uploadApi = {
-  uploadAudioFiles: (files: FormData, onProgress?: (progress: number) => void) =>
-    api.post('/api/process-audio-files', files, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 300000, // 5 minutes
-      onUploadProgress: (progressEvent) => {
-        if (onProgress && progressEvent.total) {
-          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-          onProgress(progress)
-        }
-      }
-    }),
-
-  // Async upload using existing infrastructure - returns job IDs for monitoring
+  // Async upload - returns job IDs for monitoring
   uploadAudioFilesAsync: (files: FormData, onUploadProgress?: (progress: number) => void) =>
     api.post('/api/process-audio-files-async', files, {
       headers: { 'Content-Type': 'multipart/form-data' },

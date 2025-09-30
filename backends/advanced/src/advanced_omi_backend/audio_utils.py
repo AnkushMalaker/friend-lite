@@ -7,6 +7,7 @@ import io
 import logging
 import os
 import time
+import uuid
 import wave
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+from advanced_omi_backend.audio_processing_types import AudioSource
+from advanced_omi_backend.job_tracker import StageEvent
 from wyoming.audio import AudioChunk
 
 if TYPE_CHECKING:
@@ -33,14 +36,13 @@ async def process_audio_chunk(
     user_id: str,
     user_email: str,
     audio_format: dict,
-    client_state: Optional["ClientState"] = None
 ) -> None:
-    """Process a single audio chunk through the standard pipeline.
+    """Process a single audio chunk by sending it to TranscriptionManager.
 
-    This function encapsulates the common pattern used across all audio input sources:
-    1. Create AudioChunk with format details
-    2. Queue AudioProcessingItem to processor
-    3. Update client state if provided
+    For WebSocket streaming:
+    - Creates ONE job per session (on first chunk)
+    - Accumulates chunks in TranscriptionManager
+    - Job completes when session ends (audio-stop)
 
     Args:
         audio_data: Raw audio bytes
@@ -48,27 +50,109 @@ async def process_audio_chunk(
         user_id: User identifier
         user_email: User email
         audio_format: Dict containing {rate, width, channels, timestamp}
-        client_state: Optional ClientState for state updates
     """
-
-    from advanced_omi_backend.audio_processing_types import AudioProcessingItem
+    # Import here to avoid circular import (processors imports from audio_utils)
     from advanced_omi_backend.processors import get_processor_manager
 
     # Extract format details
     rate = audio_format.get("rate", 16000)
+    width = audio_format.get("width", 2)
+    channels = audio_format.get("channels", 1)
 
-    # Create unified AudioProcessingItem for WebSocket processing
+    # Get processor manager and ensure transcription manager exists
     processor_manager = get_processor_manager()
-    processing_item = AudioProcessingItem.from_websocket(
-        audio_chunks=[audio_data],  # Single chunk as list
-        client_id=client_id,
-        user_id=user_id,
-        user_email=user_email,
-        sample_rate=rate
+    await processor_manager.ensure_transcription_manager(client_id)
+
+    # Get the transcription manager for this client
+    transcription_manager = processor_manager.transcription_managers.get(client_id)
+    if not transcription_manager:
+        logger.warning(f"No transcription manager found for {client_id} after ensure")
+        return
+
+    # Check if this is a new streaming session
+    is_new_session = client_id not in processor_manager.active_audio_uuids
+
+    if is_new_session:
+        # Generate audio_uuid for new session
+        audio_uuid = str(uuid.uuid4())
+        processor_manager.active_audio_uuids[client_id] = audio_uuid
+        processor_manager.chunk_counters[client_id] = 0  # Initialize chunk counter
+        logger.info(f"New streaming session for {client_id}: {audio_uuid}")
+
+        # Create audio file and file sink (matching old _audio_processor pattern)
+        timestamp = int(time.time())
+        wav_filename = f"{timestamp}_{client_id}_{audio_uuid}.wav"
+        wav_file_path = str(processor_manager.chunk_dir / wav_filename)
+
+        # Create file sink with sample rate from first chunk
+        sink = processor_manager._new_local_file_sink(wav_file_path, rate)
+        await sink.open()
+        processor_manager.active_file_sinks[client_id] = sink
+
+        # Create database entry for audio session
+        await processor_manager.repository.create_chunk(
+            audio_uuid=audio_uuid,
+            audio_path=wav_filename,
+            client_id=client_id,
+            timestamp=timestamp,
+            user_id=user_id,
+            user_email=user_email,
+        )
+
+        logger.info(f"Created audio file and database entry: {wav_filename}")
+
+        # Build conditional stages list based on configuration
+        stages = ["audio", "transcription"]
+        if processor_manager.speaker_recognition_enabled:
+            stages.append("speaker_recognition")
+        stages.append("memory")
+        if processor_manager.cropping_enabled:
+            stages.append("cropping")
+
+        # Create ONE pipeline job for this entire streaming session
+        job_id = await processor_manager.job_tracker.create_pipeline_job(
+            audio_source=AudioSource.WEBSOCKET,
+            user_id=user_id,
+            identifier=client_id,
+            audio_uuid=audio_uuid,
+            stages=stages
+        )
+
+        # Store job_id by audio_uuid (survives client disconnect)
+        processor_manager.audio_uuid_to_job[audio_uuid] = job_id
+
+        # Mark audio stage as in-progress (will complete when session ends)
+        await processor_manager.job_tracker.track_stage_event(
+            job_id, "audio", StageEvent.ENQUEUE
+        )
+
+        logger.info(f"Created streaming job {job_id} for session {audio_uuid} with stages: {stages}")
+    else:
+        audio_uuid = processor_manager.active_audio_uuids[client_id]
+
+    # Create AudioChunk for this data
+    chunk = AudioChunk(
+        audio=audio_data,
+        rate=rate,
+        width=width,
+        channels=channels
     )
 
-    # Submit to unified pipeline
-    await processor_manager.submit_audio_for_processing(processing_item)
+    # Increment chunk counter for this client
+    processor_manager.chunk_counters[client_id] = processor_manager.chunk_counters.get(client_id, 0) + 1
+    chunk_count = processor_manager.chunk_counters[client_id]
+
+    # Write chunk to file sink (for all chunks)
+    if client_id in processor_manager.active_file_sinks:
+        sink = processor_manager.active_file_sinks[client_id]
+        await sink.write(chunk)
+
+        # Log first 5 chunks and every 1000th chunk
+        if chunk_count <= 5 or chunk_count % 1000 == 0:
+            logger.info(f"Wrote chunk #{chunk_count} to file for {client_id} ({len(audio_data)} bytes)")
+
+    # Send chunk to transcription manager (it will accumulate them for batch processing)
+    await transcription_manager.transcribe_chunk(audio_uuid, chunk, client_id)
 
 
 async def load_audio_file_as_chunk(audio_path: Path) -> AudioChunk:
@@ -149,7 +233,7 @@ async def _process_audio_cropping_with_relative_timestamps(
         # Convert absolute timestamps to relative timestamps
         # Extract file start time from filename: timestamp_client_uuid.wav
         filename = original_path.split("/")[-1]
-        logger.info(f"🕐 Parsing filename: {filename}")
+        logger.info(f"Parsing filename: {filename}")
         filename_parts = filename.split("_")
         if len(filename_parts) < 3:
             logger.error(
@@ -190,9 +274,9 @@ async def _process_audio_cropping_with_relative_timestamps(
 
             relative_segments.append((start_rel, end_rel))
 
-        logger.info(f"🕐 Converting timestamps for {audio_uuid}: file_start={file_start_timestamp}")
-        logger.info(f"🕐 Absolute segments: {speech_segments}")
-        logger.info(f"🕐 Relative segments: {relative_segments}")
+        logger.info(f"Converting timestamps for {audio_uuid}: file_start={file_start_timestamp}")
+        logger.info(f"Absolute segments: {speech_segments}")
+        logger.info(f"Relative segments: {relative_segments}")
 
         # Validate that we have valid relative segments after conversion
         if not relative_segments:

@@ -45,6 +45,7 @@ class AudioSource(str, Enum):
 class PipelineStage(str, Enum):
     AUDIO = "audio"
     TRANSCRIPTION = "transcription"
+    SPEAKER_RECOGNITION = "speaker_recognition"
     MEMORY = "memory"
     CROPPING = "cropping"
 

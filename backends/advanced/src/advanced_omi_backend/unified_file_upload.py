@@ -32,13 +32,12 @@ def get_audio_duration(content: bytes) -> float:
         raise ValueError(f"Could not determine audio duration: {e}")
 
 
-async def save_uploaded_file(content: bytes, filename: str, user_id: str) -> str:
+async def save_uploaded_file(content: bytes, filename: str) -> str:
     """Save uploaded file content to persistent storage.
 
     Args:
         content: Raw file content
         filename: Original filename
-        user_id: User ID for directory organization
 
     Returns:
         Path to saved file
@@ -163,7 +162,7 @@ async def process_files_unified_background(
                 await validate_audio_file(filename, content)
 
                 # Save file to persistent storage
-                file_path = await save_uploaded_file(content, filename, user.user_id)
+                file_path = await save_uploaded_file(content, filename)
 
                 # Generate client_id for this file
                 file_device_name = f"{device_name}-{file_index + 1:03d}"

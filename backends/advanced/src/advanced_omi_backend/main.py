@@ -17,7 +17,6 @@ import concurrent.futures
 import json
 import os
 import time
-import uuid
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
@@ -45,7 +44,6 @@ from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.llm_client import async_health_check
 from advanced_omi_backend.memory import get_memory_service, shutdown_memory_service
 from advanced_omi_backend.processors import (
-    AudioProcessingItem,
     get_processor_manager,
     init_processor_manager,
 )
@@ -75,8 +73,6 @@ from fastapi.staticfiles import StaticFiles
 from friend_lite.decoder import OmiOpusDecoder
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConnectionFailure, PyMongoError
-from wyoming.audio import AudioChunk
-from wyoming.client import AsyncTcpClient
 
 ###############################################################################
 # SETUP
@@ -113,7 +109,8 @@ SEGMENT_SECONDS = 60  # length of each stored chunk
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
 
-# Audio cropping configuration
+# Pipeline stage configuration
+SPEAKER_RECOGNITION_ENABLED = bool(os.getenv("SPEAKER_SERVICE_URL"))  # Enabled if service URL is set
 AUDIO_CROPPING_ENABLED = os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true"
 MIN_SPEECH_SEGMENT_DURATION = float(os.getenv("MIN_SPEECH_SEGMENT_DURATION", "1.0"))  # seconds
 CROPPING_CONTEXT_PADDING = float(
@@ -315,8 +312,13 @@ async def lifespan(app: FastAPI):
     await task_manager.start()
     application_logger.info("Task manager started")
 
-    # Initialize processor manager
-    processor_manager = init_processor_manager(CHUNK_DIR, ac_repository)
+    # Initialize processor manager with pipeline configuration
+    processor_manager = init_processor_manager(
+        CHUNK_DIR,
+        ac_repository,
+        speaker_recognition_enabled=SPEAKER_RECOGNITION_ENABLED,
+        cropping_enabled=AUDIO_CROPPING_ENABLED
+    )
     await processor_manager.start()
 
 
@@ -592,7 +594,6 @@ async def ws_endpoint_omi(
                             "channels": OMI_CHANNELS,
                             "timestamp": chunk_timestamp,
                         },
-                        client_state=client_state,
                     )
 
                     # Log every 1000th packet to avoid spam
@@ -720,20 +721,8 @@ async def ws_endpoint_pcm(
                             f"{audio_format.get('width')}bytes, "
                             f"{audio_format.get('channels')}ch"
                         )
-                        
-                        # Create transcription manager early for this client
-                        processor_manager = get_processor_manager()
-                        try:
-                            application_logger.debug(f"📋 Creating transcription manager for {client_id}")
-                            await processor_manager.ensure_transcription_manager(client_id)
-                            application_logger.info(
-                                f"🔌 Created transcription manager for {client_id} on audio-start"
-                            )
-                        except Exception as tm_error:
-                            application_logger.error(
-                                f"❌ Failed to create transcription manager for {client_id}: {tm_error}", exc_info=True
-                            )
-                        
+
+                        # Transcription manager already created during client init - no need to create again
                         application_logger.info(f"🎵 Switching to audio streaming mode for {client_id}")
                         continue  # Continue to audio streaming mode
                     
@@ -751,7 +740,7 @@ async def ws_endpoint_pcm(
                         
                 else:
                     # Audio streaming mode - receive raw bytes (like speaker recognition)
-                    application_logger.debug(f"🎵 Audio streaming mode for {client_id} - waiting for audio data")
+                    application_logger.info(f"🎵 Audio streaming mode ENTERED for {client_id} - waiting for audio data")
                     
                     try:
                         # Receive raw audio bytes or check for control messages
@@ -802,9 +791,11 @@ async def ws_endpoint_pcm(
                                             audio_data = payload_msg["bytes"]
                                             packet_count += 1
                                             total_bytes += len(audio_data)
-                                            
-                                            application_logger.debug(f"🎵 Received audio chunk #{packet_count}: {len(audio_data)} bytes")
-                                            
+
+                                            # Log first 5 chunks and every 1000th chunk
+                                            if packet_count <= 5 or packet_count % 1000 == 0:
+                                                application_logger.info(f"Received audio chunk #{packet_count}: {len(audio_data)} bytes for {client_id}")
+
                                             # Process audio chunk through unified pipeline
                                             audio_format = control_header.get("data", {})
                                             await process_audio_chunk(
@@ -813,7 +804,6 @@ async def ws_endpoint_pcm(
                                                 user_id=user.user_id,
                                                 user_email=user.email,
                                                 audio_format=audio_format,
-                                                client_state=None,  # No client state update needed for Wyoming protocol
                                             )
                                         else:
                                             application_logger.warning(f"Expected binary payload for audio-chunk, got: {payload_msg.keys()}")
@@ -848,7 +838,6 @@ async def ws_endpoint_pcm(
                                     "channels": 1,
                                     "timestamp": int(time.time()),
                                 },
-                                client_state=None,  # No client state update needed for raw streaming
                             )
                         
                         else:

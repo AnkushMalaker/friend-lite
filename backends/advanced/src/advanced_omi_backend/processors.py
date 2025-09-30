@@ -13,16 +13,15 @@ import wave
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Tuple
 
 # Import TranscriptionManager for type hints
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from advanced_omi_backend.audio_processing_types import (
     AudioProcessingItem,
-    TranscriptionItem,
-    MemoryProcessingItem,
     CroppingItem,
+    MemoryProcessingItem,
+    TranscriptionItem,
 )
 from advanced_omi_backend.audio_utils import (
     _process_audio_cropping_with_relative_timestamps,
@@ -33,11 +32,7 @@ from advanced_omi_backend.database import (
     ConversationsRepository,
     conversations_col,
 )
-from advanced_omi_backend.job_tracker import (
-    AudioSource,
-    StageEvent,
-    get_job_tracker,
-)
+from advanced_omi_backend.job_tracker import AudioSource, StageEvent, get_job_tracker
 from advanced_omi_backend.memory import get_memory_service
 from advanced_omi_backend.task_manager import get_pipeline_tracker
 from advanced_omi_backend.users import get_user_by_id
@@ -70,9 +65,19 @@ if TYPE_CHECKING:
 class ProcessorManager:
     """Manages all application-level processors and queues."""
 
-    def __init__(self, chunk_dir: Path, audio_chunks_repository: AudioChunksRepository):
+    def __init__(
+        self,
+        chunk_dir: Path,
+        audio_chunks_repository: AudioChunksRepository,
+        speaker_recognition_enabled: bool = False,
+        cropping_enabled: bool = True
+    ):
         self.chunk_dir = chunk_dir
         self.repository = audio_chunks_repository
+
+        # Configuration flags for optional pipeline stages
+        self.speaker_recognition_enabled = speaker_recognition_enabled
+        self.cropping_enabled = cropping_enabled
 
         # Unified pipeline queues with job tracking (job_id, item) tuples
         self.audio_queue: asyncio.Queue[Optional[Tuple[str, AudioProcessingItem]]] = asyncio.Queue()
@@ -95,6 +100,12 @@ class ProcessorManager:
         # Track active file sinks per client
         self.active_file_sinks: dict[str, LocalFileSink] = {}
         self.active_audio_uuids: dict[str, str] = {}
+
+        # Track streaming jobs by audio_uuid (survives client disconnect)
+        self.audio_uuid_to_job: dict[str, str] = {}  # audio_uuid -> job_id
+
+        # Track chunk counts per client for logging (log first 5, then every 1000th)
+        self.chunk_counters: dict[str, int] = {}
 
         # Transcription managers pool
         self.transcription_managers: dict[str, "TranscriptionManager"] = {}
@@ -504,6 +515,13 @@ class ProcessorManager:
         # Mark as being closed
         self.closing_clients.add(client_id)
 
+        # Mark audio stage as complete in job tracker
+        audio_uuid = self.active_audio_uuids.get(client_id)
+        if audio_uuid and audio_uuid in self.audio_uuid_to_job:
+            job_id = self.audio_uuid_to_job[audio_uuid]
+            await self.job_tracker.track_stage_event(job_id, "audio", StageEvent.COMPLETE)
+            audio_logger.info(f"✅ Marked audio stage complete for job {job_id}")
+
         # First, flush ASR to complete any pending transcription
         if client_id in self.transcription_managers:
             try:
@@ -552,9 +570,8 @@ class ProcessorManager:
                 audio_logger.info(f"Closed audio file for client {client_id}")
             except Exception as e:
                 audio_logger.error(f"Error closing audio file for client {client_id}: {e}")
-        
-        # Remove from closing set now that we're done
-        self.closing_clients.discard(client_id)
+
+        # Note: Don't remove from closing_clients here - will be removed during cleanup_client_tasks
         audio_logger.info(f"✅ Completed close_client_audio for client {client_id}")
 
     async def ensure_transcription_manager(self, client_id: str):
@@ -588,86 +605,91 @@ class ProcessorManager:
             )
 
 
-    # TODO: Replace with unified implementation
-        audio_logger.info("Memory processor started")
+    # async def _memory_processor(self):
+    # # TODO: Replace with unified implementation
+    #     audio_logger.info("Memory processor started")
 
-        try:
-            while not self.shutdown_flag:
-                try:
-                    queue_size_before = self.memory_queue.qsize()
-                    item = await asyncio.wait_for(self.memory_queue.get(), timeout=30.0)
-                    queue_size_after = self.memory_queue.qsize()
+    #     try:
+    #         while not self.shutdown_flag:
+    #             try:
+    #                 queue_size_before = self.memory_queue.qsize()
+    #                 item = await asyncio.wait_for(self.memory_queue.get(), timeout=30.0)
+    #                 queue_size_after = self.memory_queue.qsize()
 
-                    if item is None:  # Shutdown signal
-                        self.memory_queue.task_done()
-                        break
+    #                 if item is None:  # Shutdown signal
+    #                     self.memory_queue.task_done()
+    #                     break
 
-                    # Track pipeline dequeue event - find audio_uuid from conversation_id
-                    try:
-                        conversations_repo = ConversationsRepository(conversations_col)
-                        conversation = await conversations_repo.get_conversation(item.conversation_id)
-                        audio_uuid = conversation.get("audio_uuid") if conversation else None
-                        if audio_uuid:
-                            self.pipeline_tracker.track_dequeue(
-                                "memory",
-                                audio_uuid,
-                                queue_size_after,
-                                {
-                                    "conversation_id": item.conversation_id,
-                                    "client_id": item.client_id,
-                                    "queue_size_before": queue_size_before
-                                }
-                            )
-                    except Exception as e:
-                        audio_logger.warning(f"Failed to track memory dequeue for conversation {item.conversation_id}: {e}")
+    #                 # Track pipeline dequeue event - find audio_uuid from conversation_id
+    #                 try:
+    #                     conversations_repo = ConversationsRepository(conversations_col)
+    #                     conversation = await conversations_repo.get_conversation(item.conversation_id)
+    #                     audio_uuid = conversation.get("audio_uuid") if conversation else None
+    #                     if audio_uuid:
+    #                         self.pipeline_tracker.track_dequeue(
+    #                             "memory",
+    #                             audio_uuid,
+    #                             queue_size_after,
+    #                             {
+    #                                 "conversation_id": item.conversation_id,
+    #                                 "client_id": item.client_id,
+    #                                 "queue_size_before": queue_size_before
+    #                             }
+    #                         )
+    #                 except Exception as e:
+    #                     audio_logger.warning(f"Failed to track memory dequeue for conversation {item.conversation_id}: {e}")
 
-                    try:
-                        # Create background task for memory processing
-                        task = asyncio.create_task(self._process_memory_item(item))
+    #                 try:
+    #                     # Create background task for memory processing
+    #                     task = asyncio.create_task(self._process_memory_item(item))
 
-                        # Track task with 5 minute timeout
-                        task_name = f"memory_{item.client_id}_{item.conversation_id}"
-                        actual_task_id = self.pipeline_tracker.track_task(
-                            task,
-                            task_name,
-                            {
-                                "client_id": item.client_id,
-                                "conversation_id": item.conversation_id,
-                                "type": "memory",
-                                "timeout": 3600,  # 60 minutes
-                            },
-                        )
+    #                     # Track task with 5 minute timeout
+    #                     task_name = f"memory_{item.client_id}_{item.conversation_id}"
+    #                     actual_task_id = self.pipeline_tracker.track_task(
+    #                         task,
+    #                         task_name,
+    #                         {
+    #                             "client_id": item.client_id,
+    #                             "conversation_id": item.conversation_id,
+    #                             "type": "memory",
+    #                             "timeout": 3600,  # 60 minutes
+    #                         },
+    #                     )
 
-                        # Register task with client for tracking (use the actual task_id from TaskManager)
-                        self.track_processing_task(
-                            item.client_id,
-                            "memory",
-                            actual_task_id,
-                            {"conversation_id": item.conversation_id},
-                        )
+    #                     # Register task with client for tracking (use the actual task_id from TaskManager)
+    #                     self.track_processing_task(
+    #                         item.client_id,
+    #                         "memory",
+    #                         actual_task_id,
+    #                         {"conversation_id": item.conversation_id},
+    #                     )
 
-                    except Exception as e:
-                        audio_logger.error(
-                            f"Error queuing memory processing for {item.conversation_id}: {e}",
-                            exc_info=True,
-                        )
-                    finally:
-                        self.memory_queue.task_done()
+    #                 except Exception as e:
+    #                     audio_logger.error(
+    #                         f"Error queuing memory processing for {item.conversation_id}: {e}",
+    #                         exc_info=True,
+    #                     )
+    #                 finally:
+    #                     self.memory_queue.task_done()
 
-                except asyncio.TimeoutError:
-                    # Periodic health check
-                    queue_size = self.memory_queue.qsize()
-                    audio_logger.debug(f"Memory processor health: {queue_size} items in queue")
+    #             except asyncio.TimeoutError:
+    #                 # Periodic health check
+    #                 queue_size = self.memory_queue.qsize()
+    #                 audio_logger.debug(f"Memory processor health: {queue_size} items in queue")
 
-        except Exception as e:
-            audio_logger.error(f"Fatal error in memory processor: {e}", exc_info=True)
-        finally:
-            audio_logger.info("Memory processor stopped")
+    #     except Exception as e:
+    #         audio_logger.error(f"Fatal error in memory processor: {e}", exc_info=True)
+    #     finally:
+    #         audio_logger.info("Memory processor stopped")
 
     async def _process_memory_item(self, item: MemoryProcessingItem):
         """Process a single memory item (speech-driven conversations architecture)."""
         start_time = time.time()
         audio_logger.info(f"⏱️  [MEMORY] Starting memory processing for conversation {item.conversation_id}")
+
+        # Track memory stage in job tracker
+        job_id = None
+        audio_uuid = None
 
         try:
             # Get conversation data directly from conversations collection (speech-driven architecture)
@@ -682,6 +704,18 @@ class ProcessorManager:
                     f"❌ [MEMORY] No conversation found for {item.conversation_id}, elapsed: {time.time() - start_time:.2f}s"
                 )
                 raise ValueError(f"No conversation found for {item.conversation_id}")
+
+            # Get audio_uuid and job_id for tracking
+            audio_uuid = conversation.get("audio_uuid")
+            if audio_uuid and audio_uuid in self.audio_uuid_to_job:
+                job_id = self.audio_uuid_to_job[audio_uuid]
+                await self.job_tracker.track_stage_event(
+                    job_id, "memory", StageEvent.ENQUEUE
+                )
+                await self.job_tracker.track_stage_event(
+                    job_id, "memory", StageEvent.DEQUEUE
+                )
+                audio_logger.info(f"📊 Marked memory stage as processing for job {job_id}")
 
             # Extract conversation text from transcript segments
             transcript_start = time.time()
@@ -719,6 +753,17 @@ class ProcessorManager:
             if not should_process:
                 await self._update_memory_status(item.conversation_id, "skipped")
                 audio_logger.info(f"⏭️  [MEMORY] Skipped (filter). Total elapsed: {time.time() - start_time:.2f}s")
+
+                # Mark memory as skipped in job tracker
+                if job_id:
+                    await self.job_tracker.track_stage_event(
+                        job_id, "memory", StageEvent.COMPLETE,
+                        metadata={"skipped": True, "reason": filter_reason}
+                    )
+                    # Cleanup job mapping
+                    if not self.cropping_enabled and audio_uuid:
+                        del self.audio_uuid_to_job[audio_uuid]
+
                 return None
 
             # Lazy import memory service
@@ -769,6 +814,17 @@ class ProcessorManager:
                         audio_logger.info(
                             f"✅ [MEMORY] Success! Created {len(created_memory_ids)} memories (DB update: {db_time:.2f}s). Total: {total_time:.2f}s"
                         )
+
+                        # Mark memory stage as complete
+                        if job_id:
+                            await self.job_tracker.track_stage_event(
+                                job_id, "memory", StageEvent.COMPLETE,
+                                metadata={"memory_count": len(created_memory_ids)}
+                            )
+                            # Final cleanup: remove job mapping only if cropping is not enabled
+                            if not self.cropping_enabled and audio_uuid:
+                                del self.audio_uuid_to_job[audio_uuid]
+                                audio_logger.info(f"🧹 Cleaned up job mapping for audio_uuid {audio_uuid}")
                     except Exception as e:
                         audio_logger.error(f"❌ [MEMORY] Failed to add memory references: {e}")
                         raise
@@ -796,12 +852,34 @@ class ProcessorManager:
             elapsed = time.time() - start_time
             audio_logger.error(f"❌ [MEMORY] Timeout after {elapsed:.2f}s")
             await self._update_memory_status(item.conversation_id, "failed")
+
+            # Mark memory as failed in job tracker
+            if job_id:
+                await self.job_tracker.track_stage_event(
+                    job_id, "memory", StageEvent.ERROR,
+                    metadata={"error": "Timeout"}
+                )
+                # Cleanup job mapping
+                if audio_uuid:
+                    del self.audio_uuid_to_job[audio_uuid]
+
             raise
 
         except Exception as e:
             elapsed = time.time() - start_time
             audio_logger.error(f"❌ [MEMORY] Exception after {elapsed:.2f}s: {e}", exc_info=True)
             await self._update_memory_status(item.conversation_id, "failed")
+
+            # Mark memory as failed in job tracker
+            if job_id:
+                await self.job_tracker.track_stage_event(
+                    job_id, "memory", StageEvent.ERROR,
+                    metadata={"error": str(e)}
+                )
+                # Cleanup job mapping
+                if audio_uuid:
+                    del self.audio_uuid_to_job[audio_uuid]
+
             raise
 
         end_time = time.time()
@@ -1134,8 +1212,8 @@ class ProcessorManager:
             client_id = item.client_id
 
             # Read the audio file and convert to AudioChunk format
-            from pathlib import Path
             import wave
+            from pathlib import Path
 
             wav_path = Path(item.audio_file_path)
             if not wav_path.exists():
@@ -1337,8 +1415,20 @@ class ProcessorManager:
                 del self.processing_tasks[client_id]
                 logger.debug(f"✅ Cleaned up processing tasks for {client_id}")
 
-            # 4. Note: We don't cancel pipeline processing tasks (memory, cropping)
+            # 4. Clean up chunk counters
+            if client_id in self.chunk_counters:
+                del self.chunk_counters[client_id]
+                logger.debug(f"✅ Cleaned up chunk counter for {client_id}")
+
+            # 5. Note: active_audio_uuids is preserved for job tracking (by audio_uuid)
+            # It's intentionally not removed here to allow job completion after disconnect
+
+            # 6. Note: We don't cancel pipeline processing tasks (memory, cropping)
             # as these should continue independently after client disconnect
+
+            # 7. Remove from closing_clients set (if present)
+            self.closing_clients.discard(client_id)
+
             logger.info(f"✅ Client cleanup completed for {client_id}")
 
         except Exception as e:
@@ -1355,10 +1445,20 @@ class ProcessorManager:
 _processor_manager: Optional[ProcessorManager] = None
 
 
-def init_processor_manager(chunk_dir: Path, db_helper: AudioChunksRepository):
+def init_processor_manager(
+    chunk_dir: Path,
+    db_helper: AudioChunksRepository,
+    speaker_recognition_enabled: bool = False,
+    cropping_enabled: bool = True
+):
     """Initialize the global processor manager."""
     global _processor_manager
-    _processor_manager = ProcessorManager(chunk_dir, db_helper)
+    _processor_manager = ProcessorManager(
+        chunk_dir,
+        db_helper,
+        speaker_recognition_enabled=speaker_recognition_enabled,
+        cropping_enabled=cropping_enabled
+    )
     return _processor_manager
 
 

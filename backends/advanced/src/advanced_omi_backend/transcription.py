@@ -2,10 +2,12 @@ import asyncio
 import logging
 import os
 import time
-import uuid
-from datetime import UTC, datetime
 from typing import Optional
 
+from advanced_omi_backend.audio_processing_types import (
+    CroppingItem,
+    MemoryProcessingItem,
+)
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.config import (
     get_conversation_stop_settings,
@@ -14,9 +16,8 @@ from advanced_omi_backend.config import (
 )
 from advanced_omi_backend.conversation_manager import get_conversation_manager
 from advanced_omi_backend.database import ConversationsRepository, conversations_col
-from advanced_omi_backend.llm_client import async_generate
+from advanced_omi_backend.job_tracker import StageEvent
 from advanced_omi_backend.processors import get_processor_manager
-from advanced_omi_backend.audio_processing_types import MemoryProcessingItem, CroppingItem
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
@@ -183,8 +184,25 @@ class TranscriptionManager:
             f"📊 Current state - buffer size: {len(self._audio_buffer) if self._audio_buffer else 0}, collecting: {self._collecting}"
         )
 
+        # Track transcription stage in job tracker
+        job_id = None
+        if self._current_audio_uuid and self._current_audio_uuid in self.processor_manager.audio_uuid_to_job:
+            job_id = self.processor_manager.audio_uuid_to_job[self._current_audio_uuid]
+            await self.processor_manager.job_tracker.track_stage_event(
+                job_id, "transcription", StageEvent.ENQUEUE
+            )
+            await self.processor_manager.job_tracker.track_stage_event(
+                job_id, "transcription", StageEvent.DEQUEUE
+            )
+            logger.info(f"📊 Marked transcription stage as processing for job {job_id}")
+
         if not self.provider:
             logger.error("No transcription provider available")
+            if job_id:
+                await self.processor_manager.job_tracker.track_stage_event(
+                    job_id, "transcription", StageEvent.ERROR,
+                    metadata={"error": "No transcription provider available"}
+                )
             return None
 
         # Cancel collection timeout task first to prevent interference
@@ -203,8 +221,21 @@ class TranscriptionManager:
             transcript_result = await self._get_transcript()
             # Process the result uniformly and get conversation_id
             conversation_id = await self._process_transcript_result(transcript_result)
+
+            # Mark transcription as complete
+            if job_id:
+                await self.processor_manager.job_tracker.track_stage_event(
+                    job_id, "transcription", StageEvent.COMPLETE
+                )
+                logger.info(f"✅ Marked transcription stage complete for job {job_id}")
+
             return conversation_id
         except asyncio.CancelledError:
+            if job_id:
+                await self.processor_manager.job_tracker.track_stage_event(
+                    job_id, "transcription", StageEvent.ERROR,
+                    metadata={"error": "Task cancelled"}
+                )
             raise
         except Exception as e:
             # Signal transcription failure
@@ -217,6 +248,14 @@ class TranscriptionManager:
                     )
                 # Transcription failed
                 logger.error(f"Transcript failed for {self._current_audio_uuid}: {str(e)}")
+
+            # Mark transcription as failed in job tracker
+            if job_id:
+                await self.processor_manager.job_tracker.track_stage_event(
+                    job_id, "transcription", StageEvent.ERROR,
+                    metadata={"error": str(e)}
+                )
+
             return None
 
     async def _get_transcript(self):
@@ -702,14 +741,18 @@ class TranscriptionManager:
 
             # Queue cropping with processor manager
             processor_manager = get_processor_manager()
+
+            # Get job_id if available
+            job_id = None
+            if self._current_audio_uuid and self._current_audio_uuid in processor_manager.audio_uuid_to_job:
+                job_id = processor_manager.audio_uuid_to_job[self._current_audio_uuid]
+
             await processor_manager.queue_cropping(
                 CroppingItem(
-                    client_id=self._client_id,
-                    user_id=current_client.user_id,
                     audio_uuid=self._current_audio_uuid,
-                    original_path=original_path,
-                    speech_segments=cropping_segments,
-                    output_path=cropped_path,
+                    audio_file_path=original_path,
+                    segments=cropping_segments,
+                    job_id=job_id
                 )
             )
 
