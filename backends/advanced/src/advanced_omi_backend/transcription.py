@@ -889,16 +889,18 @@ Summary:"""
 
             # Import here to avoid circular imports
 
-            # Queue memory processing for conversation
-            processor_manager = get_processor_manager()
-            await processor_manager.queue_memory(
-                MemoryProcessingItem(
-                    client_id=self._client_id,
-                    user_id=conversation["user_id"],
-                    user_email=audio_session["user_email"],
-                    conversation_id=conversation_id,
-                )
+            # Queue memory processing for conversation (from streaming transcript)
+            # Note: Final transcription RQ job will also trigger memory processing
+            # with higher quality transcript, which may override this
+            from advanced_omi_backend.rq_queue import enqueue_memory_processing
+
+            enqueue_memory_processing(
+                client_id=self._client_id,
+                user_id=conversation["user_id"],
+                user_email=audio_session["user_email"],
+                conversation_id=conversation_id
             )
+            logger.info(f"📤 Enqueued memory processing for streaming transcript of conversation {conversation_id}")
 
         except Exception as e:
             logger.error(f"Error queuing memory processing for conversation {conversation_id}: {e}")

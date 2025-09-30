@@ -23,7 +23,6 @@ db = mongo_client.get_default_database("friend-lite")
 
 # Collection references (for non-Beanie collections)
 users_col = db["users"]
-speakers_col = db["speakers"]
 chunks_col = db["audio_chunks"]  # Still used by AudioChunksRepository
 
 # Note: conversations collection managed by Beanie
@@ -40,7 +39,6 @@ def get_collections():
     """Get commonly used collection references."""
     return {
         "users_col": users_col,
-        "speakers_col": speakers_col,
         "chunks_col": chunks_col,
     }
 

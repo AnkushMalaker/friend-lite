@@ -69,9 +69,31 @@ class ConversationManager:
             else:
                 audio_logger.info(f"✅ Transcription already completed, skipping close_client_audio for {client_id}")
 
-            # Step 2: Memory processing is now handled by transcription completion
-            # This eliminates race conditions and event coordination issues
-            audio_logger.info(f"💭 Memory processing will be triggered by transcription completion for {audio_uuid}")
+            # Step 2: Enqueue final high-quality transcription via RQ
+            # This will add a new transcript version and trigger memory processing
+            from advanced_omi_backend.database import AudioChunksRepository
+
+            repo = AudioChunksRepository()
+            audio_session = await repo.get_chunk(audio_uuid)
+
+            if audio_session and audio_session.get("conversation_id"):
+                # Only enqueue if conversation was created (speech detected)
+                from advanced_omi_backend.rq_queue import enqueue_final_transcription
+
+                conversation_id = audio_session["conversation_id"]
+                audio_logger.info(f"📤 Enqueuing final transcription job for conversation {conversation_id}")
+
+                job = enqueue_final_transcription(
+                    conversation_id=conversation_id,
+                    audio_uuid=audio_uuid,
+                    audio_path=audio_session["audio_file_path"],
+                    user_id=user_id,
+                    client_id=client_id,
+                    user_email=user_email or ""
+                )
+                audio_logger.info(f"✅ Enqueued final transcription job {job.id} for conversation {conversation_id}")
+            else:
+                audio_logger.info(f"⏭️ No conversation created for {audio_uuid} (no speech detected), skipping final transcription")
 
             # Step 3: Audio cropping is now handled at processor level after transcription
             # This ensures cropping happens with diarization segments when available
