@@ -28,20 +28,6 @@ interface JobStatus {
   }>
 }
 
-// New unified processing interfaces
-interface ProcessingTask {
-  client_id: string
-  user_id: string
-  status: 'processing' | 'complete'
-  stages: Record<string, {
-    status?: string
-    completed?: boolean
-    error?: string
-    metadata?: any
-    timestamp?: number
-  }>
-}
-
 // UploadSessionData interface removed - replaced by unified processor tasks polling
 
 interface UploadSession {
