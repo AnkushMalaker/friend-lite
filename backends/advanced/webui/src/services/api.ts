@@ -116,6 +116,7 @@ export const systemApi = {
   getMetrics: () => api.get('/api/metrics'),
   getProcessorStatus: () => api.get('/api/processor/status'),
   getActivePipelineJobs: () => api.get('/api/process-audio-files/jobs'),
+  getAllJobs: () => api.get('/api/jobs/all'),
   getActiveClients: () => api.get('/api/clients/active'),
   getDiarizationSettings: () => api.get('/api/diarization-settings'),
   saveDiarizationSettings: (settings: any) => api.post('/api/diarization-settings', settings),

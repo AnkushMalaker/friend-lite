@@ -538,11 +538,57 @@ class ProcessorManager:
                     f"📤 Calling flush_final_transcript for client {client_id} (manager: {manager})"
                 )
                 try:
-                    await manager.process_collected_audio()
+                    conversation_id = await manager.process_collected_audio()
                     flush_duration = time.time() - flush_start_time
                     audio_logger.info(
                         f"✅ ASR flush completed for client {client_id} in {flush_duration:.2f}s"
                     )
+
+                    # Get job_id for this client's audio
+                    job_id = None
+                    audio_uuid = self.active_audio_uuids.get(client_id)
+                    if audio_uuid and audio_uuid in self.audio_uuid_to_job:
+                        job_id = self.audio_uuid_to_job[audio_uuid]
+
+                    # Mark transcription stage complete
+                    if job_id:
+                        await self.job_tracker.track_stage_event(job_id, "transcription", StageEvent.COMPLETE)
+                        audio_logger.info(f"✅ [WEBSOCKET] Marked transcription complete for job {job_id}")
+
+                    # If conversation created (speech detected), enqueue memory processing
+                    if conversation_id:
+                        # Get conversation and user data for memory processing
+                        from advanced_omi_backend.database import ConversationsRepository, conversations_col
+                        from advanced_omi_backend.audio_processing_types import MemoryProcessingItem
+
+                        conversations_repo = ConversationsRepository(conversations_col)
+                        conversation = await conversations_repo.get_conversation(conversation_id)
+
+                        if conversation and audio_uuid:
+                            audio_chunk = await self.repository.get_chunk(audio_uuid)
+                            if audio_chunk:
+                                memory_item = MemoryProcessingItem(
+                                    conversation_id=conversation_id,
+                                    user_id=conversation["user_id"],
+                                    user_email=audio_chunk.get("user_email"),
+                                    client_id=client_id,
+                                    transcript_version_id=None
+                                )
+
+                                # Track memory enqueue
+                                if job_id:
+                                    await self.job_tracker.track_stage_event(job_id, "memory", StageEvent.ENQUEUE)
+
+                                await self.memory_queue.put((job_id, memory_item))
+                                audio_logger.info(f"✅ [WEBSOCKET] Enqueued memory for job {job_id}, conversation {conversation_id}")
+                    else:
+                        audio_logger.info(f"⏭️  [WEBSOCKET] No speech detected for client {client_id}, skipping memory")
+                        # Skip remaining stages for no-speech jobs
+                        if job_id:
+                            await self.job_tracker.track_stage_event(job_id, "memory", StageEvent.COMPLETE, metadata={"skipped": True, "reason": "no_speech"})
+                            await self.job_tracker.track_stage_event(job_id, "cropping", StageEvent.COMPLETE, metadata={"skipped": True, "reason": "no_speech"})
+                            await self.complete_pipeline_job_if_ready(job_id)
+
                 except Exception as flush_error:
                     audio_logger.error(
                         f"❌ Error during flush_final_transcript: {flush_error}", exc_info=True
@@ -993,6 +1039,11 @@ class ProcessorManager:
                         audio_start = time.time()
                         audio_logger.info(f"⏱️  [AUDIO] Starting audio processing for job {job_id}")
 
+                        # Map audio_uuid to job_id for later memory/cropping enqueue
+                        if processing_item.audio_uuid:
+                            self.audio_uuid_to_job[processing_item.audio_uuid] = job_id
+                            audio_logger.info(f"📍 [AUDIO] Mapped audio_uuid {processing_item.audio_uuid} to job {job_id}")
+
                         # Track dequeue
                         await self.job_tracker.track_stage_event(job_id, "audio", StageEvent.DEQUEUE)
 
@@ -1154,9 +1205,15 @@ class ProcessorManager:
                         trans_time = time.time() - trans_start
                         audio_logger.info(f"⏱️  [TRANSCRIPTION] Transcription completed in {trans_time:.2f}s")
 
-                        # Mark transcription stage complete
+                        # Mark transcription stage complete with speaker recognition metadata
                         if job_id:
-                            await self.job_tracker.track_stage_event(job_id, "transcription", StageEvent.COMPLETE)
+                            metadata = {
+                                "speaker_recognition_enabled": self.speaker_recognition_enabled,
+                                "processing_time_seconds": trans_time
+                            }
+                            await self.job_tracker.track_stage_event(
+                                job_id, "transcription", StageEvent.COMPLETE, metadata=metadata
+                            )
 
                         # If conversation was created (speech detected), queue for memory processing
                         if conversation_id:
@@ -1243,8 +1300,7 @@ class ProcessorManager:
             # Disable internal memory queuing since unified pipeline handles it
             temp_manager = TranscriptionManager(
                 chunk_repo=self.repository,
-                processor_manager=self,
-                skip_memory_queuing=True  # Unified pipeline handles memory queuing
+                processor_manager=self
             )
 
             try:
@@ -1305,6 +1361,72 @@ class ProcessorManager:
                             await self.job_tracker.track_stage_event(job_id, "memory", StageEvent.COMPLETE)
                             audio_logger.info(f"✅ Unified memory processing completed for job {job_id}")
 
+                            # If cropping is enabled, enqueue cropping
+                            if self.cropping_enabled:
+                                # Get audio_uuid and audio file path for cropping
+                                audio_uuid = None
+                                audio_logger.info(f"🔍 [MEMORY] Looking for audio_uuid for job {job_id} in {len(self.audio_uuid_to_job)} mappings")
+                                for uuid, jid in self.audio_uuid_to_job.items():
+                                    if jid == job_id:
+                                        audio_uuid = uuid
+                                        audio_logger.info(f"✓ [MEMORY] Found audio_uuid {audio_uuid} for job {job_id}")
+                                        break
+
+                                if audio_uuid:
+                                    # Get audio file path and segments from audio_chunks collection
+                                    audio_chunk = await self.repository.get_chunk(audio_uuid)
+                                    if audio_chunk and audio_chunk.get("audio_path") and audio_chunk.get("transcript"):
+                                        # Convert transcript segments to cropping format (start, end tuples)
+                                        cropping_segments = []
+                                        for seg in audio_chunk["transcript"]:
+                                            start = seg.get("start", 0.0)
+                                            end = seg.get("end", 0.0)
+                                            if end > start:  # Only include valid segments
+                                                cropping_segments.append((start, end))
+
+                                        if not cropping_segments:
+                                            audio_logger.warning(f"⚠️  [MEMORY] No valid cropping segments for job {job_id}")
+                                            # Mark cropping as skipped
+                                            await self.job_tracker.track_stage_event(
+                                                job_id, "cropping", StageEvent.COMPLETE,
+                                                metadata={"skipped": True, "reason": "no_valid_segments"}
+                                            )
+                                        else:
+                                            cropping_item = CroppingItem(
+                                                audio_uuid=audio_uuid,
+                                                audio_file_path=audio_chunk["audio_path"],
+                                                segments=cropping_segments,
+                                                job_id=job_id
+                                            )
+
+                                            # Track cropping enqueue
+                                            await self.job_tracker.track_stage_event(job_id, "cropping", StageEvent.ENQUEUE)
+                                            await self.cropping_queue.put((job_id, cropping_item))
+
+                                            audio_logger.info(f"📤 [MEMORY] Enqueued cropping for job {job_id}")
+                                    else:
+                                        audio_logger.warning(f"⚠️  [MEMORY] Cannot enqueue cropping for job {job_id} - missing audio data")
+                                        # Mark cropping as skipped
+                                        await self.job_tracker.track_stage_event(
+                                            job_id, "cropping", StageEvent.COMPLETE,
+                                            metadata={"skipped": True, "reason": "missing_audio_data"}
+                                        )
+                                else:
+                                    audio_logger.warning(f"⚠️  [MEMORY] Cannot find audio_uuid for job {job_id} in audio_uuid_to_job mapping")
+                                    # Mark cropping as skipped
+                                    await self.job_tracker.track_stage_event(
+                                        job_id, "cropping", StageEvent.COMPLETE,
+                                        metadata={"skipped": True, "reason": "audio_uuid_not_found"}
+                                    )
+                            else:
+                                # Cropping disabled
+                                if job_id:
+                                    await self.job_tracker.track_stage_event(
+                                        job_id, "cropping", StageEvent.COMPLETE,
+                                        metadata={"skipped": True, "reason": "cropping_disabled"}
+                                    )
+                                    audio_logger.info(f"⏭️  [MEMORY] Skipping cropping for job {job_id} (disabled)")
+
                             # Check if pipeline job can be completed
                             await self.complete_pipeline_job_if_ready(job_id)
                         else:
@@ -1350,11 +1472,14 @@ class ProcessorManager:
                         # Track dequeue
                         await self.job_tracker.track_stage_event(job_id, "cropping", StageEvent.DEQUEUE)
 
+                        # Generate output path from audio file path
+                        output_audio_path = cropping_item.audio_file_path.replace(".wav", "_cropped.wav")
+
                         # Process cropping using existing cropping logic
                         await _process_audio_cropping_with_relative_timestamps(
-                            cropping_item.original_audio_path,
-                            cropping_item.speech_segments,
-                            cropping_item.output_audio_path,
+                            cropping_item.audio_file_path,
+                            cropping_item.segments,
+                            output_audio_path,
                             cropping_item.audio_uuid,
                             self.repository,
                         )

@@ -4,10 +4,6 @@ import os
 import time
 from typing import Optional
 
-from advanced_omi_backend.audio_processing_types import (
-    CroppingItem,
-    MemoryProcessingItem,
-)
 from advanced_omi_backend.client_manager import get_client_manager
 from advanced_omi_backend.config import (
     get_conversation_stop_settings,
@@ -15,9 +11,7 @@ from advanced_omi_backend.config import (
     load_diarization_settings_from_file,
 )
 from advanced_omi_backend.conversation_manager import get_conversation_manager
-from advanced_omi_backend.database import ConversationsRepository, conversations_col
 from advanced_omi_backend.job_tracker import StageEvent
-from advanced_omi_backend.processors import get_processor_manager
 from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
 from advanced_omi_backend.transcription_providers import (
     BaseTranscriptionProvider,
@@ -115,7 +109,7 @@ class SpeechActivityAnalyzer:
 class TranscriptionManager:
     """Manages transcription using any configured transcription provider."""
 
-    def __init__(self, chunk_repo=None, processor_manager=None, skip_memory_queuing=False):
+    def __init__(self, chunk_repo=None, processor_manager=None):
         self.provider: Optional[BaseTranscriptionProvider] = get_transcription_provider(
             TRANSCRIPTION_PROVIDER
         )
@@ -130,7 +124,6 @@ class TranscriptionManager:
             processor_manager  # Reference to processor manager for completion tracking
         )
         self._client_id = None
-        self._skip_memory_queuing = skip_memory_queuing  # For unified pipeline integration
 
         # Collection state tracking
         self._collecting = False
@@ -218,16 +211,26 @@ class TranscriptionManager:
 
         # Get transcript from provider
         try:
+            # Track transcription processing time
+            transcription_start = time.time()
+
             transcript_result = await self._get_transcript()
             # Process the result uniformly and get conversation_id
             conversation_id = await self._process_transcript_result(transcript_result)
 
-            # Mark transcription as complete
+            # Calculate total transcription time
+            transcription_time = time.time() - transcription_start
+
+            # Mark transcription as complete with speaker recognition metadata
             if job_id:
+                metadata = {
+                    "speaker_recognition_enabled": self.speaker_client is not None,
+                    "processing_time_seconds": round(transcription_time, 2)
+                }
                 await self.processor_manager.job_tracker.track_stage_event(
-                    job_id, "transcription", StageEvent.COMPLETE
+                    job_id, "transcription", StageEvent.COMPLETE, metadata=metadata
                 )
-                logger.info(f"✅ Marked transcription stage complete for job {job_id}")
+                logger.info(f"✅ Marked transcription stage complete for job {job_id} (time: {transcription_time:.2f}s, speaker_recog: {metadata['speaker_recognition_enabled']})")
 
             return conversation_id
         except asyncio.CancelledError:
@@ -428,21 +431,34 @@ class TranscriptionManager:
                         current_client = self._get_current_client()
                         user_id = current_client.user_id if current_client else None
 
-                        # Call new speaker service endpoint
-                        speaker_result = await self.speaker_client.diarize_identify_match(
-                            full_audio_path, transcript_data, user_id=user_id
-                        )
+                        # Track speaker recognition timing
+                        speaker_start_time = time.time()
+                        speaker_segment_count = 0
 
-                        if speaker_result and speaker_result.get("segments"):
-                            final_segments = speaker_result["segments"]
-                            logger.info(
-                                f"🎤 Speaker service returned {len(final_segments)} segments with matched text"
+                        try:
+                            # Call new speaker service endpoint
+                            speaker_result = await self.speaker_client.diarize_identify_match(
+                                full_audio_path, transcript_data, user_id=user_id
                             )
-                            # Debug: Log first few segments to see text content
-                            for i, seg in enumerate(final_segments[:3]):
-                                logger.info(f"🔍 DEBUG: Segment {i}: text='{seg.get('text', 'MISSING')}', speaker={seg.get('speaker', 'UNKNOWN')}")
-                        else:
-                            logger.info("🎤 Speaker service returned no segments")
+                            speaker_elapsed = time.time() - speaker_start_time
+
+                            if speaker_result and speaker_result.get("segments"):
+                                speaker_segment_count = len(speaker_result["segments"])
+                                final_segments = speaker_result["segments"]
+                                logger.info(
+                                    f"✅ [SPEAKER_RECOGNITION] Completed in {speaker_elapsed:.2f}s - "
+                                    f"{speaker_segment_count} segments with speaker labels"
+                                )
+                                # Debug: Log first few segments to see text content
+                                for i, seg in enumerate(final_segments[:3]):
+                                    logger.info(f"🔍 [SPEAKER_RECOGNITION] Segment {i}: text='{seg.get('text', 'MISSING')}', speaker={seg.get('speaker', 'UNKNOWN')}")
+                            else:
+                                logger.warning(f"⚠️  [SPEAKER_RECOGNITION] No segments returned after {speaker_elapsed:.2f}s")
+
+                        except Exception as speaker_error:
+                            speaker_elapsed = time.time() - speaker_start_time
+                            logger.error(f"❌ [SPEAKER_RECOGNITION] Failed after {speaker_elapsed:.2f}s: {speaker_error}")
+                            raise
                     else:
                         logger.warning("No audio path found for speaker diarization")
 
@@ -529,13 +545,8 @@ class TranscriptionManager:
             # Transcript processing completed
             logger.info(f"Transcript completed for {self._current_audio_uuid}")
 
-            # Queue memory processing now that transcription is complete (only for conversations with speech)
-            if conversation_id:
-                await self._queue_memory_processing(conversation_id)
-
-            # Queue audio cropping if we have diarization segments and cropping is enabled
-            if final_segments and os.getenv("AUDIO_CROPPING_ENABLED", "true").lower() == "true":
-                await self._queue_diarization_based_cropping(final_segments)
+            # Memory and cropping queuing handled by unified pipeline in processors.py
+            # Legacy queuing methods removed to prevent duplicate processing
 
             # Update database transcription status
             if self.chunk_repo:
@@ -577,11 +588,6 @@ class TranscriptionManager:
         else:
             # Invalid format
             return {"text": "", "words": [], "segments": []}
-
-    # REMOVED: All segment creation methods have been removed.
-    # Segments are now only created by the speaker service endpoint /v1/diarize-identify-match
-    # which handles diarization, speaker identification, and word-to-speaker matching.
-    # This keeps all the segment creation logic in one place (speaker service).
 
     def _analyze_speech(self, transcript_data: dict):
         """Analyze transcript for meaningful speech to determine if conversation should be created."""
@@ -625,141 +631,6 @@ class TranscriptionManager:
                 }
 
         return {"has_speech": False, "reason": "No meaningful speech content detected"}
-
-    async def _queue_memory_processing(self, conversation_id: str):
-        """Queue memory processing for a speech-detected conversation.
-
-        Args:
-            conversation_id: The conversation ID to process (not audio_uuid)
-        """
-        # Skip if running within unified pipeline (it handles memory queuing)
-        if self._skip_memory_queuing:
-            logger.info(f"⏭️  Skipping internal memory queuing for {conversation_id} (unified pipeline handles it)")
-            return
-
-        try:
-            # Get conversation data from conversations collection
-            conversations_repo = ConversationsRepository(conversations_col)
-            conversation = await conversations_repo.get_conversation(conversation_id)
-            if not conversation:
-                logger.warning(
-                    f"No conversation found for memory processing {conversation_id}"
-                )
-                return
-
-            # Get audio session data to get user info
-            audio_session = await self.chunk_repo.get_chunk(conversation["audio_uuid"])
-            if not audio_session:
-                logger.warning(
-                    f"No audio session found for conversation {conversation_id}"
-                )
-                return
-
-            # Check if we have required data
-            if not all(
-                [conversation_id, conversation.get("user_id"), audio_session.get("user_email")]
-            ):
-                logger.warning(
-                    f"Memory processing skipped - missing required data for conversation {conversation_id}"
-                )
-                logger.warning(f"    - conversation_id: {bool(conversation_id)}")
-                logger.warning(
-                    f"    - user_id: {bool(conversation.get('user_id'))}"
-                )
-                logger.warning(
-                    f"    - user_email: {bool(audio_session.get('user_email'))}"
-                )
-                return
-
-            logger.info(
-                f"💭 Queuing memory processing for conversation {conversation_id} (audio: {conversation['audio_uuid']})"
-            )
-
-            # Import here to avoid circular imports
-
-            # Queue memory processing for conversation
-            processor_manager = get_processor_manager()
-            await processor_manager.queue_memory(
-                MemoryProcessingItem(
-                    conversation_id=conversation_id,
-                    user_id=conversation["user_id"],
-                    user_email=audio_session["user_email"],
-                    client_id=self._client_id,
-                    transcript_version_id=None  # Use active version
-                )
-            )
-
-        except Exception as e:
-            logger.error(f"Error queuing memory processing for conversation {conversation_id}: {e}")
-
-    async def _queue_diarization_based_cropping(self, segments):
-        """Queue audio cropping based on diarization segments."""
-        try:
-            # Import here to avoid circular imports
-
-            # Get current client for user info
-            current_client = self._get_current_client()
-            if not current_client:
-                logger.warning(f"No client state available for cropping {self._current_audio_uuid}")
-                return
-
-            # Get audio file path from database
-            if not self.chunk_repo:
-                logger.warning(
-                    f"No chunk repository available for cropping {self._current_audio_uuid}"
-                )
-                return
-
-            chunk_data = await self.chunk_repo.get_chunk(self._current_audio_uuid)
-            if not chunk_data or "audio_path" not in chunk_data:
-                logger.warning(f"No audio path found for cropping {self._current_audio_uuid}")
-                return
-
-            # Build file paths
-            audio_filename = chunk_data["audio_path"]
-            original_path = f"/app/audio_chunks/{audio_filename}"
-            cropped_path = original_path.replace(".wav", "_cropped.wav")
-
-            # Convert segments to cropping format (start, end tuples)
-            cropping_segments = []
-            for seg in segments:
-                start = seg.get("start", 0.0)
-                end = seg.get("end", 0.0)
-                if end > start:  # Only include valid segments
-                    cropping_segments.append((start, end))
-
-            if not cropping_segments:
-                logger.debug(
-                    f"No valid cropping segments from diarization for {self._current_audio_uuid}"
-                )
-                return
-
-            logger.info(
-                f"✂️ Queuing diarization-based cropping for {self._current_audio_uuid} "
-                f"with {len(cropping_segments)} segments"
-            )
-
-            # Queue cropping with processor manager
-            processor_manager = get_processor_manager()
-
-            # Get job_id if available
-            job_id = None
-            if self._current_audio_uuid and self._current_audio_uuid in processor_manager.audio_uuid_to_job:
-                job_id = processor_manager.audio_uuid_to_job[self._current_audio_uuid]
-
-            await processor_manager.queue_cropping(
-                CroppingItem(
-                    audio_uuid=self._current_audio_uuid,
-                    audio_file_path=original_path,
-                    segments=cropping_segments,
-                    job_id=job_id
-                )
-            )
-
-        except Exception as e:
-            logger.error(
-                f"Error queuing diarization-based cropping for {self._current_audio_uuid}: {e}"
-            )
 
     async def disconnect(self):
         """Cleanly disconnect from transcription service."""

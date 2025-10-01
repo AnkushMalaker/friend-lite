@@ -27,6 +27,7 @@ processing_runs_col = db["processing_runs"]
 users_col = db["users"]
 speakers_col = db["speakers"]
 conversations_col = db["conversations"]
+jobs_col = db["jobs"]
 
 
 def get_database():
@@ -42,6 +43,7 @@ def get_collections():
         "users_col": users_col,
         "speakers_col": speakers_col,
         "conversations_col": conversations_col,
+        "jobs_col": jobs_col,
     }
 
 

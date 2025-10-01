@@ -1,7 +1,7 @@
 """
 Job tracking system for async file processing operations.
 
-Provides in-memory job tracking for file upload and processing operations.
+Provides persistent job tracking with MongoDB backing for file upload and processing operations.
 """
 
 import asyncio
@@ -170,6 +170,7 @@ class ProcessingJob:
         return None
 
     def to_dict(self) -> dict:
+        """Convert to API response format."""
         result = {
             "job_id": self.job_id,
             "job_type": self.job_type.value,
@@ -231,13 +232,130 @@ class ProcessingJob:
 
         return result
 
+    def to_mongo_dict(self) -> dict:
+        """Convert to MongoDB document format."""
+        doc = {
+            "job_id": self.job_id,
+            "user_id": self.user_id,
+            "device_name": self.device_name,
+            "status": self.status.value,
+            "job_type": self.job_type.value,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "error_message": self.error_message,
+            "current_file_index": self.current_file_index,
+        }
+
+        # Add batch-specific fields
+        if self.job_type == JobType.BATCH:
+            doc["files"] = [
+                {
+                    "filename": f.filename,
+                    "duration_seconds": f.duration_seconds,
+                    "size_bytes": f.size_bytes,
+                    "status": f.status.value,
+                    "client_id": f.client_id,
+                    "audio_uuid": f.audio_uuid,
+                    "transcription_status": f.transcription_status,
+                    "memory_status": f.memory_status,
+                    "error_message": f.error_message,
+                    "started_at": f.started_at,
+                    "completed_at": f.completed_at,
+                }
+                for f in self.files
+            ]
+
+        # Add pipeline-specific fields
+        if self.job_type == JobType.PIPELINE:
+            doc.update({
+                "audio_source": self.audio_source.value if self.audio_source else None,
+                "client_id": self.client_id,
+                "audio_uuid": self.audio_uuid,
+                "conversation_id": self.conversation_id,
+                "pipeline_stages": [
+                    {
+                        "stage": stage.stage.value,
+                        "status": stage.status.value,
+                        "enqueue_time": stage.enqueue_time,
+                        "dequeue_time": stage.dequeue_time,
+                        "complete_time": stage.complete_time,
+                        "error_message": stage.error_message,
+                        "metadata": stage.metadata,
+                    }
+                    for stage in self.pipeline_stages
+                ],
+            })
+
+        return doc
+
+    @classmethod
+    def from_mongo_dict(cls, doc: dict) -> "ProcessingJob":
+        """Create ProcessingJob from MongoDB document."""
+        # Parse file processing info for batch jobs
+        files = []
+        if doc.get("job_type") == JobType.BATCH.value:
+            files = [
+                FileProcessingInfo(
+                    filename=f["filename"],
+                    duration_seconds=f.get("duration_seconds"),
+                    size_bytes=f.get("size_bytes"),
+                    status=FileStatus(f["status"]),
+                    client_id=f.get("client_id"),
+                    audio_uuid=f.get("audio_uuid"),
+                    transcription_status=f.get("transcription_status"),
+                    memory_status=f.get("memory_status"),
+                    error_message=f.get("error_message"),
+                    started_at=f.get("started_at"),
+                    completed_at=f.get("completed_at"),
+                )
+                for f in doc.get("files", [])
+            ]
+
+        # Parse pipeline stages for pipeline jobs
+        pipeline_stages = []
+        if doc.get("job_type") == JobType.PIPELINE.value:
+            pipeline_stages = [
+                PipelineStageInfo(
+                    stage=PipelineStage(s["stage"]),
+                    status=FileStatus(s["status"]),
+                    enqueue_time=s.get("enqueue_time"),
+                    dequeue_time=s.get("dequeue_time"),
+                    complete_time=s.get("complete_time"),
+                    error_message=s.get("error_message"),
+                    metadata=s.get("metadata", {}),
+                )
+                for s in doc.get("pipeline_stages", [])
+            ]
+
+        return cls(
+            job_id=doc["job_id"],
+            user_id=doc["user_id"],
+            device_name=doc["device_name"],
+            status=JobStatus(doc["status"]),
+            files=files,
+            created_at=doc["created_at"],
+            started_at=doc.get("started_at"),
+            completed_at=doc.get("completed_at"),
+            error_message=doc.get("error_message"),
+            current_file_index=doc.get("current_file_index", 0),
+            job_type=JobType(doc.get("job_type", JobType.BATCH.value)),
+            audio_source=AudioSource(doc["audio_source"]) if doc.get("audio_source") else None,
+            pipeline_stages=pipeline_stages,
+            client_id=doc.get("client_id"),
+            audio_uuid=doc.get("audio_uuid"),
+            conversation_id=doc.get("conversation_id"),
+        )
+
 
 class JobTracker:
-    """In-memory job tracking system."""
+    """Persistent job tracking system with MongoDB backing and in-memory cache."""
 
-    def __init__(self):
+    def __init__(self, jobs_col=None):
         self.jobs: Dict[str, ProcessingJob] = {}
         self._lock = asyncio.Lock()
+        self.jobs_col = jobs_col  # MongoDB collection for persistence
+        self._recovery_complete = False
 
         # Start cleanup task
         self._cleanup_task = None
@@ -269,9 +387,106 @@ class JobTracker:
                     for job_id in jobs_to_remove:
                         del self.jobs[job_id]
                         logger.info(f"Cleaned up old job: {job_id}")
+                        # Also delete from MongoDB
+                        await self._delete_from_db(job_id)
 
             except Exception as e:
                 logger.error(f"Error in job cleanup task: {e}")
+
+    async def _save_to_db(self, job: ProcessingJob):
+        """Save job to MongoDB."""
+        if self.jobs_col is None:
+            return
+
+        try:
+            doc = job.to_mongo_dict()
+            await self.jobs_col.insert_one(doc)
+            logger.debug(f"💾 Saved job {job.job_id} to MongoDB")
+        except Exception as e:
+            logger.error(f"Failed to save job {job.job_id} to MongoDB: {e}")
+
+    async def _update_in_db(self, job: ProcessingJob):
+        """Update job in MongoDB."""
+        if self.jobs_col is None:
+            return
+
+        try:
+            doc = job.to_mongo_dict()
+            await self.jobs_col.update_one(
+                {"job_id": job.job_id},
+                {"$set": doc}
+            )
+            logger.debug(f"💾 Updated job {job.job_id} in MongoDB")
+        except Exception as e:
+            logger.error(f"Failed to update job {job.job_id} in MongoDB: {e}")
+
+    async def _delete_from_db(self, job_id: str):
+        """Delete job from MongoDB."""
+        if self.jobs_col is None:
+            return
+
+        try:
+            await self.jobs_col.delete_one({"job_id": job_id})
+            logger.debug(f"💾 Deleted job {job_id} from MongoDB")
+        except Exception as e:
+            logger.error(f"Failed to delete job {job_id} from MongoDB: {e}")
+
+    async def _ensure_indexes(self):
+        """Ensure MongoDB indexes exist for optimal query performance."""
+        if self.jobs_col is None:
+            return
+
+        try:
+            # Index on status for filtering active jobs
+            await self.jobs_col.create_index("status")
+
+            # Index on job_id for unique lookups
+            await self.jobs_col.create_index("job_id", unique=True)
+
+            # Index on user_id for user-specific queries
+            await self.jobs_col.create_index("user_id")
+
+            # Index on created_at for cleanup operations
+            await self.jobs_col.create_index("created_at")
+
+            # Compound index for job type and status queries
+            await self.jobs_col.create_index([("job_type", 1), ("status", 1)])
+
+            logger.info("✅ MongoDB indexes ensured for jobs collection")
+        except Exception as e:
+            logger.error(f"Failed to create indexes: {e}")
+
+    async def _recover_active_jobs(self):
+        """Recover active jobs from MongoDB on startup."""
+        if self.jobs_col is None or self._recovery_complete:
+            return
+
+        try:
+            # Ensure indexes exist first
+            await self._ensure_indexes()
+
+            logger.info("🔄 Recovering active jobs from MongoDB...")
+
+            # Find all non-completed jobs
+            cursor = self.jobs_col.find({
+                "status": {"$in": [JobStatus.QUEUED.value, JobStatus.PROCESSING.value]}
+            })
+
+            recovered_count = 0
+            async for doc in cursor:
+                try:
+                    job = ProcessingJob.from_mongo_dict(doc)
+                    self.jobs[job.job_id] = job
+                    recovered_count += 1
+                    logger.info(f"✅ Recovered job {job.job_id} ({job.job_type.value}, status: {job.status.value})")
+                except Exception as e:
+                    logger.error(f"Failed to recover job {doc.get('job_id')}: {e}")
+
+            self._recovery_complete = True
+            logger.info(f"🔄 Recovery complete: {recovered_count} active jobs restored")
+        except Exception as e:
+            logger.error(f"Failed to recover jobs from MongoDB: {e}")
+            self._recovery_complete = True
 
     async def create_job(self, user_id: str, device_name: str, files: List[str]) -> str:
         """Create a new processing job."""
@@ -288,6 +503,9 @@ class JobTracker:
         async with self._lock:
             self.jobs[job_id] = job
 
+        # Persist to MongoDB
+        await self._save_to_db(job)
+
         logger.info(f"Created job {job_id} with {len(files)} files for user {user_id}")
         return job_id
 
@@ -298,6 +516,7 @@ class JobTracker:
 
     async def update_job_status(self, job_id: str, status: JobStatus, error_message: str = None):
         """Update job status."""
+        job = None
         async with self._lock:
             if job_id in self.jobs:
                 job = self.jobs[job_id]
@@ -309,6 +528,10 @@ class JobTracker:
                     job.started_at = datetime.now(timezone.utc)
                 elif status in [JobStatus.COMPLETED, JobStatus.FAILED]:
                     job.completed_at = datetime.now(timezone.utc)
+
+        # Persist to MongoDB (outside lock to avoid blocking)
+        if job:
+            await self._update_in_db(job)
 
     async def update_file_status(
         self,
@@ -322,6 +545,7 @@ class JobTracker:
         error_message: str = None,
     ):
         """Update status of a specific file in the job."""
+        job = None
         async with self._lock:
             if job_id in self.jobs:
                 job = self.jobs[job_id]
@@ -349,8 +573,13 @@ class JobTracker:
                             file_info.completed_at = datetime.now(timezone.utc)
                         break
 
+        # Persist to MongoDB
+        if job:
+            await self._update_in_db(job)
+
     async def set_current_file(self, job_id: str, filename: str):
         """Set the currently processing file."""
+        job = None
         async with self._lock:
             if job_id in self.jobs:
                 job = self.jobs[job_id]
@@ -358,6 +587,10 @@ class JobTracker:
                     if file_info.filename == filename:
                         job.current_file_index = i
                         break
+
+        # Persist to MongoDB
+        if job:
+            await self._update_in_db(job)
 
     async def get_active_jobs(self) -> List[ProcessingJob]:
         """Get all active (non-completed) jobs."""
@@ -402,6 +635,9 @@ class JobTracker:
         async with self._lock:
             self.jobs[job_id] = job
 
+        # Persist to MongoDB
+        await self._save_to_db(job)
+
         logger.info(f"Created pipeline job {job_id} for {audio_source.value} processing")
         return job_id
 
@@ -413,6 +649,7 @@ class JobTracker:
         metadata: Dict = None
     ):
         """Track pipeline stage events (enqueue/dequeue/complete/error)."""
+        job = None
         async with self._lock:
             if job_id not in self.jobs:
                 logger.warning(f"Job {job_id} not found for stage tracking")
@@ -462,8 +699,13 @@ class JobTracker:
 
         logger.info(f"📊 Job {job_id}: {stage} → {event.value}")
 
+        # Persist to MongoDB
+        if job:
+            await self._update_in_db(job)
+
     async def complete_pipeline_job(self, job_id: str, conversation_id: str = None):
         """Mark pipeline job as completed."""
+        job = None
         async with self._lock:
             if job_id in self.jobs:
                 job = self.jobs[job_id]
@@ -471,6 +713,10 @@ class JobTracker:
                 job.completed_at = datetime.now(timezone.utc)
                 if conversation_id:
                     job.conversation_id = conversation_id
+
+        # Persist to MongoDB
+        if job:
+            await self._update_in_db(job)
 
     async def get_pipeline_metrics(self) -> Dict:
         """Get pipeline performance metrics."""
@@ -521,5 +767,7 @@ def get_job_tracker() -> JobTracker:
     """Get the global job tracker instance."""
     global _job_tracker
     if _job_tracker is None:
-        _job_tracker = JobTracker()
+        # Lazy import to avoid circular dependencies
+        from advanced_omi_backend.database import jobs_col
+        _job_tracker = JobTracker(jobs_col=jobs_col)
     return _job_tracker

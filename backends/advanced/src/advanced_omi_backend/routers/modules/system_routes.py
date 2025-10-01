@@ -59,6 +59,12 @@ async def list_processing_jobs(current_user: User = Depends(current_superuser)):
     return await system_controller.list_processing_jobs()
 
 
+@router.get("/jobs/all")
+async def list_all_jobs(current_user: User = Depends(current_superuser)):
+    """List all jobs from MongoDB (including completed/failed). Admin only."""
+    return await system_controller.list_all_jobs()
+
+
 @router.get("/diarization-settings")
 async def get_diarization_settings(current_user: User = Depends(current_superuser)):
     """Get current diarization settings. Admin only."""

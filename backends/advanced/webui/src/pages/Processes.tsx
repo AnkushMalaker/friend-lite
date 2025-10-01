@@ -7,6 +7,7 @@ import SystemHealthCards from '../components/processes/SystemHealthCards'
 import ActiveTasksTable from '../components/processes/ActiveTasksTable'
 import ProcessingHistory from '../components/processes/ProcessingHistory'
 import ClientDetailModal from '../components/processes/ClientDetailModal'
+import AllJobsView from '../components/processes/AllJobsView'
 
 interface ProcessorOverview {
   pipeline_stats: {
@@ -171,6 +172,9 @@ export default function Processes() {
               refreshTrigger={lastUpdated}
             />
           </div>
+
+          {/* All Jobs from MongoDB */}
+          <AllJobsView refreshTrigger={lastUpdated} />
         </div>
       )}
 

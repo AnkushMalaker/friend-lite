@@ -321,6 +321,11 @@ async def lifespan(app: FastAPI):
     )
     await processor_manager.start()
 
+    # Recover active jobs from MongoDB
+    from advanced_omi_backend.job_tracker import get_job_tracker
+    job_tracker = get_job_tracker()
+    await job_tracker._recover_active_jobs()
+    application_logger.info("Job recovery complete")
 
     logger.info("App ready")
     try:

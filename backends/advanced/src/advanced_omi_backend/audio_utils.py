@@ -102,10 +102,8 @@ async def process_audio_chunk(
         logger.info(f"Created audio file and database entry: {wav_filename}")
 
         # Build conditional stages list based on configuration
-        stages = ["audio", "transcription"]
-        if processor_manager.speaker_recognition_enabled:
-            stages.append("speaker_recognition")
-        stages.append("memory")
+        # Note: speaker_recognition is done inline during transcription, not a separate stage
+        stages = ["audio", "transcription", "memory"]
         if processor_manager.cropping_enabled:
             stages.append("cropping")
 

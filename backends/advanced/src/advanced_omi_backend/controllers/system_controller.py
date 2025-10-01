@@ -228,6 +228,37 @@ async def list_processing_jobs():
         return JSONResponse(status_code=500, content={"error": f"Failed to list jobs: {str(e)}"})
 
 
+async def list_all_jobs():
+    """List all jobs from MongoDB (including completed/failed)."""
+    try:
+        job_tracker = get_job_tracker()
+
+        # Get all jobs from MongoDB
+        if job_tracker.jobs_col is None:
+            return {"error": "Jobs collection not available", "jobs": []}
+
+        # Find all jobs, sorted by creation time (most recent first)
+        cursor = job_tracker.jobs_col.find({}).sort("created_at", -1).limit(100)
+
+        jobs = []
+        async for doc in cursor:
+            try:
+                from advanced_omi_backend.job_tracker import ProcessingJob
+                job = ProcessingJob.from_mongo_dict(doc)
+                jobs.append(job.to_dict())
+            except Exception as e:
+                logger.error(f"Failed to deserialize job {doc.get('job_id')}: {e}")
+
+        return {
+            "total_jobs": len(jobs),
+            "jobs": jobs
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing all jobs: {e}")
+        return JSONResponse(status_code=500, content={"error": f"Failed to list all jobs: {str(e)}"})
+
+
 # Legacy function removed - now using unified pipeline via process_files_unified_background()
 
 
