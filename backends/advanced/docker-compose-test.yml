@@ -19,6 +19,7 @@ services:
       - MONGODB_URI=mongodb://mongo-test:27017/test_db
       - QDRANT_BASE_URL=qdrant-test
       - QDRANT_PORT=6333
+      - REDIS_URL=redis://redis-test:6379/0
       - DEBUG_DIR=/app/debug_dir
       # Import API keys from environment
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
@@ -38,13 +39,16 @@ services:
       - OPENMEMORY_MCP_URL=${OPENMEMORY_MCP_URL:-http://host.docker.internal:8765}
       - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
       # Disable speaker recognition in test environment to prevent segment duplication
-      - DISABLE_SPEAKER_RECOGNITION=true
+      - DISABLE_SPEAKER_RECOGNITION=false
+      - SPEAKER_SERVICE_URL=https://localhost:8085
       - CORS_ORIGINS=http://localhost:3001,http://localhost:8001,https://localhost:3001,https://localhost:8001
     depends_on:
       qdrant-test:
         condition: service_started
       mongo-test:
         condition: service_healthy
+      redis-test:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
       interval: 10s
@@ -59,6 +63,7 @@ services:
       dockerfile: Dockerfile
       args:
         - VITE_BACKEND_URL=http://localhost:8001
+        - BACKEND_URL=http://localhost:8001
     ports:
       - "3001:80"  # Avoid conflict with dev on 3000
     depends_on:
@@ -67,6 +72,8 @@ services:
       mongo-test:
         condition: service_healthy
       qdrant-test:
+        condition: service_started
+      redis-test:
         condition: service_started
 
   qdrant-test:
@@ -91,6 +98,19 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"  # Avoid conflict with dev on 6379
+    volumes:
+      - ./data/test_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 # CI Considerations (for future implementation):
 # - GitHub Actions can run these services in isolated containers

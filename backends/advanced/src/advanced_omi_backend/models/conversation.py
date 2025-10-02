@@ -104,6 +104,8 @@ class Conversation(Document):
     @classmethod
     def clean_legacy_data(cls, data: Any) -> Any:
         """Clean up legacy/malformed data before Pydantic validation."""
+        
+        #TODO Unsure that we need this, likely best to migrate database on startup, or mimic the old structure better
         if not isinstance(data, dict):
             return data
 

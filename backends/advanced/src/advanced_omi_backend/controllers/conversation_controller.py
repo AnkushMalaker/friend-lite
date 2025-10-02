@@ -121,8 +121,8 @@ async def get_conversation(conversation_id: str, user: User):
                 "conversation_id": conversation.conversation_id,
                 "audio_uuid": conversation.audio_uuid,
                 "client_id": conversation.client_id,
-                "title": conversation.title or "Conversation",
-                "summary": conversation.summary or "",
+                "title": getattr(conversation, "title", "Conversation"),
+                "summary": getattr(conversation, "summary", ""),
                 "timestamp": conversation.session_start.timestamp() if hasattr(conversation, "session_start") and conversation.session_start else 0,
                 "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
                 "transcript": [seg.model_dump() for seg in conversation.segments] if conversation.segments else [],
@@ -178,8 +178,8 @@ async def get_conversations(user: User):
                 "conversation_id": conv.conversation_id,
                 "audio_uuid": conv.audio_uuid,
                 "client_id": conv.client_id,  # Include client_id as a field instead of grouping key
-                "title": conv.title or "Conversation",
-                "summary": conv.summary or "",
+                "title": getattr(conv, "title", "Conversation"),
+                "summary": getattr(conv, "summary", ""),
                 "timestamp": conv.session_start.timestamp() if hasattr(conv, "session_start") and conv.session_start else 0,
                 "created_at": conv.created_at.isoformat() if conv.created_at else None,
                 # Only include segment count, not full transcript - fetch separately when expanding
@@ -239,8 +239,8 @@ async def get_conversation_by_id(conversation_id: str, user: User):
         formatted_conversation = {
             "conversation_id": conversation_model.conversation_id,
             "audio_uuid": conversation_model.audio_uuid,
-            "title": conversation_model.title or "Conversation",
-            "summary": conversation_model.summary or "",
+            "title": getattr(conversation_model, "title", "Conversation"),
+            "summary": getattr(conversation_model, "summary", ""),
             "timestamp": conversation_model.session_start.timestamp() if hasattr(conversation_model, "session_start") and conversation_model.session_start else 0,
             "created_at": conversation_model.created_at.isoformat() if conversation_model.created_at else None,
             "transcript": conversation_model.transcript if conversation_model.transcript else [],
@@ -774,6 +774,18 @@ async def _do_transcript_processing(
             set_as_active=True
         )
 
+        # Generate title and summary from transcript
+        if transcript_text and len(transcript_text.strip()) > 0:
+            # Simple title: first 50 chars or first sentence
+            first_sentence = transcript_text.split('.')[0].strip()
+            conversation.title = first_sentence[:50] + "..." if len(first_sentence) > 50 else first_sentence
+
+            # Simple summary: first 150 chars
+            conversation.summary = transcript_text[:150] + "..." if len(transcript_text) > 150 else transcript_text
+        else:
+            conversation.title = "Empty Conversation"
+            conversation.summary = "No speech detected"
+
         # Save the updated conversation using Beanie
         await conversation.save()
 
@@ -800,7 +812,6 @@ async def _do_transcript_processing(
         logger.error(f"❌ Transcript processing failed for {conversation_id}: {e}")
         # Re-raise the exception so RQ marks the job as "failed"
         raise
-
 
 async def reprocess_memory(conversation_id: str, transcript_version_id: str, user: User):
     """Reprocess memory extraction for a specific transcript version. Users can only reprocess their own conversations."""
