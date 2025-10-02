@@ -23,7 +23,7 @@ Upload Audio File
       Log    Files dictionary will contain: files -> ${audio_file_path}
       Log    Data dictionary will contain: device_name -> ${device_name}
 
-        ${response}=       POST On Session    api    /api/process-audio-files
+        ${response}=       POST On Session    api    /api/audio/upload
         ...                files=${{ {'files': open('${audio_file_path}', 'rb')} }}
         ...                params=device_name=${device_name}
         ...                expected_status=any
@@ -35,19 +35,21 @@ Upload Audio File
       Log    Upload response text length: ${response.text.__len__()}
       Log    Upload response raw text: ${response.text}
 
-      # Parse and validate upload response
-      TRY
-          ${json_response}=    Set Variable    ${response.json()}
-          Log    Upload response JSON: ${json_response}
-          Log    Upload response JSON keys: ${json_response.keys()}
+      # Parse JSON response to dictionary
+      ${upload_response}=    Set Variable    ${response.json()}
+      Log    Parsed upload response: ${upload_response}
 
-          # Check if upload was successful
-          Should Be Equal As Integers    ${json_response}[successful]    1    Upload failed: ${json_response}
+      # Validate upload was successful
+      Should Be Equal As Strings    ${upload_response['summary']['enqueued']}    1    Upload failed: No files enqueued
+      Should Be Equal As Strings    ${upload_response['files'][0]['status']}    enqueued    Upload failed: ${response.text}
 
-      EXCEPT
-          Log    Response is not valid JSON or empty
-          Fail    Upload response is not valid JSON: ${response.text}
-      END
+      # Extract important values
+      ${audio_uuid}=    Set Variable    ${upload_response['files'][0]['audio_uuid']}
+      ${job_id}=        Set Variable    ${upload_response['files'][0]['job_id']}
+      Log    Audio UUID: ${audio_uuid}
+      Log    Job ID: ${job_id}
+
+  
 
       # Wait for conversation to be created and transcribed
       Log    Waiting for transcription to complete...
@@ -83,9 +85,9 @@ Conversation Should Be Complete
       ${count}=    Get Length    ${conversations}
       Should Be True    ${count} > 0    No conversations found for device: ${device_name}
 
-      # Check if first conversation has transcript
+      # Check if first conversation has transcript (use segment_count from list endpoint)
       ${conversation}=    Set Variable    ${conversations}[0]
-      Should Not Be Empty    ${conversation}[transcript]    Transcript not ready yet
+      Should Be True    ${conversation}[segment_count] > 0    Transcript not ready yet (segment_count: ${conversation}[segment_count])
 
       # Optional: Check if it has memories (if memory processing is expected)
       Log    Conversation ready: ${conversation}[conversation_id]

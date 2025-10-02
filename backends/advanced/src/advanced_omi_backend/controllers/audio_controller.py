@@ -108,30 +108,23 @@ async def upload_and_process_audio_files(
                     })
                     continue
 
-                # Save audio file to disk
+                # Generate audio UUID
                 audio_uuid = str(uuid.uuid4())
-                audio_filename = f"{audio_uuid}.wav"
-                audio_path = CHUNK_DIR / audio_filename
-
-                # Write processed audio to file
-                with wave.open(str(audio_path), "wb") as wav_out:
-                    wav_out.setnchannels(channels)
-                    wav_out.setsampwidth(sample_width)
-                    wav_out.setframerate(sample_rate)
-                    wav_out.writeframes(audio_data)
 
                 audio_logger.info(
-                    f"💾 Saved audio file: {audio_filename} "
-                    f"({duration:.1f}s, {sample_rate}Hz, {channels}ch)"
+                    f"📊 Audio parameters: {duration:.1f}s, {sample_rate}Hz, {channels}ch, {sample_width} bytes/sample"
                 )
 
-                # Enqueue RQ job for processing
+                # Enqueue RQ job for processing (no need to save to disk first - RQ job will handle it)
                 job = enqueue_audio_processing(
                     client_id=client_id,
                     user_id=user.user_id,
                     user_email=user.email,
+                    audio_data=audio_data,
+                    audio_rate=sample_rate,
+                    audio_width=sample_width,
+                    audio_channels=channels,
                     audio_uuid=audio_uuid,
-                    audio_file_path=str(audio_path),
                     timestamp=int(time.time() * 1000),
                 )
 

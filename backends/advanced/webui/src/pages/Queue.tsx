@@ -22,7 +22,10 @@ interface QueueJob {
   user_id: string;
   status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'retrying';
   priority: 'low' | 'normal' | 'high';
-  data: any;
+  data: {
+    description?: string;
+    [key: string]: any;
+  };
   result?: any;
   error_message?: string;
   created_at: string;
@@ -328,6 +331,19 @@ const Queue: React.FC = () => {
     return new Date(dateString).toLocaleString();
   };
 
+  const formatDuration = (job: QueueJob) => {
+    if (!job.started_at) return '-';
+
+    const start = new Date(job.started_at).getTime();
+    const end = job.completed_at ? new Date(job.completed_at).getTime() : Date.now();
+    const durationMs = end - start;
+
+    if (durationMs < 1000) return `${durationMs}ms`;
+    if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
+    if (durationMs < 3600000) return `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`;
+    return `${Math.floor(durationMs / 3600000)}h ${Math.floor((durationMs % 3600000) / 60000)}m`;
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -514,41 +530,53 @@ const Queue: React.FC = () => {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
+          <table className="w-full table-fixed divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Result</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                <th className="w-36 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                <th className="w-48 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
+                <th className="w-40 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                <th className="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="w-24 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                <th className="flex-1 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                <th className="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Result</th>
+                <th className="w-28 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {jobs.map((job) => (
                 <tr key={job.job_id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {formatDate(job.created_at)}
+                  <td className="w-36 px-4 py-3 text-sm text-gray-500">
+                    <div className="truncate">{new Date(job.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">
-                      #{job.job_id}
+                  <td className="w-48 px-4 py-3">
+                    <div className="text-xs font-mono text-gray-900 truncate" title={job.job_id}>
+                      {job.job_id}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{getJobTypeShort(job.job_type)}</div>
+                  <td className="w-40 px-4 py-3">
+                    <div className="text-sm text-gray-900 truncate">{getJobTypeShort(job.job_type)}</div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
+                  <td className="w-32 px-4 py-3">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
                       {getStatusIcon(job.status)}
                       <span className="ml-1">{job.status.charAt(0).toUpperCase() + job.status.slice(1)}</span>
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="w-24 px-4 py-3">
+                    <div className="text-sm text-gray-700 font-mono">
+                      {formatDuration(job)}
+                    </div>
+                  </td>
+                  <td className="flex-1 px-4 py-3">
+                    <div className="text-sm text-gray-900 truncate" title={job.data?.description || job.progress_message || ''}>
+                      {job.data?.description || job.progress_message || '-'}
+                    </div>
+                  </td>
+                  <td className="w-32 px-4 py-3">
                     {getJobResult(job)}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                  <td className="w-28 px-4 py-3 text-sm font-medium space-x-2">
                     {job.status === 'failed' && (
                       <button
                         onClick={() => retryJob(job.job_id)}
@@ -607,7 +635,7 @@ const Queue: React.FC = () => {
       {/* Job Details Modal */}
       {selectedJob && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-6xl shadow-lg rounded-md bg-white">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">Job Details</h3>
               <button onClick={() => setSelectedJob(null)} className="text-gray-400 hover:text-gray-600">

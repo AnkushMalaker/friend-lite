@@ -119,11 +119,14 @@ def process_audio_job(
                 # Get repository
                 collections = get_collections()
                 from advanced_omi_backend.database import AudioChunksRepository
+                from advanced_omi_backend.config import CHUNK_DIR
                 repository = AudioChunksRepository(collections["chunks_col"])
 
-                # Get chunk directory from env
-                import os
-                chunk_dir = Path(os.getenv("CHUNK_DIR", "/data/audio_chunks"))
+                # Use CHUNK_DIR from config
+                chunk_dir = CHUNK_DIR
+
+                # Ensure directory exists
+                chunk_dir.mkdir(parents=True, exist_ok=True)
 
                 # Create audio UUID if not provided
                 final_audio_uuid = audio_uuid or uuid.uuid4().hex
@@ -164,14 +167,57 @@ def process_audio_job(
 
                 logger.info(f"✅ RQ: Completed audio processing for client {client_id}, file: {wav_filename}")
 
+                # Enqueue transcript processing for this audio file
+                # First ensure Beanie is initialized for this worker process
+                await _ensure_beanie_initialized()
+
+                # Create a conversation entry
+                from advanced_omi_backend.models.conversation import create_conversation
+                import uuid as uuid_lib
+
+                conversation_id = str(uuid_lib.uuid4())
+                conversation = create_conversation(
+                    conversation_id=conversation_id,
+                    audio_uuid=final_audio_uuid,
+                    user_id=user_id,
+                    client_id=client_id
+                )
+                # Set placeholder title/summary
+                conversation.title = "Processing..."
+                conversation.summary = "Transcript processing in progress"
+                await conversation.insert()
+
+                logger.info(f"📝 RQ: Created conversation {conversation_id} for audio {final_audio_uuid}")
+
+                # Now enqueue transcript processing (runs outside async context)
+                version_id = str(uuid_lib.uuid4())
+
                 return {
                     "success": True,
                     "audio_uuid": final_audio_uuid,
+                    "conversation_id": conversation_id,
                     "wav_filename": wav_filename,
-                    "client_id": client_id
+                    "client_id": client_id,
+                    "version_id": version_id,
+                    "file_path": str(file_path)
                 }
 
             result = loop.run_until_complete(process())
+
+            # Enqueue transcript processing job (outside async context)
+            if result.get("success") and result.get("conversation_id"):
+                transcript_job = enqueue_transcript_processing(
+                    conversation_id=result["conversation_id"],
+                    audio_uuid=result["audio_uuid"],
+                    audio_path=result["file_path"],
+                    version_id=result["version_id"],
+                    user_id=user_id,
+                    priority=JobPriority.NORMAL,
+                    trigger="upload"
+                )
+                result["transcript_job_id"] = transcript_job.id
+                logger.info(f"📥 RQ: Enqueued transcript job {transcript_job.id} for conversation {result['conversation_id']}")
+
             return result
 
         finally:
@@ -1049,7 +1095,7 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
                         # Determine job type from function name or job ID
                         job_type = "unknown"
                         if "transcript" in job.id:
-                            job_type = "reprocess_transcript"
+                            job_type = "transcribe"
                         elif "memory" in job.id:
                             job_type = "reprocess_memory"
                         elif "process_transcript_job" in (job.func_name or ""):
