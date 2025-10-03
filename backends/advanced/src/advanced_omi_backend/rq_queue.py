@@ -59,7 +59,7 @@ async def _ensure_beanie_initialized():
         from motor.motor_asyncio import AsyncIOMotorClient
         from beanie import init_beanie
         from advanced_omi_backend.models.conversation import Conversation
-        from advanced_omi_backend.models.audio_session import AudioSession
+        from advanced_omi_backend.models.audio_file import AudioFile
         from advanced_omi_backend.models.user import User
 
         # Get MongoDB URI from environment
@@ -72,7 +72,7 @@ async def _ensure_beanie_initialized():
         # Initialize Beanie
         await init_beanie(
             database=database,
-            document_models=[User, Conversation, AudioSession],
+            document_models=[User, Conversation, AudioFile],
         )
 
         _beanie_initialized = True
@@ -245,31 +245,127 @@ def process_transcript_job(
     This function is executed by RQ workers and can survive server restarts.
     """
     import asyncio
-    from advanced_omi_backend.controllers.conversation_controller import _do_transcript_processing
+    import time
+    from pathlib import Path
 
     try:
         logger.info(f"🔄 RQ: Starting transcript processing for conversation {conversation_id} (trigger: {trigger})")
 
-        # Run the async function in a new event loop
-        # RQ workers run in separate processes, so we need our own event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         try:
-            # Initialize Beanie in this worker process
-            loop.run_until_complete(_ensure_beanie_initialized())
+            async def process():
+                # Initialize Beanie in this worker process
+                await _ensure_beanie_initialized()
 
-            result = loop.run_until_complete(
-                _do_transcript_processing(
-                    conversation_id=conversation_id,
-                    audio_uuid=audio_uuid,
-                    audio_path=audio_path,
-                    version_id=version_id,
-                    user_id=user_id,
-                    trigger=trigger
+                # Import here to avoid circular dependencies
+                from advanced_omi_backend.services.transcription import get_transcription_provider
+                from advanced_omi_backend.models.conversation import Conversation
+
+                start_time = time.time()
+
+                # Get the transcription provider
+                provider = get_transcription_provider(mode="batch")
+                if not provider:
+                    raise ValueError("No transcription provider available")
+
+                provider_name = provider.name
+                logger.info(f"Using transcription provider: {provider_name}")
+
+                # Read the audio file
+                audio_file_path = Path(audio_path)
+                if not audio_file_path.exists():
+                    raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+                # Load audio data
+                with open(audio_file_path, 'rb') as f:
+                    audio_data = f.read()
+
+                # Transcribe the audio (assume 16kHz sample rate)
+                transcription_result = await provider.transcribe(
+                    audio_data=audio_data,
+                    sample_rate=16000,
+                    diarize=True
                 )
-            )
 
+                # Extract results
+                transcript_text = transcription_result.get("text", "")
+                segments = transcription_result.get("segments", [])
+                words = transcription_result.get("words", [])
+
+                # Calculate processing time
+                processing_time = time.time() - start_time
+
+                # Get the conversation using Beanie
+                conversation = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+                if not conversation:
+                    logger.error(f"Conversation {conversation_id} not found")
+                    return {"success": False, "error": "Conversation not found"}
+
+                # Convert segments to SpeakerSegment objects
+                speaker_segments = [
+                    Conversation.SpeakerSegment(
+                        start=seg.get("start", 0),
+                        end=seg.get("end", 0),
+                        text=seg.get("text", ""),
+                        speaker=seg.get("speaker", "unknown"),
+                        confidence=seg.get("confidence")
+                    )
+                    for seg in segments
+                ]
+
+                # Add new transcript version
+                provider_normalized = provider_name.lower() if provider_name else "unknown"
+
+                conversation.add_transcript_version(
+                    version_id=version_id,
+                    transcript=transcript_text,
+                    segments=speaker_segments,
+                    provider=Conversation.TranscriptProvider(provider_normalized),
+                    model=getattr(provider, 'model', 'unknown'),
+                    processing_time_seconds=processing_time,
+                    metadata={
+                        "trigger": trigger,
+                        "audio_file_size": len(audio_data),
+                        "segment_count": len(segments),
+                        "word_count": len(words)
+                    },
+                    set_as_active=True
+                )
+
+                # Generate title and summary from transcript
+                if transcript_text and len(transcript_text.strip()) > 0:
+                    first_sentence = transcript_text.split('.')[0].strip()
+                    conversation.title = first_sentence[:50] + "..." if len(first_sentence) > 50 else first_sentence
+                    conversation.summary = transcript_text[:150] + "..." if len(transcript_text) > 150 else transcript_text
+                else:
+                    conversation.title = "Empty Conversation"
+                    conversation.summary = "No speech detected"
+
+                # Save the updated conversation
+                await conversation.save()
+
+                logger.info(f"✅ Transcript processing completed for {conversation_id} in {processing_time:.2f}s")
+
+                return {
+                    "success": True,
+                    "conversation_id": conversation_id,
+                    "version_id": version_id,
+                    "transcript": transcript_text,
+                    "segments": [seg.model_dump() for seg in speaker_segments],
+                    "provider": provider_name,
+                    "processing_time_seconds": processing_time,
+                    "trigger": trigger,
+                    "metadata": {
+                        "trigger": trigger,
+                        "audio_file_size": len(audio_data),
+                        "segment_count": len(speaker_segments),
+                        "word_count": len(words)
+                    }
+                }
+
+            result = loop.run_until_complete(process())
             logger.info(f"✅ RQ: Completed transcript processing for conversation {conversation_id}")
             return result
 
@@ -281,25 +377,29 @@ def process_transcript_job(
         raise
 
 
-def process_final_transcription_job(
-    conversation_id: str,
+def listen_for_speech_job(
     audio_uuid: str,
     audio_path: str,
-    user_id: str,
     client_id: str,
+    user_id: str,
     user_email: str
 ) -> Dict[str, Any]:
     """
-    RQ job function for final high-quality transcription after streaming completes.
+    RQ job function for initial audio transcription and speech detection.
 
-    This adds a new transcript version to an EXISTING conversation and triggers memory processing.
+    This job:
+    1. Transcribes the audio file
+    2. Detects if speech is present
+    3. Creates a conversation ONLY if speech is detected
+    4. Enqueues memory processing if conversation created
+
+    Used by: Audio file uploads and WebSocket audio streams
 
     Args:
-        conversation_id: Existing conversation ID (created by streaming transcription)
         audio_uuid: Audio UUID
         audio_path: Path to audio file
-        user_id: User ID
         client_id: Client ID
+        user_id: User ID
         user_email: User email
 
     Returns:
@@ -307,135 +407,12 @@ def process_final_transcription_job(
     """
     import asyncio
     import uuid
-    from datetime import UTC, datetime
-    from pathlib import Path
     import soundfile as sf
-
-    try:
-        logger.info(f"🔄 RQ: Starting final transcription for conversation {conversation_id}")
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        try:
-            async def process():
-                # Initialize Beanie in this worker process
-                await _ensure_beanie_initialized()
-
-                # Import here to avoid circular dependencies
-                from advanced_omi_backend.transcription_providers import get_transcription_provider
-                from advanced_omi_backend.models.conversation import Conversation
-                from advanced_omi_backend.config import CHUNK_DIR
-
-                # Get conversation (should already exist from streaming transcription)
-                conversation = await Conversation.find_one(Conversation.conversation_id == conversation_id)
-                if not conversation:
-                    raise RuntimeError(f"Conversation {conversation_id} not found - streaming transcription should have created it")
-
-                # Read audio file
-                audio_file_path = Path(CHUNK_DIR) / audio_path
-                if not audio_file_path.exists():
-                    raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
-
-                logger.info(f"📖 Reading audio file: {audio_file_path}")
-                audio_data, sample_rate = sf.read(str(audio_file_path), dtype='int16')
-                audio_bytes = audio_data.tobytes()
-
-                # Get transcription provider
-                provider = get_transcription_provider()
-                if not provider:
-                    raise RuntimeError("No transcription provider available")
-
-                # Transcribe with high quality settings
-                logger.info(f"🎤 Transcribing audio with {provider.name} (final quality)")
-                transcript_result = await provider.transcribe(audio_bytes, sample_rate, diarize=True)
-
-                # Normalize transcript
-                transcript_text = ""
-                segments = []
-
-                if hasattr(transcript_result, "text"):
-                    transcript_text = transcript_result.text
-                    # TODO: Extract segments from transcript_result
-                elif isinstance(transcript_result, dict):
-                    transcript_text = transcript_result.get("text", "")
-                    segments = transcript_result.get("segments", [])
-                elif isinstance(transcript_result, str):
-                    transcript_text = transcript_result
-
-                # Add new transcript version to conversation
-                version_id = str(uuid.uuid4())
-                logger.info(f"📝 Adding final transcript version {version_id} to conversation {conversation_id}")
-
-                # Convert segments to SpeakerSegment models
-                segment_models = [Conversation.SpeakerSegment(**seg) for seg in segments] if segments else []
-
-                conversation.add_transcript_version(
-                    version_id=version_id,
-                    transcript=transcript_text,
-                    segments=segment_models,
-                    provider=provider.name,
-                    model=getattr(provider, "model_name", provider.name),
-                    metadata={"trigger": "final_transcription", "audio_uuid": audio_uuid}
-                )
-                await conversation.save()
-
-                logger.info(f"✅ Added final transcript version {version_id} to conversation {conversation_id}")
-
-                # Enqueue memory processing on the final transcript
-                logger.info(f"📤 Enqueuing memory processing for conversation {conversation_id}")
-                enqueue_memory_processing(
-                    client_id=client_id,
-                    user_id=user_id,
-                    user_email=user_email,
-                    conversation_id=conversation_id
-                )
-
-                return {
-                    "status": "success",
-                    "conversation_id": conversation_id,
-                    "version_id": version_id,
-                    "transcript_length": len(transcript_text)
-                }
-
-            result = loop.run_until_complete(process())
-            logger.info(f"✅ RQ: Completed final transcription for conversation {conversation_id}")
-            return result
-
-        finally:
-            loop.close()
-
-    except Exception as e:
-        logger.error(f"❌ RQ: Final transcription failed for conversation {conversation_id}: {e}", exc_info=True)
-        raise
-
-
-def process_initial_transcription_job(
-    audio_uuid: str,
-    audio_path: str,
-    client_id: str,
-    user_id: str,
-    user_email: str
-) -> Dict[str, Any]:
-    """
-    RQ job function for initial transcription of WebSocket audio.
-
-    This handles the complete transcription flow:
-    1. Load and transcribe the audio file
-    2. Detect speech in transcript
-    3. Create conversation if speech detected
-    4. Add transcript as initial version
-    5. Queue memory processing
-
-    This function is executed by RQ workers and can survive server restarts.
-    """
-    import asyncio
-    import uuid
     from datetime import UTC, datetime
     from pathlib import Path
 
     try:
-        logger.info(f"🔄 RQ: Starting initial transcription for audio {audio_uuid}")
+        logger.info(f"🔄 RQ: Listening for speech in audio {audio_uuid}")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -446,19 +423,16 @@ def process_initial_transcription_job(
                 await _ensure_beanie_initialized()
 
                 # Import here to avoid circular dependencies
-                from advanced_omi_backend.transcription_providers import get_transcription_provider
-                from advanced_omi_backend.repositories.audio_chunks_repository import AudioChunksRepository
+                from advanced_omi_backend.services.transcription import get_transcription_provider
                 from advanced_omi_backend.models.conversation import Conversation
+                from advanced_omi_backend.models.audio_file import AudioFile
                 from advanced_omi_backend.config import CHUNK_DIR
-                import soundfile as sf
 
-                # Get audio file path
+                # Read audio file
                 audio_file_path = Path(CHUNK_DIR) / audio_path
-
                 if not audio_file_path.exists():
                     raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
 
-                # Read audio file
                 logger.info(f"📖 Reading audio file: {audio_file_path}")
                 audio_data, sample_rate = sf.read(str(audio_file_path), dtype='int16')
                 audio_bytes = audio_data.tobytes()
@@ -475,52 +449,69 @@ def process_initial_transcription_job(
                 # Normalize transcript
                 transcript_text = ""
                 segments = []
-                words = []
 
                 if hasattr(transcript_result, "text"):
                     transcript_text = transcript_result.text
-                    words = getattr(transcript_result, "words", [])
+                    segments = getattr(transcript_result, "segments", [])
                 elif isinstance(transcript_result, dict):
                     transcript_text = transcript_result.get("text", "")
-                    words = transcript_result.get("words", [])
+                    segments = transcript_result.get("segments", [])
                 elif isinstance(transcript_result, str):
                     transcript_text = transcript_result
+
+                version_id = str(uuid.uuid4())
 
                 # Analyze speech
                 has_speech = bool(transcript_text and transcript_text.strip() and len(transcript_text.strip()) > 10)
 
-                # Update audio_chunks with speech detection
-                repo = AudioChunksRepository()
-                await repo.update_speech_detection(
-                    audio_uuid,
-                    has_speech=has_speech,
-                    reason=f"Transcribed {len(transcript_text)} chars" if has_speech else "Transcript too short"
+                logger.info(
+                    f"📊 Speech analysis for {audio_uuid}: "
+                    f"text_length={len(transcript_text)}, "
+                    f"segments={len(segments)}, "
+                    f"has_speech={has_speech}, "
+                    f"preview={transcript_text[:100] if transcript_text else 'EMPTY'}"
                 )
 
-                # If no speech, mark as EMPTY and return
+                # Update AudioFile with speech detection
+                audio_file = await AudioFile.find_one(AudioFile.audio_uuid == audio_uuid)
+                if audio_file:
+                    audio_file.has_speech = has_speech
+                    audio_file.speech_analysis = {
+                        "transcript_length": len(transcript_text),
+                        "segment_count": len(segments),
+                        "reason": f"Transcribed {len(transcript_text)} chars" if has_speech else "Transcript too short"
+                    }
+                    await audio_file.save()
+
+                # If no speech, return early
                 if not has_speech:
                     logger.info(f"⏭️ No speech detected in {audio_uuid}, skipping conversation creation")
-                    await repo.update_transcription_status(audio_uuid, "EMPTY", provider=provider.name)
                     return {"status": "no_speech", "audio_uuid": audio_uuid}
 
                 # Create conversation
                 logger.info(f"✅ Speech detected, creating conversation for {audio_uuid}")
-                conversation_id = str(uuid.uuid4())
-                version_id = str(uuid.uuid4())
+                new_conversation_id = str(uuid.uuid4())
 
-                # Get audio session info
-                audio_session = await repo.get_chunk(audio_uuid)
-                if not audio_session:
-                    raise RuntimeError(f"Audio session not found for {audio_uuid}")
+                # Get timestamp from AudioFile
+                timestamp_value = audio_file.timestamp if audio_file else 0
+                if timestamp_value == 0:
+                    logger.warning(f"Audio file {audio_uuid} has no timestamp, using current time")
+                    session_start_time = datetime.now(UTC)
+                else:
+                    session_start_time = datetime.fromtimestamp(timestamp_value / 1000, tz=UTC)
+
+                # Generate title and summary from transcript
+                title = transcript_text[:50] + "..." if len(transcript_text) > 50 else transcript_text or "Conversation"
+                summary = transcript_text[:150] + "..." if len(transcript_text) > 150 else transcript_text or "No transcript available"
 
                 # Create conversation document
                 conversation = Conversation(
-                    conversation_id=conversation_id,
+                    conversation_id=new_conversation_id,
                     audio_uuid=audio_uuid,
-                    user_id=audio_session["user_id"],
+                    user_id=user_id,
                     client_id=client_id,
-                    title="Processing...",
-                    summary="Processing...",
+                    title=title,
+                    summary=summary,
                     transcript_versions=[
                         Conversation.TranscriptVersion(
                             version_id=version_id,
@@ -538,7 +529,7 @@ def process_initial_transcription_job(
                     active_memory_version=None,
                     created_at=datetime.now(UTC),
                     updated_at=datetime.now(UTC),
-                    session_start=datetime.fromtimestamp(audio_session.get("timestamp", 0) / 1000, tz=UTC),
+                    session_start=session_start_time,
                     session_end=datetime.now(UTC),
                     duration_seconds=0.0,
                     speech_start_time=0.0,
@@ -546,38 +537,43 @@ def process_initial_transcription_job(
                     speaker_names={},
                     action_items=[]
                 )
+
+                # Update legacy fields
+                conversation._update_legacy_transcript_fields()
                 await conversation.insert()
 
-                # Mark audio_chunks as having conversation
-                await repo.mark_conversation_created(audio_uuid, conversation_id)
+                # Link conversation to AudioFile
+                if audio_file:
+                    audio_file.conversation_id = new_conversation_id
+                    await audio_file.save()
 
-                logger.info(f"✅ Created conversation {conversation_id} for audio {audio_uuid}")
+                logger.info(f"✅ Created conversation {new_conversation_id} for audio {audio_uuid}")
 
                 # Enqueue memory processing
-                logger.info(f"📤 Enqueuing memory processing for conversation {conversation_id}")
+                logger.info(f"📤 Enqueuing memory processing for conversation {new_conversation_id}")
                 enqueue_memory_processing(
                     client_id=client_id,
                     user_id=user_id,
                     user_email=user_email,
-                    conversation_id=conversation_id
+                    conversation_id=new_conversation_id
                 )
 
                 return {
                     "status": "success",
                     "audio_uuid": audio_uuid,
-                    "conversation_id": conversation_id,
+                    "conversation_id": new_conversation_id,
                     "has_speech": True
                 }
 
             result = loop.run_until_complete(process())
-            logger.info(f"✅ RQ: Completed initial transcription for audio {audio_uuid}")
+            logger.info(f"✅ RQ: Completed speech detection for audio {audio_uuid}")
             return result
 
         finally:
             loop.close()
 
     except Exception as e:
-        logger.error(f"❌ RQ: Initial transcription failed for audio {audio_uuid}: {e}", exc_info=True)
+        logger.error(f"❌ RQ: Speech detection failed for audio {audio_uuid}: {e}", exc_info=True)
         raise
 
 
@@ -620,15 +616,24 @@ def process_memory_job(
 
                 # Extract conversation text from transcript segments
                 full_conversation = ""
-                transcript = conversation_model.transcript
-                if transcript:
+                segments = conversation_model.segments
+                if segments:
                     dialogue_lines = []
-                    for segment in transcript:
-                        text = segment.get("text", "").strip()
-                        if text:
+                    for segment in segments:
+                        # Handle both dict and object segments
+                        if isinstance(segment, dict):
+                            text = segment.get("text", "").strip()
                             speaker = segment.get("speaker", "Unknown")
+                        else:
+                            text = getattr(segment, "text", "").strip()
+                            speaker = getattr(segment, "speaker", "Unknown")
+
+                        if text:
                             dialogue_lines.append(f"{speaker}: {text}")
                     full_conversation = "\n".join(dialogue_lines)
+                elif conversation_model.transcript and isinstance(conversation_model.transcript, str):
+                    # Fallback: if segments are empty but transcript text exists
+                    full_conversation = conversation_model.transcript
 
                 if len(full_conversation) < 10:
                     logger.warning(f"Conversation too short for memory processing: {conversation_id}")
@@ -638,9 +643,15 @@ def process_memory_job(
                 user = await get_user_by_id(user_id)
                 if user and user.primary_speakers:
                     transcript_speakers = set()
-                    for segment in conversation_model.transcript:
-                        if 'identified_as' in segment and segment['identified_as'] and segment['identified_as'] != 'Unknown':
-                            transcript_speakers.add(segment['identified_as'].strip().lower())
+                    for segment in conversation_model.segments:
+                        # Handle both dict and object segments
+                        if isinstance(segment, dict):
+                            identified_as = segment.get('identified_as')
+                        else:
+                            identified_as = getattr(segment, 'identified_as', None)
+
+                        if identified_as and identified_as != 'Unknown':
+                            transcript_speakers.add(identified_as.strip().lower())
 
                     primary_speaker_names = {ps['name'].strip().lower() for ps in user.primary_speakers}
 
@@ -828,6 +839,9 @@ def enqueue_transcript_processing(
         JobPriority.LOW: 180      # 3 minutes
     }
 
+    # Use clearer job type names
+    job_type = "re-transcribe" if trigger == "reprocess" else trigger
+
     job = transcription_queue.enqueue(
         process_transcript_job,
         conversation_id,
@@ -838,63 +852,11 @@ def enqueue_transcript_processing(
         trigger,
         job_timeout=timeout_mapping.get(priority, 300),
         result_ttl=JOB_RESULT_TTL,  # Keep completed jobs for 1 hour
-        job_id=f"transcript_{conversation_id[:8]}_{trigger}",
-        description=f"Process transcript for conversation {conversation_id[:8]} ({trigger})"
+        job_id=f"{job_type}_{conversation_id[:8]}",
+        description=f"{job_type.capitalize()} conversation {conversation_id[:8]}"
     )
 
     logger.info(f"📥 RQ: Enqueued transcript job {job.id} for conversation {conversation_id} (trigger: {trigger})")
-    return job
-
-
-def enqueue_final_transcription(
-    conversation_id: str,
-    audio_uuid: str,
-    audio_path: str,
-    user_id: str,
-    client_id: str,
-    user_email: str,
-    priority: JobPriority = JobPriority.NORMAL
-) -> Job:
-    """
-    Enqueue final high-quality transcription job after streaming transcription completes.
-
-    This job adds a new high-quality transcript version to an EXISTING conversation
-    (created by streaming transcription) and triggers memory processing.
-
-    Args:
-        conversation_id: Existing conversation ID (created by streaming transcription)
-        audio_uuid: Audio UUID
-        audio_path: Path to saved audio file
-        user_id: User ID
-        client_id: Client ID
-        user_email: User email
-        priority: Job priority
-
-    Returns:
-        RQ Job object for tracking.
-    """
-    timeout_mapping = {
-        JobPriority.URGENT: 600,  # 10 minutes
-        JobPriority.HIGH: 480,    # 8 minutes
-        JobPriority.NORMAL: 300,  # 5 minutes
-        JobPriority.LOW: 180      # 3 minutes
-    }
-
-    job = transcription_queue.enqueue(
-        process_final_transcription_job,
-        conversation_id,
-        audio_uuid,
-        audio_path,
-        user_id,
-        client_id,
-        user_email,
-        job_timeout=timeout_mapping.get(priority, 300),
-        result_ttl=JOB_RESULT_TTL,
-        job_id=f"final_transcript_{conversation_id[:12]}",
-        description=f"Final transcription for conversation {conversation_id[:12]}"
-    )
-
-    logger.info(f"📥 RQ: Enqueued final transcription job {job.id} for conversation {conversation_id}")
     return job
 
 
@@ -907,15 +869,21 @@ def enqueue_initial_transcription(
     priority: JobPriority = JobPriority.NORMAL
 ) -> Job:
     """
-    Enqueue initial transcription job for WebSocket audio streaming.
+    Enqueue job to listen for speech and create conversation if detected.
 
-    This job:
-    1. Transcribes the saved audio file
-    2. Creates conversation if speech is detected
-    3. Adds transcript as initial version
-    4. Queues memory processing if conversation created
+    This job transcribes audio, detects speech, and creates a conversation
+    ONLY if speech is detected. Used for initial audio uploads and streams.
 
-    Returns RQ Job object for tracking.
+    Args:
+        audio_uuid: Audio UUID
+        audio_path: Path to saved audio file
+        client_id: Client ID
+        user_id: User ID
+        user_email: User email
+        priority: Job priority
+
+    Returns:
+        RQ Job object for tracking
     """
     timeout_mapping = {
         JobPriority.URGENT: 600,  # 10 minutes
@@ -925,7 +893,7 @@ def enqueue_initial_transcription(
     }
 
     job = transcription_queue.enqueue(
-        process_initial_transcription_job,
+        listen_for_speech_job,
         audio_uuid,
         audio_path,
         client_id,
@@ -933,11 +901,11 @@ def enqueue_initial_transcription(
         user_email,
         job_timeout=timeout_mapping.get(priority, 300),
         result_ttl=JOB_RESULT_TTL,
-        job_id=f"initial_transcript_{audio_uuid[:12]}",
-        description=f"Initial transcription for audio {audio_uuid[:12]}"
+        job_id=f"listen-for-speech_{audio_uuid[:12]}",
+        description=f"Listen for speech in {audio_uuid[:12]}"
     )
 
-    logger.info(f"📥 RQ: Enqueued initial transcription job {job.id} for audio {audio_uuid}")
+    logger.info(f"📥 RQ: Enqueued listen-for-speech job {job.id} for audio {audio_uuid}")
     return job
 
 

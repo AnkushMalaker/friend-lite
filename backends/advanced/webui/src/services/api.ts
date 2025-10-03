@@ -34,7 +34,7 @@ export { BACKEND_URL }
 
 export const api = axios.create({
   baseURL: BACKEND_URL,
-  timeout: 30000,
+  timeout: 60000,  // Increased to 60 seconds for heavy processing scenarios
 })
 
 // Add request interceptor to include auth token
@@ -50,10 +50,18 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Only clear token and redirect on actual 401 responses, not on timeouts
     if (error.response?.status === 401) {
       // Token expired or invalid, redirect to login
+      console.warn('🔐 API: 401 Unauthorized - clearing token and redirecting to login')
       localStorage.removeItem('token')
       window.location.href = '/login'
+    } else if (error.code === 'ECONNABORTED') {
+      // Request timeout - don't logout, just log it
+      console.warn('⏱️ API: Request timeout - server may be busy')
+    } else if (!error.response) {
+      // Network error - don't logout
+      console.warn('🌐 API: Network error - server may be unreachable')
     }
     return Promise.reject(error)
   }
@@ -135,15 +143,16 @@ export const systemApi = {
 
 export const queueApi = {
   getJobs: (params: URLSearchParams) => api.get(`/api/queue/jobs?${params}`),
+  getJob: (jobId: string) => api.get(`/api/queue/jobs/${jobId}`),
   getStats: () => api.get('/api/queue/stats'),
-  retryJob: (jobId: string, force: boolean = false) => 
+  retryJob: (jobId: string, force: boolean = false) =>
     api.post(`/api/queue/jobs/${jobId}/retry`, { force }),
   cancelJob: (jobId: string) => api.delete(`/api/queue/jobs/${jobId}`),
 }
 
 export const uploadApi = {
   uploadAudioFiles: (files: FormData, onProgress?: (progress: number) => void) => 
-    api.post('/api/process-audio-files', files, {
+    api.post('/api/audio/upload', files, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 300000, // 5 minutes
       onUploadProgress: (progressEvent) => {

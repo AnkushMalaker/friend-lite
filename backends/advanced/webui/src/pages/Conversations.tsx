@@ -97,7 +97,15 @@ export default function Conversations() {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [])
 
-  const formatDate = (timestamp: number) => {
+  const formatDate = (timestamp: number | string) => {
+    // Handle both Unix timestamp (number) and ISO string
+    if (typeof timestamp === 'string') {
+      return new Date(timestamp).toLocaleString()
+    }
+    // If timestamp is 0, return placeholder
+    if (timestamp === 0) {
+      return 'Unknown date'
+    }
     return new Date(timestamp * 1000).toLocaleString()
   }
 
@@ -426,7 +434,7 @@ export default function Conversations() {
                   <div className="flex items-center space-x-4">
                     <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                       <Calendar className="h-4 w-4" />
-                      <span>{formatDate(conversation.timestamp)}</span>
+                      <span>{formatDate(conversation.created_at || conversation.timestamp)}</span>
                     </div>
                     <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                       <User className="h-4 w-4" />

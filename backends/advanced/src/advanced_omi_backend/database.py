@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 
 # MongoDB Configuration
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
-mongo_client = AsyncIOMotorClient(MONGODB_URI)
+mongo_client = AsyncIOMotorClient(
+    MONGODB_URI,
+    maxPoolSize=50,  # Increased pool size for concurrent operations
+    minPoolSize=10,  # Keep minimum connections ready
+    maxIdleTimeMS=45000,  # Keep idle connections for 45 seconds
+    serverSelectionTimeoutMS=5000,  # Fail fast if server unavailable
+    socketTimeoutMS=20000,  # 20 second timeout for operations
+)
 db = mongo_client.get_default_database("friend-lite")
 
 # Collection references (for non-Beanie collections)

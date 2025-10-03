@@ -32,7 +32,7 @@ from wyoming.audio import AudioChunk
 # from advanced_omi_backend.memory import get_memory_service
 
 if TYPE_CHECKING:
-    from advanced_omi_backend.transcription import TranscriptionManager
+    from advanced_omi_backend.services.transcription_service import TranscriptionManager
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -45,7 +45,7 @@ SEGMENT_SECONDS = 60
 TARGET_SAMPLES = OMI_SAMPLE_RATE * SEGMENT_SECONDS
 
 if TYPE_CHECKING:
-    from advanced_omi_backend.transcription import TranscriptionManager
+    from advanced_omi_backend.services.transcription_service import TranscriptionManager
 
 
 @dataclass
@@ -587,7 +587,7 @@ class ProcessorManager:
         This can be called early (e.g., on audio-start) to create the manager
         before audio chunks arrive.
         """
-        from advanced_omi_backend.transcription import TranscriptionManager
+        from advanced_omi_backend.services.transcription_service import TranscriptionManager
         if client_id not in self.transcription_managers:
             audio_logger.info(
                 f"🔌 Creating transcription manager for client {client_id} (early creation)"
@@ -757,7 +757,7 @@ class ProcessorManager:
     async def _transcription_processor(self):
         """Process transcription requests."""
         audio_logger.info("Transcription processor started")
-        from advanced_omi_backend.transcription import TranscriptionManager
+        from advanced_omi_backend.services.transcription_service import TranscriptionManager
 
         try:
             while not self.shutdown_flag:

@@ -11,7 +11,7 @@ from typing import Optional
 from advanced_omi_backend.processors import (
     get_processor_manager,
 )
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
+from advanced_omi_backend.services.transcription_service import get_transcript_coordinator
 
 audio_logger = logging.getLogger("audio")
 

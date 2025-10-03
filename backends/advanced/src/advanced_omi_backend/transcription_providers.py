@@ -45,6 +45,7 @@ class BaseTranscriptionProvider(abc.ABC):
     """Abstract base class for all transcription providers."""
 
     @abc.abstractmethod
+    
     async def transcribe(self, audio_data: bytes, sample_rate: int, **kwargs) -> dict:
         """
         Transcribe audio data to text with word-level timestamps.

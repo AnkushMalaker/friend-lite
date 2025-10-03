@@ -54,8 +54,8 @@ from advanced_omi_backend.task_manager import init_task_manager, get_task_manage
 from advanced_omi_backend.rq_queue import redis_conn
 
 from advanced_omi_backend.task_manager import init_task_manager
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
-from advanced_omi_backend.transcription_providers import get_transcription_provider
+from advanced_omi_backend.services.transcription_service import get_transcript_coordinator
+from advanced_omi_backend.services.transcription import get_transcription_provider
 from advanced_omi_backend.users import (
     User,
     UserRead,
@@ -300,11 +300,11 @@ async def lifespan(app: FastAPI):
     # Initialize Beanie for all document models
     try:
         from advanced_omi_backend.models.conversation import Conversation
-        from advanced_omi_backend.models.audio_session import AudioSession
+        from advanced_omi_backend.models.audio_file import AudioFile
 
         await init_beanie(
             database=mongo_client.get_default_database("friend-lite"),
-            document_models=[User, Conversation, AudioSession],
+            document_models=[User, Conversation, AudioFile],
         )
         application_logger.info("Beanie initialized for all document models")
     except Exception as e:
@@ -337,6 +337,17 @@ async def lifespan(app: FastAPI):
         application_logger.error(f"Failed to connect to Redis for RQ: {e}")
         application_logger.warning("RQ queue system will not be available - check Redis connection")
 
+    # Initialize audio stream service for Redis Streams
+    try:
+        from advanced_omi_backend.services.audio_service import get_audio_stream_service
+        audio_service = get_audio_stream_service()
+        await audio_service.connect()
+        application_logger.info("Audio stream service connected to Redis Streams")
+        application_logger.info("Audio stream workers can be started with: python -m advanced_omi_backend.workers.audio_stream_worker")
+    except Exception as e:
+        application_logger.error(f"Failed to connect audio stream service: {e}")
+        application_logger.warning("Redis Streams audio processing will not be available")
+
     # Skip memory service pre-initialization to avoid blocking FastAPI startup
     # Memory service will be lazily initialized when first used
     application_logger.info("Memory service will be initialized on first use (lazy loading)")
@@ -359,7 +370,16 @@ async def lifespan(app: FastAPI):
 
         # RQ workers shut down automatically when process ends
         # No special cleanup needed for Redis connections
-        
+
+        # Shutdown audio stream service
+        try:
+            from advanced_omi_backend.services.audio_service import get_audio_stream_service
+            audio_service = get_audio_stream_service()
+            await audio_service.disconnect()
+            application_logger.info("Audio stream service disconnected")
+        except Exception as e:
+            application_logger.error(f"Error disconnecting audio stream service: {e}")
+
         # Shutdown processor manager
         processor_manager = get_processor_manager()
         await processor_manager.shutdown()
