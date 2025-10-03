@@ -1,11 +1,11 @@
 """
-AudioSession models for Friend-Lite backend.
+AudioFile models for Friend-Lite backend.
 
 This module contains the Beanie Document model for audio_chunks collection,
-which stores ALL audio sessions (both with and without speech). This is the
+which stores ALL audio files (both with and without speech). This is the
 storage layer - all audio gets stored here with its metadata.
 
-Note: Named AudioSession (not AudioChunk) to avoid confusion with wyoming.audio.AudioChunk
+Note: Named AudioFile (not AudioChunk) to avoid confusion with wyoming.audio.AudioChunk
 which is the in-memory streaming audio data structure.
 """
 
@@ -16,11 +16,11 @@ from pydantic import BaseModel, Field
 from beanie import Document, Indexed
 
 
-class AudioSession(Document):
+class AudioFile(Document):
     """
-    Audio session model representing persisted audio sessions in MongoDB.
+    Audio file model representing persisted audio files in MongoDB.
 
-    The audio_chunks collection stores ALL raw audio sessions (with or without speech).
+    The audio_chunks collection stores ALL raw audio files (both with and without speech).
     This is just for audio file storage and metadata. If speech is detected, a
     Conversation document is created which contains transcripts and memories.
 

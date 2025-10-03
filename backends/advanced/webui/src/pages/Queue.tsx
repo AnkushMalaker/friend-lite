@@ -58,7 +58,8 @@ const Queue: React.FC = () => {
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedJob, setSelectedJob] = useState<QueueJob | null>(null);
+  const [selectedJob, setSelectedJob] = useState<any | null>(null);
+  const [loadingJobDetails, setLoadingJobDetails] = useState(false);
   const [filters, setFilters] = useState<Filters>({
     status: '',
     job_type: '',
@@ -158,6 +159,19 @@ const Queue: React.FC = () => {
     }
   };
 
+  const viewJobDetails = async (jobId: string) => {
+    setLoadingJobDetails(true);
+    try {
+      const response = await queueApi.getJob(jobId);
+      setSelectedJob(response.data);
+    } catch (error) {
+      console.error('Error fetching job details:', error);
+      alert('Failed to fetch job details');
+    } finally {
+      setLoadingJobDetails(false);
+    }
+  };
+
   const retryJob = async (jobId: string) => {
     try {
       await queueApi.retryJob(jobId, false);
@@ -225,16 +239,6 @@ const Queue: React.FC = () => {
       case 'retrying': return 'text-orange-600 bg-orange-100';
       default: return 'text-gray-600 bg-gray-100';
     }
-  };
-
-  const formatJobType = (type: string) => {
-    const typeMap: { [key: string]: string } = {
-      'process_audio_files': 'Audio File Processing',
-      'process_single_audio_file': 'Single Audio File',
-      'reprocess_transcript': 'Reprocess Transcript',
-      'reprocess_memory': 'Reprocess Memory'
-    };
-    return typeMap[type] || type;
   };
 
   const getJobTypeShort = (type: string) => {
@@ -335,7 +339,10 @@ const Queue: React.FC = () => {
     if (!job.started_at) return '-';
 
     const start = new Date(job.started_at).getTime();
-    const end = job.completed_at ? new Date(job.completed_at).getTime() : Date.now();
+    // For failed/finished jobs, use completed_at. For running jobs, use current time.
+    const end = job.completed_at
+      ? new Date(job.completed_at).getTime()
+      : (job.status === 'processing' ? Date.now() : start); // Don't show increasing time for failed jobs
     const durationMs = end - start;
 
     if (durationMs < 1000) return `${durationMs}ms`;
@@ -530,53 +537,47 @@ const Queue: React.FC = () => {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full table-fixed divide-y divide-gray-200">
+          <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="w-36 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                <th className="w-48 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                <th className="w-40 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                <th className="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="w-24 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
-                <th className="flex-1 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
-                <th className="w-32 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Result</th>
-                <th className="w-28 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Date</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Job ID</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Type</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Duration</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Result</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {jobs.map((job) => (
                 <tr key={job.job_id} className="hover:bg-gray-50">
-                  <td className="w-36 px-4 py-3 text-sm text-gray-500">
-                    <div className="truncate">{new Date(job.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                  <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+                    {new Date(job.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </td>
-                  <td className="w-48 px-4 py-3">
+                  <td className="px-4 py-3 max-w-xs">
                     <div className="text-xs font-mono text-gray-900 truncate" title={job.job_id}>
                       {job.job_id}
                     </div>
                   </td>
-                  <td className="w-40 px-4 py-3">
-                    <div className="text-sm text-gray-900 truncate">{getJobTypeShort(job.job_type)}</div>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{getJobTypeShort(job.job_type)}</div>
                   </td>
-                  <td className="w-32 px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
                       {getStatusIcon(job.status)}
                       <span className="ml-1">{job.status.charAt(0).toUpperCase() + job.status.slice(1)}</span>
                     </span>
                   </td>
-                  <td className="w-24 px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     <div className="text-sm text-gray-700 font-mono">
                       {formatDuration(job)}
                     </div>
                   </td>
-                  <td className="flex-1 px-4 py-3">
-                    <div className="text-sm text-gray-900 truncate" title={job.data?.description || job.progress_message || ''}>
-                      {job.data?.description || job.progress_message || '-'}
-                    </div>
-                  </td>
-                  <td className="w-32 px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     {getJobResult(job)}
                   </td>
-                  <td className="w-28 px-4 py-3 text-sm font-medium space-x-2">
+                  <td className="px-4 py-3 text-sm font-medium space-x-2 whitespace-nowrap">
                     {job.status === 'failed' && (
                       <button
                         onClick={() => retryJob(job.job_id)}
@@ -586,8 +587,9 @@ const Queue: React.FC = () => {
                       </button>
                     )}
                     <button
-                      onClick={() => setSelectedJob(job)}
+                      onClick={() => viewJobDetails(job.job_id)}
                       className="text-indigo-600 hover:text-indigo-900"
+                      disabled={loadingJobDetails}
                     >
                       <Eye className="w-4 h-4" />
                     </button>
@@ -642,80 +644,88 @@ const Queue: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Job ID</label>
-                  <p className="text-sm text-gray-900">{selectedJob.job_id}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Status</label>
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedJob.status)}`}>
-                    {getStatusIcon(selectedJob.status)}
-                    <span className="ml-1">{selectedJob.status.charAt(0).toUpperCase() + selectedJob.status.slice(1)}</span>
-                  </span>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Type</label>
-                  <p className="text-sm text-gray-900">{formatJobType(selectedJob.job_type)}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Priority</label>
-                  <p className="text-sm text-gray-900">{selectedJob.priority}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Created</label>
-                  <p className="text-sm text-gray-900">{formatDate(selectedJob.created_at)}</p>
-                </div>
-                {selectedJob.completed_at && (
+
+            {loadingJobDetails ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Completed</label>
-                    <p className="text-sm text-gray-900">{formatDate(selectedJob.completed_at)}</p>
+                    <label className="block text-sm font-medium text-gray-700">Job ID</label>
+                    <p className="text-sm text-gray-900 font-mono">{selectedJob.job_id}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Status</label>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedJob.status)}`}>
+                      {getStatusIcon(selectedJob.status)}
+                      <span className="ml-1">{selectedJob.status.charAt(0).toUpperCase() + selectedJob.status.slice(1)}</span>
+                    </span>
+                  </div>
+                  {selectedJob.description && (
+                    <div className="col-span-2">
+                      <label className="block text-sm font-medium text-gray-700">Description</label>
+                      <p className="text-sm text-gray-900">{selectedJob.description}</p>
+                    </div>
+                  )}
+                  {selectedJob.func_name && (
+                    <div className="col-span-2">
+                      <label className="block text-sm font-medium text-gray-700">Function Name</label>
+                      <p className="text-sm text-gray-900 font-mono">{selectedJob.func_name}</p>
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Created</label>
+                    <p className="text-sm text-gray-900">{selectedJob.created_at ? formatDate(selectedJob.created_at) : '-'}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Started</label>
+                    <p className="text-sm text-gray-900">{selectedJob.started_at ? formatDate(selectedJob.started_at) : '-'}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Ended</label>
+                    <p className="text-sm text-gray-900">{selectedJob.ended_at ? formatDate(selectedJob.ended_at) : '-'}</p>
+                  </div>
+                </div>
+
+                {selectedJob.args && selectedJob.args.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Arguments</label>
+                    <pre className="text-xs text-gray-900 bg-gray-50 p-2 rounded overflow-auto max-h-64">
+                      {JSON.stringify(selectedJob.args, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {selectedJob.kwargs && Object.keys(selectedJob.kwargs).length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Keyword Arguments</label>
+                    <pre className="text-xs text-gray-900 bg-gray-50 p-2 rounded overflow-auto max-h-64">
+                      {JSON.stringify(selectedJob.kwargs, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {selectedJob.error_message && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Error</label>
+                    <pre className="text-xs text-red-600 bg-red-50 p-2 rounded overflow-auto max-h-64">
+                      {selectedJob.error_message}
+                    </pre>
+                  </div>
+                )}
+
+                {selectedJob.result && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Result</label>
+                    <pre className="text-xs text-gray-900 bg-green-50 p-2 rounded overflow-auto max-h-64">
+                      {JSON.stringify(selectedJob.result, null, 2)}
+                    </pre>
                   </div>
                 )}
               </div>
-              
-              {selectedJob.progress_message && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Progress</label>
-                  <p className="text-sm text-gray-900">{selectedJob.progress_message}</p>
-                  {selectedJob.progress_percent !== undefined && (
-                    <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                      <div
-                        className="bg-blue-600 h-2 rounded-full"
-                        style={{ width: `${selectedJob.progress_percent}%` }}
-                      ></div>
-                    </div>
-                  )}
-                </div>
-              )}
-              
-              {selectedJob.error_message && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Error</label>
-                  <p className="text-sm text-red-600 bg-red-50 p-2 rounded">{selectedJob.error_message}</p>
-                </div>
-              )}
-              
-              {selectedJob.data && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Job Data</label>
-                  <pre className="text-xs text-gray-900 bg-gray-50 p-2 rounded overflow-auto max-h-64">
-                    {JSON.stringify(selectedJob.data, null, 2)}
-                  </pre>
-                </div>
-              )}
-              
-              {selectedJob.result && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Result</label>
-                  <pre className="text-xs text-gray-900 bg-green-50 p-2 rounded overflow-auto max-h-64">
-                    {JSON.stringify(selectedJob.result, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
+            )}
           </div>
         </div>
       )}

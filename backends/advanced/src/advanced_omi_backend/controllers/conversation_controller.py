@@ -158,11 +158,20 @@ async def get_conversations(user: User):
             # Admins see all conversations
             user_conversations = await Conversation.find_all().sort(-Conversation.created_at).to_list()
 
+        # Batch fetch all audio chunks in one query to avoid N+1 problem
+        audio_uuids = [conv.audio_uuid for conv in user_conversations]
+        audio_chunks_dict = {}
+        if audio_uuids:
+            # Fetch all audio chunks at once
+            chunks_cursor = chunk_repo.col.find({"audio_uuid": {"$in": audio_uuids}})
+            async for chunk in chunks_cursor:
+                audio_chunks_dict[chunk["audio_uuid"]] = chunk
+
         # Convert conversations to API format
         conversations = []
         for conv in user_conversations:
-            # Get audio file paths from audio_chunks collection
-            audio_chunk = await chunk_repo.get_chunk_by_audio_uuid(conv.audio_uuid)
+            # Get audio file paths from pre-fetched chunks
+            audio_chunk = audio_chunks_dict.get(conv.audio_uuid)
             audio_path = audio_chunk.get("audio_path") if audio_chunk else None
             cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
 
@@ -678,140 +687,6 @@ async def reprocess_transcript(conversation_id: str, user: User):
         logger.error(f"Error starting transcript reprocessing: {e}")
         return JSONResponse(status_code=500, content={"error": "Error starting transcript reprocessing"})
 
-
-async def _do_transcript_processing(
-    conversation_id: str,
-    audio_uuid: str,
-    audio_path: str,
-    version_id: str,
-    user_id: str,
-    trigger: str = "reprocess"
-) -> dict:
-    """
-    Perform the actual transcript processing work.
-    This function is called by RQ workers for both new and reprocessing jobs.
-
-    Args:
-        trigger: Source of the job - 'new', 'reprocess', 'retry', etc.
-    """
-    try:
-        import time
-        from pathlib import Path
-        from advanced_omi_backend.transcription_providers import get_transcription_provider
-
-        start_time = time.time()
-        logger.info(f"Starting transcript processing for {conversation_id}, version {version_id} (trigger: {trigger})")
-
-        # Get the transcription provider
-        provider = get_transcription_provider(mode="batch")
-        if not provider:
-            error_msg = "No transcription provider available"
-            logger.error(f"❌ Transcript processing failed: {error_msg}")
-            raise ValueError(error_msg)
-
-        provider_name = provider.name
-        logger.info(f"Using transcription provider: {provider_name}")
-
-        # Read the audio file
-        audio_file_path = Path(audio_path)
-        if not audio_file_path.exists():
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
-
-        # Load audio data
-        with open(audio_file_path, 'rb') as f:
-            audio_data = f.read()
-
-        # Transcribe the audio (assume 16kHz sample rate for now)
-        transcription_result = await provider.transcribe(
-            audio_data=audio_data,
-            sample_rate=16000,
-            diarize=True  # Enable speaker diarization
-        )
-
-        # Extract results
-        transcript_text = transcription_result.get("text", "")
-        segments = transcription_result.get("segments", [])
-        words = transcription_result.get("words", [])
-
-        # Calculate processing time
-        processing_time = time.time() - start_time
-
-        # Get the conversation using Beanie and use the model methods
-        conversation = await Conversation.find_one(Conversation.conversation_id == conversation_id)
-        if not conversation:
-            logger.error(f"Conversation {conversation_id} not found")
-            return {"success": False, "error": "Conversation not found"}
-
-        # Convert segments to SpeakerSegment objects
-        speaker_segments = [
-            Conversation.SpeakerSegment(
-                start=seg.get("start", 0),
-                end=seg.get("end", 0),
-                text=seg.get("text", ""),
-                speaker=seg.get("speaker", "unknown"),
-                confidence=seg.get("confidence")
-            )
-            for seg in segments
-        ]
-
-        # Add new transcript version using the model
-        # Normalize provider name to match enum values
-        provider_normalized = provider_name.lower() if provider_name else "unknown"
-
-        conversation.add_transcript_version(
-            version_id=version_id,
-            transcript=transcript_text,
-            segments=speaker_segments,
-            provider=Conversation.TranscriptProvider(provider_normalized),
-            model=getattr(provider, 'model', 'unknown'),
-            processing_time_seconds=processing_time,
-            metadata={
-                "trigger": trigger,
-                "audio_file_size": len(audio_data),
-                "segment_count": len(segments),
-                "word_count": len(words)
-            },
-            set_as_active=True
-        )
-
-        # Generate title and summary from transcript
-        if transcript_text and len(transcript_text.strip()) > 0:
-            # Simple title: first 50 chars or first sentence
-            first_sentence = transcript_text.split('.')[0].strip()
-            conversation.title = first_sentence[:50] + "..." if len(first_sentence) > 50 else first_sentence
-
-            # Simple summary: first 150 chars
-            conversation.summary = transcript_text[:150] + "..." if len(transcript_text) > 150 else transcript_text
-        else:
-            conversation.title = "Empty Conversation"
-            conversation.summary = "No speech detected"
-
-        # Save the updated conversation using Beanie
-        await conversation.save()
-
-        logger.info(f"✅ Transcript processing completed for {conversation_id} in {processing_time:.2f}s")
-
-        return {
-            "success": True,
-            "conversation_id": conversation_id,
-            "version_id": version_id,
-            "transcript": transcript_text,
-            "segments": [seg.model_dump() for seg in speaker_segments],  # Convert Pydantic models to dicts
-            "provider": provider_name,
-            "processing_time_seconds": processing_time,
-            "trigger": trigger,
-            "metadata": {
-                "trigger": trigger,
-                "audio_file_size": len(audio_data),
-                "segment_count": len(speaker_segments),
-                "word_count": len(words)
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"❌ Transcript processing failed for {conversation_id}: {e}")
-        # Re-raise the exception so RQ marks the job as "failed"
-        raise
 
 async def reprocess_memory(conversation_id: str, transcript_version_id: str, user: User):
     """Reprocess memory extraction for a specific transcript version. Users can only reprocess their own conversations."""

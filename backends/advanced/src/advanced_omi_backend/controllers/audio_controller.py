@@ -1,23 +1,21 @@
 """
 Audio file upload and processing controller.
 
-Handles audio file uploads and enqueues them for processing via RQ jobs.
+Handles audio file uploads and processes them directly.
+Simplified to write files immediately and enqueue transcription.
 """
 
-import io
 import logging
 import time
 import uuid
-import wave
-from pathlib import Path
 
-import numpy as np
 from fastapi import UploadFile
 from fastapi.responses import JSONResponse
 
-from advanced_omi_backend.config import CHUNK_DIR
+from advanced_omi_backend.audio_utils import AudioValidationError, write_audio_file
+from advanced_omi_backend.models.job import JobPriority
 from advanced_omi_backend.models.user import User
-from advanced_omi_backend.rq_queue import enqueue_audio_processing
+from advanced_omi_backend.rq_queue import enqueue_initial_transcription
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -36,10 +34,12 @@ async def upload_and_process_audio_files(
     auto_generate_client: bool = True,
 ) -> dict:
     """
-    Upload audio files and enqueue them for RQ processing.
+    Upload audio files and process them directly.
 
-    Unlike WebSocket streaming, file uploads are processed as complete files
-    through RQ jobs for better scalability and resource management.
+    Simplified flow:
+    1. Validate and read WAV file
+    2. Write audio file and create AudioSession immediately
+    3. Enqueue transcription job (same as WebSocket path)
     """
     try:
         if not files:
@@ -67,70 +67,46 @@ async def upload_and_process_audio_files(
                 # Read file content
                 content = await file.read()
 
-                # Validate WAV file and get parameters
-                try:
-                    with wave.open(io.BytesIO(content), "rb") as wav_file:
-                        sample_rate = wav_file.getframerate()
-                        sample_width = wav_file.getsampwidth()
-                        channels = wav_file.getnchannels()
-                        frame_count = wav_file.getnframes()
-                        duration = frame_count / sample_rate
-
-                        # Read audio data
-                        audio_data = wav_file.readframes(frame_count)
-
-                except Exception as e:
-                    processed_files.append({
-                        "filename": file.filename,
-                        "status": "error",
-                        "error": f"Invalid WAV file: {str(e)}",
-                    })
-                    continue
-
-                # Convert to mono if stereo
-                if channels == 2:
-                    if sample_width == 2:
-                        audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                    else:
-                        audio_array = np.frombuffer(audio_data, dtype=np.int32)
-
-                    # Reshape to separate channels and average
-                    audio_array = audio_array.reshape(-1, 2)
-                    audio_data = np.mean(audio_array, axis=1).astype(audio_array.dtype).tobytes()
-                    channels = 1
-
-                # Check sample rate
-                if sample_rate != 16000:
-                    processed_files.append({
-                        "filename": file.filename,
-                        "status": "error",
-                        "error": f"Sample rate must be 16kHz, got {sample_rate}Hz",
-                    })
-                    continue
-
-                # Generate audio UUID
+                # Generate audio UUID and timestamp
                 audio_uuid = str(uuid.uuid4())
+                timestamp = int(time.time() * 1000)
+
+                # Validate, write audio file and create AudioSession (all in one)
+                try:
+                    wav_filename, file_path, duration = await write_audio_file(
+                        raw_audio_data=content,
+                        audio_uuid=audio_uuid,
+                        client_id=client_id,
+                        user_id=user.user_id,
+                        user_email=user.email,
+                        timestamp=timestamp,
+                        validate=True  # Validate WAV format, convert stereo→mono
+                    )
+                except AudioValidationError as e:
+                    processed_files.append({
+                        "filename": file.filename,
+                        "status": "error",
+                        "error": str(e),
+                    })
+                    continue
 
                 audio_logger.info(
-                    f"📊 Audio parameters: {duration:.1f}s, {sample_rate}Hz, {channels}ch, {sample_width} bytes/sample"
+                    f"📊 {file.filename}: {duration:.1f}s → {wav_filename}"
                 )
 
-                # Enqueue RQ job for processing (no need to save to disk first - RQ job will handle it)
-                job = enqueue_audio_processing(
+                # Enqueue transcription job (same as WebSocket path)
+                job = enqueue_initial_transcription(
+                    audio_uuid=audio_uuid,
+                    audio_path=wav_filename,
                     client_id=client_id,
                     user_id=user.user_id,
                     user_email=user.email,
-                    audio_data=audio_data,
-                    audio_rate=sample_rate,
-                    audio_width=sample_width,
-                    audio_channels=channels,
-                    audio_uuid=audio_uuid,
-                    timestamp=int(time.time() * 1000),
+                    priority=JobPriority.NORMAL
                 )
 
                 processed_files.append({
                     "filename": file.filename,
-                    "status": "enqueued",
+                    "status": "processing",
                     "audio_uuid": audio_uuid,
                     "job_id": job.id,
                     "duration_seconds": round(duration, 2),
@@ -143,7 +119,7 @@ async def upload_and_process_audio_files(
                 })
 
                 audio_logger.info(
-                    f"✅ Enqueued RQ job {job.id} for {file.filename} (audio_uuid: {audio_uuid})"
+                    f"✅ Processed {file.filename} → transcription job {job.id}"
                 )
 
             except Exception as e:
@@ -155,13 +131,13 @@ async def upload_and_process_audio_files(
                 })
 
         return {
-            "message": f"Uploaded and enqueued {len(enqueued_jobs)} file(s) for processing",
+            "message": f"Uploaded and processing {len(enqueued_jobs)} file(s)",
             "client_id": client_id,
             "files": processed_files,
             "jobs": enqueued_jobs,
             "summary": {
                 "total": len(files),
-                "enqueued": len(enqueued_jobs),
+                "processing": len(enqueued_jobs),
                 "failed": len([f for f in processed_files if f.get("status") == "error"]),
             },
         }
