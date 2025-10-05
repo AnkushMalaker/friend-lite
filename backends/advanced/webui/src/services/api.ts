@@ -145,6 +145,9 @@ export const queueApi = {
   getJobs: (params: URLSearchParams) => api.get(`/api/queue/jobs?${params}`),
   getJob: (jobId: string) => api.get(`/api/queue/jobs/${jobId}`),
   getStats: () => api.get('/api/queue/stats'),
+  getStreamingStatus: () => api.get('/api/streaming/status'),
+  cleanupStuckWorkers: () => api.post('/api/streaming/cleanup'),
+  cleanupOldSessions: (maxAgeSeconds: number = 3600) => api.post(`/api/streaming/cleanup-sessions?max_age_seconds=${maxAgeSeconds}`),
   retryJob: (jobId: string, force: boolean = false) =>
     api.post(`/api/queue/jobs/${jobId}/retry`, { force }),
   cancelJob: (jobId: string) => api.delete(`/api/queue/jobs/${jobId}`),

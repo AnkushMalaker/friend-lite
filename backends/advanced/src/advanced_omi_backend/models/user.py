@@ -7,7 +7,7 @@ from typing import Optional
 from beanie import Document, PydanticObjectId
 from fastapi_users.db import BeanieBaseUser, BeanieUserDatabase
 from fastapi_users.schemas import BaseUser, BaseUserCreate, BaseUserUpdate
-from pydantic import Field
+from pydantic import ConfigDict, EmailStr, Field
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +54,21 @@ class UserUpdate(BaseUserUpdate):
 class User(BeanieBaseUser, Document):
     """User model extending fastapi-users BeanieBaseUser with custom fields."""
 
+    # Pydantic v2 configuration
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+    )
+
     display_name: Optional[str] = None
     # Client tracking for audio devices
     registered_clients: dict[str, dict] = Field(default_factory=dict)
     # Speaker processing filter configuration
     primary_speakers: list[dict] = Field(default_factory=list)
+
+    class Settings:
+        name = "users"  # Collection name in MongoDB - standardized from "fastapi_users"
+        email_collation = {"locale": "en", "strength": 2}  # Case-insensitive comparison
 
     @property
     def user_id(self) -> str:
@@ -90,9 +100,9 @@ class User(BeanieBaseUser, Document):
         """Get all client IDs registered to this user."""
         return list(self.registered_clients.keys())
 
-    class Settings:
-        name = "users"  # Collection name in MongoDB - standardized from "fastapi_users"
-        email_collation = {"locale": "en", "strength": 2}  # Case-insensitive comparison
+
+# Rebuild Pydantic model to ensure inherited fields are properly accessible
+User.model_rebuild()
 
 
 async def get_user_db():

@@ -28,7 +28,15 @@ Provider-specific behaviors:
 """
 
 import abc
+from enum import Enum
 from typing import Optional
+
+
+class TranscriptionProvider(Enum):
+    """Available transcription providers for audio stream routing."""
+    DEEPGRAM = "deepgram"
+    PARAKEET = "parakeet"
+    MISTRAL = "mistral"
 
 
 class BaseTranscriptionProvider(abc.ABC):

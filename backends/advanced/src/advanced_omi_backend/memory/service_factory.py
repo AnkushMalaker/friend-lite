@@ -34,7 +34,7 @@ def create_memory_service(config: MemoryConfig) -> MemoryServiceBase:
         ValueError: If unsupported memory provider is specified
         RuntimeError: If required dependencies are missing
     """
-    memory_logger.info(f"Creating memory service with provider: {config.memory_provider.value}")
+    memory_logger.info(f"🧠  Creating memory service with provider: {config.memory_provider.value}")
     
     if config.memory_provider == MemoryProvider.FRIEND_LITE:
         # Use the sophisticated Friend-Lite implementation

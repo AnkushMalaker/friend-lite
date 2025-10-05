@@ -8,8 +8,8 @@ test_env_path = Path(__file__).parent / ".env.test"
 load_dotenv(test_env_path)
 
 # API Configuration
-API_URL = os.getenv('BACKEND_URL', 'http://localhost:8001')  # Use BACKEND_URL from test.env
-API_BASE = f"{API_URL}/api"
+API_URL = 'http://localhost:8001'  # Use BACKEND_URL from test.env
+API_BASE = 'http://localhost:8001/api'
 
 WEB_URL = os.getenv('FRONTEND_URL', 'http://localhost:3001')  # Use FRONTEND_URL from test.env
 # Admin user credentials (Robot Framework format)

@@ -98,16 +98,34 @@ class DeepgramProvider(BatchTranscriptionProvider):
                                 f"Deepgram diarized transcription successful: {len(transcript)} characters"
                             )
 
-                            # Extract speaker segments from utterances
+                            # Extract speaker segments, grouping consecutive sentences from same speaker
+                            current_speaker = None
+                            current_segment = None
+
                             for paragraph in alternative["paragraphs"]["paragraphs"]:
+                                speaker = f"Speaker {paragraph.get('speaker', 'unknown')}"
+
                                 for sentence in paragraph.get("sentences", []):
-                                    segments.append({
-                                        "text": sentence.get("text", "").strip(),
-                                        "speaker": f"Speaker {paragraph.get('speaker', 'unknown')}",
-                                        "start": sentence.get("start", 0),
-                                        "end": sentence.get("end", 0),
-                                        "confidence": None  # Deepgram doesn't provide segment-level confidence
-                                    })
+                                    if speaker == current_speaker and current_segment:
+                                        # Extend current segment with same speaker
+                                        current_segment["text"] += " " + sentence.get("text", "").strip()
+                                        current_segment["end"] = sentence.get("end", 0)
+                                    else:
+                                        # Save previous segment and start new one
+                                        if current_segment:
+                                            segments.append(current_segment)
+                                        current_segment = {
+                                            "text": sentence.get("text", "").strip(),
+                                            "speaker": speaker,
+                                            "start": sentence.get("start", 0),
+                                            "end": sentence.get("end", 0),
+                                            "confidence": None  # Deepgram doesn't provide segment-level confidence
+                                        }
+                                        current_speaker = speaker
+
+                            # Don't forget the last segment
+                            if current_segment:
+                                segments.append(current_segment)
                         else:
                             transcript = alternative.get("transcript", "").strip()
                             logger.info(
@@ -379,5 +397,87 @@ class DeepgramStreamingProvider(StreamingTranscriptionProvider):
                 del self._streams[client_id]
         
         logger.info("All Deepgram streaming connections closed")
+
+
+class DeepgramStreamConsumer:
+    """
+    Deepgram consumer for Redis Streams architecture.
+
+    Reads from: audio:stream:deepgram
+    Writes to: transcription:results:{session_id}
+
+    This inherits from BaseAudioStreamConsumer and implements transcribe_audio().
+    """
+
+    def __init__(self, redis_client, api_key: str = None, buffer_chunks: int = 30):
+        """
+        Initialize Deepgram consumer.
+
+        Args:
+            redis_client: Connected Redis client
+            api_key: Deepgram API key (defaults to DEEPGRAM_API_KEY env var)
+            buffer_chunks: Number of chunks to buffer before transcribing (default: 30 = ~7.7s)
+        """
+        import os
+        from advanced_omi_backend.services.audio_stream.consumer import BaseAudioStreamConsumer
+
+        self.api_key = api_key or os.getenv("DEEPGRAM_API_KEY")
+        if not self.api_key:
+            raise ValueError("DEEPGRAM_API_KEY is required")
+
+        # Initialize Deepgram provider
+        self.provider = DeepgramProvider(api_key=self.api_key)
+
+        # Create a concrete subclass that implements transcribe_audio
+        class _ConcreteConsumer(BaseAudioStreamConsumer):
+            def __init__(inner_self, provider_name: str, redis_client, buffer_chunks: int):
+                super().__init__(provider_name, redis_client, buffer_chunks)
+                inner_self._deepgram_provider = self.provider
+
+            async def transcribe_audio(inner_self, audio_data: bytes, sample_rate: int) -> dict:
+                """Transcribe using DeepgramProvider."""
+                try:
+                    result = await inner_self._deepgram_provider.transcribe(
+                        audio_data=audio_data,
+                        sample_rate=sample_rate,
+                        diarize=True
+                    )
+
+                    # Calculate confidence
+                    confidence = 0.0
+                    if result.get("words"):
+                        confidences = [
+                            w.get("confidence", 0)
+                            for w in result["words"]
+                            if "confidence" in w
+                        ]
+                        if confidences:
+                            confidence = sum(confidences) / len(confidences)
+
+                    return {
+                        "text": result.get("text", ""),
+                        "words": result.get("words", []),
+                        "segments": result.get("segments", []),
+                        "confidence": confidence
+                    }
+
+                except Exception as e:
+                    logger.error(f"Deepgram transcription failed: {e}", exc_info=True)
+                    raise
+
+        # Instantiate the concrete consumer
+        self._consumer = _ConcreteConsumer("deepgram", redis_client, buffer_chunks)
+
+    async def setup_consumer_group(self):
+        """Delegate to base consumer."""
+        return await self._consumer.setup_consumer_group()
+
+    async def start_consuming(self):
+        """Delegate to base consumer."""
+        return await self._consumer.start_consuming()
+
+    async def stop(self):
+        """Delegate to base consumer."""
+        return await self._consumer.stop()
 
 

@@ -6,6 +6,7 @@ Library          OperatingSystem
 Variables        ../test_data.py
 Resource         session_resources.robot
 Resource         conversation_keywords.robot
+Resource         queue_keywords.robot
 
 *** Keywords ***
 Upload Audio File
@@ -40,8 +41,8 @@ Upload Audio File
       Log    Parsed upload response: ${upload_response}
 
       # Validate upload was successful
-      Should Be Equal As Strings    ${upload_response['summary']['enqueued']}    1    Upload failed: No files enqueued
-      Should Be Equal As Strings    ${upload_response['files'][0]['status']}    enqueued    Upload failed: ${response.text}
+      Should Be Equal As Strings    ${upload_response['summary']['processing']}    1    Upload failed: No files enqueued
+      Should Be Equal As Strings    ${upload_response['files'][0]['status']}    processing    Upload failed: ${response.text}
 
       # Extract important values
       ${audio_uuid}=    Set Variable    ${upload_response['files'][0]['audio_uuid']}
@@ -53,26 +54,16 @@ Upload Audio File
 
       # Wait for conversation to be created and transcribed
       Log    Waiting for transcription to complete...
-      ${conversation}=    Wait For Conversation To Complete    ${device_name}
+
+
+      Wait Until Keyword Succeeds    60s    5s       Check job status   ${job_id}    completed
+      ${job}=    Get Job Details    ${job_id}
+
+     # Get the completed conversation
+      ${conversation}=     Get Conversation By ID    ${job}[result][conversation_id]
+      Should Exist    ${conversation}    Conversation not found after upload and processing
 
       Log    Found conversation: ${conversation}
-      RETURN    ${conversation}
-
-
-Wait For Conversation To Complete
-      [Documentation]    Wait for conversation to be created and transcribed after file upload
-      [Arguments]        ${device_name}    ${max_wait_time}=120s    ${check_interval}=5s
-
-      Log    Polling for conversations with device_name containing: ${device_name}
-
-      # Wait for conversation to appear and be fully processed
-      Wait Until Keyword Succeeds    ${max_wait_time}    ${check_interval}
-      ...    Conversation Should Be Complete    ${device_name}
-
-      # Get the completed conversation
-      ${conversations}=    Get Conversations For Device        ${device_name}
-      ${conversation}=     Set Variable    ${conversations}[0]
-
       RETURN    ${conversation}
 
 Conversation Should Be Complete

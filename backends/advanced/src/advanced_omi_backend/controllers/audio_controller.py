@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from advanced_omi_backend.audio_utils import AudioValidationError, write_audio_file
 from advanced_omi_backend.models.job import JobPriority
 from advanced_omi_backend.models.user import User
-from advanced_omi_backend.rq_queue import enqueue_initial_transcription
+from advanced_omi_backend.workers.transcription_jobs import enqueue_initial_transcription
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")

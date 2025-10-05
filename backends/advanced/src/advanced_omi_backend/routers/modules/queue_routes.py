@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from advanced_omi_backend.auth import current_active_user
-from advanced_omi_backend.rq_queue import get_jobs, get_job_stats, get_queue_health, redis_conn
+from advanced_omi_backend.controllers.queue_controller import get_jobs, get_job_stats, get_queue_health, redis_conn
 from advanced_omi_backend.users import User
 from rq.job import Job
 import redis.asyncio as aioredis
@@ -208,7 +208,7 @@ async def flush_jobs(
     try:
         from datetime import datetime, timedelta
         from rq.registry import FinishedJobRegistry, FailedJobRegistry, CanceledJobRegistry
-        from advanced_omi_backend.rq_queue import get_queue
+        from advanced_omi_backend.controllers.queue_controller import get_queue
 
         cutoff_time = datetime.utcnow() - timedelta(hours=request.older_than_hours)
         total_removed = 0
@@ -285,7 +285,7 @@ async def flush_all_jobs(
             DeferredJobRegistry,
             ScheduledJobRegistry
         )
-        from advanced_omi_backend.rq_queue import get_queue
+        from advanced_omi_backend.controllers.queue_controller import get_queue
 
         total_removed = 0
         queues = ["default", "transcription", "memory"]

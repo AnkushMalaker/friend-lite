@@ -248,16 +248,18 @@ async def get_conversation_by_id(conversation_id: str, user: User):
         formatted_conversation = {
             "conversation_id": conversation_model.conversation_id,
             "audio_uuid": conversation_model.audio_uuid,
+            "client_id": conversation_model.client_id,
             "title": getattr(conversation_model, "title", "Conversation"),
             "summary": getattr(conversation_model, "summary", ""),
             "timestamp": conversation_model.session_start.timestamp() if hasattr(conversation_model, "session_start") and conversation_model.session_start else 0,
             "created_at": conversation_model.created_at.isoformat() if conversation_model.created_at else None,
-            "transcript": conversation_model.transcript if conversation_model.transcript else [],
-            "segments": conversation_model.segments,
+            "transcript": conversation_model.transcript if conversation_model.transcript else "",
+            "segments": conversation_model.segments if conversation_model.segments else [],
             "speakers_identified": getattr(conversation_model, "speakers_identified", []),
             "speaker_names": getattr(conversation_model, "speaker_names", {}),
             "duration_seconds": getattr(conversation_model, "duration_seconds", 0),
-            "memories": conversation_model.memories,
+            "memories": conversation_model.memories if conversation_model.memories else [],
+            "memory_count": conversation_model.memory_count if hasattr(conversation_model, "memory_count") else 0,
             "has_memory": bool(conversation_model.memories),
             "memory_processing_status": getattr(conversation_model, "memory_processing_status", "pending"),
             "action_items": getattr(conversation_model, "action_items", []),
@@ -661,7 +663,7 @@ async def reprocess_transcript(conversation_id: str, user: User):
         version_id = str(uuid.uuid4())
 
         # Enqueue job with RQ (RQ handles job tracking instead of processing_runs)
-        from advanced_omi_backend.rq_queue import enqueue_transcript_processing
+        from advanced_omi_backend.workers.transcription_jobs import enqueue_transcript_processing
         from advanced_omi_backend.models.job import JobPriority
 
         job = enqueue_transcript_processing(
@@ -730,7 +732,7 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
         version_id = str(uuid.uuid4())
 
         # Enqueue memory processing job with RQ (RQ handles job tracking)
-        from advanced_omi_backend.rq_queue import enqueue_memory_processing
+        from advanced_omi_backend.workers.memory_jobs import enqueue_memory_processing
         from advanced_omi_backend.models.job import JobPriority
 
         job = enqueue_memory_processing(

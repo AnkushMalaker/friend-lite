@@ -63,7 +63,7 @@ export default function Layout() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex flex-col lg:flex-row gap-8">
           {/* Sidebar Navigation */}
           <nav className="lg:w-64 flex-shrink-0">
@@ -89,7 +89,7 @@ export default function Layout() {
           </nav>
 
           {/* Main Content */}
-          <main className="flex-1 min-w-0">
+          <main className="flex-1">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
               <Outlet />
             </div>
