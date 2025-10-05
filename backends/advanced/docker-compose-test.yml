@@ -64,6 +64,8 @@ services:
       args:
         - VITE_BACKEND_URL=http://localhost:8001
         - BACKEND_URL=http://localhost:8001
+    volumes:
+      - ./webui/src:/app/src  # Mount source code for easier development
     ports:
       - "3001:80"  # Avoid conflict with dev on 3000
     depends_on:
@@ -85,7 +87,7 @@ services:
       - ./data/test_qdrant_data:/qdrant/storage
 
   mongo-test:
-    image: mongo:4.4.18
+    image: mongo:8.0.14
     ports:
       - "27018:27017"  # Avoid conflict with dev on 27017
     volumes:
@@ -111,6 +113,22 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  # caddy:
+  #   image: caddy:2-alpine
+  #   ports:
+  #     - "443:443"
+  #     - "80:80"  # HTTP redirect to HTTPS
+  #   volumes:
+  #     - ./Caddyfile-test:/etc/caddy/Caddyfile:ro
+  #     - ./data/caddy_data:/data
+  #     - ./data/caddy_config:/config
+  #   depends_on:
+  #     webui-test:
+  #       condition: service_started
+  #     friend-backend-test:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
 # CI Considerations (for future implementation):
 # - GitHub Actions can run these services in isolated containers

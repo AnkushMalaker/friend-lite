@@ -182,7 +182,7 @@ config: config-all ## Generate all configuration files
 
 config-docker: ## Generate Docker Compose configuration files
 	@echo "🐳 Generating Docker Compose configuration files..."
-	@python3 scripts/generate-docker-configs.py
+	@CONFIG_FILE=config.env.dev python3 scripts/generate-docker-configs.py
 	@echo "✅ Docker Compose configuration files generated"
 
 config-k8s: ## Generate Kubernetes configuration files (Skaffold env + ConfigMap/Secret)

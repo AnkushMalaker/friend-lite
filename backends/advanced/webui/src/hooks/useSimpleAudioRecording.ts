@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 
 export type RecordingStep = 'idle' | 'mic' | 'websocket' | 'audio-start' | 'streaming' | 'stopping' | 'error'
+export type RecordingMode = 'batch' | 'streaming'
 
 export interface DebugStats {
   chunksSent: number
@@ -17,15 +18,17 @@ export interface SimpleAudioRecordingReturn {
   isRecording: boolean
   recordingDuration: number
   error: string | null
-  
+  mode: RecordingMode
+
   // Actions
   startRecording: () => Promise<void>
   stopRecording: () => void
-  
+  setMode: (mode: RecordingMode) => void
+
   // For components
   analyser: AnalyserNode | null
   debugStats: DebugStats
-  
+
   // Utilities
   formatDuration: (seconds: number) => string
   canAccessMicrophone: boolean
@@ -37,6 +40,7 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
   const [isRecording, setIsRecording] = useState(false)
   const [recordingDuration, setRecordingDuration] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<RecordingMode>('streaming')
   
   // Debug stats
   const [debugStats, setDebugStats] = useState<DebugStats>({
@@ -64,7 +68,14 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
   // Check if we're on localhost or using HTTPS
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   const isHttps = window.location.protocol === 'https:'
-  const canAccessMicrophone = isLocalhost || isHttps
+
+  // DEVELOPMENT ONLY: Allow specific IP addresses (remove in production!)
+  const devAllowedHosts = import.meta.env.MODE === 'development'
+    ? ['192.168.1.100', '10.0.0.100'] // Add your Docker host IPs here
+    : []
+  const isDevelopmentHost = devAllowedHosts.includes(window.location.hostname)
+
+  const canAccessMicrophone = isLocalhost || isHttps || isDevelopmentHost
   
   // Format duration helper
   const formatDuration = useCallback((seconds: number) => {
@@ -236,40 +247,52 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
   // Step 3: Send audio-start message
   const sendAudioStartMessage = useCallback(async (ws: WebSocket): Promise<void> => {
     console.log('📤 Step 3: Sending audio-start message')
-    
+
     if (ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected')
     }
-    
+
     const startMessage = {
       type: 'audio-start',
       data: {
         rate: 16000,
         width: 2,
-        channels: 1
+        channels: 1,
+        mode: mode  // Pass recording mode to backend
       },
       payload_length: null
     }
-    
+
     ws.send(JSON.stringify(startMessage) + '\n')
-    console.log('✅ Audio-start message sent')
-  }, [])
+    console.log('✅ Audio-start message sent with mode:', mode)
+  }, [mode])
   
   // Step 4: Start audio streaming
   const startAudioStreaming = useCallback(async (stream: MediaStream, ws: WebSocket): Promise<void> => {
     console.log('🎵 Step 4: Starting audio streaming')
-    
+
     // Set up audio context and analyser for visualization
     const audioContext = new AudioContext({ sampleRate: 16000 })
     const analyser = audioContext.createAnalyser()
     const source = audioContext.createMediaStreamSource(stream)
-    
+
     analyser.fftSize = 256
     source.connect(analyser)
-    
+
+    console.log('🎧 Audio context state:', audioContext.state)
+    console.log('🎧 Analyser created:', analyser)
+    console.log('🎧 Sample rate:', audioContext.sampleRate)
+
+    // Resume audio context if suspended (required by some browsers)
+    if (audioContext.state === 'suspended') {
+      console.log('🎧 Resuming suspended audio context...')
+      await audioContext.resume()
+      console.log('🎧 Audio context resumed, new state:', audioContext.state)
+    }
+
     audioContextRef.current = audioContext
     analyserRef.current = analyser
-    
+
     // Wait brief moment for backend to process audio-start
     await new Promise(resolve => setTimeout(resolve, 100))
     
@@ -277,20 +300,44 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
     const processor = audioContext.createScriptProcessor(4096, 1, 1)
     source.connect(processor)
     processor.connect(audioContext.destination)
-    
+
+    let processCallCount = 0
     processor.onaudioprocess = (event) => {
+      processCallCount++
+
+      // Calculate audio level for first few chunks
+      const inputData = event.inputBuffer.getChannelData(0)
+      let sum = 0
+      for (let i = 0; i < inputData.length; i++) {
+        sum += Math.abs(inputData[i])
+      }
+      const avgLevel = sum / inputData.length
+
+      // Log first few calls to debug
+      if (processCallCount <= 3) {
+        console.log(`🎵 Audio process callback #${processCallCount}`, {
+          wsState: ws?.readyState,
+          wsOpen: ws?.readyState === WebSocket.OPEN,
+          audioProcessingStarted: audioProcessingStartedRef.current,
+          audioLevel: avgLevel.toFixed(6),
+          hasAudio: avgLevel > 0.001
+        })
+      }
+
       if (!ws || ws.readyState !== WebSocket.OPEN) {
+        if (processCallCount === 1) {
+          console.warn('⚠️ WebSocket not open in audio callback')
+        }
         return
       }
-      
+
       if (!audioProcessingStartedRef.current) {
         console.log('🚫 Audio processing not started yet, skipping chunk')
         return
       }
-      
-      const inputBuffer = event.inputBuffer
-      const inputData = inputBuffer.getChannelData(0)
-      
+
+      // inputData already declared above for audio level calculation
+
       // Convert float32 to int16 PCM
       const pcmBuffer = new Int16Array(inputData.length)
       for (let i = 0; i < inputData.length; i++) {
@@ -317,10 +364,15 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
         
         ws.send(JSON.stringify(chunkHeader) + '\n')
         ws.send(new Uint8Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength))
-        
+
         // Update debug stats
         chunkCountRef.current++
         setDebugStats(prev => ({ ...prev, chunksSent: chunkCountRef.current }))
+
+        // Log first few chunks
+        if (chunkCountRef.current <= 3) {
+          console.log(`✅ Sent audio chunk #${chunkCountRef.current}, size: ${pcmBuffer.byteLength} bytes`)
+        }
       } catch (error) {
         console.error('Failed to send audio chunk:', error)
         setDebugStats(prev => ({ 
@@ -430,8 +482,10 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
     isRecording,
     recordingDuration,
     error,
+    mode,
     startRecording,
     stopRecording,
+    setMode,
     analyser: analyserRef.current,
     debugStats,
     formatDuration,

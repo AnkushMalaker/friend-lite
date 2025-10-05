@@ -6,7 +6,7 @@ Handles audio file uploads and processing job management.
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
-from advanced_omi_backend.auth import current_active_user, current_superuser
+from advanced_omi_backend.auth import current_superuser
 from advanced_omi_backend.controllers import audio_controller
 from advanced_omi_backend.models.user import User
 

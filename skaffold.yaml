@@ -174,6 +174,31 @@ profiles:
               # Node selector
               nodeSelector.kubernetes\.io/hostname: anubis
 
+  - name: test-env
+    portForward:
+      - resourceType: container
+        resourceName: redis-test
+        namespace: advanced
+        localPort: 6379
+        port: 6380
+    build:
+
+      artifacts:
+        - image: friend-backend-test
+          context: backends/advanced
+          docker:
+            dockerfile: Dockerfile          
+        - image: webui-test
+          context: backends/advanced/webui
+          docker:
+            dockerfile: Dockerfile
+
+    deploy:
+      docker:
+        images: [friend-backend-test, webui-test, mongo-test, qdrant-test, redis-test]
+          
+   
+
   - name: speaker-recognition-gtx1070
     build:
       local:

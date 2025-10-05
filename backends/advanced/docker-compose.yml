@@ -15,7 +15,11 @@ services:
     environment:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - MISTRAL_MODEL=${MISTRAL_MODEL}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER}
+      - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - HF_TOKEN=${HF_TOKEN}
       - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - ADMIN_EMAIL=${ADMIN_EMAIL}
@@ -24,30 +28,18 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
       - OPENAI_MODEL=${OPENAI_MODEL}
-      - CORS_ORIGINS=${CORS_ORIGINS}
-      # OpenMemory MCP configuration
-      - MEMORY_PROVIDER=${MEMORY_PROVIDER}
-      - OPENMEMORY_MCP_URL=${OPENMEMORY_MCP_URL:-http://host.docker.internal:8765}
-      - OPENMEMORY_CLIENT_NAME=${OPENMEMORY_CLIENT_NAME:-friend_lite}
-      - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
-      - OPENMEMORY_TIMEOUT=${OPENMEMORY_TIMEOUT:-30}
-      # Speech Detection (Speech-Driven Conversations Architecture)
-      - SPEECH_DETECTION_MIN_WORDS=${SPEECH_DETECTION_MIN_WORDS:-5}
-      - SPEECH_DETECTION_MIN_CONFIDENCE=${SPEECH_DETECTION_MIN_CONFIDENCE:-0.5}
-      # Conversation Stop (Automatic Conversation Closure)
-      - TRANSCRIPTION_BUFFER_SECONDS=${TRANSCRIPTION_BUFFER_SECONDS:-120}
-      - SPEECH_INACTIVITY_THRESHOLD_SECONDS=${SPEECH_INACTIVITY_THRESHOLD_SECONDS:-60}
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
-      - LANGFUSE_HOST=${LANGFUSE_HOST}
-      - LANGFUSE_ENABLE_TELEMETRY=${LANGFUSE_ENABLE_TELEMETRY}
-
+      - NEO4J_HOST=${NEO4J_HOST}
+      - NEO4J_USER=${NEO4J_USER}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - CORS_ORIGINS=http://localhost:3010,http://localhost:8000,https://localhost:3010,https://localhost:8000,https://100.105.225.45,https://localhost
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      # You may not want qdrant if you are using openmemory_mcp
-      # qdrant:
-      #   condition: service_started
+      qdrant:
+        condition: service_started
       mongo:
         condition: service_started
+      redis:
+        condition: service_healthy
       # neo4j-mem0:
       #   condition: service_started
     healthcheck:
@@ -58,68 +50,121 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # Development webui service (default)
+  # Unified Worker Container
+  # Runs all workers in a single container for efficiency:
+  # - 3 RQ workers (transcription, memory, default queues)
+  # - 1 Audio stream worker (Redis Streams consumer - must be single to maintain sequential chunks)
+  workers:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./start-workers.sh"]
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - ./data/audio_chunks:/app/audio_chunks
+      - ./data:/app/data
+    environment:
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - MISTRAL_MODEL=${MISTRAL_MODEL}
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
+
   webui:
+    build:
+      context: ./webui
+      dockerfile: Dockerfile
+      args:
+        # Direct access (http://localhost:3010):
+        # - VITE_BACKEND_URL=http://localhost:8000
+        # - BACKEND_URL=http://localhost:8000
+        # For Caddy HTTPS (https://localhost), use:
+        - VITE_BACKEND_URL=
+        - BACKEND_URL=
+    ports:
+      # - "${WEBUI_PORT:-3010}:80"
+      - 3010:80
+    depends_on:
+      friend-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Caddy reverse proxy - provides HTTPS for microphone access
+  # Access at: https://localhost (accepts self-signed cert warning)
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "443:443"
+      - "80:80"  # HTTP redirect to HTTPS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy_data:/data
+      - ./data/caddy_config:/config
+    depends_on:
+      friend-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Development webui service (use with docker-compose --profile dev up)
+  webui-dev:
     build:
       context: ./webui
       dockerfile: Dockerfile.dev
     ports:
-      - "${WEBUI_PORT:-5173}:5173"
+      - "${WEBUI_DEV_PORT:-5173}:5173"
     environment:
-      # Don't set VITE_BACKEND_URL - let frontend auto-detect based on access method
-      # - VITE_BACKEND_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000}
-      - VITE_HMR_PORT=443
+      - VITE_BACKEND_URL=http://${HOST_IP}:${BACKEND_PUBLIC_PORT:-8000}
     volumes:
       - ./webui/src:/app/src
       - ./webui/public:/app/public
     depends_on:
       friend-backend:
         condition: service_healthy
-    restart: unless-stopped
+    profiles:
+      - dev
 
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333" # gRPC
-      - "6334:6334" # HTTP
+      - "6033:6033" # gRPC
+      - "6034:6034" # HTTP
     volumes:
       - ./data/qdrant_data:/qdrant/storage 
   
 
   mongo:
-    image: mongo:4.4.18
+    image: mongo:8.0.14
     ports:
       - "27017:27017"
     volumes:
       - ./data/mongo_data:/data/db
 
-  # OpenMemory MCP Server - Use external server from extras/openmemory-mcp
-  # The Friend-Lite backend connects to the external OpenMemory MCP server
-  # running from extras/openmemory-mcp via host.docker.internal:8765
-  # 
-  # To start the external server:
-  # cd extras/openmemory-mcp && docker compose up -d
-
-  # Nginx reverse proxy for HTTPS access
-  nginx:
-    image: nginx:alpine
+  redis:
+    image: redis:7-alpine
     ports:
-      - "443:443"
-      - "80:80"
+      - "6379:6379"  # Avoid conflict with dev on 6379
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      friend-backend:
-        condition: service_healthy
-      webui:
-        condition: service_started
-    restart: unless-stopped
+      - ./data/redis_data:/data
+    command: redis-server --appendonly yes
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "https://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   ##  Additional
 
@@ -137,6 +182,12 @@ services:
   #     - ./data/neo4j_data:/data
   #     - ./data/neo4j_logs:/logs
   #   restart: unless-stopped
+  # proxy:
+  #   image: nginx:alpine
+  #   depends_on: [friend-backend, streamlit]
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #   ports: ["80:80"]          # publish once; ngrok points here
 
   # ollama:
   #   image: ollama/ollama:latest
@@ -155,6 +206,16 @@ services:
 
 
 
+  # Use tailscale instead 
+  # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
+  # ngrok:
+  #   image: ngrok/ngrok:latest
+  #   depends_on: [friend-backend, proxy]
+  #   ports:
+  #     - "4040:4040" # Ngrok web interface
+  #   environment:
+  #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+  #   command: "http proxy:80 --url=${NGROK_URL} --basic-auth=${NGROK_BASIC_AUTH}"
 
 
 # Question: These are named volumes, but they are not being used, right? Can we remove them?

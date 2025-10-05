@@ -54,9 +54,70 @@ interface Filters {
   priority: string;
 }
 
+interface StreamingSession {
+  session_id: string;
+  user_id: string;
+  client_id: string;
+  provider: string;
+  mode: string;
+  status: string;
+  chunks_published: number;
+  started_at: number;
+  last_chunk_at: number;
+  age_seconds: number;
+  idle_seconds: number;
+}
+
+interface StreamConsumer {
+  name: string;
+  pending: number;
+  idle_ms: number;
+}
+
+interface StreamConsumerGroup {
+  name: string;
+  consumers: StreamConsumer[];
+  pending: number;
+}
+
+interface StreamHealth {
+  stream_length?: number;
+  consumer_groups?: StreamConsumerGroup[];
+  total_pending?: number;
+  error?: string;
+  exists?: boolean;
+}
+
+interface CompletedSession {
+  session_id: string;
+  client_id: string;
+  conversation_id: string | null;
+  has_conversation: boolean;
+  action: string;
+  reason: string;
+  completed_at: number;
+  audio_file: string;
+}
+
+interface StreamingStatus {
+  active_sessions: StreamingSession[];
+  completed_sessions: CompletedSession[];
+  stream_health: {
+    [provider: string]: StreamHealth;
+  };
+  rq_queues: {
+    [queue: string]: {
+      count: number;
+      failed_count: number;
+    };
+  };
+  timestamp: number;
+}
+
 const Queue: React.FC = () => {
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [stats, setStats] = useState<QueueStats | null>(null);
+  const [streamingStatus, setStreamingStatus] = useState<StreamingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedJob, setSelectedJob] = useState<any | null>(null);
   const [loadingJobDetails, setLoadingJobDetails] = useState(false);
@@ -88,7 +149,7 @@ const Queue: React.FC = () => {
         console.log('⏰ Auto-refreshing queue data');
         fetchData();
       }
-    }, 5000); // Refresh every 5 seconds
+    }, 1000); // Refresh every 1 second
 
     return () => {
       console.log('🧹 Clearing queue auto-refresh interval');
@@ -104,10 +165,10 @@ const Queue: React.FC = () => {
   const fetchData = async () => {
     console.log('📥 fetchData called, refreshing:', refreshing, 'loading:', loading);
     if (!refreshing) setRefreshing(true);
-    
+
     try {
-      console.log('🔄 Starting Promise.all for jobs and stats');
-      await Promise.all([fetchJobs(), fetchStats()]);
+      console.log('🔄 Starting Promise.all for jobs, stats, and streaming status');
+      await Promise.all([fetchJobs(), fetchStats(), fetchStreamingStatus()]);
       console.log('✅ Promise.all completed successfully');
     } catch (error) {
       console.error('❌ Error fetching queue data:', error);
@@ -159,6 +220,20 @@ const Queue: React.FC = () => {
     }
   };
 
+  const fetchStreamingStatus = async () => {
+    try {
+      console.log('🎵 fetchStreamingStatus starting...');
+      const response = await queueApi.getStreamingStatus();
+      const data = response.data;
+      console.log('✅ fetchStreamingStatus success, active sessions:', data.active_sessions?.length);
+      setStreamingStatus(data);
+    } catch (error) {
+      console.error('❌ Error fetching streaming status:', error);
+      // Don't fail the whole page if streaming status fails
+      setStreamingStatus(null);
+    }
+  };
+
   const viewJobDetails = async (jobId: string) => {
     setLoadingJobDetails(true);
     try {
@@ -189,6 +264,48 @@ const Queue: React.FC = () => {
       fetchJobs();
     } catch (error) {
       console.error('Error cancelling job:', error);
+    }
+  };
+
+  const cleanupStuckWorkers = async () => {
+    if (!confirm('This will clean up all stuck workers and pending messages. Continue?')) return;
+
+    try {
+      console.log('🧹 Starting cleanup of stuck workers...');
+      const response = await queueApi.cleanupStuckWorkers();
+      const data = response.data;
+      console.log('✅ Cleanup complete:', data);
+
+      alert(`✅ Cleanup complete!\n\nTotal cleaned: ${data.total_cleaned} messages\n\n${
+        Object.entries(data.providers).map(([provider, result]: [string, any]) =>
+          `${provider}: ${result.message || result.error || 'Unknown'}`
+        ).join('\n')
+      }`);
+
+      // Refresh streaming status to show updated counts
+      fetchStreamingStatus();
+    } catch (error: any) {
+      console.error('❌ Error during cleanup:', error);
+      alert(`Failed to cleanup workers: ${error.response?.data?.error || error.message}`);
+    }
+  };
+
+  const cleanupOldSessions = async () => {
+    if (!confirm('This will remove old and stuck "finalizing" sessions from the dashboard. Continue?')) return;
+
+    try {
+      console.log('🧹 Starting cleanup of old sessions...');
+      const response = await queueApi.cleanupOldSessions(3600); // 1 hour
+      const data = response.data;
+      console.log('✅ Cleanup complete:', data);
+
+      alert(`✅ Cleanup complete!\n\nRemoved ${data.cleaned_count} old session(s)`);
+
+      // Refresh streaming status to show updated counts
+      fetchStreamingStatus();
+    } catch (error: any) {
+      console.error('❌ Error during cleanup:', error);
+      alert(`Failed to cleanup sessions: ${error.response?.data?.error || error.message}`);
     }
   };
 
@@ -455,6 +572,164 @@ const Queue: React.FC = () => {
               <div>
                 <p className="text-sm text-gray-600">Retrying</p>
                 <p className="text-xl font-semibold text-orange-600">{stats.retrying_jobs}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Streaming Status */}
+      {streamingStatus && (
+        <div className="bg-white rounded-lg border overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+            <h3 className="text-lg font-medium">Audio Streaming Status</h3>
+            <div className="flex items-center space-x-2">
+              {streamingStatus.active_sessions.length > 0 && streamingStatus.active_sessions.some((s) => s.status === 'finalizing') && (
+                <button
+                  onClick={cleanupOldSessions}
+                  className="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 transition-colors text-sm"
+                  title="Remove old and stuck 'finalizing' sessions"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Cleanup Old Sessions</span>
+                </button>
+              )}
+              {streamingStatus.stream_health && Object.values(streamingStatus.stream_health).some((s: any) => s.total_pending > 0) && (
+                <button
+                  onClick={cleanupStuckWorkers}
+                  className="flex items-center space-x-2 px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 transition-colors text-sm"
+                  title="Clean up stuck workers and pending messages"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Cleanup Stuck Workers ({
+                    Object.values(streamingStatus.stream_health).reduce((sum: number, s: any) => sum + (s.total_pending || 0), 0)
+                  })</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="p-6 space-y-6">
+            {/* Active and Completed Sessions Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Active Sessions */}
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-3">Active Streaming Sessions</h4>
+                {streamingStatus.active_sessions.filter(s => s.status !== 'complete').length > 0 ? (
+                  <div className="space-y-2">
+                    {streamingStatus.active_sessions.filter(s => s.status !== 'complete').map((session) => (
+                      <div key={session.session_id} className="flex items-center justify-between p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2">
+                            <Play className="w-4 h-4 text-blue-600 animate-pulse" />
+                            <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
+                            <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">{session.provider}</span>
+                            <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">{session.status}</span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-600">
+                            Session: {session.session_id.substring(0, 8)}... •
+                            Chunks: {session.chunks_published} •
+                            Duration: {Math.floor(session.age_seconds)}s •
+                            Idle: {session.idle_seconds.toFixed(1)}s
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
+                    No active sessions
+                  </div>
+                )}
+              </div>
+
+              {/* Completed Sessions */}
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-3">Completed Sessions (Last Hour)</h4>
+                {streamingStatus.completed_sessions && streamingStatus.completed_sessions.length > 0 ? (
+                  <div className="space-y-2">
+                    {streamingStatus.completed_sessions.map((session) => (
+                      <div key={session.session_id} className={`flex items-center justify-between p-3 rounded-lg border ${
+                        session.has_conversation
+                          ? 'bg-green-50 border-green-200'
+                          : 'bg-gray-50 border-gray-200'
+                      }`}>
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2">
+                            {session.has_conversation ? (
+                              <CheckCircle className="w-4 h-4 text-green-600" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-gray-600" />
+                            )}
+                            <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
+                            {session.has_conversation ? (
+                              <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Conversation</span>
+                            ) : (
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">{session.reason || 'No speech'}</span>
+                            )}
+                          </div>
+                          <div className="mt-1 text-xs text-gray-600">
+                            Session: {session.session_id.substring(0, 8)}... •
+                            {new Date(session.completed_at * 1000).toLocaleTimeString()}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
+                    No completed sessions
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Stream Health */}
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-3">Stream Workers</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {Object.entries(streamingStatus.stream_health).map(([provider, health]) => (
+                  <div key={provider} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium capitalize">{provider}</span>
+                      {health.error ? (
+                        <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">Inactive</span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Active</span>
+                      )}
+                    </div>
+
+                    {health.error ? (
+                      <p className="text-xs text-gray-500">{health.error}</p>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-600">Stream Length:</span>
+                          <span className="font-medium">{health.stream_length}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-600">Pending:</span>
+                          <span className={`font-medium ${health.total_pending && health.total_pending > 0 ? 'text-yellow-600' : 'text-green-600'}`}>
+                            {health.total_pending}
+                          </span>
+                        </div>
+                        {health.consumer_groups && health.consumer_groups.map((group) => (
+                          <div key={group.name} className="mt-2 pt-2 border-t border-gray-200">
+                            <div className="text-xs text-gray-600 mb-1">Consumers:</div>
+                            {group.consumers.map((consumer) => (
+                              <div key={consumer.name} className="flex justify-between text-xs pl-2">
+                                <span className="text-gray-700 truncate">{consumer.name}</span>
+                                <span className={consumer.pending > 0 ? 'text-yellow-600' : 'text-green-600'}>
+                                  {consumer.pending} pending
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </div>

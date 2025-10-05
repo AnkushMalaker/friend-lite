@@ -37,6 +37,14 @@ Get Job Details
         END
     END
 
+Check job status
+    [Documentation]    Check the status of a specific job by ID
+    [Arguments]    ${job_id}    ${expected_status}
+    ${job}=    Get Job Details    ${job_id}
+    ${actual_status}=    Set Variable    ${job}[status]
+    Should Be Equal As Strings    ${actual_status}    ${expected_status}    Job status does not match expected status
+    RETURN    ${job}
+
     # If we get here, job not found
     Fail    Job with ID ${job_id} not found in queue
 Clear job queue

@@ -171,7 +171,7 @@ async def create_admin_user_if_needed():
         )
 
     except Exception as e:
-        logger.error(f"Failed to create admin user: {e}")
+        logger.error(f"Failed to create admin user: {e}", exc_info=True)
 
 
 async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[User]:

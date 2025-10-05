@@ -19,6 +19,7 @@ from .modules import (
     system_router,
     user_router,
 )
+from .modules.health_routes import router as health_router
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -35,6 +36,7 @@ router.include_router(conversation_router)
 router.include_router(memory_router)
 router.include_router(system_router)
 router.include_router(queue_router)
+router.include_router(health_router)  # Also include under /api for frontend compatibility
 
 
 logger.info("API router initialized with all sub-modules")

@@ -14,6 +14,7 @@ from advanced_omi_backend.models.transcription import BaseTranscriptionProvider
 from advanced_omi_backend.services.transcription.deepgram import (
     DeepgramProvider,
     DeepgramStreamingProvider,
+    DeepgramStreamConsumer,
 )
 from advanced_omi_backend.services.transcription.parakeet import (
     ParakeetProvider,
@@ -120,6 +121,7 @@ __all__ = [
     "get_transcription_provider",
     "DeepgramProvider",
     "DeepgramStreamingProvider",
+    "DeepgramStreamConsumer",
     "ParakeetProvider",
     "ParakeetStreamingProvider",
 ]

@@ -201,9 +201,9 @@ class MemoryService(MemoryServiceBase):
                 memory_logger.info(f"✅ Upserted {len(created_ids)} memories for {source_id}")
                 return True, created_ids
 
-            error_msg = f"❌ No memories created for {source_id}: memory_entries={len(memory_entries) if memory_entries else 0}, allow_update={allow_update}"
-            memory_logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            # No memories created - this is a valid outcome (duplicates, no extractable facts, etc.)
+            memory_logger.info(f"ℹ️  No new memories created for {source_id}: memory_entries={len(memory_entries) if memory_entries else 0}, allow_update={allow_update}")
+            return True, []
 
         except asyncio.TimeoutError as e:
             memory_logger.error(f"⏰ Memory processing timed out for {source_id}")

@@ -28,7 +28,7 @@ SAMPLE_MEMORIES = [
     }
 ]
 
-TEST_AUDIO_FILE = "tests/test_data/DIY_Experts_Glass_Blowing_16khz_mono_4min.wav"
+TEST_AUDIO_FILE = "tests/test_assets/DIY_Experts_Glass_Blowing_16khz_mono_1min.wav"
 TEST_DEVICE_NAME = "Robot-test-device"
 
 # Expected content for transcript quality verification
