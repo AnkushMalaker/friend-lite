@@ -208,7 +208,10 @@ def get_queue_health() -> Dict[str, Any]:
     health = {
         "queues": {},
         "workers": [],
-        "redis_connection": "unknown"
+        "redis_connection": "unknown",
+        "total_workers": 0,
+        "active_workers": 0,
+        "idle_workers": 0,
     }
 
     # Check Redis connection
@@ -231,12 +234,23 @@ def get_queue_health() -> Dict[str, Any]:
 
     # Check workers
     workers = Worker.all(connection=redis_conn)
+    health["total_workers"] = len(workers)
+
     for worker in workers:
+        state = worker.get_state()
+        current_job = worker.get_current_job_id()
+
+        # Count active vs idle workers
+        if current_job or state == "busy":
+            health["active_workers"] += 1
+        else:
+            health["idle_workers"] += 1
+
         health["workers"].append({
             "name": worker.name,
-            "state": worker.get_state(),
+            "state": state,
             "queues": [q.name for q in worker.queues],
-            "current_job": worker.get_current_job_id(),
+            "current_job": current_job,
         })
 
     return health

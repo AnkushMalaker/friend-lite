@@ -144,6 +144,7 @@ export const systemApi = {
 export const queueApi = {
   getJobs: (params: URLSearchParams) => api.get(`/api/queue/jobs?${params}`),
   getJob: (jobId: string) => api.get(`/api/queue/jobs/${jobId}`),
+  getJobsBySession: (sessionId: string) => api.get(`/api/queue/jobs/by-session/${sessionId}`),
   getStats: () => api.get('/api/queue/stats'),
   getStreamingStatus: () => api.get('/api/streaming/status'),
   cleanupStuckWorkers: () => api.post('/api/streaming/cleanup'),

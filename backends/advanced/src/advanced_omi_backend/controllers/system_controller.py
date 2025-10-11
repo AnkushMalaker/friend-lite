@@ -602,10 +602,17 @@ async def get_streaming_status(request):
                 "idle_seconds": time.time() - last_chunk_at
             })
 
-        # Get stream health for each provider
-        stream_stats = {}
-        for provider in ["deepgram", "parakeet"]:
-            stream_name = f"audio:stream:{provider}"
+        # Get stream health for all streams (per-client streams)
+        # Categorize as active or completed based on consumer activity
+        active_streams = {}
+        completed_streams = {}
+
+        # Discover all audio streams
+        stream_keys = await redis_client.keys("audio:stream:*")
+        current_time = time.time()
+
+        for stream_key in stream_keys:
+            stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
             try:
                 # Check if stream exists
                 stream_info = await redis_client.execute_command('XINFO', 'STREAM', stream_name)
@@ -636,16 +643,33 @@ async def get_streaming_status(request):
 
                     info_dict[key] = value
 
+                # Calculate stream age from last entry
+                stream_age_seconds = 0
+                last_entry_id = info_dict.get("last-entry")
+                if last_entry_id:
+                    try:
+                        # Redis Stream IDs format: "milliseconds-sequence"
+                        last_timestamp_ms = int(last_entry_id.split('-')[0])
+                        last_timestamp_s = last_timestamp_ms / 1000
+                        stream_age_seconds = current_time - last_timestamp_s
+                    except (ValueError, IndexError, AttributeError):
+                        stream_age_seconds = 0
+
                 # Get consumer groups
                 groups = await redis_client.execute_command('XINFO', 'GROUPS', stream_name)
 
-                stream_stats[provider] = {
+                stream_data = {
                     "stream_length": info_dict.get("length", 0),
                     "first_entry_id": info_dict.get("first-entry"),
-                    "last_entry_id": info_dict.get("last-entry"),
+                    "last_entry_id": last_entry_id,
+                    "stream_age_seconds": stream_age_seconds,
                     "consumer_groups": [],
                     "total_pending": 0
                 }
+
+                # Track if stream has any active consumers
+                has_active_consumer = False
+                min_consumer_idle_ms = float('inf')
 
                 # Parse consumer groups
                 for group in groups:
@@ -686,12 +710,20 @@ async def get_streaming_status(request):
                             consumer_name = consumer_name.decode()
 
                         consumer_pending = int(consumer_dict.get("pending", 0))
+                        consumer_idle_ms = int(consumer_dict.get("idle", 0))
                         consumer_pending_total += consumer_pending
+
+                        # Track minimum idle time
+                        min_consumer_idle_ms = min(min_consumer_idle_ms, consumer_idle_ms)
+
+                        # Consumer is active if idle < 5 minutes (300000ms)
+                        if consumer_idle_ms < 300000:
+                            has_active_consumer = True
 
                         consumer_list.append({
                             "name": consumer_name,
                             "pending": consumer_pending,
-                            "idle_ms": int(consumer_dict.get("idle", 0))
+                            "idle_ms": consumer_idle_ms
                         })
 
                     # Get group-level pending count (may be 0 even if consumers have pending)
@@ -705,20 +737,34 @@ async def get_streaming_status(request):
                     # (Sometimes group pending is 0 but consumers still have pending messages)
                     effective_pending = max(group_pending_count, consumer_pending_total)
 
-                    stream_stats[provider]["consumer_groups"].append({
+                    stream_data["consumer_groups"].append({
                         "name": str(group_name),
                         "consumers": consumer_list,
                         "pending": int(effective_pending)
                     })
 
-                    stream_stats[provider]["total_pending"] += int(effective_pending)
+                    stream_data["total_pending"] += int(effective_pending)
+
+                # Determine if stream is active or completed
+                # Active: has active consumers OR pending messages OR recent activity (< 5 min)
+                # Completed: no active consumers and idle > 5 minutes but < 1 hour
+                is_active = (
+                    has_active_consumer or
+                    stream_data["total_pending"] > 0 or
+                    stream_age_seconds < 300  # Less than 5 minutes old
+                )
+
+                if is_active:
+                    active_streams[stream_name] = stream_data
+                else:
+                    # Mark as completed (will be cleaned up when > 1 hour old)
+                    stream_data["idle_seconds"] = stream_age_seconds
+                    completed_streams[stream_name] = stream_data
 
             except Exception as e:
                 # Stream doesn't exist or error getting info
-                stream_stats[provider] = {
-                    "error": str(e),
-                    "exists": False
-                }
+                logger.debug(f"Error processing stream {stream_name}: {e}")
+                continue
 
         # Get RQ queue stats
         rq_stats = {
@@ -778,7 +824,9 @@ async def get_streaming_status(request):
         return {
             "active_sessions": active_sessions,
             "completed_sessions": completed_sessions,
-            "stream_health": stream_stats,
+            "active_streams": active_streams,
+            "completed_streams": completed_streams,
+            "stream_health": active_streams,  # Backward compatibility - use active_streams
             "rq_queues": rq_stats,
             "timestamp": time.time()
         }
@@ -792,7 +840,7 @@ async def get_streaming_status(request):
 
 
 async def cleanup_stuck_stream_workers(request):
-    """Clean up stuck Redis Stream workers and pending messages."""
+    """Clean up stuck Redis Stream consumers and pending messages from all active streams."""
     import time
 
     try:
@@ -807,17 +855,68 @@ async def cleanup_stuck_stream_workers(request):
 
         cleanup_results = {}
         total_cleaned = 0
+        total_deleted_consumers = 0
+        total_deleted_streams = 0
+        current_time = time.time()
 
-        # Clean up each provider's stream
-        for provider in ["deepgram", "parakeet"]:
-            stream_name = f"audio:stream:{provider}"
+        # Discover all audio streams (per-client streams)
+        stream_keys = await redis_client.keys("audio:stream:*")
+
+        for stream_key in stream_keys:
+            stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
 
             try:
+                # First check stream age - delete old streams (>1 hour) immediately
+                stream_info = await redis_client.execute_command('XINFO', 'STREAM', stream_name)
+
+                # Parse stream info
+                info_dict = {}
+                for i in range(0, len(stream_info), 2):
+                    key_name = stream_info[i].decode() if isinstance(stream_info[i], bytes) else str(stream_info[i])
+                    info_dict[key_name] = stream_info[i+1]
+
+                stream_length = int(info_dict.get("length", 0))
+                last_entry = info_dict.get("last-entry")
+
+                # Check if stream is old
+                should_delete_stream = False
+                stream_age = 0
+
+                if stream_length == 0:
+                    should_delete_stream = True
+                    stream_age = 0
+                elif last_entry and isinstance(last_entry, list) and len(last_entry) > 0:
+                    try:
+                        last_id = last_entry[0]
+                        if isinstance(last_id, bytes):
+                            last_id = last_id.decode()
+                        last_timestamp_ms = int(last_id.split('-')[0])
+                        last_timestamp_s = last_timestamp_ms / 1000
+                        stream_age = current_time - last_timestamp_s
+
+                        # Delete streams older than 1 hour (3600 seconds)
+                        if stream_age > 3600:
+                            should_delete_stream = True
+                    except (ValueError, IndexError):
+                        pass
+
+                if should_delete_stream:
+                    await redis_client.delete(stream_name)
+                    total_deleted_streams += 1
+                    cleanup_results[stream_name] = {
+                        "message": f"Deleted old stream (age: {stream_age:.0f}s, length: {stream_length})",
+                        "cleaned": 0,
+                        "deleted_consumers": 0,
+                        "deleted_stream": True,
+                        "stream_age": stream_age
+                    }
+                    continue
+
                 # Get consumer groups
                 groups = await redis_client.execute_command('XINFO', 'GROUPS', stream_name)
 
                 if not groups:
-                    cleanup_results[provider] = {"message": "No consumer groups found", "cleaned": 0}
+                    cleanup_results[stream_name] = {"message": "No consumer groups found", "cleaned": 0, "deleted_stream": False}
                     continue
 
                 # Parse first group
@@ -914,19 +1013,21 @@ async def cleanup_stuck_stream_workers(request):
                             logger.warning(f"Failed to delete consumer {consumer_name}: {delete_error}")
 
                 if total_consumer_pending == 0 and deleted_consumers == 0:
-                    cleanup_results[provider] = {"message": "No pending messages or dead consumers", "cleaned": 0, "deleted_consumers": 0}
+                    cleanup_results[stream_name] = {"message": "No pending messages or dead consumers", "cleaned": 0, "deleted_consumers": 0, "deleted_stream": False}
                     continue
 
                 total_cleaned += cleaned_count
-                cleanup_results[provider] = {
+                total_deleted_consumers += deleted_consumers
+                cleanup_results[stream_name] = {
                     "message": f"Cleaned {cleaned_count} pending messages, deleted {deleted_consumers} dead consumers",
                     "cleaned": cleaned_count,
                     "deleted_consumers": deleted_consumers,
+                    "deleted_stream": False,
                     "original_pending": pending_count
                 }
 
             except Exception as e:
-                cleanup_results[provider] = {
+                cleanup_results[stream_name] = {
                     "error": str(e),
                     "cleaned": 0
                 }
@@ -934,7 +1035,10 @@ async def cleanup_stuck_stream_workers(request):
         return {
             "success": True,
             "total_cleaned": total_cleaned,
-            "providers": cleanup_results,
+            "total_deleted_consumers": total_deleted_consumers,
+            "total_deleted_streams": total_deleted_streams,
+            "streams": cleanup_results,  # New key for per-stream results
+            "providers": cleanup_results,  # Keep for backward compatibility with frontend
             "timestamp": time.time()
         }
 
@@ -946,7 +1050,7 @@ async def cleanup_stuck_stream_workers(request):
 
 
 async def cleanup_old_sessions(request, max_age_seconds: int = 3600):
-    """Clean up old session tracking metadata from Redis."""
+    """Clean up old session tracking metadata and old audio streams from Redis."""
     import time
 
     try:
@@ -961,7 +1065,7 @@ async def cleanup_old_sessions(request, max_age_seconds: int = 3600):
 
         # Get all session keys
         session_keys = await redis_client.keys("audio:session:*")
-        cleaned_count = 0
+        cleaned_sessions = 0
         old_sessions = []
 
         current_time = time.time()
@@ -990,12 +1094,91 @@ async def cleanup_old_sessions(request, max_age_seconds: int = 3600):
                     "status": status
                 })
                 await redis_client.delete(key)
-                cleaned_count += 1
+                cleaned_sessions += 1
+
+        # Also clean up old audio streams (per-client streams that are inactive)
+        stream_keys = await redis_client.keys("audio:stream:*")
+        cleaned_streams = 0
+        old_streams = []
+
+        for stream_key in stream_keys:
+            stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
+
+            try:
+                # Check stream info to get last activity
+                stream_info = await redis_client.execute_command('XINFO', 'STREAM', stream_name)
+
+                # Parse stream info
+                info_dict = {}
+                for i in range(0, len(stream_info), 2):
+                    key_name = stream_info[i].decode() if isinstance(stream_info[i], bytes) else str(stream_info[i])
+                    info_dict[key_name] = stream_info[i+1]
+
+                stream_length = int(info_dict.get("length", 0))
+                last_entry = info_dict.get("last-entry")
+
+                # Check stream age via last entry ID (Redis Stream IDs are timestamps)
+                should_delete = False
+                age_seconds = 0
+
+                if stream_length == 0:
+                    # Empty stream - safe to delete
+                    should_delete = True
+                    reason = "empty"
+                elif last_entry and isinstance(last_entry, list) and len(last_entry) > 0:
+                    # Extract timestamp from last entry ID
+                    last_id = last_entry[0]
+                    if isinstance(last_id, bytes):
+                        last_id = last_id.decode()
+
+                    # Redis Stream IDs format: "milliseconds-sequence"
+                    try:
+                        last_timestamp_ms = int(last_id.split('-')[0])
+                        last_timestamp_s = last_timestamp_ms / 1000
+                        age_seconds = current_time - last_timestamp_s
+
+                        # Delete streams older than max_age regardless of size
+                        if age_seconds > max_age_seconds:
+                            should_delete = True
+                            reason = "old"
+                    except (ValueError, IndexError):
+                        # If we can't parse timestamp, check if first entry is old
+                        first_entry = info_dict.get("first-entry")
+                        if first_entry and isinstance(first_entry, list) and len(first_entry) > 0:
+                            try:
+                                first_id = first_entry[0]
+                                if isinstance(first_id, bytes):
+                                    first_id = first_id.decode()
+                                first_timestamp_ms = int(first_id.split('-')[0])
+                                first_timestamp_s = first_timestamp_ms / 1000
+                                age_seconds = current_time - first_timestamp_s
+
+                                if age_seconds > max_age_seconds:
+                                    should_delete = True
+                                    reason = "old_unparseable"
+                            except (ValueError, IndexError):
+                                pass
+
+                if should_delete:
+                    await redis_client.delete(stream_name)
+                    cleaned_streams += 1
+                    old_streams.append({
+                        "stream_name": stream_name,
+                        "reason": reason,
+                        "age_seconds": age_seconds,
+                        "length": stream_length
+                    })
+
+            except Exception as e:
+                logger.debug(f"Error checking stream {stream_name}: {e}")
+                continue
 
         return {
             "success": True,
-            "cleaned_count": cleaned_count,
-            "cleaned_sessions": old_sessions,
+            "cleaned_sessions": cleaned_sessions,
+            "cleaned_streams": cleaned_streams,
+            "cleaned_session_details": old_sessions,
+            "cleaned_stream_details": old_streams,
             "timestamp": time.time()
         }
 
