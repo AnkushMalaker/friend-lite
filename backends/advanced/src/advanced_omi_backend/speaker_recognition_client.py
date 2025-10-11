@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import aiohttp
+from aiohttp import ClientConnectorError, ClientTimeout
 
 logger = logging.getLogger(__name__)
 
@@ -61,17 +62,12 @@ class SpeakerRecognitionClient:
             return {}
 
         try:
-            logger.info(f"🎤 DEBUG: diarize_identify_match called with audio_path: {audio_path}, user_id: {user_id}")
-            logger.info(f"🎤 DEBUG: Service URL: {self.service_url}")
-            logger.info(f"🎤 DEBUG: Audio file exists: {Path(audio_path).exists()}")
-            logger.info(f"🎤 Diarizing, identifying, and matching words for {audio_path}")
+            logger.info(f"🎤 Identifying speakers for {audio_path}")
 
             # Read diarization source from existing config system
             from advanced_omi_backend.config import load_diarization_settings_from_file
             config = load_diarization_settings_from_file()
             diarization_source = config.get("diarization_source", "pyannote")
-
-            logger.info(f"🎤 Using diarization source: {diarization_source}")
 
             async with aiohttp.ClientSession() as session:
                 # Prepare the audio file for upload
@@ -128,31 +124,34 @@ class SpeakerRecognitionClient:
                         data=form_data,
                         timeout=aiohttp.ClientTimeout(total=120),
                     ) as response:
-                        logger.info(f"🎤 DEBUG: Speaker service response status: {response.status}")
+                        logger.info(f"🎤 Speaker service response status: {response.status}")
 
                         if response.status != 200:
                             response_text = await response.text()
-                            logger.warning(
-                                f"🎤 Speaker service returned status {response.status}: {response_text}"
+                            logger.error(
+                                f"🎤 ❌ Speaker service returned status {response.status}: {response_text}"
                             )
                             return {}
 
                         result = await response.json()
-                        logger.info(f"🎤 DEBUG: Speaker service ({diarization_source}) response: {result}")
-                        logger.info(
-                            f"🎤 Speaker service ({diarization_source}) returned response with enhancement data"
-                        )
+
+                        # Log basic result info
+                        num_segments = len(result.get("segments", []))
+                        logger.info(f"🎤 Speaker recognition returned {num_segments} segments")
+
                         return result
 
+        except ClientConnectorError as e:
+            logger.error(f"🎤 Failed to connect to speaker recognition service: {e}")
+            return {}
+        except ClientTimeout as e:
+            logger.error(f"🎤 Timeout connecting to speaker recognition service: {e}")
+            return {}
         except aiohttp.ClientError as e:
-            logger.warning(f"🎤 Failed to connect to speaker recognition service at {self.service_url}: {e}")
-            import traceback
-            logger.warning(f"🎤 Connection error traceback: {traceback.format_exc()}")
+            logger.warning(f"🎤 Client error during speaker recognition: {e}")
             return {}
         except Exception as e:
-            logger.error(f"🎤 Error during diarize-identify-match: {e}")
-            import traceback
-            logger.error(f"🎤 Error traceback: {traceback.format_exc()}")
+            logger.error(f"🎤 Error during speaker recognition: {e}")
             return {}
 
     async def diarize_and_identify(
@@ -348,18 +347,17 @@ class SpeakerRecognitionClient:
 
                 # Assign the most common identified name, or unknown if none found
                 if name_counts:
-                    # Get the name with the highest count
                     best_name = max(name_counts.items(), key=lambda x: x[1])[0]
                     speaker_mapping[generic_speaker] = best_name
                 else:
-                    # Assign unknown speaker label
                     speaker_mapping[generic_speaker] = f"unknown_speaker_{unknown_counter}"
                     unknown_counter += 1
 
+            logger.info(f"🎤 Speaker mapping: {speaker_mapping}")
             return speaker_mapping
 
         except Exception as e:
-            logger.error(f"Error processing diarization result: {e}")
+            logger.error(f"🎤 Error processing diarization result: {e}")
             return {}
 
     async def get_enrolled_speakers(self, user_id: Optional[str] = None) -> Dict:
@@ -376,31 +374,117 @@ class SpeakerRecognitionClient:
             return {"speakers": []}
 
         try:
-            logger.info(f"Getting enrolled speakers from service: {self.service_url}")
-
             async with aiohttp.ClientSession() as session:
-                # Use the /speakers endpoint - currently no user filtering in speaker service
                 async with session.get(
                     f"{self.service_url}/speakers",
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status != 200:
-                        logger.warning(
-                            f"Speaker service returned status {response.status}: {await response.text()}"
-                        )
+                        logger.warning(f"🎤 Failed to get enrolled speakers: status {response.status}")
                         return {"speakers": []}
 
                     result = await response.json()
                     speakers = result.get("speakers", [])
-                    logger.info(f"Retrieved {len(speakers)} enrolled speakers from service")
+                    logger.info(f"🎤 Retrieved {len(speakers)} enrolled speakers")
                     return result
 
         except aiohttp.ClientError as e:
-            logger.warning(f"Failed to connect to speaker recognition service: {e}")
+            logger.warning(f"🎤 Failed to connect to speaker recognition service: {e}")
             return {"speakers": []}
         except Exception as e:
-            logger.error(f"Error getting enrolled speakers: {e}")
+            logger.error(f"🎤 Error getting enrolled speakers: {e}")
             return {"speakers": []}
+
+    async def check_if_enrolled_speaker_present(
+        self,
+        redis_client,
+        client_id: str,
+        session_id: str,
+        user_id: str,
+        transcription_results: List[dict]
+    ) -> bool:
+        """
+        Check if any enrolled speakers are present in the transcription results.
+
+        This extracts audio from Redis, runs speaker recognition, and checks if
+        any identified speakers match the user's enrolled speakers.
+
+        Args:
+            redis_client: Redis client
+            client_id: Client identifier
+            session_id: Session identifier
+            user_id: User ID
+            transcription_results: List of transcription results from aggregator
+
+        Returns:
+            True if enrolled speaker detected, False otherwise
+        """
+        import tempfile
+        import uuid
+        from pathlib import Path
+        from advanced_omi_backend.utils.audio_extraction import extract_audio_for_results
+        from advanced_omi_backend.audio_utils import write_pcm_to_wav
+
+        # Get enrolled speakers for this user
+        enrolled_result = await self.get_enrolled_speakers(user_id)
+        enrolled_speakers = set(speaker["name"] for speaker in enrolled_result.get("speakers", []))
+
+        if not enrolled_speakers:
+            logger.warning("No enrolled speakers found, allowing conversation")
+            return True  # If no enrolled speakers, allow all conversations
+
+        # Extract audio chunks
+        audio_data = await extract_audio_for_results(
+            redis_client=redis_client,
+            client_id=client_id,
+            session_id=session_id,
+            transcription_results=transcription_results
+        )
+
+        if not audio_data:
+            logger.warning("No audio data extracted, skipping speaker check")
+            return False
+
+        # Write to temporary WAV file
+        temp_path = Path(tempfile.gettempdir()) / f"speech_check_{uuid.uuid4()}.wav"
+
+        try:
+            write_pcm_to_wav(audio_data, str(temp_path), sample_rate=16000, channels=1, sample_width=2)
+
+            # Run speaker recognition (diarize and identify)
+            result = await self.diarize_and_identify(
+                audio_path=str(temp_path),
+                words=None,
+                user_id=user_id
+            )
+
+            # Check if any identified speakers are enrolled
+            identified_speakers = set()
+            for segment in result.get("segments", []):
+                identified_name = segment.get("identified_as")
+                if identified_name and identified_name != "Unknown":
+                    identified_speakers.add(identified_name)
+
+            matches = enrolled_speakers & identified_speakers
+
+            if matches:
+                logger.info(f"✅ Enrolled speaker(s) detected: {matches}")
+                return True
+            else:
+                logger.info(f"❌ No enrolled speakers detected. Identified: {identified_speakers}, Enrolled: {enrolled_speakers}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Speaker recognition check failed: {e}", exc_info=True)
+            return False  # Fail closed - don't create conversation on error
+
+        finally:
+            # Clean up temp file
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to remove temp file {temp_path}: {cleanup_error}")
 
     async def health_check(self) -> bool:
         """
@@ -418,7 +502,7 @@ class SpeakerRecognitionClient:
             async with aiohttp.ClientSession() as session:
                 # Use the /health endpoint if available, otherwise try a simple endpoint
                 health_endpoints = ["/health", "/speakers"]
-                
+
                 for endpoint in health_endpoints:
                     try:
                         async with session.get(

@@ -4,11 +4,13 @@ Audio-related RQ job functions.
 This module contains jobs related to audio file processing and cropping.
 """
 
+import asyncio
 import os
 import logging
+import time
 from typing import Dict, Any, Optional
 
-from advanced_omi_backend.models.job import JobPriority
+from advanced_omi_backend.models.job import JobPriority, async_job
 
 from advanced_omi_backend.controllers.queue_controller import (
     default_queue,
@@ -223,6 +225,170 @@ def process_cropping_job(
     except Exception as e:
         logger.error(f"❌ RQ: Audio cropping failed for audio {audio_uuid}: {e}")
         raise
+
+
+@async_job(redis=True, beanie=True)
+async def audio_streaming_persistence_job(
+    session_id: str,
+    user_id: str,
+    user_email: str,
+    client_id: str,
+    redis_client=None
+) -> Dict[str, Any]:
+    """
+    Long-running RQ job that collects audio chunks from Redis stream and writes to disk progressively.
+
+    Runs in parallel with transcription processing to reduce memory pressure on WebSocket.
+
+    Args:
+        session_id: Stream session ID
+        user_id: User ID
+        user_email: User email
+        client_id: Client ID
+        redis_client: Redis client (injected by decorator)
+
+    Returns:
+        Dict with audio_file_path, chunk_count, total_bytes, duration_seconds
+    """
+    logger.info(f"🎵 Starting audio persistence for session {session_id}")
+
+    # Setup audio persistence consumer group (separate from transcription consumer)
+    audio_stream_name = f"audio:stream:{client_id}"
+    audio_group_name = "audio_persistence"
+    audio_consumer_name = f"persistence-{session_id[:8]}"
+
+    try:
+        await redis_client.xgroup_create(
+            audio_stream_name,
+            audio_group_name,
+            "0",
+            mkstream=True
+        )
+        logger.info(f"📦 Created audio persistence consumer group for {audio_stream_name}")
+    except Exception as e:
+        if "BUSYGROUP" not in str(e):
+            logger.warning(f"Failed to create audio consumer group: {e}")
+        logger.debug(f"Audio consumer group already exists for {audio_stream_name}")
+
+    # Job control
+    session_key = f"audio:session:{session_id}"
+    max_runtime = 3540  # 59 minutes
+    start_time = time.time()
+
+    # Audio collection
+    audio_chunks = []
+    chunk_count = 0
+    total_bytes = 0
+
+    finalize_received = False
+    grace_period_start = None
+    grace_period_seconds = 5  # Short grace period for audio collection
+
+    while True:
+        # Check if session is finalizing
+        if not finalize_received:
+            status = await redis_client.hget(session_key, "status")
+            if status and status.decode() in ["finalizing", "complete"]:
+                finalize_received = True
+                logger.info(f"🛑 Session finalizing, entering grace period for audio collection")
+
+        # Check timeout
+        if time.time() - start_time > max_runtime:
+            logger.warning(f"⏱️ Timeout reached for audio persistence {session_id}")
+            break
+
+        # Read audio chunks from stream (non-blocking)
+        try:
+            audio_messages = await redis_client.xreadgroup(
+                audio_group_name,
+                audio_consumer_name,
+                {audio_stream_name: ">"},
+                count=20,  # Read up to 20 chunks at a time for efficiency
+                block=500  # 500ms timeout
+            )
+
+            if audio_messages:
+                for stream_name, msgs in audio_messages:
+                    for message_id, fields in msgs:
+                        # Extract audio data
+                        audio_data = fields.get(b"audio_data", b"")
+                        chunk_id = fields.get(b"chunk_id", b"").decode()
+
+                        # Skip END signals and empty chunks
+                        if chunk_id == "END":
+                            logger.info(f"📡 Received END signal in audio persistence")
+                            finalize_received = True
+                        elif len(audio_data) > 0:
+                            audio_chunks.append(audio_data)
+                            chunk_count += 1
+                            total_bytes += len(audio_data)
+
+                            # Log every 40 chunks to avoid spam
+                            if chunk_count % 40 == 0:
+                                logger.info(f"📦 Collected {chunk_count} audio chunks ({total_bytes / 1024 / 1024:.2f} MB)")
+
+                        # ACK the message
+                        await redis_client.xack(audio_stream_name, audio_group_name, message_id)
+
+        except Exception as audio_error:
+            # Stream might not exist yet or other transient errors
+            logger.debug(f"Audio stream read error (non-fatal): {audio_error}")
+
+        # Grace period handling
+        if finalize_received:
+            if grace_period_start is None:
+                grace_period_start = time.time()
+                logger.info(f"⏳ Starting grace period for final audio chunks...")
+
+            grace_elapsed = time.time() - grace_period_start
+            if grace_elapsed >= grace_period_seconds:
+                logger.info(f"✅ Grace period complete ({grace_elapsed:.1f}s), stopping audio collection")
+                break
+
+        await asyncio.sleep(0.1)  # Check every 100ms for responsiveness
+
+    # Write complete audio file
+    if audio_chunks:
+        from advanced_omi_backend.audio_utils import write_audio_file
+
+        complete_audio = b''.join(audio_chunks)
+        timestamp = int(time.time() * 1000)
+
+        logger.info(f"💾 Writing {len(audio_chunks)} chunks ({total_bytes / 1024 / 1024:.2f} MB) to disk")
+
+        wav_filename, file_path, duration = await write_audio_file(
+            raw_audio_data=complete_audio,
+            audio_uuid=session_id,
+            client_id=client_id,
+            user_id=user_id,
+            user_email=user_email,
+            timestamp=timestamp,
+            validate=False
+        )
+        logger.info(f"✅ Wrote audio file: {wav_filename} ({duration:.1f}s, {chunk_count} chunks)")
+
+        # Store file path in Redis for finalize job to find
+        audio_file_key = f"audio:file:{session_id}"
+        await redis_client.set(audio_file_key, file_path, ex=3600)
+        logger.info(f"💾 Stored audio file path in Redis: {audio_file_key}")
+    else:
+        logger.warning(f"⚠️ No audio chunks collected for session {session_id}")
+        file_path = None
+        duration = 0.0
+
+    # Clean up Redis tracking key
+    audio_job_key = f"audio_persistence:session:{session_id}"
+    await redis_client.delete(audio_job_key)
+    logger.info(f"🧹 Cleaned up tracking key {audio_job_key}")
+
+    return {
+        "session_id": session_id,
+        "audio_file_path": file_path,
+        "chunk_count": chunk_count,
+        "total_bytes": total_bytes,
+        "duration_seconds": duration,
+        "runtime_seconds": time.time() - start_time
+    }
 
 
 # Enqueue wrapper functions

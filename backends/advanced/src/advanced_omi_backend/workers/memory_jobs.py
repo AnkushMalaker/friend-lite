@@ -5,148 +5,135 @@ This module contains jobs related to memory extraction and processing.
 """
 
 import logging
+import time
+from datetime import UTC, datetime
 from typing import Dict, Any
 
-from advanced_omi_backend.models.job import JobPriority
-
+from advanced_omi_backend.models.job import JobPriority, BaseRQJob, async_job
 from advanced_omi_backend.controllers.queue_controller import (
     memory_queue,
-    _ensure_beanie_initialized,
     JOB_RESULT_TTL,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def process_memory_job(
+@async_job(redis=True, beanie=True)
+async def process_memory_job(
     client_id: str,
     user_id: str,
     user_email: str,
-    conversation_id: str
+    conversation_id: str,
+    redis_client=None
 ) -> Dict[str, Any]:
     """
-    RQ job function for memory extraction and processing.
+    RQ job function for memory extraction and processing from conversations.
 
-    This function is executed by RQ workers and can survive server restarts.
+    Args:
+        client_id: Client identifier
+        user_id: User ID
+        user_email: User email
+        conversation_id: Conversation ID to process
+        redis_client: Redis client (injected by decorator)
+
+    Returns:
+        Dict with processing results
     """
-    import asyncio
-    import time
-    from datetime import UTC, datetime
     from advanced_omi_backend.models.conversation import Conversation
     from advanced_omi_backend.memory import get_memory_service
     from advanced_omi_backend.users import get_user_by_id
 
-    try:
-        logger.info(f"🔄 RQ: Starting memory processing for conversation {conversation_id}")
+    start_time = time.time()
+    logger.info(f"🔄 Starting memory processing for conversation {conversation_id}")
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    # Get conversation data
+    conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+    if not conversation_model:
+        logger.warning(f"No conversation found for {conversation_id}")
+        return {"success": False, "error": "Conversation not found"}
 
-        try:
-            async def process():
-                # Initialize Beanie in this worker process
-                await _ensure_beanie_initialized()
+    # Extract conversation text from transcript segments
+    full_conversation = ""
+    segments = conversation_model.segments
+    if segments:
+        dialogue_lines = []
+        for segment in segments:
+            # Handle both dict and object segments
+            if isinstance(segment, dict):
+                text = segment.get("text", "").strip()
+                speaker = segment.get("speaker", "Unknown")
+            else:
+                text = getattr(segment, "text", "").strip()
+                speaker = getattr(segment, "speaker", "Unknown")
 
-                start_time = time.time()
+            if text:
+                dialogue_lines.append(f"{speaker}: {text}")
+        full_conversation = "\n".join(dialogue_lines)
+    elif conversation_model.transcript and isinstance(conversation_model.transcript, str):
+        # Fallback: if segments are empty but transcript text exists
+        full_conversation = conversation_model.transcript
 
-                # Get conversation data
-                conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
-                if not conversation_model:
-                    logger.warning(f"No conversation found for {conversation_id}")
-                    return {"success": False, "error": "Conversation not found"}
+    if len(full_conversation) < 10:
+        logger.warning(f"Conversation too short for memory processing: {conversation_id}")
+        return {"success": False, "error": "Conversation too short"}
 
-                # Extract conversation text from transcript segments
-                full_conversation = ""
-                segments = conversation_model.segments
-                if segments:
-                    dialogue_lines = []
-                    for segment in segments:
-                        # Handle both dict and object segments
-                        if isinstance(segment, dict):
-                            text = segment.get("text", "").strip()
-                            speaker = segment.get("speaker", "Unknown")
-                        else:
-                            text = getattr(segment, "text", "").strip()
-                            speaker = getattr(segment, "speaker", "Unknown")
+    # Check primary speakers filter
+    user = await get_user_by_id(user_id)
+    if user and user.primary_speakers:
+        transcript_speakers = set()
+        for segment in conversation_model.segments:
+            # Handle both dict and object segments
+            if isinstance(segment, dict):
+                identified_as = segment.get('identified_as')
+            else:
+                identified_as = getattr(segment, 'identified_as', None)
 
-                        if text:
-                            dialogue_lines.append(f"{speaker}: {text}")
-                    full_conversation = "\n".join(dialogue_lines)
-                elif conversation_model.transcript and isinstance(conversation_model.transcript, str):
-                    # Fallback: if segments are empty but transcript text exists
-                    full_conversation = conversation_model.transcript
+            if identified_as and identified_as != 'Unknown':
+                transcript_speakers.add(identified_as.strip().lower())
 
-                if len(full_conversation) < 10:
-                    logger.warning(f"Conversation too short for memory processing: {conversation_id}")
-                    return {"success": False, "error": "Conversation too short"}
+        primary_speaker_names = {ps['name'].strip().lower() for ps in user.primary_speakers}
 
-                # Check primary speakers filter
-                user = await get_user_by_id(user_id)
-                if user and user.primary_speakers:
-                    transcript_speakers = set()
-                    for segment in conversation_model.segments:
-                        # Handle both dict and object segments
-                        if isinstance(segment, dict):
-                            identified_as = segment.get('identified_as')
-                        else:
-                            identified_as = getattr(segment, 'identified_as', None)
+        if transcript_speakers and not transcript_speakers.intersection(primary_speaker_names):
+            logger.info(f"Skipping memory - no primary speakers found in conversation {conversation_id}")
+            return {"success": True, "skipped": True, "reason": "No primary speakers"}
 
-                        if identified_as and identified_as != 'Unknown':
-                            transcript_speakers.add(identified_as.strip().lower())
+    # Process memory
+    memory_service = get_memory_service()
+    memory_result = await memory_service.add_memory(
+        full_conversation,
+        client_id,
+        conversation_id,
+        user_id,
+        user_email,
+        allow_update=True,
+    )
 
-                    primary_speaker_names = {ps['name'].strip().lower() for ps in user.primary_speakers}
+    if memory_result:
+        success, created_memory_ids = memory_result
 
-                    if transcript_speakers and not transcript_speakers.intersection(primary_speaker_names):
-                        logger.info(f"Skipping memory - no primary speakers found in conversation {conversation_id}")
-                        return {"success": True, "skipped": True, "reason": "No primary speakers"}
+        if success and created_memory_ids:
+            # Add memory references to conversation
+            conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+            if conversation_model:
+                memory_refs = [
+                    {"memory_id": mid, "created_at": datetime.now(UTC).isoformat(), "status": "created"}
+                    for mid in created_memory_ids
+                ]
+                conversation_model.memories.extend(memory_refs)
+                await conversation_model.save()
 
-                # Process memory
-                memory_service = get_memory_service()
-                memory_result = await memory_service.add_memory(
-                    full_conversation,
-                    client_id,
-                    conversation_id,
-                    user_id,
-                    user_email,
-                    allow_update=True,
-                )
+            processing_time = time.time() - start_time
+            logger.info(f"✅ Completed memory processing for conversation {conversation_id} - created {len(created_memory_ids)} memories in {processing_time:.2f}s")
 
-                if memory_result:
-                    success, created_memory_ids = memory_result
-
-                    if success and created_memory_ids:
-                        # Add memory references to conversation
-                        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
-                        if conversation_model:
-                            memory_refs = [
-                                {"memory_id": mid, "created_at": datetime.now(UTC).isoformat(), "status": "created"}
-                                for mid in created_memory_ids
-                            ]
-                            conversation_model.memories.extend(memory_refs)
-                            await conversation_model.save()
-
-                        processing_time = time.time() - start_time
-                        logger.info(f"✅ RQ: Completed memory processing for conversation {conversation_id} - created {len(created_memory_ids)} memories in {processing_time:.2f}s")
-
-                        return {
-                            "success": True,
-                            "memories_created": len(created_memory_ids),
-                            "processing_time": processing_time
-                        }
-                    else:
-                        return {"success": True, "memories_created": 0, "skipped": True}
-                else:
-                    return {"success": False, "error": "Memory service returned False"}
-
-            result = loop.run_until_complete(process())
-            return result
-
-        finally:
-            loop.close()
-
-    except Exception as e:
-        logger.error(f"❌ RQ: Memory processing failed for conversation {conversation_id}: {e}")
-        raise
+            return {
+                "success": True,
+                "memories_created": len(created_memory_ids),
+                "processing_time": processing_time
+            }
+        else:
+            return {"success": True, "memories_created": 0, "skipped": True}
+    else:
+        return {"success": False, "error": "Memory service returned False"}
 
 
 def enqueue_memory_processing(

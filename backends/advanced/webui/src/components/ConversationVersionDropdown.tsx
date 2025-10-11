@@ -75,8 +75,14 @@ export default function ConversationVersionDropdown({
     }
   }
 
-  // Removed auto-loading - only load version history when user actually interacts with dropdowns
-  // This prevents unnecessary API calls on every conversation render
+  // Load version history on mount if there are multiple versions
+  // This ensures the correct active version is displayed immediately
+  useEffect(() => {
+    if (versionInfo && ((versionInfo.transcript_count || 0) > 1 || (versionInfo.memory_count || 0) > 1)) {
+      loadVersionHistory()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId, versionInfo?.transcript_count, versionInfo?.memory_count])
 
   const handleActivateVersion = async (type: 'transcript' | 'memory', versionId: string) => {
     try {
@@ -124,13 +130,8 @@ export default function ConversationVersionDropdown({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              const newShowState = !showTranscriptDropdown
-              setShowTranscriptDropdown(newShowState)
+              setShowTranscriptDropdown(!showTranscriptDropdown)
               setShowMemoryDropdown(false)
-              // Load version history only when opening the dropdown for the first time
-              if (newShowState && !versionHistory) {
-                loadVersionHistory()
-              }
             }}
             className="flex items-center space-x-1 px-3 py-1 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-600 rounded text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/30"
           >
@@ -186,13 +187,8 @@ export default function ConversationVersionDropdown({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              const newShowState = !showMemoryDropdown
-              setShowMemoryDropdown(newShowState)
+              setShowMemoryDropdown(!showMemoryDropdown)
               setShowTranscriptDropdown(false)
-              // Load version history only when opening the dropdown for the first time
-              if (newShowState && !versionHistory) {
-                loadVersionHistory()
-              }
             }}
             className="flex items-center space-x-1 px-3 py-1 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-600 rounded text-green-700 dark:text-green-300 hover:bg-green-100 dark:hover:bg-green-900/30"
           >

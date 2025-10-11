@@ -12,7 +12,8 @@ interface Conversation {
   created_at?: string
   client_id: string
   segment_count?: number  // From list endpoint
-  transcript?: Array<{  // Optional - only populated after fetching details
+  transcript?: string  // Full text transcript (for LLM parsing)
+  segments?: Array<{  // Optional - only populated after fetching details
     text: string
     speaker: string
     start: number
@@ -224,20 +225,20 @@ export default function Conversations() {
       return
     }
 
-    // If transcript is already loaded, just expand
-    if (conversation.transcript && conversation.transcript.length > 0) {
+    // If segments are already loaded, just expand
+    if (conversation.segments && conversation.segments.length > 0) {
       setExpandedTranscripts(prev => new Set(prev).add(audioUuid))
       return
     }
 
-    // Fetch full conversation details including transcript
+    // Fetch full conversation details including segments
     try {
       const response = await conversationsApi.getById(conversation.conversation_id)
       if (response.status === 200 && response.data.conversation) {
-        // Update the conversation in state with full transcript
+        // Update the conversation in state with full segments and transcript
         setConversations(prev => prev.map(c =>
           c.audio_uuid === audioUuid
-            ? { ...c, transcript: response.data.conversation.transcript }
+            ? { ...c, segments: response.data.conversation.segments, transcript: response.data.conversation.transcript }
             : c
         ))
         // Expand the transcript
@@ -559,9 +560,9 @@ export default function Conversations() {
                   onClick={() => toggleTranscriptExpansion(conversation.audio_uuid)}
                 >
                   <h3 className="font-medium text-gray-900 dark:text-gray-100">
-                    Transcript {((conversation.transcript && conversation.transcript.length > 0) || conversation.segment_count) && (
+                    Transcript {((conversation.segments && conversation.segments.length > 0) || conversation.segment_count) && (
                       <span className="text-sm text-gray-500 dark:text-gray-400 ml-1">
-                        ({conversation.transcript?.length || conversation.segment_count || 0} segments)
+                        ({conversation.segments?.length || conversation.segment_count || 0} segments)
                       </span>
                     )}
                   </h3>
@@ -577,7 +578,7 @@ export default function Conversations() {
                 {/* Transcript Content - Conditionally Rendered */}
                 {expandedTranscripts.has(conversation.audio_uuid) && (
                   <div className="animate-in slide-in-from-top-2 duration-300 ease-out space-y-4">
-                    {conversation.transcript && conversation.transcript.length > 0 ? (
+                    {conversation.segments && conversation.segments.length > 0 ? (
                       <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
                         <div className="space-y-1">
                       {(() => {
@@ -586,7 +587,7 @@ export default function Conversations() {
                         let colorIndex = 0;
 
                         // First pass: assign colors to unique speakers
-                        conversation.transcript.forEach(segment => {
+                        conversation.segments.forEach(segment => {
                           const speaker = segment.speaker || 'Unknown';
                           if (!speakerColorMap[speaker]) {
                             speakerColorMap[speaker] = SPEAKER_COLOR_PALETTE[colorIndex % SPEAKER_COLOR_PALETTE.length];
@@ -595,7 +596,7 @@ export default function Conversations() {
                         });
 
                         // Render the transcript
-                        return conversation.transcript.map((segment, index) => {
+                        return conversation.segments.map((segment, index) => {
                           const speaker = segment.speaker || 'Unknown';
                           const speakerColor = speakerColorMap[speaker];
                           const segmentId = `${conversation.audio_uuid}-${index}`;
@@ -687,7 +688,7 @@ export default function Conversations() {
                     <div>Cropped Audio: {conversation.cropped_audio_path || 'N/A'}</div>
                     <div>Transcription Status: {conversation.transcription_status || 'N/A'}</div>
                     <div>Memory Processing Status: {conversation.memory_processing_status || 'N/A'}</div>
-                    <div>Transcript Segments: {conversation.transcript?.length || 0}</div>
+                    <div>Transcript Segments: {conversation.segments?.length || 0}</div>
                     <div>Client ID: {conversation.client_id}</div>
                   </div>
                 </div>

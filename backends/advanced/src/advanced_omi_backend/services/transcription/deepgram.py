@@ -403,7 +403,7 @@ class DeepgramStreamConsumer:
     """
     Deepgram consumer for Redis Streams architecture.
 
-    Reads from: audio:stream:deepgram
+    Reads from: specified stream (client-specific or provider-specific)
     Writes to: transcription:results:{session_id}
 
     This inherits from BaseAudioStreamConsumer and implements transcribe_audio().
@@ -413,10 +413,12 @@ class DeepgramStreamConsumer:
         """
         Initialize Deepgram consumer.
 
+        Dynamically discovers all audio:stream:* streams and claims them using Redis locks.
+
         Args:
             redis_client: Connected Redis client
             api_key: Deepgram API key (defaults to DEEPGRAM_API_KEY env var)
-            buffer_chunks: Number of chunks to buffer before transcribing (default: 30 = ~7.7s)
+            buffer_chunks: Number of chunks to buffer before transcribing (default: 30 = ~7.5s)
         """
         import os
         from advanced_omi_backend.services.audio_stream.consumer import BaseAudioStreamConsumer
@@ -467,10 +469,6 @@ class DeepgramStreamConsumer:
 
         # Instantiate the concrete consumer
         self._consumer = _ConcreteConsumer("deepgram", redis_client, buffer_chunks)
-
-    async def setup_consumer_group(self):
-        """Delegate to base consumer."""
-        return await self._consumer.setup_consumer_group()
 
     async def start_consuming(self):
         """Delegate to base consumer."""

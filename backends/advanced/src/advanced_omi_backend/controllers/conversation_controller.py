@@ -125,7 +125,8 @@ async def get_conversation(conversation_id: str, user: User):
                 "summary": getattr(conversation, "summary", ""),
                 "timestamp": conversation.session_start.timestamp() if hasattr(conversation, "session_start") and conversation.session_start else 0,
                 "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
-                "transcript": [seg.model_dump() for seg in conversation.segments] if conversation.segments else [],
+                "transcript": conversation.transcript if conversation.transcript else "",
+                "segments": [seg.model_dump() for seg in conversation.segments] if conversation.segments else [],
                 "speakers_identified": getattr(conversation, "speakers_identified", []),
                 "speaker_names": getattr(conversation, "speaker_names", {}),
                 "duration_seconds": getattr(conversation, "duration_seconds", 0),
@@ -843,14 +844,14 @@ async def get_conversation_version_history(conversation_id: str, user: User):
         # Convert datetime objects to ISO strings for JSON serialization
         transcript_versions = []
         for v in conversation_model.transcript_versions:
-            version_dict = v.dict()
+            version_dict = v.model_dump()
             if version_dict.get('created_at'):
                 version_dict['created_at'] = version_dict['created_at'].isoformat()
             transcript_versions.append(version_dict)
 
         memory_versions = []
         for v in conversation_model.memory_versions:
-            version_dict = v.dict()
+            version_dict = v.model_dump()
             if version_dict.get('created_at'):
                 version_dict['created_at'] = version_dict['created_at'].isoformat()
             memory_versions.append(version_dict)

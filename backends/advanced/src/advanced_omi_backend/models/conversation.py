@@ -284,6 +284,10 @@ def create_conversation(
     audio_uuid: str,
     user_id: str,
     client_id: str,
+    title: Optional[str] = None,
+    summary: Optional[str] = None,
+    transcript: Optional[str] = None,
+    segments: Optional[List["Conversation.SpeakerSegment"]] = None,
 ) -> Conversation:
     """
     Factory function to create a new conversation.
@@ -293,6 +297,10 @@ def create_conversation(
         audio_uuid: Link to audio_chunks collection
         user_id: User who owns this conversation
         client_id: Client device identifier
+        title: Optional conversation title
+        summary: Optional conversation summary
+        transcript: Optional transcript text
+        segments: Optional speaker segments
 
     Returns:
         Conversation instance
@@ -302,5 +310,15 @@ def create_conversation(
         audio_uuid=audio_uuid,
         user_id=user_id,
         client_id=client_id,
-        created_at=datetime.now()
+        created_at=datetime.now(),
+        title=title,
+        summary=summary,
+        transcript=transcript or "",
+        segments=segments or [],
+        transcript_versions=[],
+        active_transcript_version=None,
+        memory_versions=[],
+        active_memory_version=None,
+        memories=[],
+        memory_count=0
     )

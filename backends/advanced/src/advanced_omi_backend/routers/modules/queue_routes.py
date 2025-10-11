@@ -129,7 +129,7 @@ async def get_stream_stats(
     limit: int = Query(default=10, ge=1, le=100),  # Max 100 streams to prevent timeouts
     current_user: User = Depends(current_active_user)
 ):
-    """Get Redis Streams statistics (limited to prevent performance issues)."""
+    """Get Redis Streams statistics with consumer group information."""
     try:
         from advanced_omi_backend.services.audio_service import get_audio_stream_service
         audio_service = get_audio_stream_service()
@@ -154,18 +154,68 @@ async def get_stream_stats(
 
         async def get_stream_info(stream_key):
             try:
-                # Get basic stream info only (skip detailed consumer group info for performance)
-                info = await audio_service.redis.xinfo_stream(stream_key)
-                stream_name = stream_key.decode()
+                stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
+
+                # Get basic stream info
+                info = await audio_service.redis.xinfo_stream(stream_name)
+
+                # Get consumer groups info
+                groups_info = []
+                try:
+                    groups = await audio_service.redis.xinfo_groups(stream_name)
+                    for group in groups:
+                        group_dict = {}
+                        # Parse group info (alternating key-value pairs)
+                        for i in range(0, len(group), 2):
+                            if i+1 < len(group):
+                                key = group[i].decode() if isinstance(group[i], bytes) else str(group[i])
+                                value = group[i+1]
+                                if isinstance(value, bytes):
+                                    try:
+                                        value = value.decode()
+                                    except:
+                                        value = str(value)
+                                group_dict[key] = value
+
+                        # Get consumers for this group
+                        consumers = []
+                        try:
+                            consumers_raw = await audio_service.redis.xinfo_consumers(stream_name, group_dict.get('name', ''))
+                            for consumer in consumers_raw:
+                                consumer_dict = {}
+                                for i in range(0, len(consumer), 2):
+                                    if i+1 < len(consumer):
+                                        key = consumer[i].decode() if isinstance(consumer[i], bytes) else str(consumer[i])
+                                        value = consumer[i+1]
+                                        if isinstance(value, bytes):
+                                            try:
+                                                value = value.decode()
+                                            except:
+                                                value = str(value)
+                                        consumer_dict[key] = value
+                                consumers.append(consumer_dict)
+                        except Exception as ce:
+                            logger.debug(f"Could not fetch consumers for group {group_dict.get('name')}: {ce}")
+
+                        groups_info.append({
+                            "name": group_dict.get('name', 'unknown'),
+                            "consumers": group_dict.get('consumers', 0),
+                            "pending": group_dict.get('pending', 0),
+                            "last_delivered_id": group_dict.get('last-delivered-id', 'N/A'),
+                            "consumer_details": consumers
+                        })
+                except Exception as ge:
+                    logger.debug(f"No consumer groups for stream {stream_name}: {ge}")
 
                 return {
                     "stream_name": stream_name,
                     "length": info[b"length"],
                     "first_entry_id": info[b"first-entry"][0].decode() if info[b"first-entry"] else None,
                     "last_entry_id": info[b"last-entry"][0].decode() if info[b"last-entry"] else None,
+                    "groups": groups_info
                 }
             except Exception as e:
-                logger.error(f"Error getting info for stream {stream_key.decode()}: {e}")
+                logger.error(f"Error getting info for stream {stream_key}: {e}")
                 return None
 
         # Fetch all stream info in parallel
@@ -323,3 +373,111 @@ async def flush_all_jobs(
     except Exception as e:
         logger.error(f"Failed to flush all jobs: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to flush all jobs: {str(e)}")
+
+
+@router.get("/sessions")
+async def get_redis_sessions(
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: User = Depends(current_active_user)
+):
+    """Get Redis session tracking information."""
+    try:
+        import redis.asyncio as aioredis
+        from advanced_omi_backend.controllers.queue_controller import REDIS_URL
+
+        redis_client = aioredis.from_url(REDIS_URL)
+
+        # Get session keys
+        session_keys = []
+        cursor = b"0"
+        while cursor and len(session_keys) < limit:
+            cursor, keys = await redis_client.scan(
+                cursor, match="audio:session:*", count=limit
+            )
+            session_keys.extend(keys[:limit - len(session_keys)])
+
+        # Get session info
+        sessions = []
+        for key in session_keys:
+            try:
+                session_data = await redis_client.hgetall(key)
+                if session_data:
+                    session_id = key.decode().replace("audio:session:", "")
+                    sessions.append({
+                        "session_id": session_id,
+                        "user_id": session_data.get(b"user_id", b"").decode(),
+                        "client_id": session_data.get(b"client_id", b"").decode(),
+                        "stream_name": session_data.get(b"stream_name", b"").decode(),
+                        "provider": session_data.get(b"provider", b"").decode(),
+                        "mode": session_data.get(b"mode", b"").decode(),
+                        "status": session_data.get(b"status", b"").decode(),
+                        "started_at": session_data.get(b"started_at", b"").decode(),
+                        "chunks_published": int(session_data.get(b"chunks_published", b"0").decode() or 0),
+                        "last_chunk_at": session_data.get(b"last_chunk_at", b"").decode()
+                    })
+            except Exception as e:
+                logger.error(f"Error getting session info for {key}: {e}")
+
+        await redis_client.close()
+
+        return {
+            "total_sessions": len(sessions),
+            "sessions": sessions
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get sessions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get sessions: {str(e)}")
+
+
+@router.post("/sessions/clear")
+async def clear_old_sessions(
+    older_than_seconds: int = Query(default=3600, description="Clear sessions older than N seconds"),
+    current_user: User = Depends(current_active_user)
+):
+    """Clear old Redis sessions that are stuck or inactive."""
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        import redis.asyncio as aioredis
+        import time
+        from advanced_omi_backend.controllers.queue_controller import REDIS_URL
+
+        redis_client = aioredis.from_url(REDIS_URL)
+        current_time = time.time()
+        cutoff_time = current_time - older_than_seconds
+
+        # Get all session keys
+        session_keys = []
+        cursor = b"0"
+        while cursor:
+            cursor, keys = await redis_client.scan(cursor, match="audio:session:*", count=100)
+            session_keys.extend(keys)
+
+        # Check each session and delete if old
+        deleted_count = 0
+        for key in session_keys:
+            try:
+                session_data = await redis_client.hgetall(key)
+                if session_data:
+                    last_chunk_at = session_data.get(b"last_chunk_at", b"").decode()
+                    if last_chunk_at:
+                        last_chunk_time = float(last_chunk_at)
+                        if last_chunk_time < cutoff_time:
+                            await redis_client.delete(key)
+                            deleted_count += 1
+                            logger.info(f"Deleted old session: {key.decode()}")
+            except Exception as e:
+                logger.error(f"Error processing session {key}: {e}")
+
+        await redis_client.close()
+
+        return {
+            "deleted_count": deleted_count,
+            "cutoff_seconds": older_than_seconds
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to clear sessions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to clear sessions: {str(e)}")
