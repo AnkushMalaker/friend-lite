@@ -584,15 +584,37 @@ const Queue: React.FC = () => {
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
             <h3 className="text-lg font-medium">Audio Streaming Status</h3>
             <div className="flex items-center space-x-2">
-              {streamingStatus.active_sessions.length > 0 && streamingStatus.active_sessions.some((s) => s.status === 'finalizing') && (
-                <button
-                  onClick={cleanupOldSessions}
-                  className="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 transition-colors text-sm"
-                  title="Remove old and stuck 'finalizing' sessions"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  <span>Cleanup Old Sessions</span>
-                </button>
+              {streamingStatus.active_sessions.length > 0 && (
+                <>
+                  <button
+                    onClick={cleanupOldSessions}
+                    className="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 transition-colors text-sm"
+                    title="Remove old sessions (>1 hour old)"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>Cleanup Old Sessions</span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Remove ALL ${streamingStatus.active_sessions.length} active sessions? This will force-delete all sessions including actively streaming ones.`)) return;
+
+                      try {
+                        const response = await queueApi.cleanupOldSessions(0); // 0 seconds = all sessions
+                        const data = response.data;
+                        alert(`✅ Removed ${data.cleaned_count} session(s)`);
+                        fetchStreamingStatus();
+                      } catch (error: any) {
+                        console.error('❌ Error removing sessions:', error);
+                        alert(`Failed to remove sessions: ${error.response?.data?.error || error.message}`);
+                      }
+                    }}
+                    className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm"
+                    title="Force remove ALL active sessions"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Remove All Sessions ({streamingStatus.active_sessions.length})</span>
+                  </button>
+                </>
               )}
               {streamingStatus.stream_health && Object.values(streamingStatus.stream_health).some((s: any) => s.total_pending > 0) && (
                 <button

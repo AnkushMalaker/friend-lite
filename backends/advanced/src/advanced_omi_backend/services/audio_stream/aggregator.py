@@ -78,6 +78,78 @@ class TranscriptionResultsAggregator:
             logger.error(f"🔄 Error getting results for session {session_id}: {e}")
             return []
 
+    async def get_combined_results(self, session_id: str) -> dict:
+        """
+        Get all transcription results combined into a single aggregated result.
+
+        This is what an aggregator should do - combine multiple chunks into one.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Combined result dict with:
+                - text: Full transcript (all chunks joined)
+                - words: All words combined
+                - segments: All segments combined and sorted
+                - chunk_count: Number of chunks combined
+                - total_confidence: Average confidence
+                - provider: Provider name
+        """
+        # Get raw chunks
+        results = await self.get_session_results(session_id)
+
+        if not results:
+            return {
+                "text": "",
+                "words": [],
+                "segments": [],
+                "chunk_count": 0,
+                "total_confidence": 0.0,
+                "provider": None
+            }
+
+        # Combine text
+        full_text = " ".join([r.get("text", "") for r in results if r.get("text")])
+
+        # Combine words
+        all_words = []
+        for r in results:
+            if "words" in r and r["words"]:
+                all_words.extend(r["words"])
+
+        # Combine segments
+        all_segments = []
+        for r in results:
+            if "segments" in r and r["segments"]:
+                all_segments.extend(r["segments"])
+
+        # Sort segments by start time
+        all_segments.sort(key=lambda s: s.get("start", 0.0))
+
+        # Calculate average confidence
+        confidences = [r.get("confidence", 0.0) for r in results]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+
+        # Get provider (assume all chunks from same provider)
+        provider = results[0].get("provider") if results else None
+
+        combined = {
+            "text": full_text,
+            "words": all_words,
+            "segments": all_segments,
+            "chunk_count": len(results),
+            "total_confidence": avg_confidence,
+            "provider": provider
+        }
+
+        logger.info(
+            f"📦 Combined {len(results)} chunks for session {session_id}: "
+            f"{len(full_text)} chars, {len(all_words)} words, {len(all_segments)} segments"
+        )
+
+        return combined
+
     async def get_realtime_results(
         self,
         session_id: str,

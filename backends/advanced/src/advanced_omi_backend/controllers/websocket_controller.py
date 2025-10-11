@@ -23,6 +23,7 @@ from advanced_omi_backend.client_manager import generate_client_id, get_client_m
 from advanced_omi_backend.constants import OMI_CHANNELS, OMI_SAMPLE_RATE, OMI_SAMPLE_WIDTH
 from advanced_omi_backend.audio_utils import process_audio_chunk
 from advanced_omi_backend.services.audio_stream import AudioStreamProducer
+from advanced_omi_backend.services.audio_stream.producer import get_audio_stream_producer
 
 # Thread pool executors for audio decoding
 _DEC_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -138,12 +139,249 @@ async def cleanup_client_state(client_id: str):
         logger.warning(f"Client {client_id} was not found for cleanup")
 
 
+# Shared helper functions for WebSocket handlers
+async def _setup_websocket_connection(
+    ws: WebSocket,
+    token: Optional[str],
+    device_name: Optional[str],
+    pending_client_id: str,
+    connection_type: str
+) -> tuple[Optional[str], Optional[object], Optional[object]]:
+    """
+    Setup WebSocket connection: accept, authenticate, create client state.
+
+    Args:
+        ws: WebSocket connection
+        token: JWT authentication token
+        device_name: Optional device name for client ID
+        pending_client_id: Temporary tracking ID
+        connection_type: "OMI" or "PCM" for logging
+
+    Returns:
+        tuple: (client_id, client_state, user) or (None, None, None) on failure
+    """
+    # Accept WebSocket first (required before any send/close operations)
+    await ws.accept()
+
+    # Authenticate user after accepting connection
+    user = await websocket_auth(ws, token)
+    if not user:
+        await ws.close(code=1008, reason="Authentication required")
+        return None, None, None
+
+    # Generate proper client_id using user and device_name
+    client_id = generate_client_id(user, device_name)
+
+    # Remove from pending now that we have real client_id
+    pending_connections.discard(pending_client_id)
+    application_logger.info(
+        f"🔌 {connection_type} WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
+    )
+
+    # Send ready message for PCM clients
+    if connection_type == "PCM":
+        try:
+            ready_msg = json.dumps({"type": "ready", "message": "WebSocket connection established"}) + "\n"
+            await ws.send_text(ready_msg)
+            application_logger.debug(f"✅ Sent ready message to {client_id}")
+        except Exception as e:
+            application_logger.error(f"Failed to send ready message to {client_id}: {e}")
+
+    # Create client state
+    client_state = await create_client_state(client_id, user, device_name)
+
+    return client_id, client_state, user
+
+
+async def _initialize_streaming_session(
+    client_state,
+    audio_stream_producer,
+    user_id: str,
+    user_email: str,
+    client_id: str,
+    audio_format: dict
+) -> None:
+    """
+    Initialize streaming session with Redis and enqueue processing jobs.
+
+    Args:
+        client_state: Client state object
+        audio_stream_producer: Audio stream producer instance
+        user_id: User ID
+        user_email: User email
+        client_id: Client ID
+        audio_format: Audio format dict from audio-start event
+    """
+    if hasattr(client_state, 'stream_session_id'):
+        application_logger.debug(f"Session already initialized for {client_id}")
+        return
+
+    # Initialize stream session
+    client_state.stream_session_id = str(uuid.uuid4())
+    client_state.stream_chunk_count = 0
+    client_state.stream_audio_format = audio_format
+    application_logger.info(f"🆔 Created stream session: {client_state.stream_session_id}")
+
+    # Initialize session tracking in Redis
+    await audio_stream_producer.init_session(
+        session_id=client_state.stream_session_id,
+        user_id=user_id,
+        client_id=client_id,
+        mode="streaming",
+        provider="deepgram"
+    )
+
+    # Enqueue speech detection job
+    from advanced_omi_backend.workers.transcription_jobs import stream_speech_detection_job
+    from advanced_omi_backend.workers.audio_jobs import audio_streaming_persistence_job
+    from advanced_omi_backend.controllers.queue_controller import transcription_queue, JOB_RESULT_TTL
+
+    speech_job = transcription_queue.enqueue(
+        stream_speech_detection_job,
+        client_state.stream_session_id,
+        user_id,
+        user_email,
+        client_id,
+        job_timeout=3600,  # 1 hour for long recordings
+        result_ttl=JOB_RESULT_TTL,
+        job_id=f"speech-detect_{client_state.stream_session_id[:12]}",
+        description=f"Stream speech detection for {client_state.stream_session_id[:12]}"
+    )
+    client_state.speech_detection_job_id = speech_job.id
+    application_logger.info(f"✅ Enqueued speech detection job {speech_job.id}")
+
+    # Enqueue audio persistence job in parallel
+    audio_job = transcription_queue.enqueue(
+        audio_streaming_persistence_job,
+        client_state.stream_session_id,
+        user_id,
+        user_email,
+        client_id,
+        job_timeout=3600,  # 1 hour for long recordings
+        result_ttl=JOB_RESULT_TTL,
+        job_id=f"audio-persist_{client_state.stream_session_id[:12]}",
+        description=f"Audio persistence for {client_state.stream_session_id[:12]}"
+    )
+    client_state.audio_persistence_job_id = audio_job.id
+    application_logger.info(f"✅ Enqueued audio persistence job {audio_job.id}")
+
+
+async def _finalize_streaming_session(
+    client_state,
+    audio_stream_producer,
+    user_id: str,
+    user_email: str,
+    client_id: str
+) -> None:
+    """
+    Finalize streaming session: flush buffer, signal workers, enqueue finalize job, cleanup.
+
+    Args:
+        client_state: Client state object
+        audio_stream_producer: Audio stream producer instance
+        user_id: User ID
+        user_email: User email
+        client_id: Client ID
+    """
+    if not hasattr(client_state, 'stream_session_id'):
+        application_logger.debug(f"No active session to finalize for {client_id}")
+        return
+
+    session_id = client_state.stream_session_id
+
+    try:
+        # Flush any remaining buffered audio
+        audio_format = getattr(client_state, 'stream_audio_format', {})
+        await audio_stream_producer.flush_session_buffer(
+            session_id=session_id,
+            sample_rate=audio_format.get("rate", 16000),
+            channels=audio_format.get("channels", 1),
+            sample_width=audio_format.get("width", 2)
+        )
+
+        # Send end-of-session signal to workers
+        await audio_stream_producer.send_session_end_signal(session_id)
+
+        # Mark session as finalizing
+        await audio_stream_producer.finalize_session(session_id)
+
+        # Enqueue finalize job
+        from advanced_omi_backend.workers.transcription_jobs import enqueue_streaming_finalization
+
+        finalize_job = enqueue_streaming_finalization(
+            session_id=session_id,
+            user_id=user_id,
+            user_email=user_email,
+            client_id=client_id
+        )
+
+        application_logger.info(
+            f"✅ Enqueued finalization job {finalize_job.id} for session {session_id[:12]}"
+        )
+
+        # Clear session state
+        for attr in ['stream_session_id', 'stream_chunk_count', 'stream_audio_format',
+                     'speech_detection_job_id', 'audio_persistence_job_id']:
+            if hasattr(client_state, attr):
+                delattr(client_state, attr)
+
+    except Exception as finalize_error:
+        application_logger.error(
+            f"❌ Failed to finalize streaming session: {finalize_error}",
+            exc_info=True
+        )
+
+
+async def _publish_audio_to_stream(
+    client_state,
+    audio_stream_producer,
+    audio_data: bytes,
+    user_id: str,
+    client_id: str,
+    sample_rate: int,
+    channels: int,
+    sample_width: int
+) -> None:
+    """
+    Publish audio chunk to Redis Stream with chunk tracking.
+
+    Args:
+        client_state: Client state object
+        audio_stream_producer: Audio stream producer instance
+        audio_data: Raw PCM audio bytes
+        user_id: User ID
+        client_id: Client ID
+        sample_rate: Sample rate (Hz)
+        channels: Number of channels
+        sample_width: Bytes per sample
+    """
+    if not hasattr(client_state, 'stream_session_id'):
+        application_logger.warning(f"⚠️ Received audio chunk before session initialized for {client_id}")
+        return
+
+    # Increment chunk count and format chunk ID
+    client_state.stream_chunk_count += 1
+    chunk_id = f"{client_state.stream_chunk_count:05d}"
+
+    # Publish to Redis Stream using producer
+    await audio_stream_producer.add_audio_chunk(
+        audio_data=audio_data,
+        session_id=client_state.stream_session_id,
+        chunk_id=chunk_id,
+        user_id=user_id,
+        client_id=client_id,
+        sample_rate=sample_rate,
+        channels=channels,
+        sample_width=sample_width
+    )
+
+
 async def handle_omi_websocket(
     ws: WebSocket,
     token: Optional[str] = None,
     device_name: Optional[str] = None,
 ):
-    """Handle OMI WebSocket connections."""
+    """Handle OMI WebSocket connections with Opus decoding."""
     # Generate pending client_id to track connection even if auth fails
     pending_client_id = f"pending_{uuid.uuid4()}"
     pending_connections.add(pending_client_id)
@@ -152,30 +390,19 @@ async def handle_omi_websocket(
     client_state = None
 
     try:
-        # Accept WebSocket first (required before any send/close operations)
-        await ws.accept()
-
-        # Authenticate user after accepting connection
-        user = await websocket_auth(ws, token)
+        # Setup connection (accept, auth, create client state)
+        client_id, client_state, user = await _setup_websocket_connection(
+            ws, token, device_name, pending_client_id, "OMI"
+        )
         if not user:
-            await ws.close(code=1008, reason="Authentication required")
             return
 
-        # Generate proper client_id using user and device_name
-        client_id = generate_client_id(user, device_name)
-
-        # Remove from pending now that we have real client_id
-        pending_connections.discard(pending_client_id)
-        application_logger.info(
-            f"🔌 WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
-        )
-
-        # Create client state
-        client_state = await create_client_state(client_id, user, device_name)
-
-        # Setup decoder (only required for decoding OMI audio)
+        # OMI-specific: Setup Opus decoder
         decoder = OmiOpusDecoder()
         _decode_packet = partial(decoder.decode_packet, strip_header=False)
+
+        # Get singleton audio stream producer
+        audio_stream_producer = get_audio_stream_producer()
 
         packet_count = 0
         total_bytes = 0
@@ -185,62 +412,56 @@ async def handle_omi_websocket(
             header, payload = await parse_wyoming_protocol(ws)
 
             if header["type"] == "audio-start":
-                # Handle audio session start (optional for OMI devices)
-                application_logger.info(
-                    f"🎙️ OMI audio session started for {client_id} (explicit start)"
+                # Handle audio session start
+                application_logger.info(f"🎙️ OMI audio session started for {client_id}")
+                await _initialize_streaming_session(
+                    client_state,
+                    audio_stream_producer,
+                    user.user_id,
+                    user.email,
+                    client_id,
+                    header.get("data", {"rate": OMI_SAMPLE_RATE, "width": OMI_SAMPLE_WIDTH, "channels": OMI_CHANNELS})
                 )
 
             elif header["type"] == "audio-chunk" and payload:
                 packet_count += 1
                 total_bytes += len(payload)
 
-                # OMI devices stream continuously - always process audio chunks
-                if packet_count <= 5 or packet_count % 1000 == 0:  # Log first 5 and every 1000th
+                # Log progress
+                if packet_count <= 5 or packet_count % 1000 == 0:
                     application_logger.info(
                         f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes"
                     )
 
-                # Decode Opus payload to PCM using OMI decoder
+                # OMI-specific: Decode Opus to PCM
                 start_time = time.time()
                 loop = asyncio.get_running_loop()
                 pcm_data = await loop.run_in_executor(_DEC_IO_EXECUTOR, _decode_packet, payload)
                 decode_time = time.time() - start_time
 
                 if pcm_data:
-                    if packet_count <= 5 or packet_count % 1000 == 0:  # Log first 5 and every 1000th
+                    if packet_count <= 5 or packet_count % 1000 == 0:
                         application_logger.debug(
-                            f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> {len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
+                            f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> "
+                            f"{len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
                         )
 
-                    # Use timestamp from Wyoming header if provided, otherwise current time
-                    audio_data = header.get("data", {})
-                    chunk_timestamp = audio_data.get("timestamp", int(time.time()))
-
-                    # Queue to application-level processor
-                    if packet_count <= 5 or packet_count % 100 == 0:  # Log first 5 and every 100th
-                        application_logger.debug(
-                            f"🚀 About to queue audio chunk #{packet_count} for client {client_id}"
-                        )
-
-                    # Process audio chunk through unified pipeline
-                    await process_audio_chunk(
-                        audio_data=pcm_data,
-                        client_id=client_id,
-                        user_id=user.user_id,
-                        user_email=user.email,
-                        audio_format={
-                            "rate": OMI_SAMPLE_RATE,
-                            "width": OMI_SAMPLE_WIDTH,
-                            "channels": OMI_CHANNELS,
-                            "timestamp": chunk_timestamp,
-                        },
-                        client_state=client_state,
+                    # Publish decoded PCM to Redis Stream
+                    await _publish_audio_to_stream(
+                        client_state,
+                        audio_stream_producer,
+                        pcm_data,
+                        user.user_id,
+                        client_id,
+                        OMI_SAMPLE_RATE,
+                        OMI_CHANNELS,
+                        OMI_SAMPLE_WIDTH
                     )
 
-                    # Log every 1000th packet to avoid spam
+                    # Log every 1000th packet
                     if packet_count % 1000 == 0:
                         application_logger.info(
-                            f"📊 Processed {packet_count} OMI packets ({total_bytes} bytes total) for client {client_id}"
+                            f"📊 Processed {packet_count} OMI packets ({total_bytes} bytes total)"
                         )
                 else:
                     # Log decode failures for first 5 packets
@@ -256,12 +477,14 @@ async def handle_omi_websocket(
                     f"Total chunks: {packet_count}, Total bytes: {total_bytes}"
                 )
 
-                # Close current conversation to trigger memory processing
-                if client_state:
-                    application_logger.info(
-                        f"📝 Closing conversation for {client_id} on audio-stop"
-                    )
-                    await client_state.close_current_conversation()
+                # Finalize session
+                await _finalize_streaming_session(
+                    client_state,
+                    audio_stream_producer,
+                    user.user_id,
+                    user.email,
+                    client_id
+                )
 
                 # Reset counters for next session
                 packet_count = 0
@@ -299,7 +522,7 @@ async def handle_pcm_websocket(
     token: Optional[str] = None,
     device_name: Optional[str] = None
 ):
-    """Handle PCM WebSocket connections."""
+    """Handle PCM WebSocket connections with batch and streaming mode support."""
     # Generate pending client_id to track connection even if auth fails
     pending_client_id = f"pending_{uuid.uuid4()}"
     pending_connections.add(pending_client_id)
@@ -308,43 +531,15 @@ async def handle_pcm_websocket(
     client_state = None
 
     try:
-        # Accept WebSocket first (required before any send/close operations)
-        await ws.accept()
-
-        # Authenticate user after accepting connection
-        user = await websocket_auth(ws, token)
+        # Setup connection (accept, auth, create client state)
+        client_id, client_state, user = await _setup_websocket_connection(
+            ws, token, device_name, pending_client_id, "PCM"
+        )
         if not user:
-            await ws.close(code=1008, reason="Authentication required")
             return
 
-        # Generate proper client_id using user and device_name
-        client_id = generate_client_id(user, device_name)
-
-        # Remove from pending now that we have real client_id
-        pending_connections.discard(pending_client_id)
-        application_logger.info(
-            f"🔌 PCM WebSocket connection accepted - User: {user.user_id} ({user.email}), Client: {client_id}"
-        )
-
-        # Send ready message to client (similar to speaker recognition service)
-        try:
-            ready_msg = json.dumps({"type": "ready", "message": "WebSocket connection established"}) + "\n"
-            await ws.send_text(ready_msg)
-            application_logger.debug(f"✅ Sent ready message to {client_id}")
-        except Exception as e:
-            application_logger.error(f"Failed to send ready message to {client_id}: {e}")
-
-        # Create client state
-        client_state = await create_client_state(client_id, user, device_name)
-
-        # Get Redis client for audio streaming producer
-        import redis.asyncio as redis
-        redis_client = await redis.from_url(
-            os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-            encoding="utf-8",
-            decode_responses=False
-        )
-        audio_stream_producer = AudioStreamProducer(redis_client)
+        # Get singleton audio stream producer
+        audio_stream_producer = get_audio_stream_producer()
 
         packet_count = 0
         total_bytes = 0
@@ -425,90 +620,25 @@ async def handle_pcm_websocket(
                                     # Check if this was a streaming mode session
                                     recording_mode = getattr(client_state, 'recording_mode', 'batch')
 
-                                    if recording_mode == "streaming" and hasattr(client_state, 'stream_session_id'):
-                                        # V2 Streaming mode: finalize transcription using job results
-                                        application_logger.info(f"🔄 Finalizing streaming session {client_state.stream_session_id}")
-
-                                        try:
-                                            # Flush any remaining buffered audio
-                                            audio_format = getattr(client_state, 'stream_audio_format', {})
-                                            await audio_stream_producer.flush_session_buffer(
-                                                session_id=client_state.stream_session_id,
-                                                sample_rate=audio_format.get("rate", 16000),
-                                                channels=audio_format.get("channels", 1),
-                                                sample_width=audio_format.get("width", 2)
-                                            )
-
-                                            # Send end-of-session signal to workers to flush their buffers
-                                            await audio_stream_producer.send_session_end_signal(
-                                                session_id=client_state.stream_session_id
-                                            )
-
-                                            # Mark session as finalizing (this stops speech_detection_job)
-                                            await audio_stream_producer.finalize_session(client_state.stream_session_id)
-
-                                            # V2 Architecture: Get speech detection job result
-                                            from advanced_omi_backend.workers.transcription_jobs import finalize_streaming_transcription_job
-                                            from advanced_omi_backend.controllers.queue_controller import transcription_queue, JOB_RESULT_TTL, REDIS_URL, redis_conn
-                                            from rq.job import Job
-
-                                            conversation_id = None
-                                            open_conversation_job_id = None
-
-                                            if hasattr(client_state, 'speech_detection_job_id'):
-                                                try:
-                                                    speech_job = Job.fetch(client_state.speech_detection_job_id, connection=redis_conn)
-                                                    # Wait briefly for job to complete (it should stop when session becomes "finalizing")
-                                                    import asyncio
-                                                    for _ in range(10):  # Wait up to 5 seconds
-                                                        if speech_job.is_finished or speech_job.is_failed:
-                                                            break
-                                                        await asyncio.sleep(0.5)
-
-                                                    if speech_job.is_finished and speech_job.result:
-                                                        result = speech_job.result
-                                                        conversation_id = result.get("conversation_id")
-                                                        open_conversation_job_id = result.get("open_conversation_job_id")
-                                                        application_logger.info(
-                                                            f"✅ Speech detection job completed: conversation_id={conversation_id}, "
-                                                            f"open_job={open_conversation_job_id}"
-                                                        )
-                                                except Exception as job_error:
-                                                    application_logger.warning(f"⚠️ Could not fetch speech detection job result: {job_error}")
-
-                                            # Enqueue finalize job directly
-                                            finalize_job = transcription_queue.enqueue(
-                                                finalize_streaming_transcription_job,
-                                                client_state.stream_session_id,
-                                                user.user_id,
-                                                user.email,
-                                                client_id,
-                                                conversation_id,
-                                                client_state.stream_audio_chunks,
-                                                REDIS_URL,  # Pass redis_url
-                                                open_conversation_job_id,
-                                                job_timeout=120,
-                                                result_ttl=JOB_RESULT_TTL,
-                                                job_id=f"finalize-stream_{client_state.stream_session_id[:12]}",
-                                                description=f"Finalize streaming session {client_state.stream_session_id[:12]}"
-                                            )
-
-                                            application_logger.info(
-                                                f"✅ Enqueued finalization job {finalize_job.id} for session {client_state.stream_session_id}"
-                                            )
-
-                                        except Exception as enqueue_error:
-                                            application_logger.error(
-                                                f"❌ Failed to finalize streaming session: {enqueue_error}",
-                                                exc_info=True
-                                            )
+                                    if recording_mode == "streaming":
+                                        # Streaming mode: finalize session using helper
+                                        await _finalize_streaming_session(
+                                            client_state,
+                                            audio_stream_producer,
+                                            user.user_id,
+                                            user.email,
+                                            client_id
+                                        )
                                     else:
                                         # Batch mode: write complete file and enqueue job (like upload)
                                         if hasattr(client_state, 'batch_audio_chunks') and client_state.batch_audio_chunks:
                                             try:
+                                                from datetime import UTC, datetime
                                                 from advanced_omi_backend.audio_utils import write_audio_file
-                                                from advanced_omi_backend.workers.transcription_jobs import listen_for_speech_job
-                                                from advanced_omi_backend.controllers.queue_controller import transcription_queue, JOB_RESULT_TTL
+                                                from advanced_omi_backend.models.conversation import Conversation
+                                                from advanced_omi_backend.workers.transcription_jobs import enqueue_transcript_processing
+                                                from advanced_omi_backend.workers.memory_jobs import enqueue_memory_processing
+                                                from advanced_omi_backend.models.job import JobPriority
 
                                                 # Combine all chunks
                                                 complete_audio = b''.join(client_state.batch_audio_chunks)
@@ -521,7 +651,7 @@ async def handle_pcm_websocket(
                                                 timestamp = int(time.time() * 1000)
 
                                                 # Write audio file and create AudioFile entry
-                                                wav_filename, _file_path, duration = await write_audio_file(
+                                                wav_filename, file_path, duration = await write_audio_file(
                                                     raw_audio_data=complete_audio,
                                                     audio_uuid=audio_uuid,
                                                     client_id=client_id,
@@ -535,22 +665,58 @@ async def handle_pcm_websocket(
                                                     f"✅ Batch mode: Wrote audio file {wav_filename} ({duration:.1f}s)"
                                                 )
 
-                                                # Enqueue transcription job directly (no wrapper)
-                                                job = transcription_queue.enqueue(
-                                                    listen_for_speech_job,
-                                                    audio_uuid,
-                                                    wav_filename,
-                                                    client_id,
-                                                    user.user_id,
-                                                    user.email,
-                                                    job_timeout=300,
-                                                    result_ttl=JOB_RESULT_TTL,
-                                                    job_id=f"listen-speech_{audio_uuid[:12]}",
-                                                    description=f"Speech detection for batch audio {audio_uuid[:12]}"
+                                                # Create conversation immediately for batch audio
+                                                conversation_id = str(uuid.uuid4())
+                                                version_id = str(uuid.uuid4())
+
+                                                conversation = Conversation(
+                                                    conversation_id=conversation_id,
+                                                    audio_uuid=audio_uuid,
+                                                    user_id=user.user_id,
+                                                    client_id=client_id,
+                                                    title="Batch Recording",
+                                                    summary="Processing batch audio...",
+                                                    transcript_versions=[],
+                                                    active_transcript_version=None,
+                                                    memory_versions=[],
+                                                    active_memory_version=None,
+                                                    created_at=datetime.now(UTC),
+                                                    updated_at=datetime.now(UTC),
+                                                    session_start=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
+                                                    session_end=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
+                                                    duration_seconds=duration,
+                                                    speech_start_time=0.0,
+                                                    speech_end_time=duration,
+                                                    speaker_names={},
+                                                    action_items=[]
+                                                )
+                                                await conversation.insert()
+
+                                                application_logger.info(f"📝 Batch mode: Created conversation {conversation_id}")
+
+                                                # Enqueue transcript processing job
+                                                transcript_job = enqueue_transcript_processing(
+                                                    conversation_id=conversation_id,
+                                                    audio_uuid=audio_uuid,
+                                                    audio_path=file_path,
+                                                    version_id=version_id,
+                                                    user_id=user.user_id,
+                                                    priority=JobPriority.HIGH,
+                                                    trigger="batch_audio"
+                                                )
+
+                                                # Enqueue memory processing job
+                                                memory_job = enqueue_memory_processing(
+                                                    client_id=client_id,
+                                                    user_id=user.user_id,
+                                                    user_email=user.email,
+                                                    conversation_id=conversation_id,
+                                                    priority=JobPriority.NORMAL
                                                 )
 
                                                 application_logger.info(
-                                                    f"✅ Batch mode: Enqueued transcription job {job.id} for {audio_uuid}"
+                                                    f"✅ Batch mode: Enqueued jobs for {conversation_id} - "
+                                                    f"transcript: {transcript_job.id}, memory: {memory_job.id}"
                                                 )
 
                                                 # Clear accumulated chunks
@@ -593,62 +759,29 @@ async def handle_pcm_websocket(
                                             audio_format = control_header.get("data", {})
 
                                             if recording_mode == "streaming":
-                                                # Streaming mode: publish to Redis Streams AND accumulate for file
+                                                # Streaming mode: initialize session if needed, then publish
                                                 try:
-                                                    # Generate session and chunk IDs
+                                                    # Initialize streaming session (idempotent)
                                                     if not hasattr(client_state, 'stream_session_id'):
-                                                        client_state.stream_session_id = str(uuid.uuid4())
-                                                        client_state.stream_chunk_count = 0
-                                                        client_state.stream_audio_chunks = []  # Accumulate for file
-                                                        client_state.stream_audio_format = audio_format
-                                                        application_logger.info(f"🆔 Created stream session: {client_state.stream_session_id}")
-
-                                                        # Initialize session tracking in Redis
-                                                        await audio_stream_producer.init_session(
-                                                            session_id=client_state.stream_session_id,
-                                                            user_id=user.user_id,
-                                                            client_id=client_id,
-                                                            mode="streaming",
-                                                            provider="deepgram"
-                                                        )
-
-                                                        # V2 Architecture: Enqueue speech detection job
-                                                        from advanced_omi_backend.workers.transcription_jobs import stream_speech_detection_job
-                                                        from advanced_omi_backend.controllers.queue_controller import transcription_queue, JOB_RESULT_TTL
-
-                                                        speech_job = transcription_queue.enqueue(
-                                                            stream_speech_detection_job,
-                                                            client_state.stream_session_id,
+                                                        await _initialize_streaming_session(
+                                                            client_state,
+                                                            audio_stream_producer,
                                                             user.user_id,
                                                             user.email,
                                                             client_id,
-                                                            job_timeout=3600,  # 1 hour for long recordings
-                                                            result_ttl=JOB_RESULT_TTL,
-                                                            job_id=f"speech-detect_{client_state.stream_session_id[:12]}",
-                                                            description=f"Stream speech detection for {client_state.stream_session_id[:12]}"
+                                                            audio_format
                                                         )
-                                                        client_state.speech_detection_job_id = speech_job.id
-                                                        application_logger.info(f"✅ Enqueued speech detection job {speech_job.id}")
 
-                                                    client_state.stream_chunk_count += 1
-                                                    chunk_id = f"{client_state.stream_chunk_count:05d}"
-
-                                                    # Accumulate audio for file writing
-                                                    client_state.stream_audio_chunks.append(audio_data)
-
-                                                    # Publish to Redis Stream for transcription
-                                                    application_logger.debug(
-                                                        f"📤 Publishing chunk {chunk_id} to Redis (session: {client_state.stream_session_id})"
-                                                    )
-                                                    await audio_stream_producer.add_audio_chunk(
-                                                        audio_data=audio_data,
-                                                        session_id=client_state.stream_session_id,
-                                                        chunk_id=chunk_id,
-                                                        user_id=user.user_id,
-                                                        client_id=client_id,
-                                                        sample_rate=audio_format.get("rate", 16000),
-                                                        channels=audio_format.get("channels", 1),
-                                                        sample_width=audio_format.get("width", 2)
+                                                    # Publish audio chunk to Redis Stream
+                                                    await _publish_audio_to_stream(
+                                                        client_state,
+                                                        audio_stream_producer,
+                                                        audio_data,
+                                                        user.user_id,
+                                                        client_id,
+                                                        audio_format.get("rate", 16000),
+                                                        audio_format.get("channels", 1),
+                                                        audio_format.get("width", 2)
                                                     )
 
                                                 except Exception as stream_error:
@@ -694,42 +827,30 @@ async def handle_pcm_websocket(
                             recording_mode = getattr(client_state, 'recording_mode', 'batch')
 
                             if recording_mode == "streaming":
-                                # Streaming mode: publish to Redis Streams
-                                # Redis client and producer are initialized during app startup
+                                # Streaming mode: publish to Redis Streams (legacy raw binary support)
                                 try:
-                                    # Generate session and chunk IDs
+                                    # Initialize streaming session if needed (fallback for clients not sending audio-start)
                                     if not hasattr(client_state, 'stream_session_id'):
-                                        client_state.stream_session_id = str(uuid.uuid4())
-                                        client_state.stream_chunk_count = 0
-                                        client_state.stream_audio_chunks = []  # Accumulate for file
-                                        
-                                        # Initialize session tracking in Redis
-                                        await audio_stream_producer.init_session(
-                                            session_id=client_state.stream_session_id,
-                                            user_id=user.user_id,
-                                            client_id=client_id,
-                                            mode="streaming"
+                                        default_format = {"rate": 16000, "width": 2, "channels": 1}
+                                        await _initialize_streaming_session(
+                                            client_state,
+                                            audio_stream_producer,
+                                            user.user_id,
+                                            user.email,
+                                            client_id,
+                                            default_format
                                         )
 
-                                    client_state.stream_chunk_count += 1
-                                    chunk_id = f"{client_state.stream_chunk_count:05d}"
-                                    
-                                    # Accumulate audio for file writing
-                                    client_state.stream_audio_chunks.append(audio_data)
-
-                                    # Publish to Redis Stream
-                                    await audio_stream_producer.add_audio_chunk(
-                                        audio_data=audio_data,
-                                        session_id=client_state.stream_session_id,
-                                        chunk_id=chunk_id,
-                                        user_id=user.user_id,
-                                        client_id=client_id,
-                                        sample_rate=16000,
-                                        channels=1,
-                                        sample_width=2
-                                    )
-                                    application_logger.debug(
-                                        f"📤 Published raw chunk {chunk_id} to Redis Stream for session {client_state.stream_session_id}"
+                                    # Publish audio chunk to Redis Stream
+                                    await _publish_audio_to_stream(
+                                        client_state,
+                                        audio_stream_producer,
+                                        audio_data,
+                                        user.user_id,
+                                        client_id,
+                                        16000,  # Default sample rate
+                                        1,      # Default channels
+                                        2       # Default sample width
                                     )
                                 except Exception as stream_error:
                                     application_logger.error(
