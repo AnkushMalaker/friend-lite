@@ -23,6 +23,97 @@ from advanced_omi_backend.controllers.queue_controller import (
 logger = logging.getLogger(__name__)
 
 
+async def apply_speaker_recognition(
+    audio_path: str,
+    transcript_text: str,
+    words: list,
+    segments: list,
+    user_id: str,
+    conversation_id: str = None
+) -> list:
+    """
+    Apply speaker recognition to segments using the speaker recognition service.
+
+    This is a reusable helper function that can be called from any job.
+
+    Args:
+        audio_path: Path to the audio file
+        transcript_text: Full transcript text
+        words: Word-level timing data
+        segments: List of Conversation.SpeakerSegment objects
+        user_id: User ID
+        conversation_id: Optional conversation ID for logging
+
+    Returns:
+        Updated list of segments with identified speakers
+    """
+    try:
+        from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
+
+        speaker_client = SpeakerRecognitionClient()
+        if not speaker_client.enabled:
+            logger.info(f"🎤 Speaker recognition disabled, using original speaker labels")
+            return segments
+
+        logger.info(f"🎤 Speaker recognition enabled, identifying speakers{f' for {conversation_id}' if conversation_id else ''}...")
+
+        # Prepare transcript data with word-level timings
+        transcript_data = {
+            "text": transcript_text,
+            "words": words
+        }
+
+        # Call speaker recognition service to match and identify speakers
+        speaker_result = await speaker_client.diarize_identify_match(
+            audio_path=audio_path,
+            transcript_data=transcript_data,
+            user_id=user_id
+        )
+
+        if not speaker_result or "segments" not in speaker_result:
+            logger.info(f"🎤 Speaker recognition returned no segments, keeping original transcription segments")
+            return segments
+
+        speaker_identified_segments = speaker_result["segments"]
+        logger.info(f"🎤 Speaker recognition returned {len(speaker_identified_segments)} identified segments")
+        logger.info(f"🎤 Original segments: {len(segments)}")
+
+        # Create time-based speaker mapping
+        def get_speaker_at_time(timestamp: float, speaker_segments: list) -> str:
+            """Get the identified speaker active at a given timestamp."""
+            for seg in speaker_segments:
+                seg_start = seg.get("start", 0.0)
+                seg_end = seg.get("end", 0.0)
+                if seg_start <= timestamp <= seg_end:
+                    return seg.get("identified_as") or seg.get("speaker", "Unknown")
+            return None
+
+        # Update each segment's speaker based on its timestamp
+        updated_count = 0
+        for seg in segments:
+            seg_mid = (seg.start + seg.end) / 2.0
+            identified_speaker = get_speaker_at_time(seg_mid, speaker_identified_segments)
+
+            if identified_speaker and identified_speaker != "Unknown":
+                original_speaker = seg.speaker
+                seg.speaker = identified_speaker
+                updated_count += 1
+                logger.debug(f"🎤   Segment [{seg.start:.1f}-{seg.end:.1f}] '{original_speaker}' -> '{identified_speaker}'")
+
+        # Ensure segments remain sorted by start time
+        segments.sort(key=lambda s: s.start)
+        logger.info(f"🎤 Updated {updated_count}/{len(segments)} segments with speaker identifications")
+
+        return segments
+
+    except Exception as speaker_error:
+        logger.warning(f"⚠️ Speaker recognition failed: {speaker_error}")
+        logger.warning(f"Continuing with original transcription speaker labels")
+        import traceback
+        logger.debug(traceback.format_exc())
+        return segments
+
+
 @async_job(redis=True, beanie=True)
 async def process_transcript_job(
     conversation_id: str,
@@ -382,9 +473,9 @@ async def stream_speech_detection_job(
                 # Get raw transcription results (with chunk IDs)
                 raw_results = await aggregator.get_session_results(session_id)
 
-                # Check if enrolled speaker is speaking
+                # Check if enrolled speaker is speaking (also returns speaker recognition results)
                 speaker_client = SpeakerRecognitionClient()
-                enrolled_speaker_present = await speaker_client.check_if_enrolled_speaker_present(
+                enrolled_speaker_present, speaker_recognition_result = await speaker_client.check_if_enrolled_speaker_present(
                     redis_client=redis_client,
                     client_id=client_id,
                     session_id=session_id,
@@ -398,6 +489,11 @@ async def stream_speech_detection_job(
                     continue
 
                 logger.info(f"✅ Enrolled speaker detected! Proceeding to create conversation...")
+
+                # Log speaker recognition results for debugging
+                if speaker_recognition_result and "segments" in speaker_recognition_result:
+                    num_segments = len(speaker_recognition_result["segments"])
+                    logger.info(f"🎤 Speaker recognition returned {num_segments} segments during enrollment check")
 
             # Check if conversation job already running for this session
             open_job_key = f"open_conversation:session:{session_id}"
@@ -534,104 +630,38 @@ async def finalize_streaming_transcription_job(
         else:
             logger.warning(f"⚠️ open_conversation_job did not complete within {max_wait_seconds}s, proceeding anyway")
 
-        # Get combined results from aggregator (does the combining for us)
-        combined = await aggregator.get_combined_results(session_id)
-        full_transcript = combined["text"]
-        logger.info(f"📝 Combined transcript: {len(full_transcript)} characters")
+    # Get combined results from aggregator (runs for ALL paths, not just when open_conversation_job exists)
+    combined = await aggregator.get_combined_results(session_id)
+    full_transcript = combined["text"]
+    logger.info(f"📝 Combined transcript: {len(full_transcript)} characters")
 
-        # Convert segments to SpeakerSegment objects
-        all_segments = []
-        for seg in combined["segments"]:
-            all_segments.append(Conversation.SpeakerSegment(
-                start=seg.get("start", 0.0),
-                end=seg.get("end", 0.0),
-                text=seg.get("text", ""),
-                speaker=seg.get("speaker", "Speaker 0"),
-                confidence=seg.get("confidence")
-            ))
-        logger.info(f"📊 Extracted {len(all_segments)} segments")
+    # Convert segments to SpeakerSegment objects
+    all_segments = []
+    for seg in combined["segments"]:
+        all_segments.append(Conversation.SpeakerSegment(
+            start=seg.get("start", 0.0),
+            end=seg.get("end", 0.0),
+            text=seg.get("text", ""),
+            speaker=seg.get("speaker", "Speaker 0"),
+            confidence=seg.get("confidence")
+        ))
+    logger.info(f"📊 Extracted {len(all_segments)} segments")
 
-        # Get audio file path from Redis (written by audio_streaming_persistence_job)
-        audio_file_key = f"audio:file:{session_id}"
-        file_path_bytes = await redis_client.get(audio_file_key)
+    # Get audio file path from Redis (written by audio_streaming_persistence_job)
+    audio_file_key = f"audio:file:{session_id}"
+    file_path_bytes = await redis_client.get(audio_file_key)
 
-        if not file_path_bytes:
-            logger.error(f"❌ Audio file path not found in Redis for session {session_id}")
-            logger.warning(f"⚠️ Audio persistence job may have failed - check job status")
-            return {"success": False, "error": "Audio file not found"}
+    if not file_path_bytes:
+        logger.error(f"❌ Audio file path not found in Redis for session {session_id}")
+        logger.warning(f"⚠️ Audio persistence job may have failed - check job status")
+        return {"success": False, "error": "Audio file not found"}
 
-        file_path = file_path_bytes.decode()
-        logger.info(f"📁 Retrieved audio file path from Redis: {file_path}")
+    file_path = file_path_bytes.decode()
+    logger.info(f"📁 Retrieved audio file path from Redis: {file_path}")
 
-        # Extract filename from path for return value
-        from pathlib import Path
-        wav_filename = Path(file_path).name
-
-        # Speaker Recognition Integration
-        speaker_identified_segments = []
-        try:
-            from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
-
-            speaker_client = SpeakerRecognitionClient()
-            if speaker_client.enabled:
-                logger.info(f"🎤 Speaker recognition enabled, identifying speakers...")
-
-                # Prepare transcript data with word-level timings (from combined results)
-                transcript_data = {
-                    "text": full_transcript,
-                    "words": combined["words"]
-                }
-
-                # Call speaker recognition service to match and identify speakers
-                speaker_result = await speaker_client.diarize_identify_match(
-                    audio_path=file_path,
-                    transcript_data=transcript_data,
-                    user_id=user_id
-                )
-
-                if speaker_result and "segments" in speaker_result:
-                    speaker_identified_segments = speaker_result["segments"]
-                    logger.info(f"🎤 Speaker recognition returned {len(speaker_identified_segments)} identified segments")
-                    logger.info(f"🎤 Original streaming segments: {len(all_segments)}")
-
-                    # Create time-based speaker mapping
-                    # Map time ranges to identified speakers for updating original segments
-                    def get_speaker_at_time(timestamp: float, speaker_segments: list) -> str:
-                        """Get the identified speaker active at a given timestamp."""
-                        for seg in speaker_segments:
-                            seg_start = seg.get("start", 0.0)
-                            seg_end = seg.get("end", 0.0)
-                            # Check if timestamp falls within this segment
-                            if seg_start <= timestamp <= seg_end:
-                                return seg.get("identified_as") or seg.get("speaker", "Unknown")
-                        return None
-
-                    # Update each streaming segment's speaker based on its timestamp
-                    updated_count = 0
-                    for seg in all_segments:
-                        # Use the middle of the segment for speaker lookup
-                        seg_mid = (seg.start + seg.end) / 2.0
-                        identified_speaker = get_speaker_at_time(seg_mid, speaker_identified_segments)
-
-                        if identified_speaker and identified_speaker != "Unknown":
-                            original_speaker = seg.speaker
-                            seg.speaker = identified_speaker
-                            updated_count += 1
-                            logger.debug(f"🎤   Segment [{seg.start:.1f}-{seg.end:.1f}] '{original_speaker}' -> '{identified_speaker}'")
-
-                    # Ensure segments remain sorted by start time
-                    all_segments.sort(key=lambda s: s.start)
-                    logger.info(f"🎤 Updated {updated_count}/{len(all_segments)} streaming segments with speaker identifications")
-                else:
-                    logger.info(f"🎤 Speaker recognition returned no segments, keeping original transcription segments")
-            else:
-                logger.info(f"🎤 Speaker recognition disabled, using original speaker labels from transcription")
-
-        except Exception as speaker_error:
-            logger.warning(f"⚠️ Speaker recognition failed: {speaker_error}")
-            logger.warning(f"Continuing with original transcription speaker labels")
-            import traceback
-            logger.debug(traceback.format_exc())
+    # Extract filename from path for return value
+    from pathlib import Path
+    wav_filename = Path(file_path).name
 
     # Mark session as complete in Redis
     session_key = f"audio:session:{session_id}"
@@ -659,174 +689,100 @@ async def finalize_streaming_transcription_job(
     except Exception as cleanup_error:
         logger.warning(f"⚠️ Error during stream cleanup: {cleanup_error}")
 
-        if conversation_id:
-            # Update existing conversation
-            conversation = await Conversation.find_one(Conversation.conversation_id == conversation_id)
-            if conversation:
-                conversation.transcript = full_transcript
-                conversation.segments = all_segments
-                await conversation.save()
-                logger.info(f"✅ Updated conversation {conversation_id} with complete transcript and {len(all_segments)} segments")
+    # Enqueue batch transcription job - this will do everything:
+    # - High-quality batch transcription
+    # - Speaker recognition
+    # - Title/summary generation
+    # - Create transcript version
+    if conversation_id:
+        # Conversation exists (created by open_conversation_job)
+        logger.info(f"📋 Conversation {conversation_id} exists, enqueueing batch transcription")
 
-                # Enqueue batch transcription of complete audio file for final high-quality transcript
-                final_version_id = str(uuid.uuid4())
-                logger.info(f"📝 Enqueueing batch transcription of complete audio file for final transcript version {final_version_id}")
+        final_version_id = str(uuid.uuid4())
+        enqueue_transcript_processing(
+            conversation_id=conversation_id,
+            audio_uuid=session_id,
+            audio_path=file_path,
+            version_id=final_version_id,
+            user_id=user_id,
+            priority=JobPriority.HIGH,
+            trigger="streaming_final"
+        )
+        logger.info(f"✅ Batch transcription job enqueued for conversation {conversation_id}")
 
-                enqueue_transcript_processing(
-                    conversation_id=conversation_id,
-                    audio_uuid=session_id,
-                    audio_path=file_path,
-                    version_id=final_version_id,
-                    user_id=user_id,
-                    priority=JobPriority.HIGH,
-                    trigger="streaming_final"
-                )
-                logger.info(f"✅ Batch transcription job enqueued for conversation {conversation_id}")
+        return {
+            "success": True,
+            "conversation_id": conversation_id,
+            "session_id": session_id,
+            "action": "enqueued_batch",
+            "audio_file": wav_filename,
+            "batch_transcription_version": final_version_id
+        }
+    else:
+        # No conversation created - check for speech and create minimal conversation if needed
+        from advanced_omi_backend.utils.conversation_utils import analyze_speech
 
-                return {
-                    "success": True,
-                    "conversation_id": conversation_id,
-                    "session_id": session_id,
-                    "action": "updated",
-                    "transcript_length": len(full_transcript),
-                    "segment_count": len(all_segments),
-                    "audio_file": wav_filename,
-                    "batch_transcription_version": final_version_id
-                }
-            else:
-                logger.error(f"❌ Conversation {conversation_id} not found")
-                return {"success": False, "error": "Conversation not found"}
+        transcript_data = {
+            "text": full_transcript,
+            "words": combined["words"]
+        }
+        speech_analysis = analyze_speech(transcript_data)
+        has_speech = speech_analysis["has_speech"]
 
+        logger.info(
+            f"🔍 Speech detection: {has_speech} "
+            f"(word_count: {speech_analysis.get('word_count', 0)})"
+        )
+
+        if has_speech:
+            logger.info(f"💬 Speech detected - creating minimal conversation for batch processing")
+
+            # Create minimal conversation (title/summary will be generated by batch job)
+            new_conversation_id = str(uuid.uuid4())
+            conversation = create_conversation(
+                conversation_id=new_conversation_id,
+                audio_uuid=session_id,
+                user_id=user_id,
+                client_id=client_id,
+                title="Processing...",
+                summary="Transcription in progress..."
+            )
+
+            await conversation.insert()
+            logger.info(f"✅ Created minimal conversation {new_conversation_id}")
+
+            # Enqueue batch transcription - will populate everything
+            final_version_id = str(uuid.uuid4())
+            enqueue_transcript_processing(
+                conversation_id=new_conversation_id,
+                audio_uuid=session_id,
+                audio_path=file_path,
+                version_id=final_version_id,
+                user_id=user_id,
+                priority=JobPriority.HIGH,
+                trigger="streaming_final"
+            )
+            logger.info(f"✅ Batch transcription job enqueued for conversation {new_conversation_id}")
+
+            return {
+                "success": True,
+                "conversation_id": new_conversation_id,
+                "session_id": session_id,
+                "action": "created_minimal",
+                "audio_file": wav_filename,
+                "batch_transcription_version": final_version_id
+            }
         else:
-            # No conversation created yet - check for speech
-            transcript_clean = full_transcript.strip()
-            words_only = re.sub(r'[^\w\s]', '', transcript_clean)
-            words = words_only.split()
-            word_count = len(words)
-            avg_word_length = sum(len(w) for w in words) / word_count if word_count > 0 else 0
-            short_words = [w for w in words if len(w) <= 2]
-            short_word_ratio = len(short_words) / word_count if word_count > 0 else 0
+            logger.info(f"⏭️ No speech detected in streaming session")
 
-            has_speech = bool(
-                transcript_clean and
-                len(transcript_clean) > 50 and
-                word_count >= 8 and
-                avg_word_length >= 3.0 and
-                short_word_ratio < 0.5
-            )
-
-            logger.info(
-                f"🔍 Speech detection: {has_speech} "
-                f"(length: {len(transcript_clean)}, words: {word_count}, "
-                f"avg_len: {avg_word_length:.1f}, short_ratio: {short_word_ratio:.1%})"
-            )
-
-            if has_speech:
-                logger.info(f"💬 Speech detected - creating conversation")
-
-                # Create conversation with transcript
-                new_conversation_id = str(uuid.uuid4())
-
-                # Generate title and summary from transcript using LLM
-                try:
-                    from advanced_omi_backend.llm_client import async_generate
-
-                    # Prepare prompt for LLM
-                    prompt = f"""Based on this conversation transcript, generate a concise title and summary.
-
-Transcript:
-{full_transcript[:2000]}
-
-Respond in this exact format:
-Title: <concise title under 50 characters>
-Summary: <brief summary under 150 characters>"""
-
-                    logger.info(f"🤖 Generating title/summary using LLM for new conversation")
-                    llm_response = await async_generate(prompt, temperature=0.7)
-
-                    # Parse LLM response
-                    lines = llm_response.strip().split('\n')
-                    title = None
-                    summary = None
-
-                    for line in lines:
-                        if line.startswith('Title:'):
-                            title = line.replace('Title:', '').strip()
-                        elif line.startswith('Summary:'):
-                            summary = line.replace('Summary:', '').strip()
-
-                    # Use LLM-generated title/summary if valid, otherwise fallback
-                    if not title or len(title) == 0:
-                        first_sentence = full_transcript.split('.')[0].strip() if full_transcript else "Conversation"
-                        title = first_sentence[:50] + "..." if len(first_sentence) > 50 else first_sentence
-
-                    if not summary or len(summary) == 0:
-                        summary = full_transcript[:120] + "..." if len(full_transcript) > 120 else (full_transcript or "No content")
-
-                    # Truncate if needed
-                    title = title[:50] + "..." if len(title) > 50 else title
-                    summary = summary[:150] + "..." if len(summary) > 150 else summary
-
-                    logger.info(f"✅ Generated title: '{title}', summary: '{summary}'")
-
-                except Exception as llm_error:
-                    logger.warning(f"⚠️ LLM title/summary generation failed: {llm_error}")
-                    # Fallback to simple truncation
-                    first_sentence = full_transcript.split('.')[0].strip() if full_transcript else "Conversation"
-                    title = first_sentence[:50] + "..." if len(first_sentence) > 50 else first_sentence
-                    summary = full_transcript[:120] + "..." if len(full_transcript) > 120 else (full_transcript or "No content")
-
-                conversation = create_conversation(
-                    conversation_id=new_conversation_id,
-                    audio_uuid=session_id,
-                    user_id=user_id,
-                    client_id=client_id,
-                    title=title,
-                    summary=summary,
-                    transcript=full_transcript,
-                    segments=all_segments
-                )
-
-                await conversation.insert()
-                logger.info(f"✅ Created conversation {new_conversation_id} with transcript ({len(full_transcript)} chars)")
-
-                # Enqueue batch transcription of complete audio file for final high-quality transcript
-                final_version_id = str(uuid.uuid4())
-                logger.info(f"📝 Enqueueing batch transcription of complete audio file for final transcript version {final_version_id}")
-
-                enqueue_transcript_processing(
-                    conversation_id=new_conversation_id,
-                    audio_uuid=session_id,
-                    audio_path=file_path,
-                    version_id=final_version_id,
-                    user_id=user_id,
-                    priority=JobPriority.HIGH,
-                    trigger="streaming_final"
-                )
-                logger.info(f"✅ Batch transcription job enqueued for conversation {new_conversation_id}")
-
-                return {
-                    "success": True,
-                    "conversation_id": new_conversation_id,
-                    "session_id": session_id,
-                    "action": "created",
-                    "transcript_length": len(full_transcript),
-                    "segment_count": len(all_segments),
-                    "audio_file": wav_filename,
-                    "batch_transcription_version": final_version_id
-                }
-            else:
-                logger.info(f"⏭️ No speech detected in streaming session")
-
-                return {
-                    "success": True,
-                    "conversation_id": None,
-                    "session_id": session_id,
-                    "action": "skipped",
-                    "reason": "no_speech",
-                    "transcript_length": len(full_transcript),
-                    "audio_file": wav_filename
-                }
+            return {
+                "success": True,
+                "conversation_id": None,
+                "session_id": session_id,
+                "action": "skipped",
+                "reason": "no_speech",
+                "audio_file": wav_filename
+            }
 
 
 # Enqueue wrapper functions
