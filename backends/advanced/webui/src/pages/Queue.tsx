@@ -12,7 +12,9 @@ import {
   RefreshCw,
   Layers,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
 import { queueApi } from '../services/api';
 
@@ -140,6 +142,8 @@ const Queue: React.FC = () => {
     flush_all: false
   });
   const [flushing, setFlushing] = useState(false);
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  const [sessionJobs, setSessionJobs] = useState<{[sessionId: string]: any[]}>({});
 
   // Auto-refresh interval
   useEffect(() => {
@@ -468,6 +472,33 @@ const Queue: React.FC = () => {
     return `${Math.floor(durationMs / 3600000)}h ${Math.floor((durationMs % 3600000) / 60000)}m`;
   };
 
+  const toggleSessionExpansion = async (sessionId: string) => {
+    const newExpanded = new Set(expandedSessions);
+
+    if (newExpanded.has(sessionId)) {
+      // Collapse
+      newExpanded.delete(sessionId);
+      setExpandedSessions(newExpanded);
+    } else {
+      // Expand and fetch jobs if not already loaded
+      newExpanded.add(sessionId);
+      setExpandedSessions(newExpanded);
+
+      if (!sessionJobs[sessionId]) {
+        try {
+          console.log(`🔍 Fetching jobs for session ${sessionId}`);
+          const response = await queueApi.getJobsBySession(sessionId);
+          const data = response.data;
+          console.log(`✅ Got ${data.jobs.length} jobs for session ${sessionId}`);
+          setSessionJobs(prev => ({ ...prev, [sessionId]: data.jobs }));
+        } catch (error) {
+          console.error(`❌ Failed to fetch jobs for session ${sessionId}:`, error);
+          setSessionJobs(prev => ({ ...prev, [sessionId]: [] }));
+        }
+      }
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -584,50 +615,46 @@ const Queue: React.FC = () => {
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
             <h3 className="text-lg font-medium">Audio Streaming Status</h3>
             <div className="flex items-center space-x-2">
+              <button
+                onClick={cleanupOldSessions}
+                className="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 transition-colors text-sm"
+                title="Remove old sessions (>1 hour old)"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Cleanup Old Sessions</span>
+              </button>
               {streamingStatus.active_sessions.length > 0 && (
-                <>
-                  <button
-                    onClick={cleanupOldSessions}
-                    className="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 transition-colors text-sm"
-                    title="Remove old sessions (>1 hour old)"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>Cleanup Old Sessions</span>
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!confirm(`Remove ALL ${streamingStatus.active_sessions.length} active sessions? This will force-delete all sessions including actively streaming ones.`)) return;
-
-                      try {
-                        const response = await queueApi.cleanupOldSessions(0); // 0 seconds = all sessions
-                        const data = response.data;
-                        alert(`✅ Removed ${data.cleaned_count} session(s)`);
-                        fetchStreamingStatus();
-                      } catch (error: any) {
-                        console.error('❌ Error removing sessions:', error);
-                        alert(`Failed to remove sessions: ${error.response?.data?.error || error.message}`);
-                      }
-                    }}
-                    className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm"
-                    title="Force remove ALL active sessions"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span>Remove All Sessions ({streamingStatus.active_sessions.length})</span>
-                  </button>
-                </>
-              )}
-              {streamingStatus.stream_health && Object.values(streamingStatus.stream_health).some((s: any) => s.total_pending > 0) && (
                 <button
-                  onClick={cleanupStuckWorkers}
-                  className="flex items-center space-x-2 px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 transition-colors text-sm"
-                  title="Clean up stuck workers and pending messages"
+                  onClick={async () => {
+                    if (!confirm(`Remove ALL ${streamingStatus.active_sessions.length} active sessions? This will force-delete all sessions including actively streaming ones.`)) return;
+
+                    try {
+                      const response = await queueApi.cleanupOldSessions(0); // 0 seconds = all sessions
+                      const data = response.data;
+                      alert(`✅ Removed ${data.cleaned_count} session(s)`);
+                      fetchStreamingStatus();
+                    } catch (error: any) {
+                      console.error('❌ Error removing sessions:', error);
+                      alert(`Failed to remove sessions: ${error.response?.data?.error || error.message}`);
+                    }
+                  }}
+                  className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm"
+                  title="Force remove ALL active sessions"
                 >
-                  <RotateCcw className="w-4 h-4" />
-                  <span>Cleanup Stuck Workers ({
-                    Object.values(streamingStatus.stream_health).reduce((sum: number, s: any) => sum + (s.total_pending || 0), 0)
-                  })</span>
+                  <Trash2 className="w-4 h-4" />
+                  <span>Remove All Sessions ({streamingStatus.active_sessions.length})</span>
                 </button>
               )}
+              <button
+                onClick={cleanupStuckWorkers}
+                className="flex items-center space-x-2 px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 transition-colors text-sm"
+                title="Clean up stuck workers and pending messages"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Cleanup Stuck Workers{streamingStatus.stream_health && Object.values(streamingStatus.stream_health).some((s: any) => s.total_pending > 0) && ` (${
+                  Object.values(streamingStatus.stream_health).reduce((sum: number, s: any) => sum + (s.total_pending || 0), 0)
+                })`}</span>
+              </button>
             </div>
           </div>
 
@@ -639,24 +666,84 @@ const Queue: React.FC = () => {
                 <h4 className="text-sm font-medium text-gray-700 mb-3">Active Streaming Sessions</h4>
                 {streamingStatus.active_sessions.filter(s => s.status !== 'complete').length > 0 ? (
                   <div className="space-y-2">
-                    {streamingStatus.active_sessions.filter(s => s.status !== 'complete').map((session) => (
-                      <div key={session.session_id} className="flex items-center justify-between p-3 bg-blue-50 rounded-lg border border-blue-200">
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2">
-                            <Play className="w-4 h-4 text-blue-600 animate-pulse" />
-                            <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
-                            <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">{session.provider}</span>
-                            <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">{session.status}</span>
+                    {streamingStatus.active_sessions.filter(s => s.status !== 'complete').map((session) => {
+                      const isExpanded = expandedSessions.has(session.session_id);
+                      const jobs = sessionJobs[session.session_id] || [];
+
+                      return (
+                        <div key={session.session_id} className="bg-blue-50 rounded-lg border border-blue-200 overflow-hidden">
+                          <div
+                            className="flex items-center justify-between p-3 cursor-pointer hover:bg-blue-100 transition-colors"
+                            onClick={() => toggleSessionExpansion(session.session_id)}
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2">
+                                {isExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-blue-600" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4 text-blue-600" />
+                                )}
+                                <Play className="w-4 h-4 text-blue-600 animate-pulse" />
+                                <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
+                                <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">{session.provider}</span>
+                                <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">{session.status}</span>
+                              </div>
+                              <div className="mt-1 text-xs text-gray-600">
+                                Session: {session.session_id.substring(0, 8)}... •
+                                Chunks: {session.chunks_published} •
+                                Duration: {Math.floor(session.age_seconds)}s •
+                                Idle: {session.idle_seconds.toFixed(1)}s
+                              </div>
+                            </div>
                           </div>
-                          <div className="mt-1 text-xs text-gray-600">
-                            Session: {session.session_id.substring(0, 8)}... •
-                            Chunks: {session.chunks_published} •
-                            Duration: {Math.floor(session.age_seconds)}s •
-                            Idle: {session.idle_seconds.toFixed(1)}s
-                          </div>
+
+                          {/* Expanded Jobs Section */}
+                          {isExpanded && (
+                            <div className="border-t border-blue-200 bg-white p-3">
+                              <h5 className="text-xs font-medium text-gray-700 mb-2">Jobs for this session:</h5>
+                              {jobs.length > 0 ? (
+                                <div className="space-y-1">
+                                  {jobs.map((job, index) => (
+                                    <div key={job.job_id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                                      <div className="flex-1">
+                                        <div className="flex items-center space-x-2">
+                                          <span className="text-xs font-mono text-gray-500">#{index + 1}</span>
+                                          {getStatusIcon(job.status)}
+                                          <span className="text-xs font-medium text-gray-900">{job.job_type}</span>
+                                          <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
+                                            {job.status}
+                                          </span>
+                                          <span className="text-xs text-gray-500">{job.queue}</span>
+                                        </div>
+                                        <div className="mt-1 text-xs text-gray-600">
+                                          {job.created_at && (
+                                            <span>Created: {new Date(job.created_at).toLocaleTimeString()}</span>
+                                          )}
+                                          {job.started_at && (
+                                            <span> • Started: {new Date(job.started_at).toLocaleTimeString()}</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          viewJobDetails(job.job_id);
+                                        }}
+                                        className="ml-2 text-indigo-600 hover:text-indigo-900"
+                                      >
+                                        <Eye className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-500 italic">No jobs found for this session</div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
@@ -670,33 +757,99 @@ const Queue: React.FC = () => {
                 <h4 className="text-sm font-medium text-gray-700 mb-3">Completed Sessions (Last Hour)</h4>
                 {streamingStatus.completed_sessions && streamingStatus.completed_sessions.length > 0 ? (
                   <div className="space-y-2">
-                    {streamingStatus.completed_sessions.map((session) => (
-                      <div key={session.session_id} className={`flex items-center justify-between p-3 rounded-lg border ${
-                        session.has_conversation
-                          ? 'bg-green-50 border-green-200'
-                          : 'bg-gray-50 border-gray-200'
-                      }`}>
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2">
-                            {session.has_conversation ? (
-                              <CheckCircle className="w-4 h-4 text-green-600" />
-                            ) : (
-                              <XCircle className="w-4 h-4 text-gray-600" />
-                            )}
-                            <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
-                            {session.has_conversation ? (
-                              <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Conversation</span>
-                            ) : (
-                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">{session.reason || 'No speech'}</span>
-                            )}
+                    {streamingStatus.completed_sessions.map((session) => {
+                      const isExpanded = expandedSessions.has(session.session_id);
+                      const jobs = sessionJobs[session.session_id] || [];
+
+                      return (
+                        <div key={session.session_id} className={`rounded-lg border overflow-hidden ${
+                          session.has_conversation
+                            ? 'bg-green-50 border-green-200'
+                            : 'bg-gray-50 border-gray-200'
+                        }`}>
+                          <div
+                            className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${
+                              session.has_conversation
+                                ? 'hover:bg-green-100'
+                                : 'hover:bg-gray-100'
+                            }`}
+                            onClick={() => toggleSessionExpansion(session.session_id)}
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2">
+                                {isExpanded ? (
+                                  <ChevronDown className={`w-4 h-4 ${session.has_conversation ? 'text-green-600' : 'text-gray-600'}`} />
+                                ) : (
+                                  <ChevronRight className={`w-4 h-4 ${session.has_conversation ? 'text-green-600' : 'text-gray-600'}`} />
+                                )}
+                                {session.has_conversation ? (
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-gray-600" />
+                                )}
+                                <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
+                                {session.has_conversation ? (
+                                  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Conversation</span>
+                                ) : (
+                                  <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">{session.reason || 'No speech'}</span>
+                                )}
+                              </div>
+                              <div className="mt-1 text-xs text-gray-600">
+                                Session: {session.session_id.substring(0, 8)}... •
+                                {new Date(session.completed_at * 1000).toLocaleTimeString()}
+                              </div>
+                            </div>
                           </div>
-                          <div className="mt-1 text-xs text-gray-600">
-                            Session: {session.session_id.substring(0, 8)}... •
-                            {new Date(session.completed_at * 1000).toLocaleTimeString()}
-                          </div>
+
+                          {/* Expanded Jobs Section */}
+                          {isExpanded && (
+                            <div className={`border-t bg-white p-3 ${
+                              session.has_conversation ? 'border-green-200' : 'border-gray-200'
+                            }`}>
+                              <h5 className="text-xs font-medium text-gray-700 mb-2">Jobs for this session:</h5>
+                              {jobs.length > 0 ? (
+                                <div className="space-y-1">
+                                  {jobs.map((job, index) => (
+                                    <div key={job.job_id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                                      <div className="flex-1">
+                                        <div className="flex items-center space-x-2">
+                                          <span className="text-xs font-mono text-gray-500">#{index + 1}</span>
+                                          {getStatusIcon(job.status)}
+                                          <span className="text-xs font-medium text-gray-900">{job.job_type}</span>
+                                          <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
+                                            {job.status}
+                                          </span>
+                                          <span className="text-xs text-gray-500">{job.queue}</span>
+                                        </div>
+                                        <div className="mt-1 text-xs text-gray-600">
+                                          {job.created_at && (
+                                            <span>Created: {new Date(job.created_at).toLocaleTimeString()}</span>
+                                          )}
+                                          {job.started_at && (
+                                            <span> • Started: {new Date(job.started_at).toLocaleTimeString()}</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          viewJobDetails(job.job_id);
+                                        }}
+                                        className="ml-2 text-indigo-600 hover:text-indigo-900"
+                                      >
+                                        <Eye className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-500 italic">No jobs found for this session</div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">

@@ -95,6 +95,80 @@ async def get_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
 
+@router.get("/jobs/by-session/{session_id}")
+async def get_jobs_by_session(
+    session_id: str,
+    current_user: User = Depends(current_active_user)
+):
+    """Get all jobs associated with a specific streaming session."""
+    try:
+        from rq.registry import FinishedJobRegistry, FailedJobRegistry, StartedJobRegistry, CanceledJobRegistry, DeferredJobRegistry
+        from advanced_omi_backend.controllers.queue_controller import get_queue
+
+        all_jobs = []
+        queues = ["default", "transcription", "memory"]
+
+        for queue_name in queues:
+            queue = get_queue(queue_name)
+
+            # Check all registries
+            registries = [
+                ("queued", queue.job_ids),
+                ("processing", StartedJobRegistry(queue=queue).get_job_ids()),
+                ("completed", FinishedJobRegistry(queue=queue).get_job_ids()),
+                ("failed", FailedJobRegistry(queue=queue).get_job_ids()),
+                ("cancelled", CanceledJobRegistry(queue=queue).get_job_ids()),
+                ("retrying", DeferredJobRegistry(queue=queue).get_job_ids())
+            ]
+
+            for status_name, job_ids in registries:
+                for job_id in job_ids:
+                    try:
+                        job = Job.fetch(job_id, connection=redis_conn)
+
+                        # Check if this job belongs to the requested session
+                        # session_id is typically the first argument in job.args
+                        job_session_id = None
+                        if job.args and len(job.args) > 0:
+                            job_session_id = job.args[0]
+
+                        if job_session_id == session_id:
+                            # Check user permission (non-admins can only see their own jobs)
+                            if not current_user.is_superuser:
+                                job_user_id = job.kwargs.get("user_id") if job.kwargs else None
+                                if job_user_id != str(current_user.user_id):
+                                    continue
+
+                            all_jobs.append({
+                                "job_id": job.id,
+                                "job_type": job.func_name.split('.')[-1] if job.func_name else "unknown",
+                                "queue": queue_name,
+                                "status": status_name,
+                                "created_at": job.created_at.isoformat() if job.created_at else None,
+                                "started_at": job.started_at.isoformat() if job.started_at else None,
+                                "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+                                "description": job.description or "",
+                                "result": job.result,
+                                "error_message": str(job.exc_info) if job.exc_info else None,
+                            })
+                    except Exception as e:
+                        logger.debug(f"Error fetching job {job_id}: {e}")
+                        continue
+
+        # Sort by created_at
+        all_jobs.sort(key=lambda x: x["created_at"] or "", reverse=False)
+
+        return {
+            "session_id": session_id,
+            "jobs": all_jobs,
+            "total": len(all_jobs)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get jobs for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get jobs for session: {str(e)}")
+
+
 @router.get("/stats")
 async def get_queue_stats_endpoint(
     current_user: User = Depends(current_active_user)
