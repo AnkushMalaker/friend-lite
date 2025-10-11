@@ -402,7 +402,7 @@ class SpeakerRecognitionClient:
         session_id: str,
         user_id: str,
         transcription_results: List[dict]
-    ) -> bool:
+    ) -> tuple[bool, dict]:
         """
         Check if any enrolled speakers are present in the transcription results.
 
@@ -417,7 +417,9 @@ class SpeakerRecognitionClient:
             transcription_results: List of transcription results from aggregator
 
         Returns:
-            True if enrolled speaker detected, False otherwise
+            Tuple of (enrolled_present: bool, speaker_result: dict)
+            - enrolled_present: True if enrolled speaker detected, False otherwise
+            - speaker_result: Full speaker recognition result dict with segments
         """
         import tempfile
         import uuid
@@ -431,7 +433,7 @@ class SpeakerRecognitionClient:
 
         if not enrolled_speakers:
             logger.warning("No enrolled speakers found, allowing conversation")
-            return True  # If no enrolled speakers, allow all conversations
+            return (True, {})  # If no enrolled speakers, allow all conversations
 
         # Extract audio chunks
         audio_data = await extract_audio_for_results(
@@ -443,7 +445,7 @@ class SpeakerRecognitionClient:
 
         if not audio_data:
             logger.warning("No audio data extracted, skipping speaker check")
-            return False
+            return (False, {})
 
         # Write to temporary WAV file
         temp_path = Path(tempfile.gettempdir()) / f"speech_check_{uuid.uuid4()}.wav"
@@ -469,14 +471,14 @@ class SpeakerRecognitionClient:
 
             if matches:
                 logger.info(f"✅ Enrolled speaker(s) detected: {matches}")
-                return True
+                return (True, result)  # Return both boolean and speaker recognition results
             else:
                 logger.info(f"❌ No enrolled speakers detected. Identified: {identified_speakers}, Enrolled: {enrolled_speakers}")
-                return False
+                return (False, result)  # Return both boolean and speaker recognition results
 
         except Exception as e:
             logger.error(f"Speaker recognition check failed: {e}", exc_info=True)
-            return False  # Fail closed - don't create conversation on error
+            return (False, {})  # Fail closed - don't create conversation on error
 
         finally:
             # Clean up temp file
