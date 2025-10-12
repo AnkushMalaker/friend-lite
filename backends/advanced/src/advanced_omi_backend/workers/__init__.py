@@ -12,11 +12,9 @@ Queue configuration and utilities are in controllers/queue_controller.py
 
 # Import from transcription_jobs
 from .transcription_jobs import (
-    process_transcript_job,
+    transcribe_full_audio_job,
+    recognise_speakers_job,
     stream_speech_detection_job,
-    finalize_streaming_transcription_job,
-    enqueue_transcript_processing,
-    enqueue_streaming_finalization,
 )
 
 # Import from conversation_jobs
@@ -59,11 +57,9 @@ from advanced_omi_backend.controllers.queue_controller import (
 
 __all__ = [
     # Transcription jobs
-    "process_transcript_job",
+    "transcribe_full_audio_job",
+    "recognise_speakers_job",
     "stream_speech_detection_job",
-    "finalize_streaming_transcription_job",
-    "enqueue_transcript_processing",
-    "enqueue_streaming_finalization",
 
     # Conversation jobs
     "open_conversation_job",

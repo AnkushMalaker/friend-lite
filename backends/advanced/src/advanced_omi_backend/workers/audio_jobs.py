@@ -141,20 +141,68 @@ def process_audio_job(
 
             result = loop.run_until_complete(process())
 
-            # Enqueue transcript processing job (outside async context)
+            # Enqueue transcript processing job chain (outside async context)
             if result.get("success") and result.get("conversation_id"):
-                from .transcription_jobs import enqueue_transcript_processing
-                transcript_job = enqueue_transcript_processing(
-                    conversation_id=result["conversation_id"],
-                    audio_uuid=result["audio_uuid"],
-                    audio_path=result["file_path"],
-                    version_id=result["version_id"],
-                    user_id=user_id,
-                    priority=JobPriority.NORMAL,
-                    trigger="upload"
+                from .transcription_jobs import transcribe_full_audio_job, recognise_speakers_job
+                from .memory_jobs import process_memory_job
+                from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, JOB_RESULT_TTL
+
+                conversation_id = result["conversation_id"]
+
+                # Job 1: Transcribe audio to text
+                transcript_job = transcription_queue.enqueue(
+                    transcribe_full_audio_job,
+                    conversation_id,
+                    result["audio_uuid"],
+                    result["file_path"],
+                    result["version_id"],
+                    user_id,
+                    "upload",
+                    job_timeout=600,
+                    result_ttl=JOB_RESULT_TTL,
+                    job_id=f"upload_{conversation_id[:8]}",
+                    description=f"Transcribe audio for {conversation_id[:8]}",
+                    meta={'audio_uuid': result["audio_uuid"]}
                 )
+                logger.info(f"📥 RQ: Enqueued transcription job {transcript_job.id}")
+
+                # Job 2: Recognize speakers (depends on transcription)
+                speaker_job = transcription_queue.enqueue(
+                    recognise_speakers_job,
+                    conversation_id,
+                    result["version_id"],
+                    result["file_path"],
+                    user_id,
+                    "",  # transcript_text - will be read from DB
+                    [],  # words - will be read from DB
+                    depends_on=transcript_job,
+                    job_timeout=600,
+                    result_ttl=JOB_RESULT_TTL,
+                    job_id=f"speaker_{conversation_id[:8]}",
+                    description=f"Recognize speakers for {conversation_id[:8]}",
+                    meta={'audio_uuid': result["audio_uuid"]}
+                )
+                logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id} (depends on {transcript_job.id})")
+
+                # Job 3: Extract memories (depends on speaker recognition)
+                memory_job = memory_queue.enqueue(
+                    process_memory_job,
+                    None,  # client_id - will be read from conversation in DB
+                    user_id,
+                    "",  # user_email - will be read from user in DB
+                    conversation_id,
+                    depends_on=speaker_job,
+                    job_timeout=1800,
+                    result_ttl=JOB_RESULT_TTL,
+                    job_id=f"memory_{conversation_id[:8]}",
+                    description=f"Extract memories for {conversation_id[:8]}",
+                    meta={'audio_uuid': result["audio_uuid"]}
+                )
+                logger.info(f"📥 RQ: Enqueued memory job {memory_job.id} (depends on {speaker_job.id})")
+
                 result["transcript_job_id"] = transcript_job.id
-                logger.info(f"📥 RQ: Enqueued transcript job {transcript_job.id} for conversation {result['conversation_id']}")
+                result["speaker_job_id"] = speaker_job.id
+                result["memory_job_id"] = memory_job.id
 
             return result
 
@@ -279,19 +327,11 @@ async def audio_streaming_persistence_job(
     audio_chunks = []
     chunk_count = 0
     total_bytes = 0
-
-    finalize_received = False
-    grace_period_start = None
-    grace_period_seconds = 5  # Short grace period for audio collection
+    end_signal_received = False
+    consecutive_empty_reads = 0
+    max_empty_reads = 3  # Exit after 3 consecutive empty reads (deterministic check)
 
     while True:
-        # Check if session is finalizing
-        if not finalize_received:
-            status = await redis_client.hget(session_key, "status")
-            if status and status.decode() in ["finalizing", "complete"]:
-                finalize_received = True
-                logger.info(f"🛑 Session finalizing, entering grace period for audio collection")
-
         # Check timeout
         if time.time() - start_time > max_runtime:
             logger.warning(f"⏱️ Timeout reached for audio persistence {session_id}")
@@ -308,16 +348,19 @@ async def audio_streaming_persistence_job(
             )
 
             if audio_messages:
+                # Reset empty read counter - we got messages
+                consecutive_empty_reads = 0
+
                 for stream_name, msgs in audio_messages:
                     for message_id, fields in msgs:
                         # Extract audio data
                         audio_data = fields.get(b"audio_data", b"")
                         chunk_id = fields.get(b"chunk_id", b"").decode()
 
-                        # Skip END signals and empty chunks
+                        # Check for END signal
                         if chunk_id == "END":
                             logger.info(f"📡 Received END signal in audio persistence")
-                            finalize_received = True
+                            end_signal_received = True
                         elif len(audio_data) > 0:
                             audio_chunks.append(audio_data)
                             chunk_count += 1
@@ -329,21 +372,19 @@ async def audio_streaming_persistence_job(
 
                         # ACK the message
                         await redis_client.xack(audio_stream_name, audio_group_name, message_id)
+            else:
+                # No new messages - stream might be empty
+                if end_signal_received:
+                    consecutive_empty_reads += 1
+                    logger.info(f"📭 No new messages ({consecutive_empty_reads}/{max_empty_reads} empty reads after END signal)")
+
+                    if consecutive_empty_reads >= max_empty_reads:
+                        logger.info(f"✅ Stream empty after END signal - stopping audio collection")
+                        break
 
         except Exception as audio_error:
             # Stream might not exist yet or other transient errors
             logger.debug(f"Audio stream read error (non-fatal): {audio_error}")
-
-        # Grace period handling
-        if finalize_received:
-            if grace_period_start is None:
-                grace_period_start = time.time()
-                logger.info(f"⏳ Starting grace period for final audio chunks...")
-
-            grace_elapsed = time.time() - grace_period_start
-            if grace_elapsed >= grace_period_seconds:
-                logger.info(f"✅ Grace period complete ({grace_elapsed:.1f}s), stopping audio collection")
-                break
 
         await asyncio.sleep(0.1)  # Check every 100ms for responsiveness
 
@@ -431,7 +472,8 @@ def enqueue_audio_processing(
         job_timeout=timeout_mapping.get(priority, 60),
         result_ttl=JOB_RESULT_TTL,
         job_id=f"audio_{client_id}_{audio_uuid or 'new'}",
-        description=f"Process audio for client {client_id}"
+        description=f"Process audio for client {client_id}",
+        meta={'audio_uuid': audio_uuid} if audio_uuid else {}
     )
 
     logger.info(f"📥 RQ: Enqueued audio job {job.id} for client {client_id}")
@@ -470,7 +512,8 @@ def enqueue_cropping(
         job_timeout=timeout_mapping.get(priority, 180),
         result_ttl=JOB_RESULT_TTL,
         job_id=f"cropping_{audio_uuid[:8]}",
-        description=f"Crop audio for {audio_uuid[:8]}"
+        description=f"Crop audio for {audio_uuid[:8]}",
+        meta={'audio_uuid': audio_uuid}
     )
 
     logger.info(f"📥 RQ: Enqueued cropping job {job.id} for audio {audio_uuid}")

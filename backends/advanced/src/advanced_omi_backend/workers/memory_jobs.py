@@ -52,6 +52,21 @@ async def process_memory_job(
         logger.warning(f"No conversation found for {conversation_id}")
         return {"success": False, "error": "Conversation not found"}
 
+    # Read client_id and user_email from conversation/user if not provided
+    # (Parameters may be empty if called via job dependency)
+    actual_client_id = client_id or conversation_model.client_id
+    actual_user_email = user_email
+
+    if not actual_user_email:
+        user = await get_user_by_id(user_id)
+        if user:
+            actual_user_email = user.email
+        else:
+            logger.warning(f"Could not find user {user_id}")
+            actual_user_email = ""
+
+    logger.info(f"🔄 Processing memory for conversation {conversation_id}, client={actual_client_id}, user={user_id}")
+
     # Extract conversation text from transcript segments
     full_conversation = ""
     segments = conversation_model.segments
@@ -101,10 +116,10 @@ async def process_memory_job(
     memory_service = get_memory_service()
     memory_result = await memory_service.add_memory(
         full_conversation,
-        client_id,
+        actual_client_id,
         conversation_id,
         user_id,
-        user_email,
+        actual_user_email,
         allow_update=True,
     )
 
@@ -125,12 +140,36 @@ async def process_memory_job(
             processing_time = time.time() - start_time
             logger.info(f"✅ Completed memory processing for conversation {conversation_id} - created {len(created_memory_ids)} memories in {processing_time:.2f}s")
 
+            # Mark session as complete in Redis (this is the last job in the chain)
+            if conversation_model and conversation_model.audio_uuid:
+                session_key = f"audio:session:{conversation_model.audio_uuid}"
+                try:
+                    await redis_client.hset(session_key, mapping={
+                        "status": "complete",
+                        "completed_at": str(time.time())
+                    })
+                    logger.info(f"✅ Marked session {conversation_model.audio_uuid} as complete (all jobs finished)")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not mark session as complete: {e}")
+
             return {
                 "success": True,
                 "memories_created": len(created_memory_ids),
                 "processing_time": processing_time
             }
         else:
+            # Mark session as complete even if no memories created
+            if conversation_model and conversation_model.audio_uuid:
+                session_key = f"audio:session:{conversation_model.audio_uuid}"
+                try:
+                    await redis_client.hset(session_key, mapping={
+                        "status": "complete",
+                        "completed_at": str(time.time())
+                    })
+                    logger.info(f"✅ Marked session {conversation_model.audio_uuid} as complete (no memories)")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not mark session as complete: {e}")
+
             return {"success": True, "memories_created": 0, "skipped": True}
     else:
         return {"success": False, "error": "Memory service returned False"}

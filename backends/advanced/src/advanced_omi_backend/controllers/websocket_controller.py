@@ -231,39 +231,18 @@ async def _initialize_streaming_session(
         provider="deepgram"
     )
 
-    # Enqueue speech detection job
-    from advanced_omi_backend.workers.transcription_jobs import stream_speech_detection_job
-    from advanced_omi_backend.workers.audio_jobs import audio_streaming_persistence_job
-    from advanced_omi_backend.controllers.queue_controller import transcription_queue, JOB_RESULT_TTL
+    # Enqueue streaming jobs (speech detection + audio persistence)
+    from advanced_omi_backend.controllers.queue_controller import start_streaming_jobs
 
-    speech_job = transcription_queue.enqueue(
-        stream_speech_detection_job,
-        client_state.stream_session_id,
-        user_id,
-        user_email,
-        client_id,
-        job_timeout=3600,  # 1 hour for long recordings
-        result_ttl=JOB_RESULT_TTL,
-        job_id=f"speech-detect_{client_state.stream_session_id[:12]}",
-        description=f"Stream speech detection for {client_state.stream_session_id[:12]}"
+    job_ids = start_streaming_jobs(
+        session_id=client_state.stream_session_id,
+        user_id=user_id,
+        user_email=user_email,
+        client_id=client_id
     )
-    client_state.speech_detection_job_id = speech_job.id
-    application_logger.info(f"✅ Enqueued speech detection job {speech_job.id}")
 
-    # Enqueue audio persistence job in parallel
-    audio_job = transcription_queue.enqueue(
-        audio_streaming_persistence_job,
-        client_state.stream_session_id,
-        user_id,
-        user_email,
-        client_id,
-        job_timeout=3600,  # 1 hour for long recordings
-        result_ttl=JOB_RESULT_TTL,
-        job_id=f"audio-persist_{client_state.stream_session_id[:12]}",
-        description=f"Audio persistence for {client_state.stream_session_id[:12]}"
-    )
-    client_state.audio_persistence_job_id = audio_job.id
-    application_logger.info(f"✅ Enqueued audio persistence job {audio_job.id}")
+    client_state.speech_detection_job_id = job_ids['speech_detection']
+    client_state.audio_persistence_job_id = job_ids['audio_persistence']
 
 
 async def _finalize_streaming_session(
@@ -305,18 +284,23 @@ async def _finalize_streaming_session(
         # Mark session as finalizing
         await audio_stream_producer.finalize_session(session_id)
 
-        # Enqueue finalize job
-        from advanced_omi_backend.workers.transcription_jobs import enqueue_streaming_finalization
-
-        finalize_job = enqueue_streaming_finalization(
-            session_id=session_id,
-            user_id=user_id,
-            user_email=user_email,
-            client_id=client_id
-        )
+        # NOTE: Finalize job disabled - open_conversation_job now handles everything
+        # The open_conversation_job will:
+        # 1. Detect the "finalizing" status
+        # 2. Enter 5-second grace period
+        # 3. Get audio file path
+        # 4. Mark session complete
+        # 5. Clean up Redis streams
+        # 6. Enqueue batch transcription and memory processing
+        #
+        # If no speech was detected (open_conversation_job never started):
+        # - Audio is discarded (intentional - we only create conversations with speech)
+        # - Redis streams are cleaned up by TTL
+        #
+        # TODO: Consider adding cleanup for no-speech scenarios if needed
 
         application_logger.info(
-            f"✅ Enqueued finalization job {finalize_job.id} for session {session_id[:12]}"
+            f"✅ Session {session_id[:12]} marked as finalizing - open_conversation_job will handle cleanup"
         )
 
         # Clear session state
@@ -376,6 +360,324 @@ async def _publish_audio_to_stream(
     )
 
 
+async def _handle_omi_audio_chunk(
+    client_state,
+    audio_stream_producer,
+    opus_payload: bytes,
+    decode_packet_fn,
+    user_id: str,
+    client_id: str,
+    packet_count: int
+) -> None:
+    """
+    Handle OMI audio chunk: decode Opus to PCM, then publish to stream.
+
+    Args:
+        client_state: Client state object
+        audio_stream_producer: Audio stream producer instance
+        opus_payload: Opus-encoded audio bytes
+        decode_packet_fn: Opus decoder function
+        user_id: User ID
+        client_id: Client ID
+        packet_count: Current packet number for logging
+    """
+    # Decode Opus to PCM
+    start_time = time.time()
+    loop = asyncio.get_running_loop()
+    pcm_data = await loop.run_in_executor(_DEC_IO_EXECUTOR, decode_packet_fn, opus_payload)
+    decode_time = time.time() - start_time
+
+    if pcm_data:
+        if packet_count <= 5 or packet_count % 1000 == 0:
+            application_logger.debug(
+                f"🎵 Decoded OMI packet #{packet_count}: {len(opus_payload)} bytes -> "
+                f"{len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
+            )
+
+        # Publish decoded PCM to Redis Stream
+        await _publish_audio_to_stream(
+            client_state,
+            audio_stream_producer,
+            pcm_data,
+            user_id,
+            client_id,
+            OMI_SAMPLE_RATE,
+            OMI_CHANNELS,
+            OMI_SAMPLE_WIDTH
+        )
+    else:
+        # Log decode failures for first 5 packets
+        if packet_count <= 5:
+            application_logger.warning(
+                f"❌ Failed to decode OMI packet #{packet_count}: {len(opus_payload)} bytes"
+            )
+
+
+async def _handle_streaming_mode_audio(
+    client_state,
+    audio_stream_producer,
+    audio_data: bytes,
+    audio_format: dict,
+    user_id: str,
+    user_email: str,
+    client_id: str
+) -> None:
+    """
+    Handle audio chunk in streaming mode.
+
+    Args:
+        client_state: Client state object
+        audio_stream_producer: Audio stream producer instance
+        audio_data: Raw PCM audio bytes
+        audio_format: Audio format dict (rate, width, channels)
+        user_id: User ID
+        user_email: User email
+        client_id: Client ID
+    """
+    # Initialize session if needed
+    if not hasattr(client_state, 'stream_session_id'):
+        await _initialize_streaming_session(
+            client_state,
+            audio_stream_producer,
+            user_id,
+            user_email,
+            client_id,
+            audio_format
+        )
+
+    # Publish to Redis Stream
+    await _publish_audio_to_stream(
+        client_state,
+        audio_stream_producer,
+        audio_data,
+        user_id,
+        client_id,
+        audio_format.get("rate", 16000),
+        audio_format.get("channels", 1),
+        audio_format.get("width", 2)
+    )
+
+
+async def _handle_batch_mode_audio(
+    client_state,
+    audio_data: bytes,
+    audio_format: dict,
+    client_id: str
+) -> None:
+    """
+    Handle audio chunk in batch mode - accumulate in memory.
+
+    Args:
+        client_state: Client state object
+        audio_data: Raw PCM audio bytes
+        audio_format: Audio format dict
+        client_id: Client ID
+    """
+    # Initialize batch accumulator if needed
+    if not hasattr(client_state, 'batch_audio_chunks'):
+        client_state.batch_audio_chunks = []
+        client_state.batch_audio_format = audio_format
+        application_logger.info(f"📦 Started batch audio accumulation for {client_id}")
+
+    # Accumulate audio
+    client_state.batch_audio_chunks.append(audio_data)
+    application_logger.debug(
+        f"📦 Accumulated chunk #{len(client_state.batch_audio_chunks)} ({len(audio_data)} bytes) for {client_id}"
+    )
+
+
+async def _handle_audio_chunk(
+    client_state,
+    audio_stream_producer,
+    audio_data: bytes,
+    audio_format: dict,
+    user_id: str,
+    user_email: str,
+    client_id: str
+) -> None:
+    """
+    Route audio chunk to appropriate mode handler (streaming or batch).
+
+    Args:
+        client_state: Client state object
+        audio_stream_producer: Audio stream producer instance
+        audio_data: Raw PCM audio bytes
+        audio_format: Audio format dict
+        user_id: User ID
+        user_email: User email
+        client_id: Client ID
+    """
+    recording_mode = getattr(client_state, 'recording_mode', 'batch')
+
+    if recording_mode == "streaming":
+        await _handle_streaming_mode_audio(
+            client_state, audio_stream_producer, audio_data,
+            audio_format, user_id, user_email, client_id
+        )
+    else:
+        await _handle_batch_mode_audio(
+            client_state, audio_data, audio_format, client_id
+        )
+
+
+async def _handle_audio_session_start(
+    client_state,
+    audio_format: dict,
+    client_id: str
+) -> tuple[bool, str]:
+    """
+    Handle audio-start event - set mode and switch to audio streaming.
+
+    Args:
+        client_state: Client state object
+        audio_format: Audio format dict with mode
+        client_id: Client ID
+
+    Returns:
+        (audio_streaming_flag, recording_mode)
+    """
+    recording_mode = audio_format.get("mode", "batch")
+    client_state.recording_mode = recording_mode
+
+    application_logger.info(
+        f"🎙️ Audio session started for {client_id} - "
+        f"Format: {audio_format.get('rate')}Hz, "
+        f"{audio_format.get('width')}bytes, "
+        f"{audio_format.get('channels')}ch, "
+        f"Mode: {recording_mode}"
+    )
+
+    return True, recording_mode  # Switch to audio streaming mode
+
+
+async def _handle_audio_session_stop(
+    client_state,
+    audio_stream_producer,
+    user_id: str,
+    user_email: str,
+    client_id: str
+) -> bool:
+    """
+    Handle audio-stop event - finalize session based on mode.
+
+    Args:
+        client_state: Client state object
+        audio_stream_producer: Audio stream producer instance
+        user_id: User ID
+        user_email: User email
+        client_id: Client ID
+
+    Returns:
+        False to switch back to control mode
+    """
+    recording_mode = getattr(client_state, 'recording_mode', 'batch')
+    application_logger.info(f"🛑 Audio session stopped for {client_id} (mode: {recording_mode})")
+
+    if recording_mode == "streaming":
+        await _finalize_streaming_session(
+            client_state, audio_stream_producer,
+            user_id, user_email, client_id
+        )
+    else:
+        await _process_batch_audio_complete(
+            client_state, user_id, user_email, client_id
+        )
+
+    return False  # Switch back to control mode
+
+
+async def _process_batch_audio_complete(
+    client_state,
+    user_id: str,
+    user_email: str,
+    client_id: str
+) -> None:
+    """
+    Process completed batch audio: write file, create conversation, enqueue jobs.
+
+    Args:
+        client_state: Client state with batch_audio_chunks
+        user_id: User ID
+        user_email: User email
+        client_id: Client ID
+    """
+    if not hasattr(client_state, 'batch_audio_chunks') or not client_state.batch_audio_chunks:
+        application_logger.warning(f"⚠️ Batch mode: No audio chunks accumulated for {client_id}")
+        return
+
+    try:
+        from advanced_omi_backend.audio_utils import write_audio_file
+        from advanced_omi_backend.models.conversation import create_conversation
+
+        # Combine all chunks
+        complete_audio = b''.join(client_state.batch_audio_chunks)
+        application_logger.info(
+            f"📦 Batch mode: Combined {len(client_state.batch_audio_chunks)} chunks into {len(complete_audio)} bytes"
+        )
+
+        # Generate audio UUID and timestamp
+        audio_uuid = str(uuid.uuid4())
+        timestamp = int(time.time() * 1000)
+
+        # Write audio file and create AudioFile entry
+        wav_filename, file_path, duration = await write_audio_file(
+            raw_audio_data=complete_audio,
+            audio_uuid=audio_uuid,
+            client_id=client_id,
+            user_id=user_id,
+            user_email=user_email,
+            timestamp=timestamp,
+            validate=False  # PCM data, not WAV
+        )
+
+        application_logger.info(
+            f"✅ Batch mode: Wrote audio file {wav_filename} ({duration:.1f}s)"
+        )
+
+        # Create conversation immediately for batch audio
+        conversation_id = str(uuid.uuid4())
+        version_id = str(uuid.uuid4())
+
+        conversation = create_conversation(
+            conversation_id=conversation_id,
+            audio_uuid=audio_uuid,
+            user_id=user_id,
+            client_id=client_id,
+            title="Batch Recording",
+            summary="Processing batch audio..."
+        )
+        await conversation.insert()
+
+        application_logger.info(f"📝 Batch mode: Created conversation {conversation_id}")
+
+        # Enqueue complete batch processing job chain
+        from advanced_omi_backend.controllers.queue_controller import start_batch_processing_jobs
+
+        job_ids = start_batch_processing_jobs(
+            conversation_id=conversation_id,
+            audio_uuid=audio_uuid,
+            user_id=user_id,
+            user_email=user_email,
+            audio_file_path=file_path
+        )
+
+        application_logger.info(
+            f"✅ Batch mode: Enqueued job chain for {conversation_id} - "
+            f"transcription ({job_ids['transcription']}) → "
+            f"speaker ({job_ids['speaker_recognition']}) → "
+            f"memory ({job_ids['memory']})"
+        )
+
+        # Clear accumulated chunks
+        client_state.batch_audio_chunks = []
+
+    except Exception as batch_error:
+        application_logger.error(
+            f"❌ Batch mode processing failed: {batch_error}",
+            exc_info=True
+        )
+
+
 async def handle_omi_websocket(
     ws: WebSocket,
     token: Optional[str] = None,
@@ -433,42 +735,22 @@ async def handle_omi_websocket(
                         f"🎵 Received OMI audio chunk #{packet_count}: {len(payload)} bytes"
                     )
 
-                # OMI-specific: Decode Opus to PCM
-                start_time = time.time()
-                loop = asyncio.get_running_loop()
-                pcm_data = await loop.run_in_executor(_DEC_IO_EXECUTOR, _decode_packet, payload)
-                decode_time = time.time() - start_time
+                # Handle OMI audio chunk (Opus decode + publish to stream)
+                await _handle_omi_audio_chunk(
+                    client_state,
+                    audio_stream_producer,
+                    payload,
+                    _decode_packet,
+                    user.user_id,
+                    client_id,
+                    packet_count
+                )
 
-                if pcm_data:
-                    if packet_count <= 5 or packet_count % 1000 == 0:
-                        application_logger.debug(
-                            f"🎵 Decoded OMI packet #{packet_count}: {len(payload)} bytes -> "
-                            f"{len(pcm_data)} PCM bytes (took {decode_time:.3f}s)"
-                        )
-
-                    # Publish decoded PCM to Redis Stream
-                    await _publish_audio_to_stream(
-                        client_state,
-                        audio_stream_producer,
-                        pcm_data,
-                        user.user_id,
-                        client_id,
-                        OMI_SAMPLE_RATE,
-                        OMI_CHANNELS,
-                        OMI_SAMPLE_WIDTH
+                # Log progress every 1000th packet
+                if packet_count % 1000 == 0:
+                    application_logger.info(
+                        f"📊 Processed {packet_count} OMI packets ({total_bytes} bytes total)"
                     )
-
-                    # Log every 1000th packet
-                    if packet_count % 1000 == 0:
-                        application_logger.info(
-                            f"📊 Processed {packet_count} OMI packets ({total_bytes} bytes total)"
-                        )
-                else:
-                    # Log decode failures for first 5 packets
-                    if packet_count <= 5:
-                        application_logger.warning(
-                            f"❌ Failed to decode OMI packet #{packet_count}: {len(payload)} bytes"
-                        )
 
             elif header["type"] == "audio-stop":
                 # Handle audio session stop
@@ -477,7 +759,7 @@ async def handle_omi_websocket(
                     f"Total chunks: {packet_count}, Total bytes: {total_bytes}"
                 )
 
-                # Finalize session
+                # Finalize session using helper function
                 await _finalize_streaming_session(
                     client_state,
                     audio_stream_producer,
@@ -556,29 +838,12 @@ async def handle_pcm_websocket(
 
                     if header["type"] == "audio-start":
                         application_logger.debug(f"🎙️ Processing audio-start for {client_id}")
-                        # Handle audio session start
-                        audio_streaming = True
-                        audio_format = header.get("data", {})
-
-                        # Extract recording mode (batch vs streaming)
-                        recording_mode = audio_format.get("mode", "batch")
-                        client_state.recording_mode = recording_mode  # Store mode in client state
-
-                        application_logger.info(
-                            f"🎙️ Audio session started for {client_id} - "
-                            f"Format: {audio_format.get('rate')}Hz, "
-                            f"{audio_format.get('width')}bytes, "
-                            f"{audio_format.get('channels')}ch, "
-                            f"Mode: {recording_mode}"
+                        # Handle audio session start using helper function
+                        audio_streaming, recording_mode = await _handle_audio_session_start(
+                            client_state,
+                            header.get("data", {}),
+                            client_id
                         )
-
-                        # Log mode selection (no transcription manager needed - both modes use job queue now)
-                        if recording_mode == "batch":
-                            application_logger.info(f"📦 Batch mode enabled for {client_id} - will accumulate and process on stop")
-                        else:
-                            application_logger.info(f"🎵 Streaming mode enabled for {client_id} - using Redis Streams")
-
-                        application_logger.info(f"🎵 Switching to audio streaming mode for {client_id}")
                         continue  # Continue to audio streaming mode
                     
                     elif header["type"] == "ping":
@@ -614,122 +879,14 @@ async def handle_pcm_websocket(
                             try:
                                 control_header = json.loads(message["text"].strip())
                                 if control_header.get("type") == "audio-stop":
-                                    application_logger.info(f"🛑 Audio session stopped for {client_id}")
-                                    audio_streaming = False
-
-                                    # Check if this was a streaming mode session
-                                    recording_mode = getattr(client_state, 'recording_mode', 'batch')
-
-                                    if recording_mode == "streaming":
-                                        # Streaming mode: finalize session using helper
-                                        await _finalize_streaming_session(
-                                            client_state,
-                                            audio_stream_producer,
-                                            user.user_id,
-                                            user.email,
-                                            client_id
-                                        )
-                                    else:
-                                        # Batch mode: write complete file and enqueue job (like upload)
-                                        if hasattr(client_state, 'batch_audio_chunks') and client_state.batch_audio_chunks:
-                                            try:
-                                                from datetime import UTC, datetime
-                                                from advanced_omi_backend.audio_utils import write_audio_file
-                                                from advanced_omi_backend.models.conversation import Conversation
-                                                from advanced_omi_backend.workers.transcription_jobs import enqueue_transcript_processing
-                                                from advanced_omi_backend.workers.memory_jobs import enqueue_memory_processing
-                                                from advanced_omi_backend.models.job import JobPriority
-
-                                                # Combine all chunks
-                                                complete_audio = b''.join(client_state.batch_audio_chunks)
-                                                application_logger.info(
-                                                    f"📦 Batch mode: Combined {len(client_state.batch_audio_chunks)} chunks into {len(complete_audio)} bytes"
-                                                )
-
-                                                # Generate audio UUID and timestamp
-                                                audio_uuid = str(uuid.uuid4())
-                                                timestamp = int(time.time() * 1000)
-
-                                                # Write audio file and create AudioFile entry
-                                                wav_filename, file_path, duration = await write_audio_file(
-                                                    raw_audio_data=complete_audio,
-                                                    audio_uuid=audio_uuid,
-                                                    client_id=client_id,
-                                                    user_id=user.user_id,
-                                                    user_email=user.email,
-                                                    timestamp=timestamp,
-                                                    validate=False  # PCM data, not WAV
-                                                )
-
-                                                application_logger.info(
-                                                    f"✅ Batch mode: Wrote audio file {wav_filename} ({duration:.1f}s)"
-                                                )
-
-                                                # Create conversation immediately for batch audio
-                                                conversation_id = str(uuid.uuid4())
-                                                version_id = str(uuid.uuid4())
-
-                                                conversation = Conversation(
-                                                    conversation_id=conversation_id,
-                                                    audio_uuid=audio_uuid,
-                                                    user_id=user.user_id,
-                                                    client_id=client_id,
-                                                    title="Batch Recording",
-                                                    summary="Processing batch audio...",
-                                                    transcript_versions=[],
-                                                    active_transcript_version=None,
-                                                    memory_versions=[],
-                                                    active_memory_version=None,
-                                                    created_at=datetime.now(UTC),
-                                                    updated_at=datetime.now(UTC),
-                                                    session_start=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
-                                                    session_end=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
-                                                    duration_seconds=duration,
-                                                    speech_start_time=0.0,
-                                                    speech_end_time=duration,
-                                                    speaker_names={},
-                                                    action_items=[]
-                                                )
-                                                await conversation.insert()
-
-                                                application_logger.info(f"📝 Batch mode: Created conversation {conversation_id}")
-
-                                                # Enqueue transcript processing job
-                                                transcript_job = enqueue_transcript_processing(
-                                                    conversation_id=conversation_id,
-                                                    audio_uuid=audio_uuid,
-                                                    audio_path=file_path,
-                                                    version_id=version_id,
-                                                    user_id=user.user_id,
-                                                    priority=JobPriority.HIGH,
-                                                    trigger="batch_audio"
-                                                )
-
-                                                # Enqueue memory processing job
-                                                memory_job = enqueue_memory_processing(
-                                                    client_id=client_id,
-                                                    user_id=user.user_id,
-                                                    user_email=user.email,
-                                                    conversation_id=conversation_id,
-                                                    priority=JobPriority.NORMAL
-                                                )
-
-                                                application_logger.info(
-                                                    f"✅ Batch mode: Enqueued jobs for {conversation_id} - "
-                                                    f"transcript: {transcript_job.id}, memory: {memory_job.id}"
-                                                )
-
-                                                # Clear accumulated chunks
-                                                client_state.batch_audio_chunks = []
-
-                                            except Exception as batch_error:
-                                                application_logger.error(
-                                                    f"❌ Batch mode processing failed: {batch_error}",
-                                                    exc_info=True
-                                                )
-                                        else:
-                                            application_logger.warning(f"⚠️ Batch mode: No audio chunks accumulated for {client_id}")
-
+                                    # Handle audio session stop using helper function
+                                    audio_streaming = await _handle_audio_session_stop(
+                                        client_state,
+                                        audio_stream_producer,
+                                        user.user_id,
+                                        user.email,
+                                        client_id
+                                    )
                                     # Reset counters for next session
                                     packet_count = 0
                                     total_bytes = 0
@@ -751,56 +908,20 @@ async def handle_pcm_websocket(
                                             audio_data = payload_msg["bytes"]
                                             packet_count += 1
                                             total_bytes += len(audio_data)
-                                            
+
                                             application_logger.debug(f"🎵 Received audio chunk #{packet_count}: {len(audio_data)} bytes")
 
-                                            # Route based on recording mode
-                                            recording_mode = getattr(client_state, 'recording_mode', 'batch')
+                                            # Route to appropriate mode handler
                                             audio_format = control_header.get("data", {})
-
-                                            if recording_mode == "streaming":
-                                                # Streaming mode: initialize session if needed, then publish
-                                                try:
-                                                    # Initialize streaming session (idempotent)
-                                                    if not hasattr(client_state, 'stream_session_id'):
-                                                        await _initialize_streaming_session(
-                                                            client_state,
-                                                            audio_stream_producer,
-                                                            user.user_id,
-                                                            user.email,
-                                                            client_id,
-                                                            audio_format
-                                                        )
-
-                                                    # Publish audio chunk to Redis Stream
-                                                    await _publish_audio_to_stream(
-                                                        client_state,
-                                                        audio_stream_producer,
-                                                        audio_data,
-                                                        user.user_id,
-                                                        client_id,
-                                                        audio_format.get("rate", 16000),
-                                                        audio_format.get("channels", 1),
-                                                        audio_format.get("width", 2)
-                                                    )
-
-                                                except Exception as stream_error:
-                                                    application_logger.error(
-                                                        f"❌ Failed to publish to Redis Stream: {stream_error}",
-                                                        exc_info=True
-                                                    )
-                                                    # Don't break - continue trying to process chunks
-                                            else:
-                                                # Batch mode: accumulate audio in memory
-                                                if not hasattr(client_state, 'batch_audio_chunks'):
-                                                    client_state.batch_audio_chunks = []
-                                                    client_state.batch_audio_format = audio_format
-                                                    application_logger.info(f"📦 Started batch audio accumulation for {client_id}")
-
-                                                client_state.batch_audio_chunks.append(audio_data)
-                                                application_logger.debug(
-                                                    f"📦 Accumulated chunk #{len(client_state.batch_audio_chunks)} ({len(audio_data)} bytes) for {client_id}"
-                                                )
+                                            await _handle_audio_chunk(
+                                                client_state,
+                                                audio_stream_producer,
+                                                audio_data,
+                                                audio_format,
+                                                user.user_id,
+                                                user.email,
+                                                client_id
+                                            )
                                         else:
                                             application_logger.warning(f"Expected binary payload for audio-chunk, got: {payload_msg.keys()}")
                                     else:
@@ -823,50 +944,17 @@ async def handle_pcm_websocket(
 
                             application_logger.debug(f"🎵 Received raw audio chunk #{packet_count}: {len(audio_data)} bytes")
 
-                            # Route based on recording mode
-                            recording_mode = getattr(client_state, 'recording_mode', 'batch')
-
-                            if recording_mode == "streaming":
-                                # Streaming mode: publish to Redis Streams (legacy raw binary support)
-                                try:
-                                    # Initialize streaming session if needed (fallback for clients not sending audio-start)
-                                    if not hasattr(client_state, 'stream_session_id'):
-                                        default_format = {"rate": 16000, "width": 2, "channels": 1}
-                                        await _initialize_streaming_session(
-                                            client_state,
-                                            audio_stream_producer,
-                                            user.user_id,
-                                            user.email,
-                                            client_id,
-                                            default_format
-                                        )
-
-                                    # Publish audio chunk to Redis Stream
-                                    await _publish_audio_to_stream(
-                                        client_state,
-                                        audio_stream_producer,
-                                        audio_data,
-                                        user.user_id,
-                                        client_id,
-                                        16000,  # Default sample rate
-                                        1,      # Default channels
-                                        2       # Default sample width
-                                    )
-                                except Exception as stream_error:
-                                    application_logger.error(
-                                        f"❌ Failed to publish to Redis Stream: {stream_error}",
-                                        exc_info=True
-                                    )
-                            else:
-                                # Batch mode: use existing flow
-                                if not hasattr(client_state, 'batch_audio_chunks'):
-                                    client_state.batch_audio_chunks = []
-                                    application_logger.info(f"📦 Started batch audio accumulation for {client_id}")
-                                
-                                client_state.batch_audio_chunks.append(audio_data)
-                                application_logger.debug(
-                                    f"📦 Accumulated chunk #{len(client_state.batch_audio_chunks)} ({len(audio_data)} bytes) for {client_id}"
-                                )
+                            # Route to appropriate mode handler with default format
+                            default_format = {"rate": 16000, "width": 2, "channels": 1}
+                            await _handle_audio_chunk(
+                                client_state,
+                                audio_stream_producer,
+                                audio_data,
+                                default_format,
+                                user.user_id,
+                                user.email,
+                                client_id
+                            )
                         
                         else:
                             application_logger.warning(f"Unexpected message format in streaming mode: {message.keys()}")

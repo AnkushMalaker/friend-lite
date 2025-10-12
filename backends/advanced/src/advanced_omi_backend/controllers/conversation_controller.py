@@ -108,38 +108,27 @@ async def get_conversation(conversation_id: str, user: User):
         audio_path = audio_chunk.get("audio_path") if audio_chunk else None
         cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
 
-        # Calculate version information
-        version_info = {
-            "transcript_count": len(conversation.transcript_versions),
-            "memory_count": len(conversation.memory_versions),
-            "active_transcript_version": conversation.active_transcript_version,
-            "active_memory_version": conversation.active_memory_version
-        }
+        # Format conversation for API response - use model_dump and add computed fields
+        formatted_conversation = conversation.model_dump(
+            mode='json',  # Automatically converts datetime to ISO strings, handles nested models
+            exclude={'id'}  # Exclude MongoDB internal _id
+        )
 
-        return {
-            "conversation": {
-                "conversation_id": conversation.conversation_id,
-                "audio_uuid": conversation.audio_uuid,
-                "client_id": conversation.client_id,
-                "title": getattr(conversation, "title", "Conversation"),
-                "summary": getattr(conversation, "summary", ""),
-                "timestamp": conversation.session_start.timestamp() if hasattr(conversation, "session_start") and conversation.session_start else 0,
-                "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
-                "transcript": conversation.transcript if conversation.transcript else "",
-                "segments": [seg.model_dump() for seg in conversation.segments] if conversation.segments else [],
-                "speakers_identified": getattr(conversation, "speakers_identified", []),
-                "speaker_names": getattr(conversation, "speaker_names", {}),
-                "duration_seconds": getattr(conversation, "duration_seconds", 0),
-                "memories": conversation.memories,
-                "memory_count": conversation.memory_count,
-                "has_memory": bool(conversation.memories),
-                "memory_processing_status": getattr(conversation, "memory_processing_status", "pending"),
-                "action_items": getattr(conversation, "action_items", []),
-                "audio_path": audio_path,
-                "cropped_audio_path": cropped_audio_path,
-                "version_info": version_info,
+        # Add computed/external fields not in the model
+        formatted_conversation.update({
+            "timestamp": 0,  # Legacy field - using created_at instead
+            "has_memory": bool(conversation.memories),
+            "audio_path": audio_path,
+            "cropped_audio_path": cropped_audio_path,
+            "version_info": {
+                "transcript_count": len(conversation.transcript_versions),
+                "memory_count": len(conversation.memory_versions),
+                "active_transcript_version": conversation.active_transcript_version,
+                "active_memory_version": conversation.active_memory_version
             }
-        }
+        })
+
+        return {"conversation": formatted_conversation}
 
     except Exception as e:
         logger.error(f"Error fetching conversation {conversation_id}: {e}")
@@ -176,36 +165,28 @@ async def get_conversations(user: User):
             audio_path = audio_chunk.get("audio_path") if audio_chunk else None
             cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
 
-            # Calculate version information for UI
-            version_info = {
-                "transcript_count": len(conv.transcript_versions),
-                "memory_count": len(conv.memory_versions),
-                "active_transcript_version": conv.active_transcript_version,
-                "active_memory_version": conv.active_memory_version
-            }
+            # Format conversation for list - use model_dump with exclusions
+            conv_dict = conv.model_dump(
+                mode='json',  # Automatically converts datetime to ISO strings
+                exclude={'id', 'transcript', 'segments'}  # Exclude large fields for list view
+            )
 
-            conversations.append({
-                "conversation_id": conv.conversation_id,
-                "audio_uuid": conv.audio_uuid,
-                "client_id": conv.client_id,  # Include client_id as a field instead of grouping key
-                "title": getattr(conv, "title", "Conversation"),
-                "summary": getattr(conv, "summary", ""),
-                "timestamp": conv.session_start.timestamp() if hasattr(conv, "session_start") and conv.session_start else 0,
-                "created_at": conv.created_at.isoformat() if conv.created_at else None,
-                # Only include segment count, not full transcript - fetch separately when expanding
+            # Add computed/external fields
+            conv_dict.update({
+                "timestamp": 0,  # Legacy field - using created_at instead
                 "segment_count": len(conv.segments) if conv.segments else 0,
-                "speakers_identified": getattr(conv, "speakers_identified", []),
-                "speaker_names": getattr(conv, "speaker_names", {}),
-                "duration_seconds": getattr(conv, "duration_seconds", 0),
-                "memory_count": conv.memory_count,
                 "has_memory": bool(conv.memories),
-                "memory_processing_status": getattr(conv, "memory_processing_status", "pending"),
-                # Audio file paths for playback
                 "audio_path": audio_path,
                 "cropped_audio_path": cropped_audio_path,
-                # Version information for reprocess/version UI
-                "version_info": version_info,
+                "version_info": {
+                    "transcript_count": len(conv.transcript_versions),
+                    "memory_count": len(conv.memory_versions),
+                    "active_transcript_version": conv.active_transcript_version,
+                    "active_memory_version": conv.active_memory_version
+                }
             })
+
+            conversations.append(conv_dict)
 
         return {"conversations": conversations}
 
@@ -237,39 +218,25 @@ async def get_conversation_by_id(conversation_id: str, user: User):
         audio_path = audio_chunk.get("audio_path") if audio_chunk else None
         cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
 
-        # Calculate version information for UI
-        version_info = {
-            "transcript_count": len(conversation_model.transcript_versions),
-            "memory_count": len(conversation_model.memory_versions),
-            "active_transcript_version": conversation_model.active_transcript_version,
-            "active_memory_version": conversation_model.active_memory_version
-        }
+        # Format conversation for API response - use model_dump and add computed fields
+        formatted_conversation = conversation_model.model_dump(
+            mode='json',  # Automatically converts datetime to ISO strings, handles nested models
+            exclude={'id'}  # Exclude MongoDB internal _id
+        )
 
-        # Format conversation for API response
-        formatted_conversation = {
-            "conversation_id": conversation_model.conversation_id,
-            "audio_uuid": conversation_model.audio_uuid,
-            "client_id": conversation_model.client_id,
-            "title": getattr(conversation_model, "title", "Conversation"),
-            "summary": getattr(conversation_model, "summary", ""),
-            "timestamp": conversation_model.session_start.timestamp() if hasattr(conversation_model, "session_start") and conversation_model.session_start else 0,
-            "created_at": conversation_model.created_at.isoformat() if conversation_model.created_at else None,
-            "transcript": conversation_model.transcript if conversation_model.transcript else "",
-            "segments": conversation_model.segments if conversation_model.segments else [],
-            "speakers_identified": getattr(conversation_model, "speakers_identified", []),
-            "speaker_names": getattr(conversation_model, "speaker_names", {}),
-            "duration_seconds": getattr(conversation_model, "duration_seconds", 0),
-            "memories": conversation_model.memories if conversation_model.memories else [],
-            "memory_count": conversation_model.memory_count if hasattr(conversation_model, "memory_count") else 0,
+        # Add computed/external fields not in the model
+        formatted_conversation.update({
+            "timestamp": 0,  # Legacy field - using created_at instead
             "has_memory": bool(conversation_model.memories),
-            "memory_processing_status": getattr(conversation_model, "memory_processing_status", "pending"),
-            "action_items": getattr(conversation_model, "action_items", []),
-            # Audio file paths for playback
             "audio_path": audio_path,
             "cropped_audio_path": cropped_audio_path,
-            # Version information for UI
-            "version_info": version_info,
-        }
+            "version_info": {
+                "transcript_count": len(conversation_model.transcript_versions),
+                "memory_count": len(conversation_model.memory_versions),
+                "active_transcript_version": conversation_model.active_transcript_version,
+                "active_memory_version": conversation_model.active_memory_version
+            }
+        })
 
         return {"conversation": formatted_conversation}
 
@@ -663,20 +630,63 @@ async def reprocess_transcript(conversation_id: str, user: User):
         import uuid
         version_id = str(uuid.uuid4())
 
-        # Enqueue job with RQ (RQ handles job tracking instead of processing_runs)
-        from advanced_omi_backend.workers.transcription_jobs import enqueue_transcript_processing
-        from advanced_omi_backend.models.job import JobPriority
+        # Enqueue job chain with RQ (transcription -> speaker recognition -> memory)
+        from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job, recognise_speakers_job
+        from advanced_omi_backend.workers.memory_jobs import process_memory_job
+        from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, JOB_RESULT_TTL
 
-        job = enqueue_transcript_processing(
-            conversation_id=conversation_id,
-            audio_uuid=audio_uuid,
-            audio_path=str(full_audio_path),
-            version_id=version_id,
-            user_id=str(user.user_id),
-            priority=JobPriority.NORMAL,
-            trigger="reprocess"
+        # Job 1: Transcribe audio to text
+        transcript_job = transcription_queue.enqueue(
+            transcribe_full_audio_job,
+            conversation_id,
+            audio_uuid,
+            str(full_audio_path),
+            version_id,
+            str(user.user_id),
+            "reprocess",
+            job_timeout=600,
+            result_ttl=JOB_RESULT_TTL,
+            job_id=f"reprocess_{conversation_id[:8]}",
+            description=f"Transcribe audio for {conversation_id[:8]}",
+            meta={'audio_uuid': audio_uuid}
         )
+        logger.info(f"📥 RQ: Enqueued transcription job {transcript_job.id}")
 
+        # Job 2: Recognize speakers (depends on transcription)
+        speaker_job = transcription_queue.enqueue(
+            recognise_speakers_job,
+            conversation_id,
+            version_id,
+            str(full_audio_path),
+            str(user.user_id),
+            "",  # transcript_text - will be read from DB
+            [],  # words - will be read from DB
+            depends_on=transcript_job,
+            job_timeout=600,
+            result_ttl=JOB_RESULT_TTL,
+            job_id=f"speaker_{conversation_id[:8]}",
+            description=f"Recognize speakers for {conversation_id[:8]}",
+            meta={'audio_uuid': audio_uuid}
+        )
+        logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id} (depends on {transcript_job.id})")
+
+        # Job 3: Extract memories (depends on speaker recognition)
+        memory_job = memory_queue.enqueue(
+            process_memory_job,
+            None,  # client_id - will be read from conversation in DB
+            str(user.user_id),
+            "",  # user_email - will be read from user in DB
+            conversation_id,
+            depends_on=speaker_job,
+            job_timeout=1800,
+            result_ttl=JOB_RESULT_TTL,
+            job_id=f"memory_{conversation_id[:8]}",
+            description=f"Extract memories for {conversation_id[:8]}",
+            meta={'audio_uuid': audio_uuid}
+        )
+        logger.info(f"📥 RQ: Enqueued memory job {memory_job.id} (depends on {speaker_job.id})")
+
+        job = transcript_job  # For backward compatibility with return value
         logger.info(f"Created transcript reprocessing job {job.id} (version: {version_id}) for conversation {conversation_id}")
 
         return JSONResponse(content={

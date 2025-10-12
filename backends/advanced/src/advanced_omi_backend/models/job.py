@@ -157,7 +157,7 @@ class BaseRQJob(ABC):
             raise
 
 
-def async_job(redis: bool = True, beanie: bool = True):
+def async_job(redis: bool = True, beanie: bool = True, timeout: int = 300, result_ttl: int = 3600):
     """
     Decorator to convert async functions into RQ-compatible job functions.
 
@@ -166,20 +166,24 @@ def async_job(redis: bool = True, beanie: bool = True):
     - Beanie (MongoDB ODM) initialization
     - Redis client creation (optional)
     - Exception handling and logging
+    - Default job configuration (timeout, result_ttl)
 
     Args:
         redis: If True, creates Redis client and passes as 'redis_client' kwarg
         beanie: If True, initializes Beanie ODM (default True)
+        timeout: Default job timeout in seconds (default 300 = 5 minutes)
+        result_ttl: Default result TTL in seconds (default 3600 = 1 hour)
 
     Example:
-        @async_job(redis=True, beanie=True)
+        @async_job(redis=True, beanie=True, timeout=600)
         async def my_job(arg1, arg2, redis_client=None):
             # Job logic with redis_client available
             result = await some_async_operation()
             return {"success": True, "result": result}
 
-        # Enqueue directly (no wrapper needed)
-        queue.enqueue(my_job, arg1_value, arg2_value)
+        # Enqueue with defaults or override
+        queue.enqueue(my_job, arg1_value, arg2_value)  # Uses timeout=600
+        queue.enqueue(my_job, arg1_value, arg2_value, job_timeout=1200)  # Override
     """
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -235,6 +239,10 @@ def async_job(redis: bool = True, beanie: bool = True):
                 elapsed = time.time() - start_time
                 logger.error(f"❌ {job_name} failed after {elapsed:.2f}s: {e}", exc_info=True)
                 raise
+
+        # Store default job configuration as attributes for RQ introspection
+        wrapper.job_timeout = timeout
+        wrapper.result_ttl = result_ttl
 
         return wrapper
     return decorator
