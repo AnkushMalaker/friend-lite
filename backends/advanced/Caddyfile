@@ -1,0 +1,107 @@
+# Caddy reverse proxy configuration for Friend-Lite
+# Provides automatic HTTPS for microphone access
+
+# USAGE:
+# 1. Start services: docker compose up -d
+# 2. Access at: https://localhost (Caddy will use self-signed cert)
+# 3. Browser will warn about self-signed cert - accept it
+# 4. Microphone access will now work via HTTPS
+#
+# NOTE: If using Caddy, update docker-compose.yml webui build args:
+#   VITE_BACKEND_URL: "" (empty for same-origin through Caddy)
+#
+# For production, replace 'localhost' with your domain name and Caddy
+# will automatically obtain Let's Encrypt certificates.
+
+localhost {
+    # Enable automatic HTTPS
+    tls internal
+
+    # WebSocket endpoints - proxy to backend with upgrade support
+    handle /ws* {
+        reverse_proxy friend-backend:8000 {
+            # Caddy automatically handles WebSocket upgrades
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # API endpoints - proxy to backend
+    handle /api/* {
+        reverse_proxy friend-backend:8000
+    }
+
+    # Auth endpoints - proxy to backend
+    handle /auth/* {
+        reverse_proxy friend-backend:8000
+    }
+
+    # Health checks - proxy to backend
+    handle /health {
+        reverse_proxy friend-backend:8000
+    }
+
+    handle /readiness {
+        reverse_proxy friend-backend:8000
+    }
+
+    # Users endpoints - proxy to backend
+    handle /users/* {
+        reverse_proxy friend-backend:8000
+    }
+
+    # Audio files - proxy to backend
+    handle /audio/* {
+        reverse_proxy friend-backend:8000
+    }
+
+    # Everything else - proxy to webui
+    handle {
+        reverse_proxy webui:80
+    }
+}
+
+# Production configuration (uncomment and modify for your domain)
+# yourdomain.com {
+#     # Caddy automatically obtains Let's Encrypt certificates
+#
+#     # WebSocket endpoints
+#     handle /ws* {
+#         reverse_proxy friend-backend:8000
+#     }
+#
+#     # API endpoints
+#     handle /api/* {
+#         reverse_proxy friend-backend:8000
+#     }
+#
+#     # Auth endpoints
+#     handle /auth/* {
+#         reverse_proxy friend-backend:8000
+#     }
+#
+#     # Health checks
+#     handle /health {
+#         reverse_proxy friend-backend:8000
+#     }
+#
+#     handle /readiness {
+#         reverse_proxy friend-backend:8000
+#     }
+#
+#     # Users endpoints
+#     handle /users/* {
+#         reverse_proxy friend-backend:8000
+#     }
+#
+#     # Audio files
+#     handle /audio/* {
+#         reverse_proxy friend-backend:8000
+#     }
+#
+#     # Everything else - webui
+#     handle {
+#         reverse_proxy webui:80
+#     }
+# }
