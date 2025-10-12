@@ -622,8 +622,9 @@ async def stream_speech_detection_job(
                 identified_speakers = []
                 if speaker_recognition_result and "segments" in speaker_recognition_result:
                     for seg in speaker_recognition_result["segments"]:
-                        identified_as = seg.get("identified_as", "Unknown")
-                        if identified_as != "Unknown" and identified_as not in identified_speakers:
+                        identified_as = seg.get("identified_as")
+                        # Filter out None and "Unknown" values
+                        if identified_as and identified_as != "Unknown" and identified_as not in identified_speakers:
                             identified_speakers.append(identified_as)
 
                     num_segments = len(speaker_recognition_result["segments"])
