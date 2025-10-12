@@ -166,7 +166,21 @@ async def _setup_websocket_connection(
     # Authenticate user after accepting connection
     user = await websocket_auth(ws, token)
     if not user:
-        await ws.close(code=1008, reason="Authentication required")
+        # Send error message to client before closing
+        try:
+            error_msg = json.dumps({
+                "type": "error",
+                "error": "authentication_failed",
+                "message": "Authentication failed. Please log in again and ensure your token is valid.",
+                "code": 1008
+            }) + "\n"
+            await ws.send_text(error_msg)
+            application_logger.info("Sent authentication error message to client")
+        except Exception as send_error:
+            application_logger.warning(f"Failed to send error message: {send_error}")
+
+        # Close connection with appropriate code
+        await ws.close(code=1008, reason="Authentication failed")
         return None, None, None
 
     # Generate proper client_id using user and device_name
