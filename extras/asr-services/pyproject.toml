@@ -1,12 +1,15 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "asr-services"
 version = "0.1.0"
 description = "Wyoming compatible WebSocket ASR server for friend-lite"
 requires-python = ">=3.10"
 
+# Core deps (NO torch/torchaudio here)
 dependencies = [
-  "torch>=2.3",
-  "torchaudio>=2.3",
   "websockets>=12.0",
   "numpy>=1.26",
   "soundfile>=0.12",
@@ -19,35 +22,112 @@ dependencies = [
   "httpx>=0.28.1",
 ]
 
-[tool.uv]
-compile-bytecode = true
-conflicts = [
-  [
-    { group = "demo" },
-    { group = "parakeet" }
-  ]
-]
-
-[tool.uv.sources]
-useful-moonshine-onnx = { git = "https://github.com/usefulsensors/moonshine.git", subdirectory = "moonshine-onnx" }
+# Choose ONE of these extras per machine at install time
+[project.optional-dependencies]
+cpu   = ["torch", "torchaudio"]
+cu118 = ["torch", "torchaudio"]
+cu121 = ["torch", "torchaudio"]
+cu124 = ["torch", "torchaudio"]
+cu126 = ["torch", "torchaudio"]
+cu128 = ["torch", "torchaudio"]  # CUDA 12.8 / Blackwell
 
 [dependency-groups]
 demo = [
-    "fastrtc>=0.0.23",
-    "gradio>=5.29.0",
-    "sounddevice>=0.5.1",
+  "fastrtc>=0.0.23",
+  "gradio>=5.29.0",
+  "sounddevice>=0.5.1",
 ]
 dev = [
-    "black>=25.1.0",
-    "requests>=2.31.0",
-    "pytest>=8.0.0",
+  "black>=25.1.0",
+  "requests>=2.31.0",
+  "pytest>=8.0.0",
 ]
-
 moonshine = [
   "useful-moonshine-onnx",
 ]
 parakeet = [
-    "nemo-toolkit[asr]>=2.2.0",
-    "cuda-python>=12.3",
-    "numpy>=1.26,<2.0",
+  "nemo-toolkit[asr]>=2.2.0",
+  "cuda-python>=12.3",
+  "numpy>=1.26,<2.0",
 ]
+
+# --- Setuptools: restrict what gets packaged (fixes multi top-level dirs) ---
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# If your package is a directory named `asr_services/` with __init__.py:
+include = ["asr_services*"]
+exclude = ["debug*", "charts*", "results*", "model_cache*"]
+
+# If instead you have a single module file `asr_services.py`,
+# comment the block above and use:
+# [tool.setuptools]
+# py-modules = ["asr_services"]
+
+# --- uv config ---
+
+[tool.uv]
+compile-bytecode = true
+conflicts = [
+  # prevent installing both demo and parakeet groups
+  [{ group = "demo" }, { group = "parakeet" }],
+  # prevent mixing CPU and CUDA extras
+  [{ extra = "cpu" }, { extra = "cu118" }],
+  [{ extra = "cpu" }, { extra = "cu121" }],
+  [{ extra = "cpu" }, { extra = "cu124" }],
+  [{ extra = "cpu" }, { extra = "cu126" }],
+  [{ extra = "cpu" }, { extra = "cu128" }],
+]
+
+[tool.uv.sources]
+# your git source
+useful-moonshine-onnx = { git = "https://github.com/usefulsensors/moonshine.git", subdirectory = "moonshine-onnx" }
+
+# map extras → PyTorch wheel indexes
+torch = [
+  { index = "pytorch-cpu",   extra = "cpu"   },
+  { index = "pytorch-cu118", extra = "cu118" },
+  { index = "pytorch-cu121", extra = "cu121" },
+  { index = "pytorch-cu124", extra = "cu124" },
+  { index = "pytorch-cu126", extra = "cu126" },
+  { index = "pytorch-cu128", extra = "cu128" },
+]
+torchaudio = [
+  { index = "pytorch-cpu",   extra = "cpu"   },
+  { index = "pytorch-cu118", extra = "cu118" },
+  { index = "pytorch-cu121", extra = "cu121" },
+  { index = "pytorch-cu124", extra = "cu124" },
+  { index = "pytorch-cu126", extra = "cu126" },
+  { index = "pytorch-cu128", extra = "cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url  = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url  = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url  = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url  = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url  = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url  = "https://download.pytorch.org/whl/cu128"
+explicit = true
