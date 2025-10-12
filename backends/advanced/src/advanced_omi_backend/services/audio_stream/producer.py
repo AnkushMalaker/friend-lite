@@ -126,7 +126,12 @@ class AudioStreamProducer:
             b"sample_width": b"2",
         }
 
-        await self.redis_client.xadd(stream_name, end_signal)
+        await self.redis_client.xadd(
+            stream_name,
+            end_signal,
+            maxlen=25000,
+            approximate=True
+        )
         logger.info(f"📡 Sent end-of-session signal for {session_id} to {stream_name}")
 
     async def finalize_session(self, session_id: str):
@@ -229,8 +234,13 @@ class AudioStreamProducer:
                 b"sample_width": str(sample_width).encode(),
             }
 
-            # Add to stream
-            message_id = await self.redis_client.xadd(stream_name, chunk_data)
+            # Add to stream with MAXLEN limit (safety net to prevent unbounded growth)
+            message_id = await self.redis_client.xadd(
+                stream_name,
+                chunk_data,
+                maxlen=25000,  # Keep max 25k chunks (~104 minutes at 250ms/chunk)
+                approximate=True
+            )
             message_ids.append(message_id.decode())
 
             # Update session tracking
@@ -304,8 +314,13 @@ class AudioStreamProducer:
                 b"sample_width": str(sample_width).encode(),
             }
 
-            # Add to stream
-            message_id = await self.redis_client.xadd(stream_name, chunk_data)
+            # Add to stream with MAXLEN limit
+            message_id = await self.redis_client.xadd(
+                stream_name,
+                chunk_data,
+                maxlen=25000,
+                approximate=True
+            )
 
             # Update session tracking
             await self.update_session_chunk_count(session_id)
