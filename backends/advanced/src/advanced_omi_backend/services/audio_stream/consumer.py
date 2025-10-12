@@ -404,6 +404,13 @@ class BaseAudioStreamConsumer(ABC):
                         for msg_id in buffer["message_ids"]:
                             await self.redis_client.xack(stream_name, self.group_name, msg_id)
 
+                        # Trim stream to remove ACKed messages (keep only last 1000 for safety)
+                        try:
+                            await self.redis_client.xtrim(stream_name, maxlen=1000, approximate=True)
+                            logger.debug(f"🧹 Trimmed audio stream {stream_name} to max 1000 entries")
+                        except Exception as trim_error:
+                            logger.warning(f"Failed to trim stream {stream_name}: {trim_error}")
+
                         logger.info(
                             f"➡️ [{self.consumer_name}] {self.provider_name}: Flushed buffer for session {session_id} "
                             f"in {processing_time:.2f}s (transcript: {len(result.get('text', ''))} chars)"
@@ -501,6 +508,13 @@ class BaseAudioStreamConsumer(ABC):
                 for msg_id in buffer["message_ids"]:
                     await self.redis_client.xack(stream_name, self.group_name, msg_id)
 
+                # Trim stream to remove ACKed messages (keep only last 1000 for safety)
+                try:
+                    await self.redis_client.xtrim(stream_name, maxlen=1000, approximate=True)
+                    logger.debug(f"🧹 Trimmed audio stream {stream_name} to max 1000 entries")
+                except Exception as trim_error:
+                    logger.warning(f"Failed to trim stream {stream_name}: {trim_error}")
+
                 logger.info(
                     f"➡️ [{self.consumer_name}] {self.provider_name}: Completed {combined_chunk_id} in {processing_time:.2f}s "
                     f"(transcript: {len(result.get('text', ''))} chars, next_offset={buffer['audio_offset_seconds']:.1f}s)"
@@ -554,9 +568,14 @@ class BaseAudioStreamConsumer(ABC):
         if segments:
             result_data[b"segments"] = json.dumps(segments).encode()
 
-        # Write to session results stream
+        # Write to session results stream with MAXLEN limit
         session_results_stream = f"transcription:results:{session_id}"
-        message_id = await self.redis_client.xadd(session_results_stream, result_data)
+        message_id = await self.redis_client.xadd(
+            session_results_stream,
+            result_data,
+            maxlen=1000,  # Keep max 1k results per session
+            approximate=True
+        )
 
         logger.info(
             f"➡️ Stored result {chunk_id} in {session_results_stream}: "
