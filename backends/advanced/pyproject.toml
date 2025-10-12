@@ -21,6 +21,9 @@ dependencies = [
     "langfuse>=3.3.0",
     "spacy>=3.8.2",
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "redis>=5.0.0",
+    "rq>=1.16.0",
+    "soundfile>=0.12.1",
 ]
 
 [project.optional-dependencies]
@@ -48,9 +51,43 @@ line-length = 100
 [tool.uv.sources]
 mem0ai = { git = "https://github.com/AnkushMalaker/mem0.git", rev = "async-client-unbound-var-fix" }
 
+[tool.poetry.dependencies]
+robotframework = "^6.1.1"
+
 [tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*", "*Tests"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--spec",
+    "-v",
+    "--tb=long",
+    "--color=yes",
+    "--durations=10",
+    "--showlocals",
+    "--capture=no",
+]
 markers = [
-    "integration: marks tests as integration tests",
+    "integration: marks tests as integration tests (may be slow)",
+    "unit: marks tests as unit tests (fast, isolated)",
+    "smoke: marks tests as smoke tests (quick validation)",
+    "slow: marks tests as slow running tests",
+    "api: marks tests that test API endpoints",
+    "memory: marks tests that test memory functionality",
+    "transcription: marks tests that test transcription functionality",
+    "auth: marks tests that test authentication",
+    "database: marks tests that require database access",
+]
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
 ]
 
 [dependency-groups]
@@ -63,4 +100,11 @@ dev = [
 test = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
+    "pytest-spec>=3.2.0",
+    "pytest-cov>=6.0.0",
+    "pytest-xdist>=3.6.0",
+    "pytest-mock>=3.14.0",
+    "requests-mock>=1.12.1",
+    "pytest-json-report>=1.5.0",
+    "pytest-html>=4.0.0",
 ]

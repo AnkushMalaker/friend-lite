@@ -8,7 +8,6 @@ Simplified to write files immediately and enqueue transcription.
 import logging
 import time
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import UploadFile
 from fastapi.responses import JSONResponse
@@ -16,9 +15,7 @@ from fastapi.responses import JSONResponse
 from advanced_omi_backend.audio_utils import AudioValidationError, write_audio_file
 from advanced_omi_backend.models.job import JobPriority
 from advanced_omi_backend.models.user import User
-from advanced_omi_backend.models.conversation import Conversation
-from advanced_omi_backend.workers.transcription_jobs import enqueue_transcript_processing
-from advanced_omi_backend.workers.memory_jobs import enqueue_memory_processing
+from advanced_omi_backend.models.conversation import create_conversation
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -104,49 +101,27 @@ async def upload_and_process_audio_files(
                 # Generate title from filename
                 title = file.filename.rsplit('.', 1)[0][:50] if file.filename else "Uploaded Audio"
 
-                conversation = Conversation(
+                conversation = create_conversation(
                     conversation_id=conversation_id,
                     audio_uuid=audio_uuid,
                     user_id=user.user_id,
                     client_id=client_id,
                     title=title,
-                    summary="Processing uploaded audio file...",
-                    transcript_versions=[],
-                    active_transcript_version=None,
-                    memory_versions=[],
-                    active_memory_version=None,
-                    created_at=datetime.now(UTC),
-                    updated_at=datetime.now(UTC),
-                    session_start=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
-                    session_end=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
-                    duration_seconds=duration,
-                    speech_start_time=0.0,
-                    speech_end_time=duration,
-                    speaker_names={},
-                    action_items=[]
+                    summary="Processing uploaded audio file..."
                 )
                 await conversation.insert()
 
                 audio_logger.info(f"📝 Created conversation {conversation_id} for uploaded file")
 
-                # Enqueue transcript processing job
-                transcript_job = enqueue_transcript_processing(
+                # Enqueue complete batch processing job chain
+                from advanced_omi_backend.controllers.queue_controller import start_batch_processing_jobs
+
+                job_ids = start_batch_processing_jobs(
                     conversation_id=conversation_id,
                     audio_uuid=audio_uuid,
-                    audio_path=file_path,
-                    version_id=version_id,
-                    user_id=user.user_id,
-                    priority=JobPriority.HIGH,
-                    trigger="file_upload"
-                )
-
-                # Enqueue memory processing job (will run after transcript completes)
-                memory_job = enqueue_memory_processing(
-                    client_id=client_id,
                     user_id=user.user_id,
                     user_email=user.email,
-                    conversation_id=conversation_id,
-                    priority=JobPriority.NORMAL
+                    audio_file_path=file_path
                 )
 
                 processed_files.append({
@@ -154,14 +129,16 @@ async def upload_and_process_audio_files(
                     "status": "processing",
                     "audio_uuid": audio_uuid,
                     "conversation_id": conversation_id,
-                    "transcript_job_id": transcript_job.id,
-                    "memory_job_id": memory_job.id,
+                    "transcript_job_id": job_ids['transcription'],
+                    "speaker_job_id": job_ids['speaker_recognition'],
+                    "memory_job_id": job_ids['memory'],
                     "duration_seconds": round(duration, 2),
                 })
 
                 enqueued_jobs.append({
-                    "transcript_job_id": transcript_job.id,
-                    "memory_job_id": memory_job.id,
+                    "transcript_job_id": job_ids['transcription'],
+                    "speaker_job_id": job_ids['speaker_recognition'],
+                    "memory_job_id": job_ids['memory'],
                     "conversation_id": conversation_id,
                     "audio_uuid": audio_uuid,
                     "filename": file.filename,
@@ -169,7 +146,7 @@ async def upload_and_process_audio_files(
 
                 audio_logger.info(
                     f"✅ Processed {file.filename} → conversation {conversation_id}, "
-                    f"transcript job {transcript_job.id}, memory job {memory_job.id}"
+                    f"jobs: {job_ids['transcription']} → {job_ids['speaker_recognition']} → {job_ids['memory']}"
                 )
 
             except Exception as e:

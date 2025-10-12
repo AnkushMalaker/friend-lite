@@ -62,7 +62,7 @@ class ConversationManager:
             if audio_session and audio_session.get("conversation_id"):
                 # Only enqueue if conversation was created (speech detected)
                 import uuid
-                from advanced_omi_backend.workers.transcription_jobs import process_transcript_job
+                from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job
                 from advanced_omi_backend.controllers.queue_controller import transcription_queue, JOB_RESULT_TTL
 
                 conversation_id = audio_session["conversation_id"]
@@ -70,7 +70,7 @@ class ConversationManager:
                 audio_logger.info(f"📤 Enqueuing final transcription job for conversation {conversation_id}")
 
                 job = transcription_queue.enqueue(
-                    process_transcript_job,
+                    transcribe_full_audio_job,
                     conversation_id,
                     audio_uuid,
                     audio_session["audio_file_path"],

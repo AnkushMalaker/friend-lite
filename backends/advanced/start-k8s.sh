@@ -51,6 +51,26 @@ else
     echo "  ⚠️  REDIS_URL not set, using default"
 fi
 
+# Clean up stale worker registrations from previous runs
+echo "🧹 Cleaning up stale worker registrations from Redis..."
+uv run --no-sync python3 -c "
+from rq import Worker
+from redis import Redis
+import os
+
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+redis_conn = Redis.from_url(redis_url)
+
+# Get all workers and clean up dead ones
+workers = Worker.all(connection=redis_conn)
+for worker in workers:
+    # Force cleanup of all registered workers from previous runs
+    worker.register_death()
+print(f'Cleaned up {len(workers)} stale workers')
+" 2>/dev/null || echo "No stale workers to clean"
+
+sleep 1
+
 # OLD WORKERS - Disabled for testing new Redis Streams architecture
 # These have been renamed to old_audio_stream_worker.py and old_transcription_stream_worker.py
 # echo "🎵 Starting Redis Streams audio workers (2 workers)..."

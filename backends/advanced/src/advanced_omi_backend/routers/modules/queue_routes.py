@@ -74,7 +74,7 @@ async def get_job(
         elif job.is_failed:
             status = "failed"
         elif job.is_deferred:
-            status = "retrying"
+            status = "deferred"
 
         return {
             "job_id": job.id,
@@ -102,12 +102,83 @@ async def get_jobs_by_session(
 ):
     """Get all jobs associated with a specific streaming session."""
     try:
-        from rq.registry import FinishedJobRegistry, FailedJobRegistry, StartedJobRegistry, CanceledJobRegistry, DeferredJobRegistry
+        from rq.registry import FinishedJobRegistry, FailedJobRegistry, StartedJobRegistry, CanceledJobRegistry, DeferredJobRegistry, ScheduledJobRegistry
         from advanced_omi_backend.controllers.queue_controller import get_queue
+        from advanced_omi_backend.models.conversation import Conversation
+
+        # First, get conversation_id(s) for this session (for memory jobs)
+        conversation_ids = set()
+        conversations = await Conversation.find(Conversation.audio_uuid == session_id).to_list()
+        conversation_ids = {conv.conversation_id for conv in conversations}
 
         all_jobs = []
+        processed_job_ids = set()  # Track which jobs we've already processed
         queues = ["default", "transcription", "memory"]
 
+        def get_job_status(job, registries_map):
+            """Determine job status from registries."""
+            if job.is_queued:
+                return "queued"
+            elif job.is_started:
+                return "processing"
+            elif job.is_finished:
+                return "completed"
+            elif job.is_failed:
+                return "failed"
+            elif job.is_deferred:
+                return "deferred"
+            elif job.is_scheduled:
+                return "waiting"
+            else:
+                return "unknown"
+
+        def process_job_and_dependents(job, queue_name, base_status):
+            """Process a job and recursively find all its dependents."""
+            if job.id in processed_job_ids:
+                return
+
+            processed_job_ids.add(job.id)
+
+            # Check user permission (non-admins can only see their own jobs)
+            if not current_user.is_superuser:
+                job_user_id = job.kwargs.get("user_id") if job.kwargs else None
+                if job_user_id != str(current_user.user_id):
+                    return
+
+            # Get accurate status
+            status = get_job_status(job, {})
+
+            # Add this job to results
+            all_jobs.append({
+                "job_id": job.id,
+                "job_type": job.func_name.split('.')[-1] if job.func_name else "unknown",
+                "queue": queue_name,
+                "status": status,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "started_at": job.started_at.isoformat() if job.started_at else None,
+                "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+                "description": job.description or "",
+                "result": job.result,
+                "error_message": str(job.exc_info) if job.exc_info else None,
+            })
+
+            # Check for dependent jobs (jobs that depend on this one)
+            try:
+                dependent_ids = job.dependent_ids
+                if dependent_ids:
+                    logger.debug(f"Job {job.id} has {len(dependent_ids)} dependents: {dependent_ids}")
+
+                    for dep_id in dependent_ids:
+                        try:
+                            dep_job = Job.fetch(dep_id, connection=redis_conn)
+                            # Recursively process dependent job
+                            process_job_and_dependents(dep_job, queue_name, "waiting")
+                        except Exception as e:
+                            logger.debug(f"Error fetching dependent job {dep_id}: {e}")
+            except Exception as e:
+                logger.debug(f"Error checking dependents for job {job.id}: {e}")
+
+        # Find all jobs that match the session
         for queue_name in queues:
             queue = get_queue(queue_name)
 
@@ -118,7 +189,8 @@ async def get_jobs_by_session(
                 ("completed", FinishedJobRegistry(queue=queue).get_job_ids()),
                 ("failed", FailedJobRegistry(queue=queue).get_job_ids()),
                 ("cancelled", CanceledJobRegistry(queue=queue).get_job_ids()),
-                ("retrying", DeferredJobRegistry(queue=queue).get_job_ids())
+                ("waiting", DeferredJobRegistry(queue=queue).get_job_ids()),
+                ("waiting", ScheduledJobRegistry(queue=queue).get_job_ids())
             ]
 
             for status_name, job_ids in registries:
@@ -127,36 +199,36 @@ async def get_jobs_by_session(
                         job = Job.fetch(job_id, connection=redis_conn)
 
                         # Check if this job belongs to the requested session
-                        # session_id is typically the first argument in job.args
-                        job_session_id = None
-                        if job.args and len(job.args) > 0:
-                            job_session_id = job.args[0]
+                        matches_session = False
 
-                        if job_session_id == session_id:
-                            # Check user permission (non-admins can only see their own jobs)
-                            if not current_user.is_superuser:
-                                job_user_id = job.kwargs.get("user_id") if job.kwargs else None
-                                if job_user_id != str(current_user.user_id):
-                                    continue
+                        # NEW: Check job.meta first (preferred method for all new jobs)
+                        if job.meta and 'audio_uuid' in job.meta:
+                            if job.meta['audio_uuid'] == session_id:
+                                matches_session = True
+                        # FALLBACK: Check args for backward compatibility with existing queued jobs
+                        elif job.args and len(job.args) > 0:
+                            # Check args[0] first (most common for streaming jobs)
+                            if job.args[0] == session_id:
+                                matches_session = True
+                            # Check args[1] for transcription jobs
+                            elif len(job.args) > 1 and job.args[1] == session_id:
+                                matches_session = True
+                            # Check args[3] for memory jobs (conversation_id)
+                            elif len(job.args) > 3 and job.args[3] in conversation_ids:
+                                matches_session = True
 
-                            all_jobs.append({
-                                "job_id": job.id,
-                                "job_type": job.func_name.split('.')[-1] if job.func_name else "unknown",
-                                "queue": queue_name,
-                                "status": status_name,
-                                "created_at": job.created_at.isoformat() if job.created_at else None,
-                                "started_at": job.started_at.isoformat() if job.started_at else None,
-                                "ended_at": job.ended_at.isoformat() if job.ended_at else None,
-                                "description": job.description or "",
-                                "result": job.result,
-                                "error_message": str(job.exc_info) if job.exc_info else None,
-                            })
+                        if matches_session:
+                            # Process this job and all its dependents
+                            process_job_and_dependents(job, queue_name, status_name)
+
                     except Exception as e:
                         logger.debug(f"Error fetching job {job_id}: {e}")
                         continue
 
         # Sort by created_at
         all_jobs.sort(key=lambda x: x["created_at"] or "", reverse=False)
+
+        logger.info(f"Found {len(all_jobs)} jobs for session {session_id} (including dependents)")
 
         return {
             "session_id": session_id,
@@ -180,7 +252,7 @@ async def get_queue_stats_endpoint(
 
     except Exception as e:
         logger.error(f"Failed to get queue stats: {e}")
-        return {"total_jobs": 0, "queued_jobs": 0, "processing_jobs": 0, "completed_jobs": 0, "failed_jobs": 0, "cancelled_jobs": 0, "retrying_jobs": 0}
+        return {"total_jobs": 0, "queued_jobs": 0, "processing_jobs": 0, "completed_jobs": 0, "failed_jobs": 0, "cancelled_jobs": 0, "deferred_jobs": 0}
 
 
 @router.get("/health")

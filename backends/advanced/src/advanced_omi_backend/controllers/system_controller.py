@@ -563,7 +563,12 @@ async def delete_all_user_memories(user: User):
 async def get_streaming_status(request):
     """Get status of active streaming sessions and Redis Streams health."""
     import time
-    from advanced_omi_backend.controllers.queue_controller import redis_conn, transcription_queue, memory_queue, default_queue
+    from advanced_omi_backend.controllers.queue_controller import (
+        transcription_queue,
+        memory_queue,
+        default_queue,
+        all_jobs_complete_for_session
+    )
 
     try:
         # Get Redis client from request.app.state (initialized during startup)
@@ -575,9 +580,10 @@ async def get_streaming_status(request):
                 content={"error": "Redis client for audio streaming not initialized"}
             )
 
-        # Get all active sessions
+        # Get all sessions (both active and completed)
         session_keys = await redis_client.keys("audio:session:*")
         active_sessions = []
+        completed_sessions_from_redis = []
 
         for key in session_keys:
             session_data = await redis_client.hgetall(key)
@@ -587,20 +593,54 @@ async def get_streaming_status(request):
             session_id = key.decode().split(":")[-1]
             started_at = float(session_data.get(b"started_at", b"0"))
             last_chunk_at = float(session_data.get(b"last_chunk_at", b"0"))
+            status = session_data.get(b"status", b"").decode()
 
-            active_sessions.append({
+            session_obj = {
                 "session_id": session_id,
                 "user_id": session_data.get(b"user_id", b"").decode(),
                 "client_id": session_data.get(b"client_id", b"").decode(),
                 "provider": session_data.get(b"provider", b"").decode(),
                 "mode": session_data.get(b"mode", b"").decode(),
-                "status": session_data.get(b"status", b"").decode(),
+                "status": status,
                 "chunks_published": int(session_data.get(b"chunks_published", b"0")),
                 "started_at": started_at,
                 "last_chunk_at": last_chunk_at,
                 "age_seconds": time.time() - started_at,
                 "idle_seconds": time.time() - last_chunk_at
-            })
+            }
+
+            # Separate active and completed sessions
+            # Check if all jobs are complete (including failed jobs)
+            all_jobs_done = all_jobs_complete_for_session(session_id)
+
+            # Session is completed if:
+            # 1. Redis status says complete/finalized AND all jobs done, OR
+            # 2. All jobs are done (even if status isn't complete yet)
+            # This ensures sessions with failed jobs move to completed
+            if status in ["complete", "completed", "finalized"] or all_jobs_done:
+                if all_jobs_done:
+                    # All jobs complete - this is truly a completed session
+                    # Update Redis status if it wasn't already marked complete
+                    if status not in ["complete", "completed", "finalized"]:
+                        await redis_client.hset(key, "status", "complete")
+                        logger.info(f"✅ Marked session {session_id} as complete (all jobs terminal)")
+
+                    completed_sessions_from_redis.append({
+                        "session_id": session_id,
+                        "client_id": session_data.get(b"client_id", b"").decode(),
+                        "conversation_id": session_data.get(b"conversation_id", b"").decode() if b"conversation_id" in session_data else None,
+                        "has_conversation": bool(session_data.get(b"conversation_id", b"")),
+                        "action": session_data.get(b"action", b"complete").decode(),
+                        "reason": session_data.get(b"reason", b"").decode() if b"reason" in session_data else "",
+                        "completed_at": last_chunk_at,
+                        "audio_file": session_data.get(b"audio_file", b"").decode() if b"audio_file" in session_data else ""
+                    })
+                else:
+                    # Status says complete but jobs still processing - keep in active
+                    active_sessions.append(session_obj)
+            else:
+                # This is an active session
+                active_sessions.append(session_obj)
 
         # Get stream health for all streams (per-client streams)
         # Categorize as active or completed based on consumer activity
@@ -766,64 +806,37 @@ async def get_streaming_status(request):
                 logger.debug(f"Error processing stream {stream_name}: {e}")
                 continue
 
-        # Get RQ queue stats
+        # Get RQ queue stats - include all registries
         rq_stats = {
             "transcription_queue": {
-                "count": transcription_queue.count,
-                "failed_count": transcription_queue.failed_job_registry.count
+                "queued": transcription_queue.count,
+                "processing": len(transcription_queue.started_job_registry),
+                "completed": len(transcription_queue.finished_job_registry),
+                "failed": len(transcription_queue.failed_job_registry),
+                "cancelled": len(transcription_queue.canceled_job_registry),
+                "deferred": len(transcription_queue.deferred_job_registry)
             },
             "memory_queue": {
-                "count": memory_queue.count,
-                "failed_count": memory_queue.failed_job_registry.count
+                "queued": memory_queue.count,
+                "processing": len(memory_queue.started_job_registry),
+                "completed": len(memory_queue.finished_job_registry),
+                "failed": len(memory_queue.failed_job_registry),
+                "cancelled": len(memory_queue.canceled_job_registry),
+                "deferred": len(memory_queue.deferred_job_registry)
             },
             "default_queue": {
-                "count": default_queue.count,
-                "failed_count": default_queue.failed_job_registry.count
+                "queued": default_queue.count,
+                "processing": len(default_queue.started_job_registry),
+                "completed": len(default_queue.finished_job_registry),
+                "failed": len(default_queue.failed_job_registry),
+                "cancelled": len(default_queue.canceled_job_registry),
+                "deferred": len(default_queue.deferred_job_registry)
             }
         }
 
-        # Get completed sessions from recent finalize jobs
-        completed_sessions = []
-        try:
-            from rq.job import Job
-            from rq.registry import FinishedJobRegistry
-
-            registry = FinishedJobRegistry(queue=transcription_queue)
-            # Get last 20 completed jobs
-            job_ids = registry.get_job_ids(start=0, end=19)
-
-            for job_id in job_ids:
-                try:
-                    if not job_id.startswith("finalize-stream_"):
-                        continue
-
-                    job = Job.fetch(job_id, connection=redis_conn)
-                    if not job.result:
-                        continue
-
-                    result = job.result
-                    # Only include if completed recently (last hour)
-                    if job.ended_at and (time.time() - job.ended_at.timestamp()) < 3600:
-                        completed_sessions.append({
-                            "session_id": result.get("session_id", ""),
-                            "client_id": job.kwargs.get("client_id", "") if job.kwargs else "",
-                            "conversation_id": result.get("conversation_id"),
-                            "has_conversation": bool(result.get("conversation_id")),
-                            "action": result.get("action", ""),
-                            "reason": result.get("reason", ""),
-                            "completed_at": job.ended_at.timestamp(),
-                            "audio_file": result.get("audio_file", "")
-                        })
-                except Exception as e:
-                    logger.debug(f"Error processing job {job_id}: {e}")
-                    continue
-
-        except Exception as e:
-            logger.error(f"Error getting completed sessions: {e}", exc_info=True)
-
         return {
             "active_sessions": active_sessions,
-            "completed_sessions": completed_sessions,
+            "completed_sessions": completed_sessions_from_redis,
             "active_streams": active_streams,
             "completed_streams": completed_streams,
             "stream_health": active_streams,  # Backward compatibility - use active_streams

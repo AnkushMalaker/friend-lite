@@ -115,7 +115,7 @@ async def apply_speaker_recognition(
 
 
 @async_job(redis=True, beanie=True)
-async def process_transcript_job(
+async def transcribe_full_audio_job(
     conversation_id: str,
     audio_uuid: str,
     audio_path: str,
@@ -125,22 +125,27 @@ async def process_transcript_job(
     redis_client=None
 ) -> Dict[str, Any]:
     """
-    RQ job function for transcript processing.
+    RQ job function for transcribing full audio to text (transcription only, no speaker recognition).
 
-    This function handles both new transcription and reprocessing.
-    The 'trigger' parameter indicates the source: 'new', 'reprocess', 'retry', etc.
+    This job:
+    1. Transcribes audio to text with generic speaker labels (Speaker 0, Speaker 1, etc.)
+    2. Generates title and summary
+    3. Saves transcript version to conversation
+    4. Returns results for downstream jobs (speaker recognition, memory)
+
+    Speaker recognition is handled by a separate job (recognise_speakers_job).
 
     Args:
         conversation_id: Conversation ID
         audio_uuid: Audio UUID (unused but kept for compatibility)
         audio_path: Path to audio file
         version_id: Version ID for new transcript
-        user_id: User ID (unused but kept for compatibility)
+        user_id: User ID
         trigger: Trigger source
         redis_client: Redis client (injected by decorator)
 
     Returns:
-        Dict with processing results
+        Dict with processing results including transcript data for next job
     """
     from pathlib import Path
     from advanced_omi_backend.services.transcription import get_transcription_provider
@@ -181,48 +186,7 @@ async def process_transcript_job(
 
     logger.info(f"📊 Transcription complete: {len(transcript_text)} chars, {len(segments)} segments, {len(words)} words")
 
-    # Speaker Recognition Integration
-    speaker_identified_segments = []
-    try:
-        from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
-
-        speaker_client = SpeakerRecognitionClient()
-        if speaker_client.enabled:
-            logger.info(f"🎤 Speaker recognition enabled, identifying speakers...")
-
-            # Prepare transcript data with word-level timings
-            transcript_data = {
-                "text": transcript_text,
-                "words": words
-            }
-
-            # Call speaker recognition service to match and identify speakers
-            speaker_result = await speaker_client.diarize_identify_match(
-                audio_path=str(audio_file_path),
-                transcript_data=transcript_data,
-                user_id=user_id
-            )
-
-            if speaker_result and "segments" in speaker_result:
-                speaker_identified_segments = speaker_result["segments"]
-                logger.info(f"🎤 Speaker recognition returned {len(speaker_identified_segments)} identified segments")
-
-                # Replace original segments with identified segments
-                if speaker_identified_segments:
-                    segments = speaker_identified_segments
-                    logger.info(f"🎤 Using identified segments from speaker recognition service")
-            else:
-                logger.info(f"🎤 Speaker recognition returned no segments, using original transcription segments")
-        else:
-            logger.info(f"🎤 Speaker recognition disabled, using original speaker labels from transcription")
-
-    except Exception as speaker_error:
-        logger.warning(f"⚠️ Speaker recognition failed: {speaker_error}")
-        logger.warning(f"Continuing with original transcription speaker labels")
-        import traceback
-        logger.debug(traceback.format_exc())
-
-    # Calculate processing time
+    # Calculate processing time (transcription only)
     processing_time = time.time() - start_time
 
     # Get the conversation using Beanie
@@ -252,34 +216,18 @@ async def process_transcript_job(
     # Add new transcript version
     provider_normalized = provider_name.lower() if provider_name else "unknown"
 
-    # Prepare metadata with speaker recognition info
+    # Prepare metadata (transcription only - speaker recognition will add its own metadata)
     metadata = {
         "trigger": trigger,
         "audio_file_size": len(audio_data),
         "segment_count": len(segments),
-        "word_count": len(words)
-    }
-
-    # Add speaker recognition metadata if available
-    if speaker_identified_segments:
-        # Extract unique identified speakers
-        identified_speakers = set()
-        for seg in speaker_identified_segments:
-            identified_as = seg.get("identified_as", "Unknown")
-            if identified_as != "Unknown":
-                identified_speakers.add(identified_as)
-
-        metadata["speaker_recognition"] = {
-            "enabled": True,
-            "identified_speakers": list(identified_speakers),
-            "speaker_count": len(identified_speakers),
-            "total_segments": len(speaker_identified_segments)
-        }
-    else:
-        metadata["speaker_recognition"] = {
+        "word_count": len(words),
+        "words": words,  # Store words for speaker recognition job to read
+        "speaker_recognition": {
             "enabled": False,
-            "reason": "disabled or failed"
+            "reason": "handled_by_separate_job"
         }
+    }
 
     conversation.add_transcript_version(
         version_id=version_id,
@@ -356,18 +304,199 @@ Summary: <brief summary under 150 characters>"""
         "success": True,
         "conversation_id": conversation_id,
         "version_id": version_id,
+        "audio_path": str(audio_file_path),
+        "user_id": user_id,
         "transcript": transcript_text,
         "segments": [seg.model_dump() for seg in speaker_segments],
+        "words": words,  # Needed by speaker recognition
         "provider": provider_name,
         "processing_time_seconds": processing_time,
-        "trigger": trigger,
-        "metadata": {
-            "trigger": trigger,
-            "audio_file_size": len(audio_data),
-            "segment_count": len(speaker_segments),
-            "word_count": len(words)
-        }
+        "trigger": trigger
     }
+
+
+@async_job(redis=True, beanie=True)
+async def recognise_speakers_job(
+    conversation_id: str,
+    version_id: str,
+    audio_path: str,
+    user_id: str,
+    transcript_text: str,
+    words: list,
+    redis_client=None
+) -> Dict[str, Any]:
+    """
+    RQ job function for identifying speakers in a transcribed conversation.
+
+    This job runs after transcription and:
+    1. Calls speaker recognition service to identify speakers
+    2. Updates the transcript version with identified speaker labels
+    3. Returns results for downstream jobs (memory)
+
+    Args:
+        conversation_id: Conversation ID
+        version_id: Transcript version ID to update
+        audio_path: Path to audio file
+        user_id: User ID
+        transcript_text: Transcript text from transcription job
+        words: Word-level timing data from transcription job
+        redis_client: Redis client (injected by decorator)
+
+    Returns:
+        Dict with processing results
+    """
+    from advanced_omi_backend.models.conversation import Conversation
+    from advanced_omi_backend.speaker_recognition_client import SpeakerRecognitionClient
+
+    logger.info(f"🎤 RQ: Starting speaker recognition for conversation {conversation_id}")
+
+    start_time = time.time()
+
+    # Get the conversation
+    conversation = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+    if not conversation:
+        logger.error(f"Conversation {conversation_id} not found")
+        return {"success": False, "error": "Conversation not found"}
+
+    # Find the transcript version to update
+    transcript_version = None
+    for version in conversation.transcript_versions:
+        if version.version_id == version_id:
+            transcript_version = version
+            break
+
+    if not transcript_version:
+        logger.error(f"Transcript version {version_id} not found")
+        return {"success": False, "error": "Transcript version not found"}
+
+    # Check if speaker recognition is enabled
+    speaker_client = SpeakerRecognitionClient()
+    if not speaker_client.enabled:
+        logger.info(f"🎤 Speaker recognition disabled, skipping")
+        return {
+            "success": True,
+            "conversation_id": conversation_id,
+            "version_id": version_id,
+            "speaker_recognition_enabled": False,
+            "processing_time_seconds": 0
+        }
+
+    # Call speaker recognition service
+    try:
+        logger.info(f"🎤 Calling speaker recognition service...")
+
+        # Read transcript text and words from the transcript version
+        # (Parameters may be empty if called via job dependency)
+        actual_transcript_text = transcript_text or transcript_version.transcript or ""
+        actual_words = words if words else []
+
+        # If words not provided, we need to get them from metadata
+        if not actual_words and transcript_version.metadata:
+            actual_words = transcript_version.metadata.get("words", [])
+
+        if not actual_transcript_text:
+            logger.warning(f"🎤 No transcript text found in version {version_id}")
+            return {
+                "success": False,
+                "conversation_id": conversation_id,
+                "version_id": version_id,
+                "error": "No transcript text available",
+                "processing_time_seconds": 0
+            }
+
+        transcript_data = {
+            "text": actual_transcript_text,
+            "words": actual_words
+        }
+
+        speaker_result = await speaker_client.diarize_identify_match(
+            audio_path=audio_path,
+            transcript_data=transcript_data,
+            user_id=user_id
+        )
+
+        if not speaker_result or "segments" not in speaker_result:
+            logger.warning(f"🎤 Speaker recognition returned no segments")
+            return {
+                "success": True,
+                "conversation_id": conversation_id,
+                "version_id": version_id,
+                "speaker_recognition_enabled": True,
+                "identified_speakers": [],
+                "processing_time_seconds": time.time() - start_time
+            }
+
+        speaker_segments = speaker_result["segments"]
+        logger.info(f"🎤 Speaker recognition returned {len(speaker_segments)} segments")
+
+        # Update the transcript version segments with identified speakers
+        updated_segments = []
+        for seg in speaker_segments:
+            speaker_name = seg.get("identified_as") or seg.get("speaker", "Unknown")
+            updated_segments.append(
+                Conversation.SpeakerSegment(
+                    start=seg.get("start", 0),
+                    end=seg.get("end", 0),
+                    text=seg.get("text", ""),
+                    speaker=speaker_name,
+                    confidence=seg.get("confidence")
+                )
+            )
+
+        # Update the transcript version
+        transcript_version.segments = updated_segments
+
+        # Extract unique identified speakers for metadata
+        identified_speakers = set()
+        for seg in speaker_segments:
+            identified_as = seg.get("identified_as", "Unknown")
+            if identified_as != "Unknown":
+                identified_speakers.add(identified_as)
+
+        # Update metadata
+        if not transcript_version.metadata:
+            transcript_version.metadata = {}
+
+        transcript_version.metadata["speaker_recognition"] = {
+            "enabled": True,
+            "identified_speakers": list(identified_speakers),
+            "speaker_count": len(identified_speakers),
+            "total_segments": len(speaker_segments),
+            "processing_time_seconds": time.time() - start_time
+        }
+
+        # Update legacy fields if this is the active version
+        if conversation.active_transcript_version == version_id:
+            conversation.segments = updated_segments
+
+        await conversation.save()
+
+        processing_time = time.time() - start_time
+        logger.info(f"✅ Speaker recognition completed for {conversation_id} in {processing_time:.2f}s")
+
+        return {
+            "success": True,
+            "conversation_id": conversation_id,
+            "version_id": version_id,
+            "user_id": user_id,
+            "speaker_recognition_enabled": True,
+            "identified_speakers": list(identified_speakers),
+            "segment_count": len(updated_segments),
+            "processing_time_seconds": processing_time
+        }
+
+    except Exception as speaker_error:
+        logger.error(f"❌ Speaker recognition failed: {speaker_error}")
+        import traceback
+        logger.debug(traceback.format_exc())
+
+        return {
+            "success": False,
+            "conversation_id": conversation_id,
+            "version_id": version_id,
+            "error": str(speaker_error),
+            "processing_time_seconds": time.time() - start_time
+        }
 
 
 @async_job(redis=True, beanie=True)
@@ -395,7 +524,7 @@ async def stream_speech_detection_job(
 
         This is part of the V2 architecture using RQ jobs as orchestrators.
 
-        For batch/upload mode, conversations are created upfront and process_transcript_job is used.
+        For batch/upload mode, conversations are created upfront and transcribe_full_audio_job is used.
 
         Args:
             session_id: Stream session ID
@@ -404,7 +533,7 @@ async def stream_speech_detection_job(
             client_id: Client ID
 
         Returns:
-            Dict with session_id, conversation_id, open_conversation_job_id, runtime_seconds
+            Dict with session_id, conversation_id, open_conversation_job_id, detected_speakers, runtime_seconds
         """
     from advanced_omi_backend.services.audio_stream import TranscriptionResultsAggregator
     from .conversation_jobs import open_conversation_job
@@ -421,20 +550,21 @@ async def stream_speech_detection_job(
 
     conversation_id = None
     open_conversation_job_id = None
+    detected_speakers = []  # Track enrolled speakers detected during speech detection
 
     while True:
         # Check if session has ended (status = "finalizing" or "complete")
-        session_status = await redis_client.hget(session_key, "status")
-        if session_status:
-            status_str = session_status.decode() if isinstance(session_status, bytes) else session_status
-            if status_str in ["finalizing", "complete"]:
-                logger.info(f"🛑 Session {status_str}, stopping speech detection")
-                break
+        # session_status = await redis_client.hget(session_key, "status")
+        # if session_status:
+        #     status_str = session_status.decode() if isinstance(session_status, bytes) else session_status
+        #     if status_str in ["finalizing", "complete"]:
+        #         logger.info(f"🛑 Session {status_str}, stopping speech detection")
+        #         break
 
-        # Check timeout
-        if time.time() - start_time > max_runtime:
-            logger.warning(f"⏱️ Timeout reached for {session_id}")
-            break
+        # # Check timeout
+        # if time.time() - start_time > max_runtime:
+        #     logger.warning(f"⏱️ Timeout reached for {session_id}")
+        #     break
 
         # Get combined transcription results (aggregator does the combining)
         combined = await aggregator.get_combined_results(session_id)
@@ -488,12 +618,27 @@ async def stream_speech_detection_job(
                     await asyncio.sleep(2)
                     continue
 
-                logger.info(f"✅ Enrolled speaker detected! Proceeding to create conversation...")
-
-                # Log speaker recognition results for debugging
+                # Extract identified speakers from the result
+                identified_speakers = []
                 if speaker_recognition_result and "segments" in speaker_recognition_result:
+                    for seg in speaker_recognition_result["segments"]:
+                        identified_as = seg.get("identified_as", "Unknown")
+                        if identified_as != "Unknown" and identified_as not in identified_speakers:
+                            identified_speakers.append(identified_as)
+
                     num_segments = len(speaker_recognition_result["segments"])
-                    logger.info(f"🎤 Speaker recognition returned {num_segments} segments during enrollment check")
+
+                    if identified_speakers:
+                        speakers_str = ", ".join(identified_speakers)
+                        logger.info(f"✅ Enrolled speaker(s) detected: {speakers_str}")
+                        logger.info(f"🎤 Speaker recognition returned {num_segments} segments with {len(identified_speakers)} enrolled speaker(s)")
+                        print(f"✅ ENROLLED SPEAKERS DETECTED: {speakers_str} ({num_segments} segments)")
+                        detected_speakers = identified_speakers  # Store for return value
+                    else:
+                        logger.info(f"✅ Enrolled speaker detected! (no identified_as field in segments)")
+                        logger.info(f"🎤 Speaker recognition returned {num_segments} segments during enrollment check")
+                else:
+                    logger.info(f"✅ Enrolled speaker detected! Proceeding to create conversation...")
 
             # Check if conversation job already running for this session
             open_job_key = f"open_conversation:session:{session_id}"
@@ -548,368 +693,8 @@ async def stream_speech_detection_job(
     return {
         "session_id": session_id,
         "open_conversation_job_id": open_conversation_job_id,
+        "detected_speakers": detected_speakers,
         "runtime_seconds": time.time() - start_time
     }
 
 
-@async_job(redis=True, beanie=True)
-async def finalize_streaming_transcription_job(
-    session_id: str,
-    user_id: str,
-    user_email: str,
-    client_id: str,
-    redis_client=None
-) -> Dict[str, Any]:
-    """
-    RQ job function for finalizing streaming transcription.
-
-    This job:
-    1. Coordinates with open_conversation_job if it exists (V2 architecture)
-    2. Waits for final chunks to be processed
-    3. Aggregates results from Redis Streams
-    4. Updates existing conversation OR creates new one if speech detected
-    5. Reads audio file from audio_streaming_persistence_job
-
-    Args:
-        session_id: Stream session ID
-        user_id: User ID
-        user_email: User email
-        client_id: Client ID
-        redis_client: Redis client (injected by decorator)
-
-    Returns:
-        Dict with processing results
-    """
-    import re
-    import uuid
-    from advanced_omi_backend.models.conversation import Conversation, create_conversation
-    from advanced_omi_backend.services.audio_stream import TranscriptionResultsAggregator
-
-    logger.info(f"🔄 RQ: Finalizing streaming transcription for session {session_id}")
-
-    # Use redis_client parameter
-    aggregator = TranscriptionResultsAggregator(redis_client)
-
-    # Look up conversation_id from Redis (created by open_conversation_job)
-    conversation_id = None
-    conversation_key = f"conversation:session:{session_id}"
-    stored_conversation_id = await redis_client.get(conversation_key)
-    if stored_conversation_id:
-        conversation_id = stored_conversation_id.decode()
-        logger.info(f"📋 Found conversation {conversation_id} for session {session_id}")
-
-    # Look up open_conversation_job_id from Redis
-    open_conversation_job_id = None
-    open_job_key = f"open_conversation:session:{session_id}"
-    stored_job_id = await redis_client.get(open_job_key)
-    if stored_job_id:
-        open_conversation_job_id = stored_job_id.decode()
-        logger.info(f"📋 Found open conversation job {open_conversation_job_id}")
-
-    # V2 Architecture: Wait for open_conversation_job to complete if it exists
-    # Note: Session status is already set to "finalizing" by producer
-    # The conversation job will detect this and enter grace period automatically
-    if open_conversation_job_id:
-        logger.info(f"📋 Waiting for open_conversation_job {open_conversation_job_id} to complete...")
-
-        # Wait for open_conversation_job to finish by checking if tracking key still exists
-        # The job deletes this key when it completes
-        max_wait_seconds = 30  # Job should finish within grace period (~15s) + buffer
-        wait_interval = 1  # Check every second for responsiveness
-        elapsed = 0
-
-        while elapsed < max_wait_seconds:
-            job_still_running = await redis_client.exists(open_job_key)
-
-            if not job_still_running:
-                logger.info(f"✅ open_conversation_job completed after {elapsed}s")
-                break
-
-            await asyncio.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            logger.warning(f"⚠️ open_conversation_job did not complete within {max_wait_seconds}s, proceeding anyway")
-
-    # Get combined results from aggregator (runs for ALL paths, not just when open_conversation_job exists)
-    combined = await aggregator.get_combined_results(session_id)
-    full_transcript = combined["text"]
-    logger.info(f"📝 Combined transcript: {len(full_transcript)} characters")
-
-    # Convert segments to SpeakerSegment objects
-    all_segments = []
-    for seg in combined["segments"]:
-        all_segments.append(Conversation.SpeakerSegment(
-            start=seg.get("start", 0.0),
-            end=seg.get("end", 0.0),
-            text=seg.get("text", ""),
-            speaker=seg.get("speaker", "Speaker 0"),
-            confidence=seg.get("confidence")
-        ))
-    logger.info(f"📊 Extracted {len(all_segments)} segments")
-
-    # Get audio file path from Redis (written by audio_streaming_persistence_job)
-    audio_file_key = f"audio:file:{session_id}"
-    file_path_bytes = await redis_client.get(audio_file_key)
-
-    if not file_path_bytes:
-        logger.error(f"❌ Audio file path not found in Redis for session {session_id}")
-        logger.warning(f"⚠️ Audio persistence job may have failed - check job status")
-        return {"success": False, "error": "Audio file not found"}
-
-    file_path = file_path_bytes.decode()
-    logger.info(f"📁 Retrieved audio file path from Redis: {file_path}")
-
-    # Extract filename from path for return value
-    from pathlib import Path
-    wav_filename = Path(file_path).name
-
-    # Mark session as complete in Redis
-    session_key = f"audio:session:{session_id}"
-    await redis_client.hset(session_key, mapping={
-        "status": "complete",
-        "completed_at": str(time.time())
-    })
-    logger.info(f"✅ Marked session {session_id} as complete")
-
-    # Clean up Redis streams to prevent memory leaks
-    try:
-        # Delete the audio input stream
-        audio_stream_key = f"audio:stream:{client_id}"
-        await redis_client.delete(audio_stream_key)
-        logger.info(f"🧹 Deleted audio stream: {audio_stream_key}")
-
-        # Delete the transcription results stream
-        results_stream_key = f"transcription:results:{session_id}"
-        await redis_client.delete(results_stream_key)
-        logger.info(f"🧹 Deleted results stream: {results_stream_key}")
-
-        # Set TTL on session key (expire after 1 hour)
-        await redis_client.expire(session_key, 3600)
-        logger.info(f"⏰ Set TTL on session key: {session_key}")
-    except Exception as cleanup_error:
-        logger.warning(f"⚠️ Error during stream cleanup: {cleanup_error}")
-
-    # Enqueue batch transcription job - this will do everything:
-    # - High-quality batch transcription
-    # - Speaker recognition
-    # - Title/summary generation
-    # - Create transcript version
-    if conversation_id:
-        # Conversation exists (created by open_conversation_job)
-        logger.info(f"📋 Conversation {conversation_id} exists, enqueueing batch transcription")
-
-        final_version_id = str(uuid.uuid4())
-        enqueue_transcript_processing(
-            conversation_id=conversation_id,
-            audio_uuid=session_id,
-            audio_path=file_path,
-            version_id=final_version_id,
-            user_id=user_id,
-            priority=JobPriority.HIGH,
-            trigger="streaming_final"
-        )
-        logger.info(f"✅ Batch transcription job enqueued for conversation {conversation_id}")
-
-        return {
-            "success": True,
-            "conversation_id": conversation_id,
-            "session_id": session_id,
-            "action": "enqueued_batch",
-            "audio_file": wav_filename,
-            "batch_transcription_version": final_version_id
-        }
-    else:
-        # No conversation created - check for speech and create minimal conversation if needed
-        from advanced_omi_backend.utils.conversation_utils import analyze_speech
-
-        transcript_data = {
-            "text": full_transcript,
-            "words": combined["words"]
-        }
-        speech_analysis = analyze_speech(transcript_data)
-        has_speech = speech_analysis["has_speech"]
-
-        logger.info(
-            f"🔍 Speech detection: {has_speech} "
-            f"(word_count: {speech_analysis.get('word_count', 0)})"
-        )
-
-        if has_speech:
-            logger.info(f"💬 Speech detected - creating minimal conversation for batch processing")
-
-            # Create minimal conversation (title/summary will be generated by batch job)
-            new_conversation_id = str(uuid.uuid4())
-            conversation = create_conversation(
-                conversation_id=new_conversation_id,
-                audio_uuid=session_id,
-                user_id=user_id,
-                client_id=client_id,
-                title="Processing...",
-                summary="Transcription in progress..."
-            )
-
-            await conversation.insert()
-            logger.info(f"✅ Created minimal conversation {new_conversation_id}")
-
-            # Enqueue batch transcription - will populate everything
-            final_version_id = str(uuid.uuid4())
-            enqueue_transcript_processing(
-                conversation_id=new_conversation_id,
-                audio_uuid=session_id,
-                audio_path=file_path,
-                version_id=final_version_id,
-                user_id=user_id,
-                priority=JobPriority.HIGH,
-                trigger="streaming_final"
-            )
-            logger.info(f"✅ Batch transcription job enqueued for conversation {new_conversation_id}")
-
-            return {
-                "success": True,
-                "conversation_id": new_conversation_id,
-                "session_id": session_id,
-                "action": "created_minimal",
-                "audio_file": wav_filename,
-                "batch_transcription_version": final_version_id
-            }
-        else:
-            logger.info(f"⏭️ No speech detected in streaming session")
-
-            return {
-                "success": True,
-                "conversation_id": None,
-                "session_id": session_id,
-                "action": "skipped",
-                "reason": "no_speech",
-                "audio_file": wav_filename
-            }
-
-
-# Enqueue wrapper functions
-
-def enqueue_transcript_processing(
-    conversation_id: str,
-    audio_uuid: str,
-    audio_path: str,
-    version_id: str,
-    user_id: str,
-    priority: JobPriority = JobPriority.NORMAL,
-    trigger: str = "reprocess"
-):
-    """
-    Enqueue a transcript processing job.
-
-    Args:
-        trigger: Source of the job - 'new', 'reprocess', 'retry', etc.
-
-    Returns RQ Job object for tracking.
-    """
-    # Map our priority enum to RQ job timeout in seconds (higher priority = longer timeout)
-    timeout_mapping = {
-        JobPriority.URGENT: 600,  # 10 minutes
-        JobPriority.HIGH: 480,    # 8 minutes
-        JobPriority.NORMAL: 300,  # 5 minutes
-        JobPriority.LOW: 180      # 3 minutes
-    }
-
-    # Use clearer job type names
-    job_type = "re-transcribe" if trigger == "reprocess" else trigger
-
-    job = transcription_queue.enqueue(
-        process_transcript_job,
-        conversation_id,
-        audio_uuid,
-        audio_path,
-        version_id,
-        user_id,
-        trigger,
-        job_timeout=timeout_mapping.get(priority, 300),
-        result_ttl=JOB_RESULT_TTL,  # Keep completed jobs for 1 hour
-        job_id=f"{job_type}_{conversation_id[:8]}",
-        description=f"{job_type.capitalize()} conversation {conversation_id[:8]}"
-    )
-
-    logger.info(f"📥 RQ: Enqueued transcript job {job.id} for conversation {conversation_id} (trigger: {trigger})")
-    return job
-
-
-def enqueue_streaming_finalization(
-    session_id: str,
-    user_id: str,
-    user_email: str,
-    client_id: str,
-    priority: JobPriority = JobPriority.HIGH
-):
-    """
-    Enqueue a streaming transcription finalization job.
-
-    This job handles the final processing when a streaming session ends.
-    Conversation ID, job ID, and audio file path are looked up from Redis inside the job.
-
-    Args:
-        session_id: Stream session ID
-        user_id: User ID
-        user_email: User email
-        client_id: Client ID
-        priority: Job priority (default HIGH for responsive UI)
-
-    Returns:
-        RQ Job object for tracking
-    """
-    timeout_mapping = {
-        JobPriority.URGENT: 180,  # 3 minutes
-        JobPriority.HIGH: 120,    # 2 minutes
-        JobPriority.NORMAL: 90,   # 1.5 minutes
-        JobPriority.LOW: 60       # 1 minute
-    }
-
-    job = transcription_queue.enqueue(
-        finalize_streaming_transcription_job,
-        session_id,
-        user_id,
-        user_email,
-        client_id,
-        job_timeout=timeout_mapping.get(priority, 120),
-        result_ttl=JOB_RESULT_TTL,
-        job_id=f"finalize-stream_{session_id[:12]}",
-        description=f"Finalize streaming session {session_id[:12]}"
-    )
-
-    logger.info(f"📥 RQ: Enqueued streaming finalization job {job.id} for session {session_id}")
-    return job
-
-
-# RQ Callback functions for speech detection job
-def on_speech_detection_success(job, connection, result, *args, **kwargs):
-    """
-    RQ callback when speech detection job succeeds.
-
-    Args:
-        job: The RQ Job instance
-        connection: Redis connection
-        result: Job result dictionary
-        *args, **kwargs: Additional arguments
-    """
-    session_id = job.meta.get('session_id', 'unknown')
-    conversation_id = result.get('conversation_id')
-
-    if conversation_id:
-        logger.info(f"✅ Speech detection succeeded for session {session_id}: Created conversation {conversation_id}")
-    else:
-        logger.info(f"✅ Speech detection succeeded for session {session_id}: No conversation created (no speech or already exists)")
-
-
-def on_speech_detection_failure(job, connection, type, value, traceback):
-    """
-    RQ callback when speech detection job fails.
-
-    Args:
-        job: The RQ Job instance
-        connection: Redis connection
-        type: Exception type
-        value: Exception value
-        traceback: Exception traceback
-    """
-    session_id = job.meta.get('session_id', 'unknown')
-    logger.error(f"❌ Speech detection failed for session {session_id}: {type.__name__}: {value}")
-    logger.debug(f"Speech detection failure traceback: {traceback}")

@@ -342,6 +342,49 @@ async def _process_audio_cropping_with_relative_timestamps(
         return False
 
 
+def write_pcm_to_wav(
+    pcm_data: bytes,
+    output_path: str,
+    sample_rate: int = 16000,
+    channels: int = 1,
+    sample_width: int = 2
+) -> None:
+    """
+    Write raw PCM audio data to a WAV file.
+
+    Args:
+        pcm_data: Raw PCM audio bytes
+        output_path: Path to output WAV file
+        sample_rate: Sample rate in Hz (default: 16000)
+        channels: Number of audio channels (default: 1 for mono)
+        sample_width: Sample width in bytes (default: 2 for 16-bit)
+    """
+    import wave
+
+    logger.info(
+        f"Writing PCM to WAV: {len(pcm_data)} bytes -> {output_path} "
+        f"(rate={sample_rate}, channels={channels}, width={sample_width})"
+    )
+
+    try:
+        with wave.open(output_path, 'wb') as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(sample_width)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(pcm_data)
+
+        # Verify file was created
+        file_size = os.path.getsize(output_path)
+        duration = len(pcm_data) / (sample_rate * channels * sample_width)
+        logger.info(
+            f"✅ WAV file created: {output_path} ({file_size} bytes, {duration:.2f}s)"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Failed to write PCM to WAV: {e}")
+        raise
+
+
 async def _crop_audio_with_ffmpeg(
     original_path: str, speech_segments: list[tuple[float, float]], output_path: str
 ) -> bool:

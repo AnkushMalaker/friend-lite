@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Clock,
   Play,
+  Pause,
   CheckCircle,
   XCircle,
   RotateCcw,
@@ -14,7 +15,12 @@ import {
   Trash2,
   AlertTriangle,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  FileAudio,
+  FileText,
+  Brain,
+  Repeat,
+  Zap
 } from 'lucide-react';
 import { queueApi } from '../services/api';
 
@@ -22,7 +28,7 @@ interface QueueJob {
   job_id: string;
   job_type: string;
   user_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'retrying';
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'deferred' | 'waiting';
   priority: 'low' | 'normal' | 'high';
   data: {
     description?: string;
@@ -33,6 +39,7 @@ interface QueueJob {
   created_at: string;
   started_at?: string;
   completed_at?: string;
+  ended_at?: string;  // API returns this field instead of completed_at
   retry_count: number;
   max_retries: number;
   progress_percent: number;
@@ -46,7 +53,7 @@ interface QueueStats {
   completed_jobs: number;
   failed_jobs: number;
   cancelled_jobs: number;
-  retrying_jobs: number;
+  deferred_jobs: number;
   timestamp: string;
 }
 
@@ -144,48 +151,124 @@ const Queue: React.FC = () => {
   const [flushing, setFlushing] = useState(false);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
   const [sessionJobs, setSessionJobs] = useState<{[sessionId: string]: any[]}>({});
+  const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(() => {
+    // Load from localStorage, default to true
+    const saved = localStorage.getItem('queue_auto_refresh');
+    return saved !== null ? saved === 'true' : true;
+  });
 
-  // Auto-refresh interval
+  // Use refs to track current state in interval
+  const expandedSessionsRef = useRef<Set<string>>(new Set());
+  const streamingStatusRef = useRef<StreamingStatus | null>(null);
+  const refreshingRef = useRef<boolean>(false);
+
+  // Update refs when state changes
   useEffect(() => {
-    console.log('🔄 Setting up queue auto-refresh interval');
-    const interval = setInterval(() => {
-      if (!loading) {
-        console.log('⏰ Auto-refreshing queue data');
-        fetchData();
+    expandedSessionsRef.current = expandedSessions;
+  }, [expandedSessions]);
+
+  useEffect(() => {
+    streamingStatusRef.current = streamingStatus;
+  }, [streamingStatus]);
+
+  useEffect(() => {
+    refreshingRef.current = refreshing;
+  }, [refreshing]);
+
+  // Refresh jobs for all expanded, active, and completed sessions
+  const refreshSessionJobs = useCallback(async () => {
+    const currentExpanded = expandedSessionsRef.current;
+    const currentStreamingStatus = streamingStatusRef.current;
+
+    // Get all active session IDs
+    const activeSessionIds = currentStreamingStatus?.active_sessions
+      ?.filter(s => s.status !== 'complete')
+      .map(s => s.session_id) || [];
+
+    // Get all completed session IDs
+    const completedSessionIds = currentStreamingStatus?.completed_sessions
+      ?.map(s => s.session_id) || [];
+
+    // Get all session IDs that should have jobs loaded (expanded, active, or completed)
+    const sessionIdsToRefresh = new Set([...currentExpanded, ...activeSessionIds, ...completedSessionIds]);
+
+    if (sessionIdsToRefresh.size === 0) return;
+
+    // Fetch jobs for all sessions in parallel
+    const fetchPromises = Array.from(sessionIdsToRefresh).map(async (sessionId) => {
+      try {
+        const response = await queueApi.getJobsBySession(sessionId);
+        return { sessionId, jobs: response.data.jobs };
+      } catch (error) {
+        console.error(`❌ Failed to refresh jobs for session ${sessionId}:`, error);
+        return { sessionId, jobs: [] };
       }
-    }, 1000); // Refresh every 1 second
+    });
 
-    return () => {
-      console.log('🧹 Clearing queue auto-refresh interval');
-      clearInterval(interval);
-    };
-  }, []); // Remove dependencies to prevent interval recreation
+    const results = await Promise.all(fetchPromises);
 
-  // Initial data fetch
-  useEffect(() => {
-    fetchData();
-  }, [filters, pagination.offset]);
+    // Update session jobs state with all results
+    setSessionJobs(prev => {
+      const updated = { ...prev };
+      results.forEach(({ sessionId, jobs }) => {
+        updated[sessionId] = jobs;
+      });
+      return updated;
+    });
+  }, []);
 
-  const fetchData = async () => {
-    console.log('📥 fetchData called, refreshing:', refreshing, 'loading:', loading);
-    if (!refreshing) setRefreshing(true);
+  // Main data fetch function
+  const fetchData = useCallback(async () => {
+    if (refreshingRef.current) {
+      return;
+    }
+
+    setRefreshing(true);
 
     try {
-      console.log('🔄 Starting Promise.all for jobs, stats, and streaming status');
+      // Fetch all main data in parallel
       await Promise.all([fetchJobs(), fetchStats(), fetchStreamingStatus()]);
-      console.log('✅ Promise.all completed successfully');
+
+      // Then refresh session jobs
+      await refreshSessionJobs();
+
+      setLastUpdate(Date.now());
     } catch (error) {
       console.error('❌ Error fetching queue data:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
-      console.log('🏁 fetchData completed');
     }
-  };
+  }, [refreshSessionJobs]);
+
+  // Save auto-refresh preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('queue_auto_refresh', autoRefreshEnabled.toString());
+  }, [autoRefreshEnabled]);
+
+  // Auto-refresh interval using useRef
+  useEffect(() => {
+    if (!autoRefreshEnabled) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      fetchData();
+    }, 2000); // Refresh every 2 seconds
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [fetchData, autoRefreshEnabled]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchData();
+  }, [filters, pagination.offset, fetchData]);
 
   const fetchJobs = async () => {
     try {
-      console.log('🔍 fetchJobs starting...');
       const params = new URLSearchParams({
         limit: pagination.limit.toString(),
         offset: pagination.offset.toString(),
@@ -197,10 +280,8 @@ const Queue: React.FC = () => {
       if (filters.job_type) params.append('job_type', filters.job_type);
       if (filters.priority) params.append('priority', filters.priority);
 
-      console.log('📡 Fetching jobs with params:', params.toString());
       const response = await queueApi.getJobs(params);
       const data = response.data;
-      console.log('✅ fetchJobs success, got', data.jobs?.length, 'jobs');
       setJobs(data.jobs);
       setPagination(prev => ({
         ...prev,
@@ -214,10 +295,8 @@ const Queue: React.FC = () => {
 
   const fetchStats = async () => {
     try {
-      console.log('📊 fetchStats starting...');
       const response = await queueApi.getStats();
       const data = response.data;
-      console.log('✅ fetchStats success, total jobs:', data.total_jobs);
       setStats(data);
     } catch (error) {
       console.error('❌ Error fetching stats:', error);
@@ -226,11 +305,26 @@ const Queue: React.FC = () => {
 
   const fetchStreamingStatus = async () => {
     try {
-      console.log('🎵 fetchStreamingStatus starting...');
       const response = await queueApi.getStreamingStatus();
       const data = response.data;
-      console.log('✅ fetchStreamingStatus success, active sessions:', data.active_sessions?.length);
       setStreamingStatus(data);
+
+      // Auto-expand active sessions
+      if (data.active_sessions && data.active_sessions.length > 0) {
+        setExpandedSessions(prev => {
+          const newExpanded = new Set(prev);
+          let hasChanges = false;
+
+          data.active_sessions.filter((s: StreamingSession) => s.status !== 'complete').forEach((session: StreamingSession) => {
+            if (!newExpanded.has(session.session_id)) {
+              newExpanded.add(session.session_id);
+              hasChanges = true;
+            }
+          });
+
+          return hasChanges ? newExpanded : prev;
+        });
+      }
     } catch (error) {
       console.error('❌ Error fetching streaming status:', error);
       // Don't fail the whole page if streaming status fails
@@ -345,7 +439,8 @@ const Queue: React.FC = () => {
       case 'completed': return <CheckCircle className="w-4 h-4" />;
       case 'failed': return <XCircle className="w-4 h-4" />;
       case 'cancelled': return <StopCircle className="w-4 h-4" />;
-      case 'retrying': return <RotateCcw className="w-4 h-4 animate-spin" />;
+      case 'deferred': return <Pause className="w-4 h-4" />;
+      case 'waiting': return <Pause className="w-4 h-4" />;
       default: return <Clock className="w-4 h-4" />;
     }
   };
@@ -357,7 +452,8 @@ const Queue: React.FC = () => {
       case 'completed': return 'text-green-600 bg-green-100';
       case 'failed': return 'text-red-600 bg-red-100';
       case 'cancelled': return 'text-gray-600 bg-gray-100';
-      case 'retrying': return 'text-orange-600 bg-orange-100';
+      case 'deferred': return 'text-blue-600 bg-blue-100';
+      case 'waiting': return 'text-blue-600 bg-blue-100';
       default: return 'text-gray-600 bg-gray-100';
     }
   };
@@ -370,6 +466,250 @@ const Queue: React.FC = () => {
       'reprocess_memory': 'Memory'
     };
     return typeMap[type] || type;
+  };
+
+  const getJobTypeIcon = (type: string) => {
+    const iconClass = "w-3.5 h-3.5";
+    switch (type) {
+      case 'audio_transcription':
+      case 'process_audio_chunk':
+        return <FileAudio className={iconClass} />;
+      case 'transcript_processing':
+      case 'reprocess_transcript':
+        return <FileText className={iconClass} />;
+      case 'memory_extraction':
+      case 'reprocess_memory':
+        return <Brain className={iconClass} />;
+      case 'process_audio_files':
+      case 'process_single_audio_file':
+        return <Zap className={iconClass} />;
+      default:
+        return <Repeat className={iconClass} />;
+    }
+  };
+
+  const getJobTypeColor = (type: string, status: string) => {
+    // Base colors by job type
+    let bgColor = 'bg-gray-400';
+    let borderColor = 'border-gray-500';
+
+    // Transcription jobs - blue shades
+    if (type.includes('transcribe') || type === 'transcribe_full_audio_job') {
+      bgColor = 'bg-blue-500';
+      borderColor = 'border-blue-600';
+    }
+    // Speaker recognition - purple shades
+    else if (type.includes('speaker') || type.includes('recognise') || type === 'recognise_speakers_job') {
+      bgColor = 'bg-purple-500';
+      borderColor = 'border-purple-600';
+    }
+    // Memory jobs - pink shades
+    else if (type.includes('memory') || type === 'process_memory_job') {
+      bgColor = 'bg-pink-500';
+      borderColor = 'border-pink-600';
+    }
+    // Conversation/open jobs - cyan shades (check this AFTER memory to avoid confusion)
+    else if (type.includes('conversation') || type.includes('open_conversation') || type === 'open_conversation_job') {
+      bgColor = 'bg-cyan-500';
+      borderColor = 'border-cyan-600';
+    }
+    // Speech detection jobs - green shades
+    else if (type.includes('speech') || type.includes('detect')) {
+      bgColor = 'bg-green-500';
+      borderColor = 'border-green-600';
+    }
+    // Audio processing - orange shades
+    else if (type.includes('audio') || type.includes('persist') || type.includes('cropping')) {
+      bgColor = 'bg-orange-500';
+      borderColor = 'border-orange-600';
+    }
+    // Default - gray
+    else {
+      bgColor = 'bg-gray-400';
+      borderColor = 'border-gray-500';
+    }
+
+    // Failed jobs - always red
+    if (status === 'failed') {
+      bgColor = 'bg-red-500';
+      borderColor = 'border-red-600';
+    }
+    // Processing jobs - add pulse animation
+    else if (status === 'processing') {
+      bgColor = bgColor + ' animate-pulse';
+    }
+
+    return { bgColor, borderColor };
+  };
+
+  const renderJobTimeline = (jobs: any[], session: StreamingSession | CompletedSession) => {
+    if (!jobs || jobs.length === 0) return null;
+
+    // Sort jobs by created_at first
+    const sortedJobs = [...jobs].sort((a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+
+    // Calculate timeline boundaries
+    // For active sessions, use session timestamps
+    // For completed sessions without started_at, use earliest job timestamp
+    let sessionStart: number;
+    let sessionEnd: number;
+
+    if ('started_at' in session) {
+      // Active session - use session.started_at
+      sessionStart = session.started_at * 1000;
+    } else {
+      // Completed session - calculate from jobs
+      // Use the earliest job timestamp (created_at or started_at)
+      const earliestTime = Math.min(...sortedJobs.map(j => {
+        const created = new Date(j.created_at).getTime();
+        const started = j.started_at ? new Date(j.started_at).getTime() : created;
+        return Math.min(created, started);
+      }));
+      sessionStart = earliestTime;
+    }
+
+    if ('completed_at' in session) {
+      // Completed session - use the latest job end time (not session.completed_at)
+      // This handles batch jobs that run after the session is marked complete
+      const latestJobEnd = Math.max(...sortedJobs.map(j => {
+        const completed = j.completed_at ? new Date(j.completed_at).getTime() : 0;
+        const ended = j.ended_at ? new Date(j.ended_at).getTime() : 0;
+        const started = j.started_at ? new Date(j.started_at).getTime() : 0;
+        return Math.max(completed, ended, started);
+      }));
+      // Use the later of: session completion or latest job end
+      sessionEnd = Math.max(session.completed_at * 1000, latestJobEnd);
+    } else {
+      // Active session - use current time
+      sessionEnd = Date.now();
+    }
+
+    const totalDuration = sessionEnd - sessionStart;
+
+    if (totalDuration <= 0) return null;
+
+    // Smart row assignment - place jobs in rows to avoid overlaps
+    const rows: any[][] = [];
+    sortedJobs.forEach(job => {
+      const jobStart = job.started_at ? new Date(job.started_at).getTime() : new Date(job.created_at).getTime();
+
+      // Find first row where this job doesn't overlap
+      let assignedRow = -1;
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        const row = rows[rowIndex];
+        const lastJobInRow = row[row.length - 1];
+        // Calculate when the last job in this row ends (use Date.now() for active jobs)
+        const lastJobEnd = lastJobInRow.completed_at || lastJobInRow.ended_at
+          ? new Date((lastJobInRow.completed_at || lastJobInRow.ended_at)!).getTime()
+          : (lastJobInRow.status === 'processing' ? Date.now() : new Date(lastJobInRow.started_at || lastJobInRow.created_at).getTime());
+
+        // If this job starts after the last job in this row ends, we can use this row
+        if (jobStart >= lastJobEnd) {
+          assignedRow = rowIndex;
+          break;
+        }
+      }
+
+      // If no suitable row found, create a new one
+      if (assignedRow === -1) {
+        assignedRow = rows.length;
+        rows.push([]);
+      }
+
+      rows[assignedRow].push(job);
+      job._assignedRow = assignedRow;
+    });
+
+    // Calculate height based on number of rows needed
+    const rowCount = rows.length;
+    const timelineHeight = Math.max(4, rowCount * 2); // At least 4rem, 2rem per row
+
+    return (
+      <div className="mt-3 mb-2">
+        <div className="text-xs font-medium text-gray-700 mb-2">Timeline:</div>
+        <div className="relative bg-gray-100 rounded-lg border border-gray-200 overflow-visible" style={{ height: `${timelineHeight}rem` }}>
+          {/* Timeline grid lines */}
+          <div className="absolute inset-0 flex">
+            {[0, 25, 50, 75, 100].map(percent => (
+              <div
+                key={percent}
+                className="absolute h-full border-l border-gray-300"
+                style={{ left: `${percent}%` }}
+              />
+            ))}
+          </div>
+
+          {/* Job bars */}
+          {sortedJobs.map((job) => {
+            const jobStart = job.started_at ? new Date(job.started_at).getTime() : new Date(job.created_at).getTime();
+            const jobEnd = job.completed_at || job.ended_at
+              ? new Date((job.completed_at || job.ended_at)!).getTime()
+              : (job.status === 'processing' ? Date.now() : jobStart);
+
+            const startPercent = Math.max(0, ((jobStart - sessionStart) / totalDuration) * 100);
+            const duration = jobEnd - jobStart;
+            const widthPercent = Math.max(1, (duration / totalDuration) * 100);
+
+            // Color based on job type
+            const { bgColor, borderColor } = getJobTypeColor(job.job_type, job.status);
+
+            // Calculate position in assigned row
+            const rowIndex = job._assignedRow;
+            const rowHeight = 100 / rowCount;
+            const barHeight = Math.min(25, rowHeight * 0.6); // 60% of row height, max 25%
+            const topPercent = (rowIndex * rowHeight) + (rowHeight - barHeight) / 2;
+
+            // Format duration for display
+            const durationMs = jobEnd - jobStart;
+            let durationStr = '';
+            if (durationMs < 1000) durationStr = `${durationMs}ms`;
+            else if (durationMs < 60000) durationStr = `${(durationMs / 1000).toFixed(1)}s`;
+            else durationStr = `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`;
+
+            return (
+              <div
+                key={job.job_id}
+                className={`absolute ${bgColor} ${borderColor} border rounded shadow-sm group cursor-pointer transition-all hover:z-10 hover:scale-105`}
+                style={{
+                  left: `${startPercent}%`,
+                  width: `${widthPercent}%`,
+                  top: `${topPercent}%`,
+                  height: `${barHeight}%`
+                }}
+                title={`${job.job_type} - ${job.status} - ${durationStr}`}
+              >
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                    {getJobTypeIcon(job.job_type)}
+                  </div>
+                </div>
+
+                {/* Tooltip on hover - smart positioning to avoid viewport overflow */}
+                <div
+                  className="absolute bottom-full mb-1 px-2 py-1 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-20"
+                  style={{
+                    left: startPercent < 20 ? '0' : startPercent > 80 ? 'auto' : '50%',
+                    right: startPercent > 80 ? '0' : 'auto',
+                    transform: startPercent >= 20 && startPercent <= 80 ? 'translateX(-50%)' : 'none'
+                  }}
+                >
+                  <div className="font-medium">{job.job_type}</div>
+                  <div className="text-gray-300">{job.status} • {durationStr}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Timeline labels */}
+        <div className="flex justify-between text-xs text-gray-500 mt-1 px-1">
+          <span>0s</span>
+          <span>{(totalDuration / 1000).toFixed(0)}s</span>
+        </div>
+      </div>
+    );
   };
 
   const getJobResult = (job: QueueJob) => {
@@ -456,13 +796,13 @@ const Queue: React.FC = () => {
     return new Date(dateString).toLocaleString();
   };
 
-  const formatDuration = (job: QueueJob) => {
+  const formatDuration = (job: any) => {
     if (!job.started_at) return '-';
 
     const start = new Date(job.started_at).getTime();
-    // For failed/finished jobs, use completed_at. For running jobs, use current time.
-    const end = job.completed_at
-      ? new Date(job.completed_at).getTime()
+    // For failed/finished jobs, use completed_at or ended_at. For running jobs, use current time.
+    const end = job.completed_at || job.ended_at
+      ? new Date((job.completed_at || job.ended_at)!).getTime()
       : (job.status === 'processing' ? Date.now() : start); // Don't show increasing time for failed jobs
     const durationMs = end - start;
 
@@ -486,10 +826,8 @@ const Queue: React.FC = () => {
 
       if (!sessionJobs[sessionId]) {
         try {
-          console.log(`🔍 Fetching jobs for session ${sessionId}`);
           const response = await queueApi.getJobsBySession(sessionId);
           const data = response.data;
-          console.log(`✅ Got ${data.jobs.length} jobs for session ${sessionId}`);
           setSessionJobs(prev => ({ ...prev, [sessionId]: data.jobs }));
         } catch (error) {
           console.error(`❌ Failed to fetch jobs for session ${sessionId}:`, error);
@@ -513,9 +851,35 @@ const Queue: React.FC = () => {
       <div className="flex justify-between items-center">
         <div className="flex items-center space-x-3">
           <Layers className="w-6 h-6 text-blue-600" />
-          <h1 className="text-2xl font-bold text-gray-900">Queue Management</h1>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Queue Management</h1>
+            <p className="text-xs text-gray-500">
+              Last updated: {new Date(lastUpdate).toLocaleTimeString()} • Auto-refresh every 2s
+            </p>
+          </div>
         </div>
         <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
+              autoRefreshEnabled
+                ? 'bg-green-600 hover:bg-green-700 text-white'
+                : 'bg-gray-600 hover:bg-gray-700 text-white'
+            }`}
+            title={autoRefreshEnabled ? 'Auto-refresh enabled (click to disable)' : 'Auto-refresh disabled (click to enable)'}
+          >
+            {autoRefreshEnabled ? (
+              <>
+                <Pause className="w-4 h-4" />
+                <span>Auto-refresh ON</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4" />
+                <span>Auto-refresh OFF</span>
+              </>
+            )}
+          </button>
           <button
             onClick={() => setShowFlushModal(true)}
             className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
@@ -599,10 +963,10 @@ const Queue: React.FC = () => {
 
           <div className="bg-white rounded-lg border p-4">
             <div className="flex items-center space-x-2">
-              <RotateCcw className="w-5 h-5 text-orange-600" />
+              <Pause className="w-5 h-5 text-blue-600" />
               <div>
-                <p className="text-sm text-gray-600">Retrying</p>
-                <p className="text-xl font-semibold text-orange-600">{stats.retrying_jobs}</p>
+                <p className="text-sm text-gray-600">Deferred</p>
+                <p className="text-xl font-semibold text-blue-600">{stats.deferred_jobs}</p>
               </div>
             </div>
           </div>
@@ -623,10 +987,10 @@ const Queue: React.FC = () => {
                 <RotateCcw className="w-4 h-4" />
                 <span>Cleanup Old Sessions</span>
               </button>
-              {streamingStatus.active_sessions.length > 0 && (
+              {streamingStatus?.active_sessions && streamingStatus.active_sessions.length > 0 && (
                 <button
                   onClick={async () => {
-                    if (!confirm(`Remove ALL ${streamingStatus.active_sessions.length} active sessions? This will force-delete all sessions including actively streaming ones.`)) return;
+                    if (!streamingStatus || !confirm(`Remove ALL ${streamingStatus.active_sessions.length} active sessions? This will force-delete all sessions including actively streaming ones.`)) return;
 
                     try {
                       const response = await queueApi.cleanupOldSessions(0); // 0 seconds = all sessions
@@ -651,7 +1015,7 @@ const Queue: React.FC = () => {
                 title="Clean up stuck workers and pending messages"
               >
                 <RotateCcw className="w-4 h-4" />
-                <span>Cleanup Stuck Workers{streamingStatus.stream_health && Object.values(streamingStatus.stream_health).some((s: any) => s.total_pending > 0) && ` (${
+                <span>Cleanup Stuck Workers{streamingStatus?.stream_health && Object.values(streamingStatus.stream_health).some((s: any) => s.total_pending > 0) && ` (${
                   Object.values(streamingStatus.stream_health).reduce((sum: number, s: any) => sum + (s.total_pending || 0), 0)
                 })`}</span>
               </button>
@@ -664,7 +1028,7 @@ const Queue: React.FC = () => {
               {/* Active Sessions */}
               <div>
                 <h4 className="text-sm font-medium text-gray-700 mb-3">Active Streaming Sessions</h4>
-                {streamingStatus.active_sessions.filter(s => s.status !== 'complete').length > 0 ? (
+                {streamingStatus?.active_sessions && streamingStatus.active_sessions.filter(s => s.status !== 'complete').length > 0 ? (
                   <div className="space-y-2">
                     {streamingStatus.active_sessions.filter(s => s.status !== 'complete').map((session) => {
                       const isExpanded = expandedSessions.has(session.session_id);
@@ -700,27 +1064,31 @@ const Queue: React.FC = () => {
                           {/* Expanded Jobs Section */}
                           {isExpanded && (
                             <div className="border-t border-blue-200 bg-white p-3">
+                              {/* Timeline Visualization */}
+                              {renderJobTimeline(jobs, session)}
+
                               <h5 className="text-xs font-medium text-gray-700 mb-2">Jobs for this session:</h5>
                               {jobs.length > 0 ? (
                                 <div className="space-y-1">
                                   {jobs.map((job, index) => (
-                                    <div key={job.job_id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
-                                      <div className="flex-1">
+                                    <div key={job.job_id} className={`flex items-center justify-between p-2 bg-gray-50 rounded border ${getJobTypeColor(job.job_type, job.status).borderColor}`} style={{ borderLeftWidth: '12px' }}>
+                                      <div className="flex-1 min-w-0">
                                         <div className="flex items-center space-x-2">
-                                          <span className="text-xs font-mono text-gray-500">#{index + 1}</span>
-                                          {getStatusIcon(job.status)}
-                                          <span className="text-xs font-medium text-gray-900">{job.job_type}</span>
+                                          <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
+                                          <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
+                                          <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
+                                          <span className="text-xs font-medium text-gray-900 truncate">{job.job_type}</span>
                                           <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
                                             {job.status}
                                           </span>
                                           <span className="text-xs text-gray-500">{job.queue}</span>
                                         </div>
                                         <div className="mt-1 text-xs text-gray-600">
-                                          {job.created_at && (
-                                            <span>Created: {new Date(job.created_at).toLocaleTimeString()}</span>
+                                          {job.started_at && (
+                                            <span>Started: {new Date(job.started_at).toLocaleTimeString()}</span>
                                           )}
                                           {job.started_at && (
-                                            <span> • Started: {new Date(job.started_at).toLocaleTimeString()}</span>
+                                            <span> • Duration: {formatDuration(job)}</span>
                                           )}
                                         </div>
                                       </div>
@@ -729,7 +1097,7 @@ const Queue: React.FC = () => {
                                           e.stopPropagation();
                                           viewJobDetails(job.job_id);
                                         }}
-                                        className="ml-2 text-indigo-600 hover:text-indigo-900"
+                                        className="ml-2 text-indigo-600 hover:text-indigo-900 flex-shrink-0"
                                       >
                                         <Eye className="w-3 h-3" />
                                       </button>
@@ -755,7 +1123,7 @@ const Queue: React.FC = () => {
               {/* Completed Sessions */}
               <div>
                 <h4 className="text-sm font-medium text-gray-700 mb-3">Completed Sessions (Last Hour)</h4>
-                {streamingStatus.completed_sessions && streamingStatus.completed_sessions.length > 0 ? (
+                {streamingStatus?.completed_sessions && streamingStatus.completed_sessions.length > 0 ? (
                   <div className="space-y-2">
                     {streamingStatus.completed_sessions.map((session) => {
                       const isExpanded = expandedSessions.has(session.session_id);
@@ -806,27 +1174,31 @@ const Queue: React.FC = () => {
                             <div className={`border-t bg-white p-3 ${
                               session.has_conversation ? 'border-green-200' : 'border-gray-200'
                             }`}>
+                              {/* Timeline Visualization */}
+                              {renderJobTimeline(jobs, session)}
+
                               <h5 className="text-xs font-medium text-gray-700 mb-2">Jobs for this session:</h5>
                               {jobs.length > 0 ? (
                                 <div className="space-y-1">
                                   {jobs.map((job, index) => (
-                                    <div key={job.job_id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
-                                      <div className="flex-1">
+                                    <div key={job.job_id} className={`flex items-center justify-between p-2 bg-gray-50 rounded border ${getJobTypeColor(job.job_type, job.status).borderColor}`} style={{ borderLeftWidth: '12px' }}>
+                                      <div className="flex-1 min-w-0">
                                         <div className="flex items-center space-x-2">
-                                          <span className="text-xs font-mono text-gray-500">#{index + 1}</span>
-                                          {getStatusIcon(job.status)}
-                                          <span className="text-xs font-medium text-gray-900">{job.job_type}</span>
+                                          <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
+                                          <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
+                                          <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
+                                          <span className="text-xs font-medium text-gray-900 truncate">{job.job_type}</span>
                                           <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
                                             {job.status}
                                           </span>
                                           <span className="text-xs text-gray-500">{job.queue}</span>
                                         </div>
                                         <div className="mt-1 text-xs text-gray-600">
-                                          {job.created_at && (
-                                            <span>Created: {new Date(job.created_at).toLocaleTimeString()}</span>
+                                          {job.started_at && (
+                                            <span>Started: {new Date(job.started_at).toLocaleTimeString()}</span>
                                           )}
                                           {job.started_at && (
-                                            <span> • Started: {new Date(job.started_at).toLocaleTimeString()}</span>
+                                            <span> • Duration: {formatDuration(job)}</span>
                                           )}
                                         </div>
                                       </div>
@@ -835,7 +1207,7 @@ const Queue: React.FC = () => {
                                           e.stopPropagation();
                                           viewJobDetails(job.job_id);
                                         }}
-                                        className="ml-2 text-indigo-600 hover:text-indigo-900"
+                                        className="ml-2 text-indigo-600 hover:text-indigo-900 flex-shrink-0"
                                       >
                                         <Eye className="w-3 h-3" />
                                       </button>
@@ -863,7 +1235,7 @@ const Queue: React.FC = () => {
             <div>
               <h4 className="text-sm font-medium text-gray-700 mb-3">Stream Workers</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {Object.entries(streamingStatus.stream_health).map(([provider, health]) => (
+                {streamingStatus?.stream_health && Object.entries(streamingStatus.stream_health).map(([provider, health]) => (
                   <div key={provider} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium capitalize">{provider}</span>
@@ -928,7 +1300,7 @@ const Queue: React.FC = () => {
               <option value="completed">Completed</option>
               <option value="failed">Failed</option>
               <option value="cancelled">Cancelled</option>
-              <option value="retrying">Retrying</option>
+              <option value="deferred">Deferred</option>
             </select>
           </div>
 
