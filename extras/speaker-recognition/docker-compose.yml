@@ -6,8 +6,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        COMPUTE_MODE: cpu
     image: speaker-recognition:latest
     env_file:
       - .env
@@ -44,8 +42,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        COMPUTE_MODE: gpu
     deploy:
       resources:
         reservations:

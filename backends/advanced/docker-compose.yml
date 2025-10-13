@@ -182,12 +182,6 @@ services:
   #     - ./data/neo4j_data:/data
   #     - ./data/neo4j_logs:/logs
   #   restart: unless-stopped
-  # proxy:
-  #   image: nginx:alpine
-  #   depends_on: [friend-backend, streamlit]
-  #   volumes:
-  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
-  #   ports: ["80:80"]          # publish once; ngrok points here
 
   # ollama:
   #   image: ollama/ollama:latest
