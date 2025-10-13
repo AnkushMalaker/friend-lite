@@ -12,8 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Dependency manifest first for cache‑friendly installs
 COPY pyproject.toml uv.lock ./
+ARG INSTALL_EXTRAS
+
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --group parakeet
+    uv venv && \
+    uv pip install -e "${INSTALL_EXTRAS}" --group demo --group dev --group parakeet
+
 
 # Should prepare the .venv for use :)
 
@@ -22,7 +26,7 @@ FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 build-essential portaudio19-dev curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 build-essential ffmpeg portaudio19-dev curl && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app /app
 COPY . .
