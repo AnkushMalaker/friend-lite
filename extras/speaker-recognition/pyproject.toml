@@ -27,9 +27,12 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "alembic>=1.13.0",
     # Data processing
-    "pandas>=2.2.0",
+    "pandas>=2.0.0",
     "scikit-learn>=1.4.0", # For t-SNE/UMAP visualization
     "umap-learn>=0.5.3",
+    "faiss-cpu>=1.9",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
 ]
 
 [build-system]
@@ -49,17 +52,6 @@ simple-speaker-service = "simple_speaker_recognition.api.service:main"
 simple-speaker-web = "simple_speaker_recognition.web.app:main"
 
 [dependency-groups]
-cpu = [
-    "faiss-cpu>=1.9",
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
-    "numpy==1.23.5",  # Ensure numpy compatibility with faiss-cpu   
-]
-gpu = [
-    "faiss-cpu>=1.9",  # Use CPU FAISS for compatibility, GPU PyTorch for performance
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
-]
 dev = [
     "black>=25.1.0",
     "isort>=6.0.1",
@@ -70,15 +62,5 @@ test = [
     "requests",  # For integration tests
 ]
 
-[tool.uv]
-# dev & cpu are installed automatically
-default-groups = ["dev", "cpu"]
-# cpu and gpu can never coexist
-conflicts = [
-    [
-        { group = "cpu" },
-        { group = "gpu" },
-    ],
-]
 [tool.isort]
 profile = "black" 
