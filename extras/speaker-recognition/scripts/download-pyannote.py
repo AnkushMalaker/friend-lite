@@ -4,9 +4,12 @@ Script to download and cache PyAnnote models for speaker recognition.
 This script is designed to be run during Docker build to pre-download models.
 """
 
+import logging
 import os
 import sys
-import logging
+
+from pyannote.audio import Pipeline
+from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,14 +31,12 @@ def download_models():
             return True  # Don't fail the build, just skip download
         
         # Import and download models
-        from pyannote.audio import Pipeline
-        from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
         
         logger.info("Downloading speaker diarization model...")
-        Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=hf_token)
+        Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=hf_token)
         
         logger.info("Downloading speaker embedding model...")
-        PretrainedSpeakerEmbedding('pyannote/wespeaker-voxceleb-resnet34-LM', use_auth_token=hf_token)
+        PretrainedSpeakerEmbedding('pyannote/wespeaker-voxceleb-resnet34-LM', token=hf_token)
         
         logger.info("Models downloaded successfully!")
         return True
