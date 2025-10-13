@@ -39,9 +39,10 @@ COPY memory_config.yaml* ./
 COPY diarization_config.json* ./
 
 
-# Copy and make startup script executable
+# Copy and make startup scripts executable
 COPY start.sh ./
-RUN chmod +x start.sh
+COPY start-workers.sh ./
+RUN chmod +x start.sh start-workers.sh
 
 # Run the application with workers
 CMD ["./start.sh"]
