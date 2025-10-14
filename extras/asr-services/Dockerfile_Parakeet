@@ -2,6 +2,10 @@
 
 #########################  builder #################################
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+
+# Accept CUDA version as build argument
+ARG CUDA_VERSION
+
 WORKDIR /app
 
 # NeMo and texterrors need libs and C++ compiler
@@ -13,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Dependency manifest first for cache‑friendly installs
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --group parakeet
+    uv sync --no-install-project --group parakeet --extra ${CUDA_VERSION}
 
 # Should prepare the .venv for use :)
 
