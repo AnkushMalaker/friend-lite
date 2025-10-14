@@ -107,6 +107,18 @@ profiles:
               persistence.size: "10Gi"
               persistence.storageClass: "openebs-hostpath"
 
+          - name: redis
+            remoteChart: oci://registry-1.docker.io/bitnamicharts/redis
+            version: "22.0.7"
+            namespace: "{{.INFRASTRUCTURE_NAMESPACE}}"
+            setValueTemplates:
+              auth.enabled: "false"  # Disable authentication for simplicity
+              master.persistence.enabled: "true"
+              master.persistence.size: "2Gi"
+              master.persistence.storageClass: "openebs-hostpath"
+              master.service.nameOverride: "redis"
+              replica.replicaCount: "0"  # Single instance for development
+
   # Application profile - frequently updated
   - name: advanced-backend
     build:
@@ -137,8 +149,9 @@ profiles:
               image.repository: "{{.IMAGE_REPO_advanced_backend}}"
               image.tag: "{{.IMAGE_TAG_advanced_backend}}"
               # Override specific Kubernetes-specific values (not in env file)
-              env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend"
+              env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend-lite"
               env.QDRANT_BASE_URL: "qdrant.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local"
+              env.REDIS_URL: "redis://redis-master.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:6379/0"
               persistence.storageClass: "openebs-hostpath"
               persistence.size: "10Gi"
               service.nodePort: "{{.BACKEND_NODEPORT}}"
@@ -160,6 +173,31 @@ profiles:
               ingress.hosts[1].host: "{{.EXTERNAL_DOMAIN}}"
               # Node selector
               nodeSelector.kubernetes\.io/hostname: anubis
+
+  - name: test-env
+    portForward:
+      - resourceType: container
+        resourceName: redis-test
+        namespace: advanced
+        localPort: 6379
+        port: 6380
+    build:
+
+      artifacts:
+        - image: friend-backend-test
+          context: backends/advanced
+          docker:
+            dockerfile: Dockerfile          
+        - image: webui-test
+          context: backends/advanced/webui
+          docker:
+            dockerfile: Dockerfile
+
+    deploy:
+      docker:
+        images: [friend-backend-test, webui-test, mongo-test, qdrant-test, redis-test]
+          
+   
 
   - name: speaker-recognition-gtx1070
     build:

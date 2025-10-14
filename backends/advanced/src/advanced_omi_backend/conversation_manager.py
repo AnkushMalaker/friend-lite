@@ -8,11 +8,6 @@ queuing, and audio cropping coordination.
 import logging
 from typing import Optional
 
-from advanced_omi_backend.processors import (
-    get_processor_manager,
-)
-from advanced_omi_backend.transcript_coordinator import get_transcript_coordinator
-
 audio_logger = logging.getLogger("audio")
 
 
@@ -21,10 +16,11 @@ class ConversationManager:
 
     This class handles the responsibilities previously mixed into ClientState,
     providing a clean separation of concerns for conversation management.
+
+    V2 Architecture: Uses RQ jobs for all transcription and memory processing.
     """
 
     def __init__(self):
-        self.coordinator = get_transcript_coordinator()
         audio_logger.info("ConversationManager initialized")
 
     async def close_conversation(
@@ -55,27 +51,39 @@ class ConversationManager:
         audio_logger.info(f"🔒 Closing conversation {audio_uuid} for client {client_id}")
 
         try:
-            # Get processor manager
-            processor_manager = get_processor_manager()
+            # V2 Architecture: All processing handled by RQ jobs
+            # Step 1: Enqueue final high-quality transcription via RQ
+            # This will add a new transcript version and trigger memory processing
+            from advanced_omi_backend.database import AudioChunksRepository
 
-            # Step 1: Close audio file in processor (only if transcription not already completed)
-            # Check if transcription is already completed to avoid double-flushing
-            processing_status = processor_manager.get_processing_status(client_id)
-            transcription_completed = processing_status.get("stages", {}).get("transcription", {}).get("completed", False)
-            
-            if not transcription_completed:
-                audio_logger.info(f"🔄 Transcription not completed, calling close_client_audio for {client_id}")
-                await processor_manager.close_client_audio(client_id)
+            repo = AudioChunksRepository()
+            audio_session = await repo.get_chunk(audio_uuid)
+
+            if audio_session and audio_session.get("conversation_id"):
+                # Only enqueue if conversation was created (speech detected)
+                import uuid
+                from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job
+                from advanced_omi_backend.controllers.queue_controller import transcription_queue, JOB_RESULT_TTL
+
+                conversation_id = audio_session["conversation_id"]
+                version_id = str(uuid.uuid4())  # Generate new version ID for final transcription
+                audio_logger.info(f"📤 Enqueuing final transcription job for conversation {conversation_id}")
+
+                job = transcription_queue.enqueue(
+                    transcribe_full_audio_job,
+                    conversation_id,
+                    audio_uuid,
+                    audio_session["audio_file_path"],
+                    version_id,
+                    user_id,
+                    job_timeout=300,
+                    result_ttl=JOB_RESULT_TTL,
+                    job_id=f"transcript-reprocess_{conversation_id[:12]}",
+                    description=f"Final transcription for conversation {conversation_id[:12]} (conversation close)"
+                )
+                audio_logger.info(f"✅ Enqueued final transcription job {job.id} for conversation {conversation_id}")
             else:
-                audio_logger.info(f"✅ Transcription already completed, skipping close_client_audio for {client_id}")
-
-            # Step 2: Memory processing is now handled by transcription completion
-            # This eliminates race conditions and event coordination issues
-            audio_logger.info(f"💭 Memory processing will be triggered by transcription completion for {audio_uuid}")
-
-            # Step 3: Audio cropping is now handled at processor level after transcription
-            # This ensures cropping happens with diarization segments when available
-            # See transcription.py _queue_diarization_based_cropping() method
+                audio_logger.info(f"⏭️ No conversation created for {audio_uuid} (no speech detected), skipping final transcription")
 
             audio_logger.info(f"✅ Successfully closed conversation {audio_uuid}")
             return True

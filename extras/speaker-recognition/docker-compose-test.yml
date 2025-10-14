@@ -19,6 +19,8 @@ services:
       - ./audio_chunks_test:/app/audio_chunks
       - ./debug_test:/app/debug
       - ./speaker_data_test:/app/data
+    env_file:
+      - .env
     environment:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
@@ -26,6 +28,7 @@ services:
       - SPEAKER_SERVICE_HOST=0.0.0.0
       - SPEAKER_SERVICE_PORT=8085
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - CORS_ORIGINS=http://localhost:3001,http://localhost:8001,https://localhost:3001,https://localhost:8001
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8085/health"]

@@ -36,5 +36,10 @@ COPY diarization_config.json* ./
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Run the application
-CMD ["python", "src/advanced_omi_backend/main.py"]
+# Copy and make startup scripts executable
+COPY start.sh ./
+COPY start-workers.sh ./
+RUN chmod +x start.sh start-workers.sh
+
+# Run the application with workers
+CMD ["./start.sh"]

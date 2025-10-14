@@ -13,6 +13,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Data directory paths
+DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
+CHUNK_DIR = Path("./audio_chunks")  # Mounted to ./data/audio_chunks by Docker
+
 # Default diarization settings
 DEFAULT_DIARIZATION_SETTINGS = {
     "diarization_source": "pyannote",
@@ -35,6 +39,12 @@ DEFAULT_SPEECH_DETECTION_SETTINGS = {
 DEFAULT_CONVERSATION_STOP_SETTINGS = {
     "transcription_buffer_seconds": 120,    # Periodic transcription interval (2 minutes)
     "speech_inactivity_threshold": 60,      # Speech gap threshold for closure (1 minute)
+}
+
+# Default audio storage settings
+DEFAULT_AUDIO_STORAGE_SETTINGS = {
+    "audio_base_path": "/app/data",  # Main audio directory (where volume is mounted)
+    "audio_chunks_path": "/app/audio_chunks",  # Full path to audio chunks subfolder
 }
 
 # Global cache for diarization settings
@@ -137,6 +147,19 @@ def get_conversation_stop_settings():
         "transcription_buffer_seconds": float(os.getenv("TRANSCRIPTION_BUFFER_SECONDS", DEFAULT_CONVERSATION_STOP_SETTINGS["transcription_buffer_seconds"])),
         "speech_inactivity_threshold": float(os.getenv("SPEECH_INACTIVITY_THRESHOLD_SECONDS", DEFAULT_CONVERSATION_STOP_SETTINGS["speech_inactivity_threshold"])),
         "min_word_confidence": float(os.getenv("SPEECH_DETECTION_MIN_CONFIDENCE", DEFAULT_SPEECH_DETECTION_SETTINGS["min_confidence"])),
+    }
+
+
+def get_audio_storage_settings():
+    """Get audio storage settings from environment or defaults."""
+    
+    # Get base path and derive chunks path
+    audio_base_path = os.getenv("AUDIO_BASE_PATH", DEFAULT_AUDIO_STORAGE_SETTINGS["audio_base_path"])
+    audio_chunks_path = os.getenv("AUDIO_CHUNKS_PATH", f"{audio_base_path}/audio_chunks")
+    
+    return {
+        "audio_base_path": audio_base_path,
+        "audio_chunks_path": audio_chunks_path,
     }
 
 

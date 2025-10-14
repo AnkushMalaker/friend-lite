@@ -2,32 +2,24 @@
 System controller for handling system-related business logic.
 """
 
-import asyncio
-import io
-import json
 import logging
 import os
 import shutil
 import time
-import wave
 from datetime import UTC, datetime
-from pathlib import Path
 
-import numpy as np
-from advanced_omi_backend.client_manager import generate_client_id
 from advanced_omi_backend.config import (
     load_diarization_settings_from_file,
     save_diarization_settings_to_file,
 )
-from advanced_omi_backend.database import chunks_col
-from advanced_omi_backend.job_tracker import FileStatus, JobStatus, get_job_tracker
-from advanced_omi_backend.processors import AudioProcessingItem, get_processor_manager
-from advanced_omi_backend.audio_utils import process_audio_chunk
+from advanced_omi_backend.models.user import User
+# TODO: Remove old processor architecture
+# from advanced_omi_backend.processors import get_processor_manager
+def get_processor_manager():
+    """Stub - processors being removed."""
+    return None
 from advanced_omi_backend.task_manager import get_task_manager
-from advanced_omi_backend.users import User
-from fastapi import BackgroundTasks, File, Query, UploadFile
 from fastapi.responses import JSONResponse
-from wyoming.audio import AudioChunk
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -118,28 +110,26 @@ async def get_processing_task_status(client_id: str):
 
 
 async def get_processor_status():
-    """Get processor queue status and health."""
+    """Get RQ worker and queue status."""
     try:
-        processor_manager = get_processor_manager()
+        # Get RQ queue health (new architecture)
+        from advanced_omi_backend.controllers.queue_controller import get_queue_health
+        queue_health = get_queue_health()
 
-        # Get queue sizes
         status = {
-            "queues": {
-                "audio_queue": processor_manager.audio_queue.qsize(),
-                "transcription_queue": processor_manager.transcription_queue.qsize(),
-                "memory_queue": processor_manager.memory_queue.qsize(),
-                "cropping_queue": processor_manager.cropping_queue.qsize(),
-            },
-            "processors": {
-                "audio_processor": "running",
-                "transcription_processor": "running",
-                "memory_processor": "running",
-                "cropping_processor": "running",
-            },
-            "active_clients": len(processor_manager.active_file_sinks),
-            "active_audio_uuids": len(processor_manager.active_audio_uuids),
-            "processing_tasks": len(processor_manager.processing_tasks),
+            "architecture": "rq_workers",  # New RQ-based architecture
             "timestamp": int(time.time()),
+            "workers": {
+                "total": queue_health.get("total_workers", 0),
+                "active": queue_health.get("active_workers", 0),
+                "idle": queue_health.get("idle_workers", 0),
+                "details": queue_health.get("workers", [])
+            },
+            "queues": {
+                "transcription": queue_health.get("queues", {}).get("transcription", {}),
+                "memory": queue_health.get("queues", {}).get("memory", {}),
+                "default": queue_health.get("queues", {}).get("default", {})
+            }
         }
 
         # Get task manager status if available
@@ -154,604 +144,13 @@ async def get_processor_status():
         return status
 
     except Exception as e:
-        logger.error(f"Error getting processor status: {e}")
+        logger.error(f"Error getting processor status: {e}", exc_info=True)
         return JSONResponse(
             status_code=500, content={"error": f"Failed to get processor status: {str(e)}"}
         )
 
 
-async def process_audio_files(
-    user: User, files: list[UploadFile], device_name: str, auto_generate_client: bool
-):
-    """Process uploaded audio files through the transcription pipeline."""
-    # Need to import here because we import the routes into main, causing circular imports
-    from advanced_omi_backend.main import cleanup_client_state, create_client_state
-
-    # Process files through complete transcription pipeline like WebSocket clients
-    try:
-        if not files:
-            return JSONResponse(status_code=400, content={"error": "No files provided"})
-
-        processed_files = []
-        processed_conversations = []
-
-        for file_index, file in enumerate(files):
-            client_id = None
-            client_state = None
-
-            try:
-                # Validate file type (only WAV for now)
-                if not file.filename or not file.filename.lower().endswith(".wav"):
-                    processed_files.append(
-                        {
-                            "filename": file.filename or "unknown",
-                            "status": "error",
-                            "error": "Only WAV files are currently supported",
-                        }
-                    )
-                    continue
-
-                # Generate unique client ID for each file to create separate conversations
-                file_device_name = f"{device_name}-{file_index + 1:03d}"
-                client_id = generate_client_id(user, file_device_name)
-
-                # Create separate client state for this file
-                client_state = await create_client_state(client_id, user, file_device_name)
-
-                audio_logger.info(
-                    f"📁 Processing file {file_index + 1}/{len(files)}: {file.filename} with client_id: {client_id}"
-                )
-
-                processor_manager = get_processor_manager()
-
-                # Read file content
-                content = await file.read()
-
-                # Process WAV file
-                with wave.open(io.BytesIO(content), "rb") as wav_file:
-                    # Get audio parameters
-                    sample_rate = wav_file.getframerate()
-                    sample_width = wav_file.getsampwidth()
-                    channels = wav_file.getnchannels()
-
-                    # Read all audio data
-                    audio_data = wav_file.readframes(wav_file.getnframes())
-
-                    # Convert to mono if stereo
-                    if channels == 2:
-                        # Convert stereo to mono by averaging channels
-                        if sample_width == 2:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                        else:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int32)
-
-                        # Reshape to separate channels and average
-                        audio_array = audio_array.reshape(-1, 2)
-                        audio_data = (
-                            np.mean(audio_array, axis=1).astype(audio_array.dtype).tobytes()
-                        )
-                        channels = 1
-
-                    # Ensure sample rate is 16kHz (resample if needed)
-                    if sample_rate != 16000:
-                        audio_logger.warning(
-                            f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz."
-                        )
-                        raise JSONResponse(status_code=400, content={"error": f"File {file.filename} has sample rate {sample_rate}Hz, expected 16kHz. I'll implement this at some point sorry"})
-
-                    # Process audio in larger chunks for faster file processing
-                    # Use larger chunks (32KB) for optimal performance
-                    chunk_size = 32 * 1024  # 32KB chunks
-                    base_timestamp = int(time.time())
-
-                    for i in range(0, len(audio_data), chunk_size):
-                        chunk_data = audio_data[i : i + chunk_size]
-
-                        # Calculate relative timestamp for this chunk
-                        chunk_offset_bytes = i
-                        chunk_offset_seconds = chunk_offset_bytes / (
-                            sample_rate * sample_width * channels
-                        )
-                        chunk_timestamp = base_timestamp + int(chunk_offset_seconds)
-
-                        # Process audio chunk through unified pipeline
-                        await process_audio_chunk(
-                            audio_data=chunk_data,
-                            client_id=client_id,
-                            user_id=user.user_id,
-                            user_email=user.email,
-                            audio_format={
-                                "rate": sample_rate,
-                                "width": sample_width,
-                                "channels": channels,
-                                "timestamp": chunk_timestamp,
-                            },
-                            client_state=None,  # No client state needed for file upload
-                        )
-
-                        # Yield control occasionally to prevent blocking the event loop
-                        if i % (chunk_size * 10) == 0:  # Every 10 chunks (~320KB)
-                            await asyncio.sleep(0)
-
-                    processed_files.append(
-                        {
-                            "filename": file.filename,
-                            "sample_rate": sample_rate,
-                            "channels": channels,
-                            "duration_seconds": len(audio_data)
-                            / (sample_rate * sample_width * channels),
-                            "size_bytes": len(audio_data),
-                            "client_id": client_id,
-                            "status": "processed",
-                        }
-                    )
-
-                    audio_logger.info(
-                        f"✅ Processed audio file: {file.filename} ({len(audio_data)} bytes)"
-                    )
-
-                # Wait briefly for transcription manager to be created by background processor
-                audio_logger.info(
-                    f"⏳ Waiting for transcription manager to be created for client {client_id}"
-                )
-                await asyncio.sleep(2.0)  # Give transcription processor time to create manager
-
-                # Close client audio to trigger transcription completion (flush_final_transcript)
-                audio_logger.info(
-                    f"📞 About to call close_client_audio for upload client {client_id}"
-                )
-                processor_manager = get_processor_manager()
-                audio_logger.info(f"📞 Got processor manager, calling close_client_audio now...")
-                await processor_manager.close_client_audio(client_id)
-                audio_logger.info(
-                    f"🔚 Successfully called close_client_audio for upload client {client_id}"
-                )
-
-                # Wait for this file's transcription processing to complete
-                audio_logger.info(f"📁 Waiting for transcription to process file: {file.filename}")
-
-                # Wait for chunks to be processed by the audio saver
-                await asyncio.sleep(1.0)
-
-                # Wait for file processing to complete using task tracking
-                # Increase timeout based on file duration (3x duration + 60s buffer)
-                audio_duration = len(audio_data) / (sample_rate * sample_width * channels)
-                max_wait_time = max(
-                    120, int(audio_duration * 3) + 60
-                )  # At least 2 minutes, or 3x duration + 60s
-                wait_interval = 2.0  # Reduced from 0.5s to 2s to reduce polling spam
-                elapsed_time = 0
-
-                audio_logger.info(
-                    f"📁 Audio duration: {audio_duration:.1f}s, max wait time: {max_wait_time}s"
-                )
-
-                # Use concrete task tracking instead of database polling
-                while elapsed_time < max_wait_time:
-                    try:
-                        # Check processing status using task tracking
-                        processing_status = processor_manager.get_processing_status(client_id)
-
-                        # Check if transcription stage is complete
-                        stages = processing_status.get("stages", {})
-                        transcription_stage = stages.get("transcription", {})
-
-                        # If transcription is marked as started but not completed, check database
-                        if transcription_stage.get(
-                            "status"
-                        ) == "started" and not transcription_stage.get("completed", False):
-                            # Check if transcription is actually complete by checking the database
-                            try:
-                                chunk = await chunks_col.find_one({"client_id": client_id})
-                                if (
-                                    chunk
-                                    and chunk.get("transcript")
-                                    and len(chunk.get("transcript", [])) > 0
-                                ):
-                                    # Transcription is complete! Update the processor state
-                                    processor_manager.track_processing_stage(
-                                        client_id,
-                                        "transcription",
-                                        "completed",
-                                        {
-                                            "audio_uuid": chunk.get("audio_uuid"),
-                                            "segments": len(chunk.get("transcript", [])),
-                                        },
-                                    )
-                                    audio_logger.info(
-                                        f"📁 Transcription completed for file: {file.filename} ({len(chunk.get('transcript', []))} segments)"
-                                    )
-                                    break
-                            except Exception as e:
-                                audio_logger.debug(f"Error checking transcription completion: {e}")
-
-                        if transcription_stage.get("completed", False):
-                            audio_logger.info(
-                                f"📁 Transcription completed for file: {file.filename}"
-                            )
-                            break
-
-                        # Check for errors
-                        if transcription_stage.get("error"):
-                            audio_logger.warning(
-                                f"📁 Transcription error for file: {file.filename}: {transcription_stage.get('error')}"
-                            )
-                            break
-
-                    except Exception as e:
-                        audio_logger.debug(f"Error checking processing status: {e}")
-
-                    await asyncio.sleep(wait_interval)
-                    elapsed_time += wait_interval
-
-                if elapsed_time >= max_wait_time:
-                    audio_logger.warning(f"📁 Transcription timed out for file: {file.filename}")
-
-                # Signal end of conversation - trigger memory processing
-                await client_state.close_current_conversation()
-
-                # Give cleanup time to complete
-                await asyncio.sleep(0.5)
-
-                # Track conversation created
-                conversation_info = {
-                    "client_id": client_id,
-                    "filename": file.filename,
-                    "status": "completed" if elapsed_time < max_wait_time else "timed_out",
-                }
-                processed_conversations.append(conversation_info)
-
-            except Exception as e:
-                audio_logger.error(f"Error processing file {file.filename}: {e}")
-                processed_files.append(
-                    {"filename": file.filename or "unknown", "status": "error", "error": str(e)}
-                )
-            finally:
-                # Always clean up client state to prevent accumulation
-                if client_id and client_state:
-                    try:
-                        await cleanup_client_state(client_id)
-                        audio_logger.info(f"🧹 Cleaned up client state for {client_id}")
-                    except Exception as cleanup_error:
-                        audio_logger.error(
-                            f"❌ Error cleaning up client state for {client_id}: {cleanup_error}"
-                        )
-
-        return {
-            "message": f"Processed {len(files)} files",
-            "files": processed_files,
-            "conversations": processed_conversations,
-            "successful": len([f for f in processed_files if f.get("status") != "error"]),
-            "failed": len([f for f in processed_files if f.get("status") == "error"]),
-        }
-
-    except Exception as e:
-        audio_logger.error(f"Error in process_audio_files: {e}")
-        return JSONResponse(status_code=500, content={"error": f"File processing failed: {str(e)}"})
-
-
-def get_audio_duration(file_content: bytes) -> float:
-    """Get duration of WAV file in seconds using wave library."""
-    try:
-        with wave.open(io.BytesIO(file_content), "rb") as wav_file:
-            frames = wav_file.getnframes()
-            sample_rate = wav_file.getframerate()
-            duration = frames / sample_rate
-            return duration
-    except Exception as e:
-        logger.warning(f"Could not determine audio duration: {e}")
-        return 0.0
-
-
-async def process_audio_files_async(
-    background_tasks: BackgroundTasks, user: User, files: list[UploadFile], device_name: str
-):
-    """Start async processing of uploaded audio files. Returns job ID immediately."""
-    try:
-        if not files:
-            return JSONResponse(status_code=400, content={"error": "No files provided"})
-
-        # Read all file contents immediately to avoid file handle issues
-        file_data = []
-        for file in files:
-            try:
-                content = await file.read()
-                file_data.append((file.filename, content))
-                audio_logger.info(f"📥 Read file: {file.filename} ({len(content)} bytes)")
-            except Exception as e:
-                audio_logger.error(f"❌ Failed to read file {file.filename}: {e}")
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": f"Failed to read file {file.filename}: {str(e)}"},
-                )
-
-        # Create job
-        job_tracker = get_job_tracker()
-        filenames = [filename for filename, _ in file_data]
-        job_id = await job_tracker.create_job(user.user_id, device_name, filenames)
-
-        # Start background processing with file contents
-        background_tasks.add_task(process_files_with_content, job_id, file_data, user, device_name)
-
-        audio_logger.info(f"🚀 Started async processing job {job_id} with {len(files)} files")
-
-        return {
-            "job_id": job_id,
-            "message": f"Started processing {len(files)} files",
-            "status_url": f"/api/process-audio-files/jobs/{job_id}",
-            "total_files": len(files),
-        }
-
-    except Exception as e:
-        audio_logger.error(f"Error starting async file processing: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": f"Failed to start processing: {str(e)}"}
-        )
-
-
-async def get_processing_job_status(job_id: str):
-    """Get status of an async file processing job."""
-    try:
-        job_tracker = get_job_tracker()
-        job = await job_tracker.get_job(job_id)
-
-        if not job:
-            return JSONResponse(status_code=404, content={"error": "Job not found"})
-
-        return job.to_dict()
-
-    except Exception as e:
-        logger.error(f"Error getting job status for {job_id}: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": f"Failed to get job status: {str(e)}"}
-        )
-
-
-async def list_processing_jobs():
-    """List all active processing jobs."""
-    try:
-        job_tracker = get_job_tracker()
-        active_jobs = await job_tracker.get_active_jobs()
-
-        return {"active_jobs": len(active_jobs), "jobs": [job.to_dict() for job in active_jobs]}
-
-    except Exception as e:
-        logger.error(f"Error listing jobs: {e}")
-        return JSONResponse(status_code=500, content={"error": f"Failed to list jobs: {str(e)}"})
-
-
-async def process_files_with_content(
-    job_id: str, file_data: list[tuple[str, bytes]], user: User, device_name: str
-):
-    """Background task to process uploaded files using pre-read content."""
-    # Import here to avoid circular imports
-    from advanced_omi_backend.main import cleanup_client_state, create_client_state
-
-    audio_logger.info(
-        f"🚀 process_files_with_content called for job {job_id} with {len(file_data)} files"
-    )
-    job_tracker = get_job_tracker()
-
-    try:
-        # Update job status to processing
-        await job_tracker.update_job_status(job_id, JobStatus.PROCESSING)
-
-        for file_index, (filename, content) in enumerate(file_data):
-            client_id = None
-            client_state = None
-
-            try:
-                audio_logger.info(
-                    f"🔧 [Job {job_id}] Processing file {file_index + 1}/{len(file_data)}: {filename}, content type: {type(content)}, size: {len(content)}"
-                )
-                # Set current file
-                await job_tracker.set_current_file(job_id, filename)
-                await job_tracker.update_file_status(job_id, filename, FileStatus.PROCESSING)
-
-                audio_logger.info(
-                    f"🚀 [Job {job_id}] Processing file {file_index + 1}/{len(file_data)}: {filename}"
-                )
-
-                # Check duration and skip if too long
-                audio_logger.info(
-                    f"🔍 [Job {job_id}] About to check duration for {filename}, content size: {len(content)} bytes"
-                )
-                try:
-                    duration = get_audio_duration(content)
-                    audio_logger.info(
-                        f"🔍 [Job {job_id}] Duration check successful: {duration:.2f}s for {filename}"
-                    )
-                except Exception as duration_error:
-                    audio_logger.error(
-                        f"❌ [Job {job_id}] Duration check failed for {filename}: {duration_error}"
-                    )
-                    raise
-                # Duration limit removed - process files of any reasonable length
-                audio_logger.info(f"📊 File duration: {duration/60:.1f} minutes")
-
-                # Validate file type
-                if not filename or not filename.lower().endswith(".wav"):
-                    error_msg = "Only WAV files are currently supported"
-                    await job_tracker.update_file_status(
-                        job_id, filename, FileStatus.FAILED, error_message=error_msg
-                    )
-                    continue
-
-                # Generate unique client ID for each file
-                file_device_name = f"{device_name}-{file_index + 1:03d}"
-                client_id = generate_client_id(user, file_device_name)
-
-                # Update job tracker with client ID
-                await job_tracker.update_file_status(
-                    job_id, filename, FileStatus.PROCESSING, client_id=client_id
-                )
-
-                # Create client state
-                client_state = await create_client_state(client_id, user, file_device_name)
-
-                # Process WAV file
-                with wave.open(io.BytesIO(content), "rb") as wav_file:
-                    sample_rate = wav_file.getframerate()
-                    sample_width = wav_file.getsampwidth()
-                    channels = wav_file.getnchannels()
-                    audio_data = wav_file.readframes(wav_file.getnframes())
-
-                    # Convert to mono if stereo
-                    if channels == 2:
-                        if sample_width == 2:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                        else:
-                            audio_array = np.frombuffer(audio_data, dtype=np.int32)
-                        audio_array = audio_array.reshape(-1, 2)
-                        audio_data = (
-                            np.mean(audio_array, axis=1).astype(audio_array.dtype).tobytes()
-                        )
-                        channels = 1
-
-                    # Process audio in chunks
-                    processor_manager = get_processor_manager()
-                    chunk_size = 32 * 1024
-                    base_timestamp = int(time.time())
-
-                    for i in range(0, len(audio_data), chunk_size):
-                        chunk_data = audio_data[i : i + chunk_size]
-                        chunk_offset_bytes = i
-                        chunk_offset_seconds = chunk_offset_bytes / (
-                            sample_rate * sample_width * channels
-                        )
-                        chunk_timestamp = base_timestamp + int(chunk_offset_seconds)
-
-                        # Process audio chunk through unified pipeline
-                        await process_audio_chunk(
-                            audio_data=chunk_data,
-                            client_id=client_id,
-                            user_id=user.user_id,
-                            user_email=user.email,
-                            audio_format={
-                                "rate": sample_rate,
-                                "width": sample_width,
-                                "channels": channels,
-                                "timestamp": chunk_timestamp,
-                            },
-                            client_state=None,  # No client state needed for file upload
-                        )
-
-                        if i % (chunk_size * 10) == 0:  # Yield control occasionally
-                            await asyncio.sleep(0)
-
-                # Wait briefly for transcription manager to be created
-                await asyncio.sleep(2.0)
-
-                # Close client audio to trigger transcription completion
-                await processor_manager.close_client_audio(client_id)
-
-                # Wait for processing to complete with dynamic timeout
-                max_wait_time = max(120, int(duration * 2) + 60)  # 2x duration + 60s buffer
-                wait_interval = 2.0
-                elapsed_time = 0
-
-                audio_logger.info(
-                    f"⏳ [Job {job_id}] Waiting for transcription (max {max_wait_time}s)"
-                )
-
-                # Track whether memory processing has been triggered to avoid duplicate calls
-                memory_triggered = False
-
-                while elapsed_time < max_wait_time:
-                    try:
-                        # Check database for completion status
-                        chunk = await chunks_col.find_one({"client_id": client_id})
-                        if chunk:
-                            transcription_status = chunk.get("transcription_status", "PENDING")
-                            memory_status = chunk.get("memory_processing_status", "PENDING")
-
-                            # Update job tracker with current status
-                            await job_tracker.update_file_status(
-                                job_id,
-                                filename,
-                                FileStatus.PROCESSING,
-                                audio_uuid=chunk.get("audio_uuid"),
-                                transcription_status=transcription_status,
-                                memory_status=memory_status,
-                            )
-
-                            # Check if transcription failed - immediately fail the job
-                            if transcription_status == "FAILED":
-                                audio_logger.error(
-                                    f"❌ [Job {job_id}] Transcription failed, marking file as failed: {filename}"
-                                )
-                                await job_tracker.update_file_status(
-                                    job_id, filename, FileStatus.FAILED, 
-                                    error_message="Transcription failed"
-                                )
-                                break  # Exit monitoring loop for this file
-                            
-                            # Check if transcription is complete to trigger memory processing
-                            elif transcription_status in ["COMPLETED", "EMPTY"]:
-                                # Trigger memory processing if not already done
-                                if memory_status == "PENDING" and not memory_triggered:
-                                    audio_logger.info(
-                                        f"🚀 [Job {job_id}] Transcription complete, triggering memory processing: {filename}"
-                                    )
-                                    await client_state.close_current_conversation()
-                                    memory_triggered = True
-                                    # Continue to next iteration to check memory status
-                                    continue
-
-                                # Check if memory processing is also complete
-                                if memory_status in ["COMPLETED", "FAILED", "SKIPPED"]:
-                                    audio_logger.info(
-                                        f"✅ [Job {job_id}] File processing completed: {filename}"
-                                    )
-                                    await job_tracker.update_file_status(
-                                        job_id, filename, FileStatus.COMPLETED
-                                    )
-                                    break
-
-                    except Exception as e:
-                        audio_logger.debug(f"Error checking processing status: {e}")
-
-                    await asyncio.sleep(wait_interval)
-                    elapsed_time += wait_interval
-
-                if elapsed_time >= max_wait_time:
-                    error_msg = f"Processing timed out after {max_wait_time}s"
-                    audio_logger.warning(f"⏰ [Job {job_id}] {error_msg}: {filename}")
-                    await job_tracker.update_file_status(
-                        job_id, filename, FileStatus.FAILED, error_message=error_msg
-                    )
-
-                # Signal end of conversation - trigger memory processing
-                await client_state.close_current_conversation()
-                await asyncio.sleep(0.5)
-
-            except Exception as e:
-                error_msg = f"Error processing file: {str(e)}"
-                audio_logger.error(f"❌ [Job {job_id}] {error_msg}")
-                await job_tracker.update_file_status(
-                    job_id, filename, FileStatus.FAILED, error_message=error_msg
-                )
-            finally:
-                # Always clean up client state to prevent accumulation
-                if client_id and client_state:
-                    try:
-                        await cleanup_client_state(client_id)
-                        audio_logger.info(
-                            f"🧹 [Job {job_id}] Cleaned up client state for {client_id}"
-                        )
-                    except Exception as cleanup_error:
-                        audio_logger.error(
-                            f"❌ [Job {job_id}] Error cleaning up client state for {client_id}: {cleanup_error}"
-                        )
-
-        # Mark job as completed
-        await job_tracker.update_job_status(job_id, JobStatus.COMPLETED)
-        audio_logger.info(f"🎉 [Job {job_id}] All files processed")
-
-    except Exception as e:
-        error_msg = f"Job processing failed: {str(e)}"
-        audio_logger.error(f"💥 [Job {job_id}] {error_msg}")
-        await job_tracker.update_job_status(job_id, JobStatus.FAILED, error_msg)
+# Audio file processing functions moved to audio_controller.py
 
 
 # Configuration functions moved to config.py to avoid circular imports
@@ -1158,4 +557,646 @@ async def delete_all_user_memories(user: User):
         logger.error(f"Error deleting all memories for user {user.user_id}: {e}")
         return JSONResponse(
             status_code=500, content={"error": f"Failed to delete memories: {str(e)}"}
+        )
+
+
+async def get_streaming_status(request):
+    """Get status of active streaming sessions and Redis Streams health."""
+    import time
+    from advanced_omi_backend.controllers.queue_controller import (
+        transcription_queue,
+        memory_queue,
+        default_queue,
+        all_jobs_complete_for_session
+    )
+
+    try:
+        # Get Redis client from request.app.state (initialized during startup)
+        redis_client = request.app.state.redis_audio_stream
+
+        if not redis_client:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Redis client for audio streaming not initialized"}
+            )
+
+        # Get all sessions (both active and completed)
+        session_keys = await redis_client.keys("audio:session:*")
+        active_sessions = []
+        completed_sessions_from_redis = []
+
+        for key in session_keys:
+            session_data = await redis_client.hgetall(key)
+            if not session_data:
+                continue
+
+            session_id = key.decode().split(":")[-1]
+            started_at = float(session_data.get(b"started_at", b"0"))
+            last_chunk_at = float(session_data.get(b"last_chunk_at", b"0"))
+            status = session_data.get(b"status", b"").decode()
+
+            session_obj = {
+                "session_id": session_id,
+                "user_id": session_data.get(b"user_id", b"").decode(),
+                "client_id": session_data.get(b"client_id", b"").decode(),
+                "provider": session_data.get(b"provider", b"").decode(),
+                "mode": session_data.get(b"mode", b"").decode(),
+                "status": status,
+                "chunks_published": int(session_data.get(b"chunks_published", b"0")),
+                "started_at": started_at,
+                "last_chunk_at": last_chunk_at,
+                "age_seconds": time.time() - started_at,
+                "idle_seconds": time.time() - last_chunk_at
+            }
+
+            # Separate active and completed sessions
+            # Check if all jobs are complete (including failed jobs)
+            all_jobs_done = all_jobs_complete_for_session(session_id)
+
+            # Session is completed if:
+            # 1. Redis status says complete/finalized AND all jobs done, OR
+            # 2. All jobs are done (even if status isn't complete yet)
+            # This ensures sessions with failed jobs move to completed
+            if status in ["complete", "completed", "finalized"] or all_jobs_done:
+                if all_jobs_done:
+                    # All jobs complete - this is truly a completed session
+                    # Update Redis status if it wasn't already marked complete
+                    if status not in ["complete", "completed", "finalized"]:
+                        await redis_client.hset(key, "status", "complete")
+                        logger.info(f"✅ Marked session {session_id} as complete (all jobs terminal)")
+
+                    completed_sessions_from_redis.append({
+                        "session_id": session_id,
+                        "client_id": session_data.get(b"client_id", b"").decode(),
+                        "conversation_id": session_data.get(b"conversation_id", b"").decode() if b"conversation_id" in session_data else None,
+                        "has_conversation": bool(session_data.get(b"conversation_id", b"")),
+                        "action": session_data.get(b"action", b"complete").decode(),
+                        "reason": session_data.get(b"reason", b"").decode() if b"reason" in session_data else "",
+                        "completed_at": last_chunk_at,
+                        "audio_file": session_data.get(b"audio_file", b"").decode() if b"audio_file" in session_data else ""
+                    })
+                else:
+                    # Status says complete but jobs still processing - keep in active
+                    active_sessions.append(session_obj)
+            else:
+                # This is an active session
+                active_sessions.append(session_obj)
+
+        # Get stream health for all streams (per-client streams)
+        # Categorize as active or completed based on consumer activity
+        active_streams = {}
+        completed_streams = {}
+
+        # Discover all audio streams
+        stream_keys = await redis_client.keys("audio:stream:*")
+        current_time = time.time()
+
+        for stream_key in stream_keys:
+            stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
+            try:
+                # Check if stream exists
+                stream_info = await redis_client.execute_command('XINFO', 'STREAM', stream_name)
+
+                # Parse stream info (returns flat list of key-value pairs)
+                info_dict = {}
+                for i in range(0, len(stream_info), 2):
+                    key = stream_info[i].decode() if isinstance(stream_info[i], bytes) else str(stream_info[i])
+                    value = stream_info[i+1]
+
+                    # Skip complex binary structures like first-entry and last-entry
+                    # which contain message data that can't be JSON serialized
+                    if key in ["first-entry", "last-entry"]:
+                        # Just extract the message ID (first element)
+                        if isinstance(value, list) and len(value) > 0:
+                            msg_id = value[0]
+                            if isinstance(msg_id, bytes):
+                                msg_id = msg_id.decode()
+                            value = msg_id
+                        else:
+                            value = None
+                    elif isinstance(value, bytes):
+                        try:
+                            value = value.decode()
+                        except UnicodeDecodeError:
+                            # Binary data that can't be decoded, skip it
+                            value = "<binary>"
+
+                    info_dict[key] = value
+
+                # Calculate stream age from last entry
+                stream_age_seconds = 0
+                last_entry_id = info_dict.get("last-entry")
+                if last_entry_id:
+                    try:
+                        # Redis Stream IDs format: "milliseconds-sequence"
+                        last_timestamp_ms = int(last_entry_id.split('-')[0])
+                        last_timestamp_s = last_timestamp_ms / 1000
+                        stream_age_seconds = current_time - last_timestamp_s
+                    except (ValueError, IndexError, AttributeError):
+                        stream_age_seconds = 0
+
+                # Get consumer groups
+                groups = await redis_client.execute_command('XINFO', 'GROUPS', stream_name)
+
+                stream_data = {
+                    "stream_length": info_dict.get("length", 0),
+                    "first_entry_id": info_dict.get("first-entry"),
+                    "last_entry_id": last_entry_id,
+                    "stream_age_seconds": stream_age_seconds,
+                    "consumer_groups": [],
+                    "total_pending": 0
+                }
+
+                # Track if stream has any active consumers
+                has_active_consumer = False
+                min_consumer_idle_ms = float('inf')
+
+                # Parse consumer groups
+                for group in groups:
+                    group_dict = {}
+                    for i in range(0, len(group), 2):
+                        key = group[i].decode() if isinstance(group[i], bytes) else str(group[i])
+                        value = group[i+1]
+                        if isinstance(value, bytes):
+                            try:
+                                value = value.decode()
+                            except UnicodeDecodeError:
+                                value = "<binary>"
+                        group_dict[key] = value
+
+                    group_name = group_dict.get("name", "unknown")
+                    if isinstance(group_name, bytes):
+                        group_name = group_name.decode()
+
+                    # Get consumers for this group
+                    consumers = await redis_client.execute_command('XINFO', 'CONSUMERS', stream_name, group_name)
+                    consumer_list = []
+                    consumer_pending_total = 0
+
+                    for consumer in consumers:
+                        consumer_dict = {}
+                        for i in range(0, len(consumer), 2):
+                            key = consumer[i].decode() if isinstance(consumer[i], bytes) else str(consumer[i])
+                            value = consumer[i+1]
+                            if isinstance(value, bytes):
+                                try:
+                                    value = value.decode()
+                                except UnicodeDecodeError:
+                                    value = "<binary>"
+                            consumer_dict[key] = value
+
+                        consumer_name = consumer_dict.get("name", "unknown")
+                        if isinstance(consumer_name, bytes):
+                            consumer_name = consumer_name.decode()
+
+                        consumer_pending = int(consumer_dict.get("pending", 0))
+                        consumer_idle_ms = int(consumer_dict.get("idle", 0))
+                        consumer_pending_total += consumer_pending
+
+                        # Track minimum idle time
+                        min_consumer_idle_ms = min(min_consumer_idle_ms, consumer_idle_ms)
+
+                        # Consumer is active if idle < 5 minutes (300000ms)
+                        if consumer_idle_ms < 300000:
+                            has_active_consumer = True
+
+                        consumer_list.append({
+                            "name": consumer_name,
+                            "pending": consumer_pending,
+                            "idle_ms": consumer_idle_ms
+                        })
+
+                    # Get group-level pending count (may be 0 even if consumers have pending)
+                    try:
+                        pending = await redis_client.xpending(stream_name, group_name)
+                        group_pending_count = int(pending[0]) if pending else 0
+                    except Exception:
+                        group_pending_count = 0
+
+                    # Use the maximum of group-level pending or sum of consumer pending
+                    # (Sometimes group pending is 0 but consumers still have pending messages)
+                    effective_pending = max(group_pending_count, consumer_pending_total)
+
+                    stream_data["consumer_groups"].append({
+                        "name": str(group_name),
+                        "consumers": consumer_list,
+                        "pending": int(effective_pending)
+                    })
+
+                    stream_data["total_pending"] += int(effective_pending)
+
+                # Determine if stream is active or completed
+                # Active: has active consumers OR pending messages OR recent activity (< 5 min)
+                # Completed: no active consumers and idle > 5 minutes but < 1 hour
+                is_active = (
+                    has_active_consumer or
+                    stream_data["total_pending"] > 0 or
+                    stream_age_seconds < 300  # Less than 5 minutes old
+                )
+
+                if is_active:
+                    active_streams[stream_name] = stream_data
+                else:
+                    # Mark as completed (will be cleaned up when > 1 hour old)
+                    stream_data["idle_seconds"] = stream_age_seconds
+                    completed_streams[stream_name] = stream_data
+
+            except Exception as e:
+                # Stream doesn't exist or error getting info
+                logger.debug(f"Error processing stream {stream_name}: {e}")
+                continue
+
+        # Get RQ queue stats - include all registries
+        rq_stats = {
+            "transcription_queue": {
+                "queued": transcription_queue.count,
+                "processing": len(transcription_queue.started_job_registry),
+                "completed": len(transcription_queue.finished_job_registry),
+                "failed": len(transcription_queue.failed_job_registry),
+                "cancelled": len(transcription_queue.canceled_job_registry),
+                "deferred": len(transcription_queue.deferred_job_registry)
+            },
+            "memory_queue": {
+                "queued": memory_queue.count,
+                "processing": len(memory_queue.started_job_registry),
+                "completed": len(memory_queue.finished_job_registry),
+                "failed": len(memory_queue.failed_job_registry),
+                "cancelled": len(memory_queue.canceled_job_registry),
+                "deferred": len(memory_queue.deferred_job_registry)
+            },
+            "default_queue": {
+                "queued": default_queue.count,
+                "processing": len(default_queue.started_job_registry),
+                "completed": len(default_queue.finished_job_registry),
+                "failed": len(default_queue.failed_job_registry),
+                "cancelled": len(default_queue.canceled_job_registry),
+                "deferred": len(default_queue.deferred_job_registry)
+            }
+        }
+
+        return {
+            "active_sessions": active_sessions,
+            "completed_sessions": completed_sessions_from_redis,
+            "active_streams": active_streams,
+            "completed_streams": completed_streams,
+            "stream_health": active_streams,  # Backward compatibility - use active_streams
+            "rq_queues": rq_stats,
+            "timestamp": time.time()
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting streaming status: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get streaming status: {str(e)}"}
+        )
+
+
+async def cleanup_stuck_stream_workers(request):
+    """Clean up stuck Redis Stream consumers and pending messages from all active streams."""
+    import time
+
+    try:
+        # Get Redis client from request.app.state (initialized during startup)
+        redis_client = request.app.state.redis_audio_stream
+
+        if not redis_client:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Redis client for audio streaming not initialized"}
+            )
+
+        cleanup_results = {}
+        total_cleaned = 0
+        total_deleted_consumers = 0
+        total_deleted_streams = 0
+        current_time = time.time()
+
+        # Discover all audio streams (per-client streams)
+        stream_keys = await redis_client.keys("audio:stream:*")
+
+        for stream_key in stream_keys:
+            stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
+
+            try:
+                # First check stream age - delete old streams (>1 hour) immediately
+                stream_info = await redis_client.execute_command('XINFO', 'STREAM', stream_name)
+
+                # Parse stream info
+                info_dict = {}
+                for i in range(0, len(stream_info), 2):
+                    key_name = stream_info[i].decode() if isinstance(stream_info[i], bytes) else str(stream_info[i])
+                    info_dict[key_name] = stream_info[i+1]
+
+                stream_length = int(info_dict.get("length", 0))
+                last_entry = info_dict.get("last-entry")
+
+                # Check if stream is old
+                should_delete_stream = False
+                stream_age = 0
+
+                if stream_length == 0:
+                    should_delete_stream = True
+                    stream_age = 0
+                elif last_entry and isinstance(last_entry, list) and len(last_entry) > 0:
+                    try:
+                        last_id = last_entry[0]
+                        if isinstance(last_id, bytes):
+                            last_id = last_id.decode()
+                        last_timestamp_ms = int(last_id.split('-')[0])
+                        last_timestamp_s = last_timestamp_ms / 1000
+                        stream_age = current_time - last_timestamp_s
+
+                        # Delete streams older than 1 hour (3600 seconds)
+                        if stream_age > 3600:
+                            should_delete_stream = True
+                    except (ValueError, IndexError):
+                        pass
+
+                if should_delete_stream:
+                    await redis_client.delete(stream_name)
+                    total_deleted_streams += 1
+                    cleanup_results[stream_name] = {
+                        "message": f"Deleted old stream (age: {stream_age:.0f}s, length: {stream_length})",
+                        "cleaned": 0,
+                        "deleted_consumers": 0,
+                        "deleted_stream": True,
+                        "stream_age": stream_age
+                    }
+                    continue
+
+                # Get consumer groups
+                groups = await redis_client.execute_command('XINFO', 'GROUPS', stream_name)
+
+                if not groups:
+                    cleanup_results[stream_name] = {"message": "No consumer groups found", "cleaned": 0, "deleted_stream": False}
+                    continue
+
+                # Parse first group
+                group_dict = {}
+                group = groups[0]
+                for i in range(0, len(group), 2):
+                    key = group[i].decode() if isinstance(group[i], bytes) else str(group[i])
+                    value = group[i+1]
+                    if isinstance(value, bytes):
+                        try:
+                            value = value.decode()
+                        except UnicodeDecodeError:
+                            value = str(value)
+                    group_dict[key] = value
+
+                group_name = group_dict.get("name", "unknown")
+                if isinstance(group_name, bytes):
+                    group_name = group_name.decode()
+
+                pending_count = int(group_dict.get("pending", 0))
+
+                # Get consumers for this group to check per-consumer pending
+                consumers = await redis_client.execute_command('XINFO', 'CONSUMERS', stream_name, group_name)
+
+                cleaned_count = 0
+                total_consumer_pending = 0
+
+                # Clean up pending messages for each consumer AND delete dead consumers
+                deleted_consumers = 0
+                for consumer in consumers:
+                    consumer_dict = {}
+                    for i in range(0, len(consumer), 2):
+                        key = consumer[i].decode() if isinstance(consumer[i], bytes) else str(consumer[i])
+                        value = consumer[i+1]
+                        if isinstance(value, bytes):
+                            try:
+                                value = value.decode()
+                            except UnicodeDecodeError:
+                                value = str(value)
+                        consumer_dict[key] = value
+
+                    consumer_name = consumer_dict.get("name", "unknown")
+                    if isinstance(consumer_name, bytes):
+                        consumer_name = consumer_name.decode()
+
+                    consumer_pending = int(consumer_dict.get("pending", 0))
+                    consumer_idle_ms = int(consumer_dict.get("idle", 0))
+                    total_consumer_pending += consumer_pending
+
+                    # Check if consumer is dead (idle > 5 minutes = 300000ms)
+                    is_dead = consumer_idle_ms > 300000
+
+                    if consumer_pending > 0:
+                        logger.info(f"Found {consumer_pending} pending messages for consumer {consumer_name} (idle: {consumer_idle_ms}ms)")
+
+                        # Get pending messages for this specific consumer
+                        try:
+                            pending_messages = await redis_client.execute_command(
+                                'XPENDING', stream_name, group_name, '-', '+', str(consumer_pending), consumer_name
+                            )
+
+                            # XPENDING returns flat list: [msg_id, consumer, idle_ms, delivery_count, msg_id, ...]
+                            # Parse in groups of 4
+                            for i in range(0, len(pending_messages), 4):
+                                if i < len(pending_messages):
+                                    msg_id = pending_messages[i]
+                                    if isinstance(msg_id, bytes):
+                                        msg_id = msg_id.decode()
+
+                                    # Claim the message to a cleanup worker
+                                    try:
+                                        await redis_client.execute_command(
+                                            'XCLAIM', stream_name, group_name, 'cleanup-worker', '0', msg_id
+                                        )
+
+                                        # Acknowledge it immediately
+                                        await redis_client.xack(stream_name, group_name, msg_id)
+                                        cleaned_count += 1
+                                    except Exception as claim_error:
+                                        logger.warning(f"Failed to claim/ack message {msg_id}: {claim_error}")
+
+                        except Exception as consumer_error:
+                            logger.error(f"Error processing consumer {consumer_name}: {consumer_error}")
+
+                    # Delete dead consumers (idle > 5 minutes with no pending messages)
+                    if is_dead and consumer_pending == 0:
+                        try:
+                            await redis_client.execute_command(
+                                'XGROUP', 'DELCONSUMER', stream_name, group_name, consumer_name
+                            )
+                            deleted_consumers += 1
+                            logger.info(f"🧹 Deleted dead consumer {consumer_name} (idle: {consumer_idle_ms}ms)")
+                        except Exception as delete_error:
+                            logger.warning(f"Failed to delete consumer {consumer_name}: {delete_error}")
+
+                if total_consumer_pending == 0 and deleted_consumers == 0:
+                    cleanup_results[stream_name] = {"message": "No pending messages or dead consumers", "cleaned": 0, "deleted_consumers": 0, "deleted_stream": False}
+                    continue
+
+                total_cleaned += cleaned_count
+                total_deleted_consumers += deleted_consumers
+                cleanup_results[stream_name] = {
+                    "message": f"Cleaned {cleaned_count} pending messages, deleted {deleted_consumers} dead consumers",
+                    "cleaned": cleaned_count,
+                    "deleted_consumers": deleted_consumers,
+                    "deleted_stream": False,
+                    "original_pending": pending_count
+                }
+
+            except Exception as e:
+                cleanup_results[stream_name] = {
+                    "error": str(e),
+                    "cleaned": 0
+                }
+
+        return {
+            "success": True,
+            "total_cleaned": total_cleaned,
+            "total_deleted_consumers": total_deleted_consumers,
+            "total_deleted_streams": total_deleted_streams,
+            "streams": cleanup_results,  # New key for per-stream results
+            "providers": cleanup_results,  # Keep for backward compatibility with frontend
+            "timestamp": time.time()
+        }
+
+    except Exception as e:
+        logger.error(f"Error cleaning up stuck workers: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to cleanup stuck workers: {str(e)}"}
+        )
+
+
+async def cleanup_old_sessions(request, max_age_seconds: int = 3600):
+    """Clean up old session tracking metadata and old audio streams from Redis."""
+    import time
+
+    try:
+        # Get Redis client from request.app.state (initialized during startup)
+        redis_client = request.app.state.redis_audio_stream
+
+        if not redis_client:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Redis client for audio streaming not initialized"}
+            )
+
+        # Get all session keys
+        session_keys = await redis_client.keys("audio:session:*")
+        cleaned_sessions = 0
+        old_sessions = []
+
+        current_time = time.time()
+
+        for key in session_keys:
+            session_data = await redis_client.hgetall(key)
+            if not session_data:
+                continue
+
+            session_id = key.decode().split(":")[-1]
+            started_at = float(session_data.get(b"started_at", b"0"))
+            status = session_data.get(b"status", b"").decode()
+
+            age_seconds = current_time - started_at
+
+            # Clean up sessions older than max_age or stuck in "finalizing"
+            should_clean = (
+                age_seconds > max_age_seconds or
+                (status == "finalizing" and age_seconds > 300)  # Finalizing for more than 5 minutes
+            )
+
+            if should_clean:
+                old_sessions.append({
+                    "session_id": session_id,
+                    "age_seconds": age_seconds,
+                    "status": status
+                })
+                await redis_client.delete(key)
+                cleaned_sessions += 1
+
+        # Also clean up old audio streams (per-client streams that are inactive)
+        stream_keys = await redis_client.keys("audio:stream:*")
+        cleaned_streams = 0
+        old_streams = []
+
+        for stream_key in stream_keys:
+            stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
+
+            try:
+                # Check stream info to get last activity
+                stream_info = await redis_client.execute_command('XINFO', 'STREAM', stream_name)
+
+                # Parse stream info
+                info_dict = {}
+                for i in range(0, len(stream_info), 2):
+                    key_name = stream_info[i].decode() if isinstance(stream_info[i], bytes) else str(stream_info[i])
+                    info_dict[key_name] = stream_info[i+1]
+
+                stream_length = int(info_dict.get("length", 0))
+                last_entry = info_dict.get("last-entry")
+
+                # Check stream age via last entry ID (Redis Stream IDs are timestamps)
+                should_delete = False
+                age_seconds = 0
+
+                if stream_length == 0:
+                    # Empty stream - safe to delete
+                    should_delete = True
+                    reason = "empty"
+                elif last_entry and isinstance(last_entry, list) and len(last_entry) > 0:
+                    # Extract timestamp from last entry ID
+                    last_id = last_entry[0]
+                    if isinstance(last_id, bytes):
+                        last_id = last_id.decode()
+
+                    # Redis Stream IDs format: "milliseconds-sequence"
+                    try:
+                        last_timestamp_ms = int(last_id.split('-')[0])
+                        last_timestamp_s = last_timestamp_ms / 1000
+                        age_seconds = current_time - last_timestamp_s
+
+                        # Delete streams older than max_age regardless of size
+                        if age_seconds > max_age_seconds:
+                            should_delete = True
+                            reason = "old"
+                    except (ValueError, IndexError):
+                        # If we can't parse timestamp, check if first entry is old
+                        first_entry = info_dict.get("first-entry")
+                        if first_entry and isinstance(first_entry, list) and len(first_entry) > 0:
+                            try:
+                                first_id = first_entry[0]
+                                if isinstance(first_id, bytes):
+                                    first_id = first_id.decode()
+                                first_timestamp_ms = int(first_id.split('-')[0])
+                                first_timestamp_s = first_timestamp_ms / 1000
+                                age_seconds = current_time - first_timestamp_s
+
+                                if age_seconds > max_age_seconds:
+                                    should_delete = True
+                                    reason = "old_unparseable"
+                            except (ValueError, IndexError):
+                                pass
+
+                if should_delete:
+                    await redis_client.delete(stream_name)
+                    cleaned_streams += 1
+                    old_streams.append({
+                        "stream_name": stream_name,
+                        "reason": reason,
+                        "age_seconds": age_seconds,
+                        "length": stream_length
+                    })
+
+            except Exception as e:
+                logger.debug(f"Error checking stream {stream_name}: {e}")
+                continue
+
+        return {
+            "success": True,
+            "cleaned_sessions": cleaned_sessions,
+            "cleaned_streams": cleaned_streams,
+            "cleaned_session_details": old_sessions,
+            "cleaned_stream_details": old_streams,
+            "timestamp": time.time()
+        }
+
+    except Exception as e:
+        logger.error(f"Error cleaning up old sessions: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to cleanup old sessions: {str(e)}"}
         )

@@ -17,7 +17,7 @@ from advanced_omi_backend.auth import (
 from advanced_omi_backend.client_manager import get_user_clients_all
 from advanced_omi_backend.database import chunks_col, db, users_col
 from advanced_omi_backend.memory import get_memory_service
-from advanced_omi_backend.users import User, UserCreate
+from advanced_omi_backend.users import User, UserCreate, UserUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,9 @@ async def create_user(user_data: UserCreate):
         )
 
 
-async def update_user(user_id: str, user_data: UserCreate):
+async def update_user(user_id: str, user_data: UserUpdate):
     """Update an existing user."""
+    print("DEBUG: New update_user function is being called!")
     try:
         # Validate ObjectId format
         try:
@@ -106,23 +107,9 @@ async def update_user(user_id: str, user_data: UserCreate):
 
         # Convert to User object for the manager
         user_obj = User(**existing_user)
-        
-        # Prepare update data - only include non-None fields
-        update_data = {}
-        if user_data.email:
-            update_data["email"] = user_data.email
-        if user_data.display_name is not None:
-            update_data["display_name"] = user_data.display_name
-        if hasattr(user_data, 'is_superuser'):
-            update_data["is_superuser"] = user_data.is_superuser
-        if hasattr(user_data, 'is_active'):
-            update_data["is_active"] = user_data.is_active
-        if user_data.password:
-            # Hash the password if provided
-            update_data["hashed_password"] = user_manager.password_helper.hash(user_data.password)
 
-        # Update the user
-        updated_user = await user_manager.update(user_obj, update_data)
+        # Update the user using the fastapi-users manager (now with fix for missing method)
+        updated_user = await user_manager.update(user_obj, user_data)
 
         return JSONResponse(
             status_code=200,

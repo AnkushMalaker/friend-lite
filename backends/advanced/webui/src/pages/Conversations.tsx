@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { MessageSquare, RefreshCw, Calendar, User, Play, Pause, MoreVertical, RotateCcw, Zap, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { conversationsApi, BACKEND_URL } from '../services/api'
+import ConversationVersionHeader from '../components/ConversationVersionHeader'
 
 interface Conversation {
   conversation_id?: string
@@ -10,7 +11,9 @@ interface Conversation {
   timestamp: number
   created_at?: string
   client_id: string
-  transcript: Array<{
+  segment_count?: number  // From list endpoint
+  transcript?: string  // Full text transcript (for LLM parsing)
+  segments?: Array<{  // Optional - only populated after fetching details
     text: string
     speaker: string
     start: number
@@ -28,6 +31,12 @@ interface Conversation {
   memory_processing_status?: string
   transcription_status?: string
   action_items?: any[]
+  version_info?: {
+    transcript_count: number
+    memory_count: number
+    active_transcript_version?: string
+    active_memory_version?: string
+  }
 }
 
 // Speaker color palette for consistent colors across conversations
@@ -67,11 +76,8 @@ export default function Conversations() {
     try {
       setLoading(true)
       const response = await conversationsApi.getAll()
-      // Convert the conversations object to an array
-      const conversationsData = response.data.conversations || {}
-      const conversationsList = Object.entries(conversationsData).flatMap(([clientId, convs]: [string, any]) =>
-        convs.map((conv: any) => ({ ...conv, client_id: clientId }))
-      )
+      // API now returns a flat list with client_id as a field
+      const conversationsList = response.data.conversations || []
       setConversations(conversationsList)
       setError(null)
     } catch (err: any) {
@@ -92,7 +98,15 @@ export default function Conversations() {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [])
 
-  const formatDate = (timestamp: number) => {
+  const formatDate = (timestamp: number | string) => {
+    // Handle both Unix timestamp (number) and ISO string
+    if (typeof timestamp === 'string') {
+      return new Date(timestamp).toLocaleString()
+    }
+    // If timestamp is 0, return placeholder
+    if (timestamp === 0) {
+      return 'Unknown date'
+    }
     return new Date(timestamp * 1000).toLocaleString()
   }
 
@@ -193,16 +207,47 @@ export default function Conversations() {
     }
   }
 
-  const toggleTranscriptExpansion = (audioUuid: string) => {
-    setExpandedTranscripts(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(audioUuid)) {
+  const toggleTranscriptExpansion = async (audioUuid: string) => {
+    // If already expanded, just collapse
+    if (expandedTranscripts.has(audioUuid)) {
+      setExpandedTranscripts(prev => {
+        const newSet = new Set(prev)
         newSet.delete(audioUuid)
-      } else {
-        newSet.add(audioUuid)
+        return newSet
+      })
+      return
+    }
+
+    // Find the conversation by audio_uuid
+    const conversation = conversations.find(c => c.audio_uuid === audioUuid)
+    if (!conversation || !conversation.conversation_id) {
+      console.error('Cannot expand transcript: conversation_id missing')
+      return
+    }
+
+    // If segments are already loaded, just expand
+    if (conversation.segments && conversation.segments.length > 0) {
+      setExpandedTranscripts(prev => new Set(prev).add(audioUuid))
+      return
+    }
+
+    // Fetch full conversation details including segments
+    try {
+      const response = await conversationsApi.getById(conversation.conversation_id)
+      if (response.status === 200 && response.data.conversation) {
+        // Update the conversation in state with full segments and transcript
+        setConversations(prev => prev.map(c =>
+          c.audio_uuid === audioUuid
+            ? { ...c, segments: response.data.conversation.segments, transcript: response.data.conversation.transcript }
+            : c
+        ))
+        // Expand the transcript
+        setExpandedTranscripts(prev => new Set(prev).add(audioUuid))
       }
-      return newSet
-    })
+    } catch (err: any) {
+      console.error('Failed to fetch conversation details:', err)
+      setError(`Failed to load transcript: ${err.message || 'Unknown error'}`)
+    }
   }
 
   const handleSegmentPlayPause = (audioUuid: string, segmentIndex: number, segment: any, audioPath: string) => {
@@ -345,6 +390,32 @@ export default function Conversations() {
               key={conversation.audio_uuid}
               className="bg-gray-50 dark:bg-gray-700 rounded-lg p-6 border border-gray-200 dark:border-gray-600"
             >
+              {/* Version Selector Header - Only show for conversations with conversation_id */}
+              {conversation.conversation_id && (
+                <ConversationVersionHeader
+                  conversationId={conversation.conversation_id}
+                  versionInfo={conversation.version_info}
+                  onVersionChange={async () => {
+                    // Update only this specific conversation without reloading all conversations
+                    // This prevents page scroll jump
+                    try {
+                      const response = await conversationsApi.getById(conversation.conversation_id!)
+                      if (response.status === 200 && response.data.conversation) {
+                        setConversations(prev => prev.map(c =>
+                          c.conversation_id === conversation.conversation_id
+                            ? { ...c, ...response.data.conversation }
+                            : c
+                        ))
+                      }
+                    } catch (err: any) {
+                      console.error('Failed to refresh conversation:', err)
+                      // Fallback to full reload on error
+                      loadConversations()
+                    }
+                  }}
+                />
+              )}
+              
               {/* Conversation Header */}
               <div className="flex justify-between items-start mb-4">
                 <div className="flex flex-col space-y-2">
@@ -364,7 +435,7 @@ export default function Conversations() {
                   <div className="flex items-center space-x-4">
                     <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                       <Calendar className="h-4 w-4" />
-                      <span>{formatDate(conversation.timestamp)}</span>
+                      <span>{formatDate(conversation.created_at || conversation.timestamp)}</span>
                     </div>
                     <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                       <User className="h-4 w-4" />
@@ -489,9 +560,9 @@ export default function Conversations() {
                   onClick={() => toggleTranscriptExpansion(conversation.audio_uuid)}
                 >
                   <h3 className="font-medium text-gray-900 dark:text-gray-100">
-                    Transcript {conversation.transcript && conversation.transcript.length > 0 && (
+                    Transcript {((conversation.segments && conversation.segments.length > 0) || conversation.segment_count) && (
                       <span className="text-sm text-gray-500 dark:text-gray-400 ml-1">
-                        ({conversation.transcript.length} segments)
+                        ({conversation.segments?.length || conversation.segment_count || 0} segments)
                       </span>
                     )}
                   </h3>
@@ -506,26 +577,26 @@ export default function Conversations() {
 
                 {/* Transcript Content - Conditionally Rendered */}
                 {expandedTranscripts.has(conversation.audio_uuid) && (
-                  <div className="animate-in slide-in-from-top-2 duration-300 ease-out">
-                    {conversation.transcript && conversation.transcript.length > 0 ? (
+                  <div className="animate-in slide-in-from-top-2 duration-300 ease-out space-y-4">
+                    {conversation.segments && conversation.segments.length > 0 ? (
                       <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">
                         <div className="space-y-1">
                       {(() => {
                         // Build a speaker-to-color map for this conversation
                         const speakerColorMap: { [key: string]: string } = {};
                         let colorIndex = 0;
-                        
+
                         // First pass: assign colors to unique speakers
-                        conversation.transcript.forEach(segment => {
+                        conversation.segments.forEach(segment => {
                           const speaker = segment.speaker || 'Unknown';
                           if (!speakerColorMap[speaker]) {
                             speakerColorMap[speaker] = SPEAKER_COLOR_PALETTE[colorIndex % SPEAKER_COLOR_PALETTE.length];
                             colorIndex++;
                           }
                         });
-                        
+
                         // Render the transcript
-                        return conversation.transcript.map((segment, index) => {
+                        return conversation.segments.map((segment, index) => {
                           const speaker = segment.speaker || 'Unknown';
                           const speakerColor = speakerColorMap[speaker];
                           const segmentId = `${conversation.audio_uuid}-${index}`;
@@ -584,6 +655,7 @@ export default function Conversations() {
                         No transcript available
                       </div>
                     )}
+                    
                   </div>
                 )}
               </div>
@@ -616,7 +688,7 @@ export default function Conversations() {
                     <div>Cropped Audio: {conversation.cropped_audio_path || 'N/A'}</div>
                     <div>Transcription Status: {conversation.transcription_status || 'N/A'}</div>
                     <div>Memory Processing Status: {conversation.memory_processing_status || 'N/A'}</div>
-                    <div>Transcript Segments: {conversation.transcript?.length || 0}</div>
+                    <div>Transcript Segments: {conversation.segments?.length || 0}</div>
                     <div>Client ID: {conversation.client_id}</div>
                   </div>
                 </div>

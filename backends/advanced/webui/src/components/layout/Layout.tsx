@@ -1,5 +1,5 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
-import { Music, MessageSquare, MessageCircle, Brain, Users, Upload, Settings, LogOut, Sun, Moon, Shield, Radio } from 'lucide-react'
+import { Music, MessageSquare, MessageCircle, Brain, Users, Upload, Settings, LogOut, Sun, Moon, Shield, Radio, Layers } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 
@@ -16,6 +16,7 @@ export default function Layout() {
     { path: '/users', label: 'User Management', icon: Users },
     ...(isAdmin ? [
       { path: '/upload', label: 'Upload Audio', icon: Upload },
+      { path: '/queue', label: 'Queue Management', icon: Layers },
       { path: '/system', label: 'System State', icon: Settings },
     ] : []),
   ]
@@ -62,7 +63,7 @@ export default function Layout() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex flex-col lg:flex-row gap-8">
           {/* Sidebar Navigation */}
           <nav className="lg:w-64 flex-shrink-0">
@@ -88,7 +89,7 @@ export default function Layout() {
           </nav>
 
           {/* Main Content */}
-          <main className="flex-1 min-w-0">
+          <main className="flex-1">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
               <Outlet />
             </div>

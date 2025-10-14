@@ -20,13 +20,12 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
     # cert-manager.io/cluster-issuer: "selfsigned-issuer"
     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
     nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
     nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
     nginx.ingress.kubernetes.io/enable-cors: "true"
+    # WebSocket support - long timeouts for persistent connections
     nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "60s"
@@ -55,11 +54,12 @@ env:
   # These are set by Skaffold setValueTemplates for Kubernetes-specific URLs
   # MONGODB_URI: set by Skaffold
   # QDRANT_BASE_URL: set by Skaffold
-  
+  # REDIS_URL: set by Skaffold in templates
+
   # Override only specific values if needed
   ENVIRONMENT: "dev"
   AUTH_ENABLED: "false"
-  CORS_ORIGINS: ""  # Set by ConfigMap generated from Makefile
+  # CORS_ORIGINS is set by ConfigMap generated from Makefile - don't override here
   # Don't override OPENAI_API_KEY - it comes from ConfigMap
 
 # Volume mounts for persistent data

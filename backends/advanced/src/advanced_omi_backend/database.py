@@ -18,15 +18,23 @@ logger = logging.getLogger(__name__)
 
 # MongoDB Configuration
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
-mongo_client = AsyncIOMotorClient(MONGODB_URI)
+mongo_client = AsyncIOMotorClient(
+    MONGODB_URI,
+    maxPoolSize=50,  # Increased pool size for concurrent operations
+    minPoolSize=10,  # Keep minimum connections ready
+    maxIdleTimeMS=45000,  # Keep idle connections for 45 seconds
+    serverSelectionTimeoutMS=5000,  # Fail fast if server unavailable
+    socketTimeoutMS=20000,  # 20 second timeout for operations
+)
 db = mongo_client.get_default_database("friend-lite")
 
-# Collection references
-chunks_col = db["audio_chunks"]
-processing_runs_col = db["processing_runs"]
+# Collection references (for non-Beanie collections)
 users_col = db["users"]
-speakers_col = db["speakers"]
-conversations_col = db["conversations"]
+chunks_col = db["audio_chunks"]  # Still used by AudioChunksRepository
+
+# Note: conversations collection managed by Beanie
+# Note: processing_runs replaced by RQ job tracking
+# Beanie initialization happens in main.py during application startup
 
 
 def get_database():
@@ -37,11 +45,8 @@ def get_database():
 def get_collections():
     """Get commonly used collection references."""
     return {
-        "chunks_col": chunks_col,
-        "processing_runs_col": processing_runs_col,
         "users_col": users_col,
-        "speakers_col": speakers_col,
-        "conversations_col": conversations_col,
+        "chunks_col": chunks_col,
     }
 
 
@@ -520,335 +525,38 @@ class AudioChunksRepository:
 
         return await cursor.to_list(length=None)
 
-
-class ConversationsRepository:
-    """Repository for user-facing conversations (speech-driven architecture)."""
-
-    def __init__(self, collection):
-        self.col = collection
-
-    async def create_conversation(self, conversation_data: dict) -> str:
-        """Create new user-facing conversation."""
-        result = await self.col.insert_one(conversation_data)
-        return conversation_data["conversation_id"]
-
-    def _populate_legacy_fields(self, conversation):
-        """Auto-populate legacy fields from active versions for backward compatibility."""
-        if not conversation:
-            return conversation
-
-        # Auto-populate transcript from active transcript version
-        active_transcript_version_id = conversation.get("active_transcript_version")
-        if active_transcript_version_id:
-            for version in conversation.get("transcript_versions", []):
-                if version.get("version_id") == active_transcript_version_id:
-                    conversation["transcript"] = version.get("segments", [])
-                    conversation["speakers_identified"] = version.get("speakers_identified", [])
-                    break
-        else:
-            # No active version - ensure empty transcript
-            conversation["transcript"] = []
-
-        # Auto-populate memories from active memory version
-        active_memory_version_id = conversation.get("active_memory_version")
-        if active_memory_version_id:
-            for version in conversation.get("memory_versions", []):
-                if version.get("version_id") == active_memory_version_id:
-                    conversation["memories"] = version.get("memories", [])
-                    conversation["memory_processing_status"] = version.get("status", "pending")
-                    break
-        else:
-            # No active version - ensure empty memories
-            conversation["memories"] = []
-            conversation["memory_processing_status"] = "pending"
-
-        return conversation
-
-    async def get_conversation(self, conversation_id: str):
-        """Get conversation by conversation_id with auto-populated legacy fields."""
-        conversation = await self.col.find_one({"conversation_id": conversation_id})
-        return self._populate_legacy_fields(conversation)
-
-    async def get_user_conversations(self, user_id: str, limit=100):
-        """Get all conversations for a user (only shows conversations with speech)."""
-        cursor = self.col.find({"user_id": user_id})
-        conversations = await cursor.sort("created_at", -1).limit(limit).to_list()
-        # Auto-populate legacy fields for all conversations
-        return [self._populate_legacy_fields(conv) for conv in conversations]
-
-    async def update_conversation(self, conversation_id: str, update_data: dict):
-        """Update conversation data."""
-        result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {"$set": {**update_data, "updated_at": datetime.now(UTC)}}
-        )
-        return result.modified_count > 0
-
-    async def add_memories(self, conversation_id: str, memories: list):
-        """Add memories to conversation."""
-        result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {
-                "$push": {"memories": {"$each": memories}},
-                "$set": {"updated_at": datetime.now(UTC)}
-            }
-        )
-        return result.modified_count > 0
-
-    async def update_memory_processing_status(self, conversation_id: str, status: str):
-        """Update memory processing status for conversation."""
-        result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {
-                "$set": {
-                    "memory_processing_status": status,
-                    "memory_processing_updated_at": datetime.now(UTC)
-                }
-            }
-        )
-        return result.modified_count > 0
-
-    # ========================================
-    # NEW: VERSIONING METHODS FOR REPROCESSING
-    # ========================================
-
-    async def create_transcript_version(
-        self,
-        conversation_id: str,
-        segments: list = None,
-        processing_run_id: str = None,
-        provider: str = None,
-        raw_data: dict = None
-    ) -> Optional[str]:
-        """Create a new transcript version in conversation."""
-        version_id = str(uuid.uuid4())
-        version_data = {
-            "version_id": version_id,
-            "segments": segments or [],
-            "status": "PENDING",
-            "provider": provider,
-            "created_at": datetime.now(UTC).isoformat(),
-            "processing_run_id": processing_run_id,
-            "raw_data": raw_data or {},
-            "speakers_identified": []
-        }
-
-        result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {"$push": {"transcript_versions": version_data}}
-        )
-
-        if result.modified_count > 0:
-            logger.info(f"Created new transcript version {version_id} for conversation {conversation_id}")
-            return version_id
-        return None
-
-    async def create_memory_version(
-        self,
-        conversation_id: str,
-        transcript_version_id: str,
-        memories: list = None,
-        processing_run_id: str = None
-    ) -> Optional[str]:
-        """Create a new memory version in conversation."""
-        version_id = str(uuid.uuid4())
-        version_data = {
-            "version_id": version_id,
-            "memories": memories or [],
-            "status": "PENDING",
-            "created_at": datetime.now(UTC).isoformat(),
-            "processing_run_id": processing_run_id,
-            "transcript_version_id": transcript_version_id
-        }
-
-        result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {"$push": {"memory_versions": version_data}}
-        )
-
-        if result.modified_count > 0:
-            logger.info(f"Created new memory version {version_id} for conversation {conversation_id}")
-            return version_id
-        return None
-
-    async def activate_transcript_version(self, conversation_id: str, version_id: str) -> bool:
-        """Activate a specific transcript version in conversation."""
-        # First verify the version exists
-        conversation = await self.col.find_one(
-            {"conversation_id": conversation_id, "transcript_versions.version_id": version_id}
-        )
-        if not conversation:
-            return False
-
-        # Find the version and update active fields
-        version_data = None
-        for version in conversation.get("transcript_versions", []):
-            if version["version_id"] == version_id:
-                version_data = version
-                break
-
-        if not version_data:
-            return False
-
-        result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {
-                "$set": {
-                    "active_transcript_version": version_id,
-                    "transcript": version_data["segments"],
-                    "speakers_identified": version_data["speakers_identified"],
-                    "updated_at": datetime.now(UTC)
-                }
-            }
-        )
-
-        if result.modified_count > 0:
-            logger.info(f"Activated transcript version {version_id} for conversation {conversation_id}")
-        return result.modified_count > 0
-
-    async def activate_memory_version(self, conversation_id: str, version_id: str) -> bool:
-        """Activate a specific memory version in conversation."""
-        # First verify the version exists
-        conversation = await self.col.find_one(
-            {"conversation_id": conversation_id, "memory_versions.version_id": version_id}
-        )
-        if not conversation:
-            return False
-
-        # Find the version and update active fields
-        version_data = None
-        for version in conversation.get("memory_versions", []):
-            if version["version_id"] == version_id:
-                version_data = version
-                break
-
-        if not version_data:
-            return False
-
-        result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {
-                "$set": {
-                    "active_memory_version": version_id,
-                    "memories": version_data["memories"],
-                    "memory_processing_status": version_data["status"],
-                    "updated_at": datetime.now(UTC)
-                }
-            }
-        )
-
-        if result.modified_count > 0:
-            logger.info(f"Activated memory version {version_id} for conversation {conversation_id}")
-        return result.modified_count > 0
-
-    async def get_version_history(self, conversation_id: str) -> dict:
-        """Get all version history for a conversation."""
-        conversation = await self.col.find_one({"conversation_id": conversation_id})
-        if not conversation:
-            return {}
-
-        return {
-            "conversation_id": conversation_id,
-            "active_transcript_version": conversation.get("active_transcript_version"),
-            "active_memory_version": conversation.get("active_memory_version"),
-            "transcript_versions": conversation.get("transcript_versions", []),
-            "memory_versions": conversation.get("memory_versions", [])
-        }
-
-    async def update_transcript_processing_status(
-        self,
-        conversation_id: str,
-        status: str,
-        provider: str = None,
-        error_message: str = None
+    async def update_transcription_status(
+        self, audio_uuid: str, status: str, error_message: str = None, provider: str = None
     ):
-        """Update transcript processing status for conversation."""
+        """Update transcription status and completion timestamp.
+        
+        Args:
+            audio_uuid: UUID of the audio chunk
+            status: New status ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'EMPTY')
+            error_message: Optional error message if status is 'FAILED'
+            provider: Optional provider name for successful transcriptions
+        """
         update_doc = {
-            "transcript_processing_status": status,
-            "transcript_processing_updated_at": datetime.now(UTC),
-            "updated_at": datetime.now(UTC)
+            "transcription_status": status,
+            "updated_at": datetime.now(UTC).isoformat()
         }
-        if provider:
-            update_doc["transcript_provider"] = provider
-        if error_message:
-            update_doc["transcript_processing_error"] = error_message
-
+        
+        if status == "COMPLETED":
+            update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
+            if provider:
+                update_doc["transcription_provider"] = provider
+        elif status == "FAILED" and error_message:
+            update_doc["transcription_error"] = error_message
+        elif status == "EMPTY":
+            update_doc["transcription_completed_at"] = datetime.now(UTC).isoformat()
+            if provider:
+                update_doc["transcription_provider"] = provider
+            
         result = await self.col.update_one(
-            {"conversation_id": conversation_id},
-            {"$set": update_doc}
+            {"audio_uuid": audio_uuid}, {"$set": update_doc}
         )
         return result.modified_count > 0
 
 
-class ProcessingRunsRepository:
-    """Repository for processing run tracking (updated for conversation_id)."""
-
-    def __init__(self, collection):
-        self.col = collection
-
-    async def create_run(
-        self,
-        *,
-        conversation_id: str,
-        audio_uuid: str,  # Keep for audio file access
-        run_type: str,  # 'transcript' or 'memory'
-        user_id: str,
-        trigger: str,  # 'manual_reprocess', 'initial_processing', etc.
-        config_hash: str = None
-    ) -> str:
-        """Create a new processing run for conversation."""
-        run_id = str(uuid.uuid4())
-        doc = {
-            "run_id": run_id,
-            "conversation_id": conversation_id,
-            "audio_uuid": audio_uuid,  # Keep for file access
-            "run_type": run_type,
-            "user_id": user_id,
-            "trigger": trigger,
-            "config_hash": config_hash,
-            "status": "PENDING",
-            "started_at": datetime.now(UTC),
-            "completed_at": None,
-            "error_message": None,
-            "result_version_id": None
-        }
-        await self.col.insert_one(doc)
-        logger.info(f"Created processing run {run_id} for conversation {conversation_id}")
-        return run_id
-
-    async def update_run_status(
-        self,
-        run_id: str,
-        status: str,
-        error_message: str = None,
-        result_version_id: str = None
-    ) -> bool:
-        """Update processing run status."""
-        update_doc = {
-            "status": status,
-            "updated_at": datetime.now(UTC)
-        }
-        if status in ["COMPLETED", "FAILED"]:
-            update_doc["completed_at"] = datetime.now(UTC)
-        if error_message:
-            update_doc["error_message"] = error_message
-        if result_version_id:
-            update_doc["result_version_id"] = result_version_id
-
-        result = await self.col.update_one(
-            {"run_id": run_id},
-            {"$set": update_doc}
-        )
-
-        if result.modified_count > 0:
-            logger.info(f"Updated processing run {run_id} status to {status}")
-        return result.modified_count > 0
-
-    async def get_run(self, run_id: str):
-        """Get a processing run by ID."""
-        return await self.col.find_one({"run_id": run_id})
-
-    async def get_runs_for_conversation(self, conversation_id: str):
-        """Get all processing runs for a conversation."""
-        cursor = self.col.find({"conversation_id": conversation_id}).sort("started_at", -1)
-        return await cursor.to_list(length=None)
+# ConversationsRepository removed - use Beanie Conversation model directly
+# ProcessingRunsRepository removed - use RQ job tracking instead

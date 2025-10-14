@@ -29,6 +29,16 @@ persistence:
   size: 10Gi
   mountPath: /qdrant/storage
 
+# Pod-level security context
+podSecurityContext:
+  fsGroup: 1000
+
+# Container-level security context
+containerSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

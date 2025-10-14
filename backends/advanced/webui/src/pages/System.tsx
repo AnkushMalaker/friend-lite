@@ -158,7 +158,8 @@ export default function System() {
   const getServiceDisplayName = (service: string) => {
     const displayNames: Record<string, string> = {
       'mongodb': 'MONGODB',
-      'audioai': 'AUDIOAI', 
+      'redis': 'REDIS & RQ WORKERS',
+      'audioai': 'AUDIOAI',
       'mem0': 'MEM0',
       'memory_service': 'MEMORY SERVICE',
       'speech_to_text': 'SPEECH TO TEXT',
@@ -275,6 +276,12 @@ export default function System() {
                         ({(status as any).provider})
                       </span>
                     )}
+                    {service === 'redis' && (status as any).worker_count !== undefined && (
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                        Workers: {(status as any).worker_count} total
+                        ({(status as any).active_workers || 0} active, {(status as any).idle_workers || 0} idle)
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -289,7 +296,7 @@ export default function System() {
               <Server className="h-5 w-5 mr-2 text-blue-600" />
               Processor Status
             </h3>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 mb-6">
               <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3">
                 <div className="text-sm text-gray-600 dark:text-gray-400">Audio Queue</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
@@ -315,6 +322,43 @@ export default function System() {
                 </div>
               </div>
             </div>
+
+            {/* Worker Information */}
+            {(processorStatus as any).workers && (
+              <div className="mt-4 border-t border-gray-200 dark:border-gray-600 pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                    RQ Workers
+                  </h4>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    {(processorStatus as any).workers.active} / {(processorStatus as any).workers.total} active
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {(processorStatus as any).workers.details?.map((worker: any, idx: number) => (
+                    <div key={idx} className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 rounded px-3 py-2 text-sm">
+                      <div className="flex items-center space-x-3">
+                        <span className={`w-2 h-2 rounded-full ${worker.state === 'idle' ? 'bg-green-500' : 'bg-blue-500'}`}></span>
+                        <div className="flex flex-col">
+                          <span className="text-gray-900 dark:text-gray-100 font-medium">RQ Worker #{idx + 1}</span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">{worker.name.substring(0, 8)}...</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        <span className="text-gray-600 dark:text-gray-400 text-xs">{worker.queues?.join(', ')}</span>
+                        <span className={`px-2 py-0.5 rounded text-xs ${
+                          worker.state === 'idle'
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                        }`}>
+                          {worker.state}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

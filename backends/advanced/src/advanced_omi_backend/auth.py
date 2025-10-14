@@ -82,7 +82,7 @@ async def get_user_manager(user_db=Depends(get_user_db)):
 
 # Transport configurations
 cookie_transport = CookieTransport(
-    cookie_max_age=3600,  # 1 hour
+    cookie_max_age=86400,  # 24 hours (matches JWT lifetime)
     cookie_secure=COOKIE_SECURE,  # Set to False in development if not using HTTPS
     cookie_httponly=True,
     cookie_samesite="lax",
@@ -171,7 +171,7 @@ async def create_admin_user_if_needed():
         )
 
     except Exception as e:
-        logger.error(f"Failed to create admin user: {e}")
+        logger.error(f"Failed to create admin user: {e}", exc_info=True)
 
 
 async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[User]:

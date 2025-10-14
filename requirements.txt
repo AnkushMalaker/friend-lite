@@ -1,0 +1,6 @@
+robotframework
+robotframework-tidy
+robotframework-requests
+robotframework-browser
+python-dotenv
+ 

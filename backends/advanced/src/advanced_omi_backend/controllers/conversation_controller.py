@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -17,17 +18,17 @@ from advanced_omi_backend.client_manager import (
     client_belongs_to_user,
     get_user_clients_all,
 )
-from advanced_omi_backend.database import AudioChunksRepository, ProcessingRunsRepository, chunks_col, processing_runs_col, conversations_col, ConversationsRepository
+from advanced_omi_backend.database import AudioChunksRepository, chunks_col
+from advanced_omi_backend.models.conversation import Conversation
 from advanced_omi_backend.users import User
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
 
-# Initialize repositories
+# Initialize repositories (legacy collections only)
 chunk_repo = AudioChunksRepository(chunks_col)
-processing_runs_repo = ProcessingRunsRepository(processing_runs_col)
-conversations_repo = ConversationsRepository(conversations_col)
+# ProcessingRunsRepository removed - using RQ job tracking instead
 
 
 async def close_current_conversation(client_id: str, user: User, client_manager: ClientManager):
@@ -90,109 +91,152 @@ async def close_current_conversation(client_id: str, user: User, client_manager:
         )
 
 
+async def get_conversation(conversation_id: str, user: User):
+    """Get a single conversation with full transcript details."""
+    try:
+        # Find the conversation using Beanie
+        conversation = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+        if not conversation:
+            return JSONResponse(status_code=404, content={"error": "Conversation not found"})
+
+        # Check ownership for non-admin users
+        if not user.is_superuser and conversation.user_id != str(user.user_id):
+            return JSONResponse(status_code=403, content={"error": "Access forbidden"})
+
+        # Get audio file paths from audio_chunks collection
+        audio_chunk = await chunk_repo.get_chunk_by_audio_uuid(conversation.audio_uuid)
+        audio_path = audio_chunk.get("audio_path") if audio_chunk else None
+        cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
+
+        # Format conversation for API response - use model_dump and add computed fields
+        formatted_conversation = conversation.model_dump(
+            mode='json',  # Automatically converts datetime to ISO strings, handles nested models
+            exclude={'id'}  # Exclude MongoDB internal _id
+        )
+
+        # Add computed/external fields not in the model
+        formatted_conversation.update({
+            "timestamp": 0,  # Legacy field - using created_at instead
+            "has_memory": bool(conversation.memories),
+            "audio_path": audio_path,
+            "cropped_audio_path": cropped_audio_path,
+            "version_info": {
+                "transcript_count": len(conversation.transcript_versions),
+                "memory_count": len(conversation.memory_versions),
+                "active_transcript_version": conversation.active_transcript_version,
+                "active_memory_version": conversation.active_memory_version
+            }
+        })
+
+        return {"conversation": formatted_conversation}
+
+    except Exception as e:
+        logger.error(f"Error fetching conversation {conversation_id}: {e}")
+        return JSONResponse(status_code=500, content={"error": "Error fetching conversation"})
+
+
 async def get_conversations(user: User):
     """Get conversations with speech only (speech-driven architecture)."""
     try:
-        # Import conversations collection and repository
-        conversations_repo = ConversationsRepository(conversations_col)
-
-        # Build query based on user permissions
+        # Build query based on user permissions using Beanie
         if not user.is_superuser:
             # Regular users can only see their own conversations
-            user_conversations = await conversations_repo.get_user_conversations(str(user.user_id))
+            user_conversations = await Conversation.find(
+                Conversation.user_id == str(user.user_id)
+            ).sort(-Conversation.created_at).to_list()
         else:
             # Admins see all conversations
-            cursor = conversations_col.find({}).sort("created_at", -1)
-            user_conversations = await cursor.to_list(length=None)
+            user_conversations = await Conversation.find_all().sort(-Conversation.created_at).to_list()
 
-        # Group conversations by client_id for backwards compatibility
-        conversations = {}
-        for conversation in user_conversations:
-            client_id = conversation["client_id"]
-            if client_id not in conversations:
-                conversations[client_id] = []
+        # Batch fetch all audio chunks in one query to avoid N+1 problem
+        audio_uuids = [conv.audio_uuid for conv in user_conversations]
+        audio_chunks_dict = {}
+        if audio_uuids:
+            # Fetch all audio chunks at once
+            chunks_cursor = chunk_repo.col.find({"audio_uuid": {"$in": audio_uuids}})
+            async for chunk in chunks_cursor:
+                audio_chunks_dict[chunk["audio_uuid"]] = chunk
 
-            # Get audio file paths from audio_chunks collection
-            audio_chunk = await chunk_repo.get_chunk_by_audio_uuid(conversation["audio_uuid"])
+        # Convert conversations to API format
+        conversations = []
+        for conv in user_conversations:
+            # Get audio file paths from pre-fetched chunks
+            audio_chunk = audio_chunks_dict.get(conv.audio_uuid)
             audio_path = audio_chunk.get("audio_path") if audio_chunk else None
             cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
 
-            # Convert conversation to API format
-            conversations[client_id].append(
-                {
-                    "conversation_id": conversation["conversation_id"],
-                    "audio_uuid": conversation["audio_uuid"],
-                    "title": conversation.get("title", "Conversation"),
-                    "summary": conversation.get("summary", ""),
-                    "timestamp": conversation.get("session_start").timestamp() if conversation.get("session_start") else 0,
-                    "created_at": conversation.get("created_at").isoformat() if conversation.get("created_at") else None,
-                    "transcript": conversation.get("transcript", []),
-                    "speakers_identified": conversation.get("speakers_identified", []),
-                    "speaker_names": conversation.get("speaker_names", {}),
-                    "duration_seconds": conversation.get("duration_seconds", 0),
-                    "memories": conversation.get("memories", []),
-                    "has_memory": bool(conversation.get("memories", [])),
-                    "memory_processing_status": conversation.get("memory_processing_status", "pending"),
-                    "action_items": conversation.get("action_items", []),
-                    # Audio file paths for playback
-                    "audio_path": audio_path,
-                    "cropped_audio_path": cropped_audio_path,
-                }
+            # Format conversation for list - use model_dump with exclusions
+            conv_dict = conv.model_dump(
+                mode='json',  # Automatically converts datetime to ISO strings
+                exclude={'id', 'transcript', 'segments'}  # Exclude large fields for list view
             )
+
+            # Add computed/external fields
+            conv_dict.update({
+                "timestamp": 0,  # Legacy field - using created_at instead
+                "segment_count": len(conv.segments) if conv.segments else 0,
+                "has_memory": bool(conv.memories),
+                "audio_path": audio_path,
+                "cropped_audio_path": cropped_audio_path,
+                "version_info": {
+                    "transcript_count": len(conv.transcript_versions),
+                    "memory_count": len(conv.memory_versions),
+                    "active_transcript_version": conv.active_transcript_version,
+                    "active_memory_version": conv.active_memory_version
+                }
+            })
+
+            conversations.append(conv_dict)
 
         return {"conversations": conversations}
 
     except Exception as e:
-        logger.error(f"Error fetching conversations: {e}")
+        logger.exception(f"Error fetching conversations: {e}")
         return JSONResponse(status_code=500, content={"error": "Error fetching conversations"})
 
 
 async def get_conversation_by_id(conversation_id: str, user: User):
     """Get a specific conversation by conversation_id (speech-driven architecture)."""
     try:
-        # Import conversations collection and repository
-        conversations_repo = ConversationsRepository(conversations_col)
-
-        # Get the conversation
-        conversation = await conversations_repo.get_conversation(conversation_id)
-        if not conversation:
+        # Get the conversation using Beanie
+        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+        if not conversation_model:
             return JSONResponse(
                 status_code=404,
                 content={"error": "Conversation not found"}
             )
 
         # Check if user owns this conversation
-        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+        if not user.is_superuser and conversation_model.user_id != str(user.user_id):
             return JSONResponse(
                 status_code=403,
                 content={"error": "Access forbidden. You can only access your own conversations."}
             )
 
         # Get audio file paths from audio_chunks collection
-        audio_chunk = await chunk_repo.get_chunk_by_audio_uuid(conversation["audio_uuid"])
+        audio_chunk = await chunk_repo.get_chunk_by_audio_uuid(conversation_model.audio_uuid)
         audio_path = audio_chunk.get("audio_path") if audio_chunk else None
         cropped_audio_path = audio_chunk.get("cropped_audio_path") if audio_chunk else None
 
-        # Format conversation for API response
-        formatted_conversation = {
-            "conversation_id": conversation["conversation_id"],
-            "audio_uuid": conversation["audio_uuid"],
-            "title": conversation.get("title", "Conversation"),
-            "summary": conversation.get("summary", ""),
-            "timestamp": conversation.get("session_start").timestamp() if conversation.get("session_start") else 0,
-            "created_at": conversation.get("created_at").isoformat() if conversation.get("created_at") else None,
-            "transcript": conversation.get("transcript", []),
-            "speakers_identified": conversation.get("speakers_identified", []),
-            "speaker_names": conversation.get("speaker_names", {}),
-            "duration_seconds": conversation.get("duration_seconds", 0),
-            "memories": conversation.get("memories", []),
-            "has_memory": bool(conversation.get("memories", [])),
-            "memory_processing_status": conversation.get("memory_processing_status", "pending"),
-            "action_items": conversation.get("action_items", []),
-            # Audio file paths for playback
+        # Format conversation for API response - use model_dump and add computed fields
+        formatted_conversation = conversation_model.model_dump(
+            mode='json',  # Automatically converts datetime to ISO strings, handles nested models
+            exclude={'id'}  # Exclude MongoDB internal _id
+        )
+
+        # Add computed/external fields not in the model
+        formatted_conversation.update({
+            "timestamp": 0,  # Legacy field - using created_at instead
+            "has_memory": bool(conversation_model.memories),
             "audio_path": audio_path,
             "cropped_audio_path": cropped_audio_path,
-        }
+            "version_info": {
+                "transcript_count": len(conversation_model.transcript_versions),
+                "memory_count": len(conversation_model.memory_versions),
+                "active_transcript_version": conversation_model.active_transcript_version,
+                "active_memory_version": conversation_model.active_memory_version
+            }
+        })
 
         return {"conversation": formatted_conversation}
 
@@ -249,7 +293,6 @@ async def reprocess_audio_cropping(audio_uuid: str, user: User):
 
         # Check if file exists - try multiple possible locations
         possible_paths = [
-            Path("/app/data/audio_chunks") / audio_path,
             Path("/app/audio_chunks") / audio_path,
             Path(audio_path),  # fallback to relative path
         ]
@@ -280,7 +323,7 @@ async def reprocess_audio_cropping(audio_uuid: str, user: User):
 
         # Generate output path for cropped audio
         cropped_filename = f"cropped_{audio_uuid}.wav"
-        output_path = Path("/app/data/audio_chunks") / cropped_filename
+        output_path = Path("/app/audio_chunks") / cropped_filename
 
         # Get repository for database updates
         chunk_repo = AudioChunksRepository(chunks_col)
@@ -469,11 +512,12 @@ async def delete_conversation(audio_uuid: str, user: User):
 
         logger.info(f"Deleted audio chunk {audio_uuid}")
 
-        # If this audio chunk has an associated conversation, delete it from conversations collection too
+        # If this audio chunk has an associated conversation, delete it using Beanie
         if conversation_id:
             try:
-                conversation_result = await conversations_col.delete_one({"conversation_id": conversation_id})
-                if conversation_result.deleted_count > 0:
+                conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+                if conversation_model:
+                    await conversation_model.delete()
                     conversation_deleted = True
                     logger.info(f"Deleted conversation {conversation_id} associated with audio chunk {audio_uuid}")
                 else:
@@ -537,18 +581,17 @@ async def delete_conversation(audio_uuid: str, user: User):
 async def reprocess_transcript(conversation_id: str, user: User):
     """Reprocess transcript for a conversation. Users can only reprocess their own conversations."""
     try:
-        # Find the conversation in conversations collection
-        conversations_repo = ConversationsRepository(conversations_col)
-        conversation = await conversations_repo.get_conversation(conversation_id)
-        if not conversation:
+        # Find the conversation using Beanie
+        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+        if not conversation_model:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+        if not user.is_superuser and conversation_model.user_id != str(user.user_id):
             return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only reprocess your own conversations."})
 
         # Get audio_uuid for file access
-        audio_uuid = conversation["audio_uuid"]
+        audio_uuid = conversation_model.audio_uuid
 
         # Get audio file path from audio_chunks collection
         chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
@@ -563,7 +606,6 @@ async def reprocess_transcript(conversation_id: str, user: User):
 
         # Check if file exists - try multiple possible locations
         possible_paths = [
-            Path("/app/data/audio_chunks") / audio_path,
             Path("/app/audio_chunks") / audio_path,
             Path(audio_path),  # fallback to relative path
         ]
@@ -584,47 +626,74 @@ async def reprocess_transcript(conversation_id: str, user: User):
                 }
             )
 
-        # Generate configuration hash for duplicate detection
-        config_data = {
-            "audio_path": str(full_audio_path),
-            "transcription_provider": "deepgram",  # This would come from settings
-            "trigger": "manual_reprocess"
-        }
-        config_hash = hashlib.sha256(str(config_data).encode()).hexdigest()[:16]
+        # Create new transcript version ID
+        import uuid
+        version_id = str(uuid.uuid4())
 
-        # Create processing run
-        run_id = await processing_runs_repo.create_run(
-            conversation_id=conversation_id,
-            audio_uuid=audio_uuid,
-            run_type="transcript",
-            user_id=user.user_id,
-            trigger="manual_reprocess",
-            config_hash=config_hash
+        # Enqueue job chain with RQ (transcription -> speaker recognition -> memory)
+        from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job, recognise_speakers_job
+        from advanced_omi_backend.workers.memory_jobs import process_memory_job
+        from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, JOB_RESULT_TTL
+
+        # Job 1: Transcribe audio to text
+        transcript_job = transcription_queue.enqueue(
+            transcribe_full_audio_job,
+            conversation_id,
+            audio_uuid,
+            str(full_audio_path),
+            version_id,
+            str(user.user_id),
+            "reprocess",
+            job_timeout=600,
+            result_ttl=JOB_RESULT_TTL,
+            job_id=f"reprocess_{conversation_id[:8]}",
+            description=f"Transcribe audio for {conversation_id[:8]}",
+            meta={'audio_uuid': audio_uuid}
         )
+        logger.info(f"📥 RQ: Enqueued transcription job {transcript_job.id}")
 
-        # Create new transcript version in conversations collection
-        version_id = await conversations_repo.create_transcript_version(
-            conversation_id=conversation_id,
-            processing_run_id=run_id
+        # Job 2: Recognize speakers (depends on transcription)
+        speaker_job = transcription_queue.enqueue(
+            recognise_speakers_job,
+            conversation_id,
+            version_id,
+            str(full_audio_path),
+            str(user.user_id),
+            "",  # transcript_text - will be read from DB
+            [],  # words - will be read from DB
+            depends_on=transcript_job,
+            job_timeout=600,
+            result_ttl=JOB_RESULT_TTL,
+            job_id=f"speaker_{conversation_id[:8]}",
+            description=f"Recognize speakers for {conversation_id[:8]}",
+            meta={'audio_uuid': audio_uuid}
         )
+        logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id} (depends on {transcript_job.id})")
 
-        if not version_id:
-            return JSONResponse(
-                status_code=500, content={"error": "Failed to create transcript version"}
-            )
+        # Job 3: Extract memories (depends on speaker recognition)
+        memory_job = memory_queue.enqueue(
+            process_memory_job,
+            None,  # client_id - will be read from conversation in DB
+            str(user.user_id),
+            "",  # user_email - will be read from user in DB
+            conversation_id,
+            depends_on=speaker_job,
+            job_timeout=1800,
+            result_ttl=JOB_RESULT_TTL,
+            job_id=f"memory_{conversation_id[:8]}",
+            description=f"Extract memories for {conversation_id[:8]}",
+            meta={'audio_uuid': audio_uuid}
+        )
+        logger.info(f"📥 RQ: Enqueued memory job {memory_job.id} (depends on {speaker_job.id})")
 
-        # TODO: Queue audio for reprocessing with ProcessorManager
-        # This is where we would integrate with the existing processor
-        # For now, we'll return the version ID for the caller to handle
-
-        logger.info(f"Created transcript reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
+        job = transcript_job  # For backward compatibility with return value
+        logger.info(f"Created transcript reprocessing job {job.id} (version: {version_id}) for conversation {conversation_id}")
 
         return JSONResponse(content={
             "message": f"Transcript reprocessing started for conversation {conversation_id}",
-            "run_id": run_id,
+            "job_id": job.id,
             "version_id": version_id,
-            "config_hash": config_hash,
-            "status": "PENDING"
+            "status": "queued"
         })
 
     except Exception as e:
@@ -635,25 +704,22 @@ async def reprocess_transcript(conversation_id: str, user: User):
 async def reprocess_memory(conversation_id: str, transcript_version_id: str, user: User):
     """Reprocess memory extraction for a specific transcript version. Users can only reprocess their own conversations."""
     try:
-        # Find the conversation in conversations collection
-        conversations_repo = ConversationsRepository(conversations_col)
-        conversation = await conversations_repo.get_conversation(conversation_id)
-        if not conversation:
+        # Find the conversation using Beanie
+        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+        if not conversation_model:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+        if not user.is_superuser and conversation_model.user_id != str(user.user_id):
             return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only reprocess your own conversations."})
 
         # Get audio_uuid for processing run tracking
-        audio_uuid = conversation["audio_uuid"]
+        audio_uuid = conversation_model.audio_uuid
 
         # Resolve transcript version ID
-        transcript_versions = conversation.get("transcript_versions", [])
-
         # Handle special "active" version ID
         if transcript_version_id == "active":
-            active_version_id = conversation.get("active_transcript_version")
+            active_version_id = conversation_model.active_transcript_version
             if not active_version_id:
                 return JSONResponse(
                     status_code=404, content={"error": "No active transcript version found"}
@@ -662,8 +728,8 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
 
         # Find the specific transcript version
         transcript_version = None
-        for version in transcript_versions:
-            if version["version_id"] == transcript_version_id:
+        for version in conversation_model.transcript_versions:
+            if version.version_id == transcript_version_id:
                 transcript_version = version
                 break
 
@@ -672,48 +738,30 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
                 status_code=404, content={"error": f"Transcript version '{transcript_version_id}' not found"}
             )
 
-        # Generate configuration hash for duplicate detection
-        config_data = {
-            "transcript_version_id": transcript_version_id,
-            "memory_provider": "friend_lite",  # This would come from settings
-            "trigger": "manual_reprocess"
-        }
-        config_hash = hashlib.sha256(str(config_data).encode()).hexdigest()[:16]
+        # Create new memory version ID
+        import uuid
+        version_id = str(uuid.uuid4())
 
-        # Create processing run
-        run_id = await processing_runs_repo.create_run(
+        # Enqueue memory processing job with RQ (RQ handles job tracking)
+        from advanced_omi_backend.workers.memory_jobs import enqueue_memory_processing
+        from advanced_omi_backend.models.job import JobPriority
+
+        job = enqueue_memory_processing(
+            client_id=conversation_model.client_id,
+            user_id=str(user.user_id),
+            user_email=user.email,
             conversation_id=conversation_id,
-            audio_uuid=audio_uuid,
-            run_type="memory",
-            user_id=user.user_id,
-            trigger="manual_reprocess",
-            config_hash=config_hash
+            priority=JobPriority.NORMAL
         )
 
-        # Create new memory version in conversations collection
-        version_id = await conversations_repo.create_memory_version(
-            conversation_id=conversation_id,
-            transcript_version_id=transcript_version_id,
-            processing_run_id=run_id
-        )
-
-        if not version_id:
-            return JSONResponse(
-                status_code=500, content={"error": "Failed to create memory version"}
-            )
-
-        # TODO: Queue memory extraction for processing
-        # This is where we would integrate with the existing memory processor
-
-        logger.info(f"Created memory reprocessing job {run_id} (version {version_id}) for conversation {conversation_id}")
+        logger.info(f"Created memory reprocessing job {job.id} (version {version_id}) for conversation {conversation_id}")
 
         return JSONResponse(content={
             "message": f"Memory reprocessing started for conversation {conversation_id}",
-            "run_id": run_id,
+            "job_id": job.id,
             "version_id": version_id,
             "transcript_version_id": transcript_version_id,
-            "config_hash": config_hash,
-            "status": "PENDING"
+            "status": "queued"
         })
 
     except Exception as e:
@@ -724,22 +772,23 @@ async def reprocess_memory(conversation_id: str, transcript_version_id: str, use
 async def activate_transcript_version(conversation_id: str, version_id: str, user: User):
     """Activate a specific transcript version. Users can only modify their own conversations."""
     try:
-        # Find the conversation in conversations collection
-        conversations_repo = ConversationsRepository(conversations_col)
-        conversation = await conversations_repo.get_conversation(conversation_id)
-        if not conversation:
+        # Find the conversation using Beanie
+        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+        if not conversation_model:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+        if not user.is_superuser and conversation_model.user_id != str(user.user_id):
             return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only modify your own conversations."})
 
-        # Activate the transcript version
-        success = await conversations_repo.activate_transcript_version(conversation_id, version_id)
+        # Activate the transcript version using Beanie model method
+        success = conversation_model.set_active_transcript_version(version_id)
         if not success:
             return JSONResponse(
                 status_code=400, content={"error": "Failed to activate transcript version"}
             )
+
+        await conversation_model.save()
 
         # TODO: Trigger speaker recognition if configured
         # This would integrate with existing speaker recognition logic
@@ -759,22 +808,23 @@ async def activate_transcript_version(conversation_id: str, version_id: str, use
 async def activate_memory_version(conversation_id: str, version_id: str, user: User):
     """Activate a specific memory version. Users can only modify their own conversations."""
     try:
-        # Find the conversation in conversations collection
-        conversations_repo = ConversationsRepository(conversations_col)
-        conversation = await conversations_repo.get_conversation(conversation_id)
-        if not conversation:
+        # Find the conversation using Beanie
+        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+        if not conversation_model:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+        if not user.is_superuser and conversation_model.user_id != str(user.user_id):
             return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only modify your own conversations."})
 
-        # Activate the memory version
-        success = await conversations_repo.activate_memory_version(conversation_id, version_id)
+        # Activate the memory version using Beanie model method
+        success = conversation_model.set_active_memory_version(version_id)
         if not success:
             return JSONResponse(
                 status_code=400, content={"error": "Failed to activate memory version"}
             )
+
+        await conversation_model.save()
 
         logger.info(f"Activated memory version {version_id} for conversation {conversation_id} by user {user.user_id}")
 
@@ -791,18 +841,38 @@ async def activate_memory_version(conversation_id: str, version_id: str, user: U
 async def get_conversation_version_history(conversation_id: str, user: User):
     """Get version history for a conversation. Users can only access their own conversations."""
     try:
-        # Find the conversation in conversations collection to check ownership
-        conversations_repo = ConversationsRepository(conversations_col)
-        conversation = await conversations_repo.get_conversation(conversation_id)
-        if not conversation:
+        # Find the conversation using Beanie to check ownership
+        conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+        if not conversation_model:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
-        if not user.is_superuser and conversation["user_id"] != str(user.user_id):
+        if not user.is_superuser and conversation_model.user_id != str(user.user_id):
             return JSONResponse(status_code=403, content={"error": "Access forbidden. You can only access your own conversations."})
 
-        # Get version history
-        history = await conversations_repo.get_version_history(conversation_id)
+        # Get version history from model
+        # Convert datetime objects to ISO strings for JSON serialization
+        transcript_versions = []
+        for v in conversation_model.transcript_versions:
+            version_dict = v.model_dump()
+            if version_dict.get('created_at'):
+                version_dict['created_at'] = version_dict['created_at'].isoformat()
+            transcript_versions.append(version_dict)
+
+        memory_versions = []
+        for v in conversation_model.memory_versions:
+            version_dict = v.model_dump()
+            if version_dict.get('created_at'):
+                version_dict['created_at'] = version_dict['created_at'].isoformat()
+            memory_versions.append(version_dict)
+
+        history = {
+            "conversation_id": conversation_id,
+            "active_transcript_version": conversation_model.active_transcript_version,
+            "active_memory_version": conversation_model.active_memory_version,
+            "transcript_versions": transcript_versions,
+            "memory_versions": memory_versions
+        }
 
         return JSONResponse(content=history)
 
