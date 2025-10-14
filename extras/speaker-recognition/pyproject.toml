@@ -45,41 +45,31 @@ local-audio = [
     "easy-audio-interfaces[local-audio]>=0.7.1",
 ]
 
-[project.scripts]
-simple-speaker-service = "simple_speaker_recognition.api.service:main"
-simple-speaker-web = "simple_speaker_recognition.web.app:main"
-
-[dependency-groups]
+# CPU / GPU install modes
 cpu = [
     "faiss-cpu>=1.9",
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
     "numpy>=1.26,<2",
 ]
-gpu = [
-    "faiss-cpu>=1.9",  # Use CPU FAISS for compatibility, GPU PyTorch for performance
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
-]
+cu118 = ["torch>=2.0.0", "torchaudio>=2.0.0"]
+cu121 = ["torch>=2.0.0", "torchaudio>=2.0.0"]
+cu124 = ["torch>=2.0.0", "torchaudio>=2.0.0"]
+cu126 = ["torch>=2.0.0", "torchaudio>=2.0.0"]
+cu128 = ["torch>=2.0.0", "torchaudio>=2.0.0"]
+
 dev = [
     "black>=25.1.0",
     "isort>=6.0.1",
 ]
-
 test = [
     "pytest",
-    "requests",  # For integration tests
+    "requests",
 ]
 
-[tool.uv]
-# dev & cpu are installed automatically
-default-groups = ["dev", "cpu"]
-# cpu and gpu can never coexist
-conflicts = [
-    [
-        { group = "cpu" },
-        { group = "gpu" },
-    ],
-]
+[project.scripts]
+simple-speaker-service = "simple_speaker_recognition.api.service:main"
+simple-speaker-web = "simple_speaker_recognition.web.app:main"
+
 [tool.isort]
-profile = "black" 
+profile = "black"

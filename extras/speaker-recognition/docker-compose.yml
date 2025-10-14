@@ -8,6 +8,7 @@ services:
       dockerfile: Dockerfile
       args:
         COMPUTE_MODE: cpu
+        CUDA_VERSION: cu121
     image: speaker-recognition:latest
     env_file:
       - .env
@@ -46,6 +47,7 @@ services:
       dockerfile: Dockerfile
       args:
         COMPUTE_MODE: gpu
+        CUDA_VERSION: cu121
     deploy:
       resources:
         reservations:

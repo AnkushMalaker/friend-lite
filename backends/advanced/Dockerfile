@@ -19,16 +19,12 @@ WORKDIR /app
 
 # Copy package structure and dependency files first
 COPY pyproject.toml README.md ./
-COPY uv.lock .
 RUN mkdir -p src/advanced_omi_backend
 COPY src/advanced_omi_backend/__init__.py src/advanced_omi_backend/
 
-# Install dependencies using uv with deepgram extra
-# Use cache mount for BuildKit, fallback for legacy builds
-# RUN --mount=type=cache,target=/root/.cache/uv \
-#     uv sync --extra deepgram
+# Install dependencies using uv pip with deepgram extra
 # Fallback for legacy Docker builds (CI compatibility)
-RUN uv sync --extra deepgram
+RUN uv pip install --system ".[deepgram]" -f https://download.pytorch.org/whl/cpu
 
 # Copy all application code
 COPY . .
@@ -38,6 +34,7 @@ COPY . .
 COPY memory_config.yaml* ./
 COPY diarization_config.json* ./
 
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Run the application
-CMD ["uv", "run", "--extra", "deepgram", "python3", "src/advanced_omi_backend/main.py"]
+CMD ["python", "src/advanced_omi_backend/main.py"]
