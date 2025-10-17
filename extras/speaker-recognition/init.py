@@ -265,8 +265,9 @@ class SpeakerRecognitionSetup:
         self.console.print()
 
         model_links = [
-            ("Speaker Diarization", "https://huggingface.co/pyannote/speaker-diarization-3.1"),
+            ("Speaker Diarization", "https://huggingface.co/pyannote/speaker-diarization-community-1"),
             ("Segmentation Model", "https://huggingface.co/pyannote/segmentation-3.0"),
+            ("Segmentation Model2", "https://huggingface.co/pyannote/segmentation-3.1"),
             ("Embedding Model", "https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM")
         ]
 
@@ -309,6 +310,7 @@ class SpeakerRecognitionSetup:
 
             # Show results
             self.show_summary()
+            self.show_model_agreement_links()
             self.show_next_steps()
 
             self.console.print()
