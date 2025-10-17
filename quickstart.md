@@ -93,7 +93,7 @@ cd friend-lite
 
 **Run the setup wizard:**
 ```bash
-uv run --with-requirements setup-requirements.txt python init.py
+uv run --with-requirements setup-requirements.txt python wizard.py
 ```
 
 ### What the Setup Wizard Will Ask You
