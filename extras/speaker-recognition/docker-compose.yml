@@ -3,6 +3,7 @@ services:
   speaker-service:
     &base-speaker-service
     profiles: ["cpu"]
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile
@@ -52,6 +53,7 @@ services:
   
   # React Web UI
   web-ui:
+    platform: linux/amd64
     build:
       context: webui
       dockerfile: Dockerfile
