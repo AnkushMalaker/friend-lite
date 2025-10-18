@@ -9,12 +9,12 @@ interface HealthData {
   services: Record<string, {
     healthy: boolean
     message?: string
-    status?: string; // Overall status from LLM client
+    status?: string;
     base_url?: string;
-    model?: string; // default_model from LLM client
-    embedder_model?: string; // New field
-    embedder_status?: string; // New field
-    provider?: string; // LLM provider (e.g., ollama, openai)
+    model?: string;
+    embedder_model?: string;
+    embedder_status?: string;
+    provider?: string;
   }>
   timestamp?: string
 }

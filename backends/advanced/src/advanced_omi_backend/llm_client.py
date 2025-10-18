@@ -117,8 +117,8 @@ class OpenAILLMClient(LLMClient):
                     "base_url": self.base_url,
                     "default_model": self.model,
                     "api_key_configured": False,
-                    "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"), # Add embedder model info
-                    "embedder_status": "❌ Not Checked" # Default embedder status
+                    "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"),
+                    "embedder_status": "❌ Not Checked"
                 }
 
                 try:

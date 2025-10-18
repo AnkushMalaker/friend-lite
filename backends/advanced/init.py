@@ -249,13 +249,11 @@ class FriendLiteSetup:
 
             model = self.prompt_value("Ollama model", "llama3.2")
             
-            # Prompt for Ollama embedder model, defaulting to 'nomic-embed-text:latest'
-            # IMPORTANT: Ensure this model is capable of generating embeddings.
             embedder_model = self.prompt_value("Ollama embedder model", "nomic-embed-text:latest")
             
             self.config["OLLAMA_BASE_URL"] = base_url
             self.config["OLLAMA_MODEL"] = model
-            self.config["OLLAMA_EMBEDDER_MODEL"] = embedder_model # Add this line
+            self.config["OLLAMA_EMBEDDER_MODEL"] = embedder_model
             self.console.print("[green][SUCCESS][/green] Ollama configured")
             self.console.print("[yellow][WARNING][/yellow] Make sure Ollama is running and all required models (LLM and embedder) are pulled")
 

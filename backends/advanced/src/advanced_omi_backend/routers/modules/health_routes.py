@@ -199,12 +199,12 @@ async def health_check():
 
         health_status["services"]["audioai"] = {
             "status": llm_health.get("status", "❌ Unknown"),
-            "healthy": audioai_overall_healthy, # Updated healthy flag
+            "healthy": audioai_overall_healthy,
             "base_url": llm_health.get("base_url", ""),
             "model": llm_health.get("default_model", ""),
             "provider": os.getenv("LLM_PROVIDER", "openai"),
-            "embedder_model": llm_health.get("embedder_model", ""), # Added
-            "embedder_status": llm_health.get("embedder_status", ""), # Added
+            "embedder_model": llm_health.get("embedder_model", ""),
+            "embedder_status": llm_health.get("embedder_status", ""),
             "critical": False,
         }
     except asyncio.TimeoutError:
@@ -213,8 +213,8 @@ async def health_check():
             "healthy": False,
             "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
-            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"), # Added for context
-            "embedder_status": "❌ Not Checked (Timeout)" # Added
+            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"),
+            "embedder_status": "❌ Not Checked (Timeout)"
         }
         overall_healthy = False
     except Exception as e:
@@ -223,8 +223,8 @@ async def health_check():
             "healthy": False,
             "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
-            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"), # Added for context
-            "embedder_status": "❌ Not Checked (Connection Failed)" # Added
+            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"),
+            "embedder_status": "❌ Not Checked (Connection Failed)"
         }
         overall_healthy = False
 
