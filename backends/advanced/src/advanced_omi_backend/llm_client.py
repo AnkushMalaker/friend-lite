@@ -45,11 +45,13 @@ class OpenAILLMClient(LLMClient):
 
     def __init__(
         self,
+        provider: str,
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
         temperature: float = 0.1,
     ):
+        self.provider = provider
         super().__init__(model, temperature)
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
@@ -94,25 +96,69 @@ class OpenAILLMClient(LLMClient):
             self.logger.error(f"Error generating completion: {e}")
             raise
 
-    def health_check(self) -> Dict:
+    async def health_check(self) -> Dict:
         """Check OpenAI-compatible service health."""
         try:
-            # For OpenAI API, check if we have valid configuration
-            # Avoid calling /models endpoint as it can be unreliable
-            if self.api_key and self.api_key != "dummy" and self.model:
+            if not (self.model and self.base_url):
                 return {
-                    "status": "✅ Connected",
+                    "status": "⚠️ Configuration incomplete (missing model or base_url)",
                     "base_url": self.base_url,
                     "default_model": self.model,
                     "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
                 }
+
+            if self.provider == "ollama":
+                # For Ollama, attempt to reach the base_url
+                import aiohttp
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        # Ollama's health endpoint is usually just the base URL or /
+                        ollama_health_url = self.base_url.replace("/v1", "") if self.base_url.endswith("/v1") else self.base_url
+                        async with session.get(f"{ollama_health_url}/api/version", timeout=aiohttp.ClientTimeout(total=5)) as response:
+                            if response.status == 200:
+                                return {
+                                    "status": "✅ Connected",
+                                    "base_url": self.base_url,
+                                    "default_model": self.model,
+                                    "api_key_configured": False, # Ollama doesn't use API keys
+                                }
+                            else:
+                                return {
+                                    "status": f"⚠️ Ollama Unhealthy: HTTP {response.status}",
+                                    "base_url": self.base_url,
+                                    "default_model": self.model,
+                                    "api_key_configured": False,
+                                }
+                except aiohttp.ClientError as e:
+                    return {
+                        "status": "❌ Ollama Connection Failed",
+                        "base_url": self.base_url,
+                        "default_model": self.model,
+                        "api_key_configured": False,
+                    }
+                except asyncio.TimeoutError:
+                    return {
+                        "status": "❌ Ollama Connection Timeout (5s)",
+                        "base_url": self.base_url,
+                        "default_model": self.model,
+                        "api_key_configured": False,
+                    }
             else:
-                return {
-                    "status": "⚠️ Configuration incomplete",
-                    "base_url": self.base_url,
-                    "default_model": self.model,
-                    "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
-                }
+                # For other OpenAI-compatible APIs, check configuration
+                if self.api_key and self.api_key != "dummy":
+                    return {
+                        "status": "✅ Connected",
+                        "base_url": self.base_url,
+                        "default_model": self.model,
+                        "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
+                    }
+                else:
+                    return {
+                        "status": "⚠️ Configuration incomplete (missing API key)",
+                        "base_url": self.base_url,
+                        "default_model": self.model,
+                        "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
+                    }
         except Exception as e:
             self.logger.error(f"Health check failed: {e}")
             return {
@@ -137,12 +183,14 @@ class LLMClientFactory:
 
         if provider == "openai":
             return OpenAILLMClient(
+                provider="openai",
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL"),
             )
         elif provider == "ollama":
             return OpenAILLMClient(
+                provider="ollama",
                 api_key="dummy",  # Ollama doesn't require an API key
                 base_url=os.getenv("OLLAMA_BASE_URL"),
                 model=os.getenv("OLLAMA_MODEL"),
@@ -187,5 +235,4 @@ async def async_generate(
 async def async_health_check() -> Dict:
     """Async wrapper for LLM health check."""
     client = get_llm_client()
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, client.health_check)
+    return await client.health_check()

@@ -243,7 +243,8 @@ class OpenAIProvider(LLMProviderBase):
             if os.getenv("LLM_PROVIDER", "openai").lower() == "ollama":
                 import httpx
                 async with httpx.AsyncClient() as client:
-                    response = await client.get(self.base_url)
+                    # For Ollama, test connection by hitting the /v1/models endpoint
+                    response = await client.get(f"{self.base_url}/models")
                     response.raise_for_status()
                 return True
 
