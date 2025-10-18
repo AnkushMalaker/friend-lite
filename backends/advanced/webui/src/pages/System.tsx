@@ -9,6 +9,12 @@ interface HealthData {
   services: Record<string, {
     healthy: boolean
     message?: string
+    status?: string; // Overall status from LLM client
+    base_url?: string;
+    model?: string; // default_model from LLM client
+    embedder_model?: string; // New field
+    embedder_status?: string; // New field
+    provider?: string; // LLM provider (e.g., ollama, openai)
   }>
   timestamp?: string
 }
@@ -273,8 +279,14 @@ export default function System() {
                     )}
                     {(status as any).provider && (
                       <span className="text-xs text-blue-600 dark:text-blue-400">
-                        ({(status as any).provider})
+                        ({(status as any).provider}
+                        {service === 'audioai' && (status as any).model && ` - ${(status as any).model}`})
                       </span>
+                    )}
+                    {service === 'audioai' && (status as any).embedder_model && (
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                        Embedder: {(status as any).embedder_status} <span className="text-blue-600 dark:text-blue-400">({(status as any).embedder_model})</span>
+                      </div>
                     )}
                     {service === 'redis' && (status as any).worker_count !== undefined && (
                       <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">

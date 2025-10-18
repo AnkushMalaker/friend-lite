@@ -190,12 +190,21 @@ async def health_check():
     # Check LLM service (non-critical service - may not be running)
     try:
         llm_health = await asyncio.wait_for(async_health_check(), timeout=8.0)
+        
+        # Determine overall health for audioai service based on LLM and embedder status
+        is_llm_healthy = "✅" in llm_health.get("status", "")
+        is_embedder_healthy = "✅" in llm_health.get("embedder_status", "") or llm_health.get("embedder_status") == "⚠️ Embedder Model Not Configured" # Not configured is not unhealthy
+        
+        audioai_overall_healthy = is_llm_healthy and is_embedder_healthy
+
         health_status["services"]["audioai"] = {
             "status": llm_health.get("status", "❌ Unknown"),
-            "healthy": "✅" in llm_health.get("status", ""),
+            "healthy": audioai_overall_healthy, # Updated healthy flag
             "base_url": llm_health.get("base_url", ""),
             "model": llm_health.get("default_model", ""),
             "provider": os.getenv("LLM_PROVIDER", "openai"),
+            "embedder_model": llm_health.get("embedder_model", ""), # Added
+            "embedder_status": llm_health.get("embedder_status", ""), # Added
             "critical": False,
         }
     except asyncio.TimeoutError:
@@ -204,6 +213,8 @@ async def health_check():
             "healthy": False,
             "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
+            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"), # Added for context
+            "embedder_status": "❌ Not Checked (Timeout)" # Added
         }
         overall_healthy = False
     except Exception as e:
@@ -212,6 +223,8 @@ async def health_check():
             "healthy": False,
             "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
+            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"), # Added for context
+            "embedder_status": "❌ Not Checked (Connection Failed)" # Added
         }
         overall_healthy = False
 

@@ -108,41 +108,51 @@ class OpenAILLMClient(LLMClient):
                 }
 
             if self.provider == "ollama":
-                # For Ollama, attempt to reach the base_url
                 import aiohttp
+                ollama_health_url = self.base_url.replace("/v1", "") if self.base_url.endswith("/v1") else self.base_url
+                
+                # Initialize response with main LLM status
+                response_data = {
+                    "status": "❌ Unknown",
+                    "base_url": self.base_url,
+                    "default_model": self.model,
+                    "api_key_configured": False,
+                    "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"), # Add embedder model info
+                    "embedder_status": "❌ Not Checked" # Default embedder status
+                }
+
                 try:
                     async with aiohttp.ClientSession() as session:
-                        # Ollama's health endpoint is usually just the base URL or /
-                        ollama_health_url = self.base_url.replace("/v1", "") if self.base_url.endswith("/v1") else self.base_url
+                        # Check main Ollama server health
                         async with session.get(f"{ollama_health_url}/api/version", timeout=aiohttp.ClientTimeout(total=5)) as response:
                             if response.status == 200:
-                                return {
-                                    "status": "✅ Connected",
-                                    "base_url": self.base_url,
-                                    "default_model": self.model,
-                                    "api_key_configured": False, # Ollama doesn't use API keys
-                                }
+                                response_data["status"] = "✅ Connected"
                             else:
-                                return {
-                                    "status": f"⚠️ Ollama Unhealthy: HTTP {response.status}",
-                                    "base_url": self.base_url,
-                                    "default_model": self.model,
-                                    "api_key_configured": False,
-                                }
-                except aiohttp.ClientError as e:
-                    return {
-                        "status": "❌ Ollama Connection Failed",
-                        "base_url": self.base_url,
-                        "default_model": self.model,
-                        "api_key_configured": False,
-                    }
+                                response_data["status"] = f"⚠️ Ollama Unhealthy: HTTP {response.status}"
+                        
+                        # Check embedder model availability
+                        embedder_model_name = os.getenv("OLLAMA_EMBEDDER_MODEL")
+                        if embedder_model_name:
+                            try:
+                                # Use /api/show to check if model exists
+                                async with session.post(f"{ollama_health_url}/api/show", json={"name": embedder_model_name}, timeout=aiohttp.ClientTimeout(total=5)) as embedder_response:
+                                    if embedder_response.status == 200:
+                                        response_data["embedder_status"] = "✅ Available"
+                                    else:
+                                        response_data["embedder_status"] = "⚠️ Embedder Model Unhealthy"
+                            except aiohttp.ClientError:
+                                response_data["embedder_status"] = "❌ Embedder Model Connection Failed"
+                            except asyncio.TimeoutError:
+                                response_data["embedder_status"] = "❌ Embedder Model Timeout"
+                        else:
+                            response_data["embedder_status"] = "⚠️ Embedder Model Not Configured"
+
+                except aiohttp.ClientError:
+                    response_data["status"] = "❌ Ollama Connection Failed"
                 except asyncio.TimeoutError:
-                    return {
-                        "status": "❌ Ollama Connection Timeout (5s)",
-                        "base_url": self.base_url,
-                        "default_model": self.model,
-                        "api_key_configured": False,
-                    }
+                    response_data["status"] = "❌ Ollama Connection Timeout (5s)"
+                
+                return response_data
             else:
                 # For other OpenAI-compatible APIs, check configuration
                 if self.api_key and self.api_key != "dummy":
