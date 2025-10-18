@@ -69,7 +69,7 @@ class MemoryService(MemoryServiceBase):
 
         try:
             # Initialize LLM provider
-            if self.config.llm_provider == LLMProviderEnum.OPENAI:
+            if self.config.llm_provider in [LLMProviderEnum.OPENAI, LLMProviderEnum.OLLAMA]:
                 self.llm_provider = OpenAIProvider(self.config.llm_config)
             else:
                 raise ValueError(f"Unsupported LLM provider: {self.config.llm_provider}")

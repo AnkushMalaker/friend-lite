@@ -12,6 +12,7 @@ memory_logger = logging.getLogger("memory_service")
 class LLMProvider(Enum):
     """Supported LLM providers."""
     OPENAI = "openai"
+    OLLAMA = "ollama"
     CUSTOM = "custom"
 
 
@@ -72,6 +73,7 @@ def create_ollama_config(
 ) -> Dict[str, Any]:
     """Create Ollama configuration."""
     return {
+        "api_key": "dummy",  # Ollama doesn't require an API key
         "base_url": base_url,
         "model": model,
         "embedding_model": embedding_model,
@@ -147,9 +149,13 @@ def build_memory_config_from_env() -> MemoryConfig:
         
         # Get LLM provider from environment
         llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
-        if llm_provider not in ["openai"]:
+        if llm_provider not in ["openai", "ollama"]:
             raise ValueError(f"Unsupported LLM provider: {llm_provider}")
         
+        llm_config = None
+        llm_provider_enum = None
+        embedding_dims = 1536 # Default
+
         # Build LLM configuration
         if llm_provider == "openai":
             openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -182,7 +188,24 @@ def build_memory_config_from_env() -> MemoryConfig:
             else:
                 # Default for OpenAI embedding models
                 embedding_dims = 1536
+        
+        elif llm_provider == "ollama":
+            base_url = os.getenv("OLLAMA_BASE_URL")
+            if not base_url:
+                raise ValueError("OLLAMA_BASE_URL required for Ollama provider")
             
+            model = os.getenv("OLLAMA_MODEL") or "llama2"
+            embedding_model = "nomic-embed-text" # Hardcoded for now
+            memory_logger.info(f"🔧 Memory config: LLM={model}, Embedding={embedding_model}, Base URL={base_url}")
+
+            llm_config = create_ollama_config(
+                base_url=base_url,
+                model=model,
+                embedding_model=embedding_model,
+            )
+            llm_provider_enum = LLMProvider.OLLAMA
+            embedding_dims = 768 # For nomic-embed-text
+
         # Build vector store configuration
         vector_store_provider = os.getenv("VECTOR_STORE_PROVIDER", "qdrant").lower()
         

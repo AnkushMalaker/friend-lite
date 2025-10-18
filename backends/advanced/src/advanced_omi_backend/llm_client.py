@@ -135,11 +135,17 @@ class LLMClientFactory:
         """Create an LLM client based on LLM_PROVIDER environment variable."""
         provider = os.getenv("LLM_PROVIDER", "openai").lower()
 
-        if provider in ["openai", "ollama"]:
+        if provider == "openai":
             return OpenAILLMClient(
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL"),
+            )
+        elif provider == "ollama":
+            return OpenAILLMClient(
+                api_key="dummy",  # Ollama doesn't require an API key
+                base_url=os.getenv("OLLAMA_BASE_URL"),
+                model=os.getenv("OLLAMA_MODEL"),
             )
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")

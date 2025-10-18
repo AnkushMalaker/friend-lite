@@ -37,7 +37,7 @@ services:
       qdrant:
         condition: service_started
       mongo:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
       # neo4j-mem0:
@@ -79,7 +79,7 @@ services:
       redis:
         condition: service_healthy
       mongo:
-        condition: service_started
+        condition: service_healthy
       qdrant:
         condition: service_started
     restart: unless-stopped
@@ -112,8 +112,8 @@ services:
       - "80:80"  # HTTP redirect to HTTPS
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./data/caddy_data:/data
-      - ./data/caddy_config:/config
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       friend-backend:
         condition: service_healthy
@@ -151,7 +151,13 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - ./data/mongo_data:/data/db
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -216,13 +222,16 @@ networks:
   default:
     name: friend-network
 
-# Question: These are named volumes, but they are not being used, right? Can we remove them?
-# volumes:
-#   ollama_data:
-#     driver: local
-#   mongo_data:
-#     driver: local
-#   neo4j_data:
-#     driver: local
-#   neo4j_logs:
-#     driver: local
+volumes:
+  ollama_data:
+    driver: local
+  mongo_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local

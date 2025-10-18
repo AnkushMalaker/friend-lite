@@ -243,6 +243,10 @@ class FriendLiteSetup:
             self.console.print("[blue][INFO][/blue] Ollama selected")
             
             base_url = self.prompt_value("Ollama server URL", "http://host.docker.internal:11434")
+            if not base_url.endswith("/v1"):
+                base_url = base_url.rstrip("/") + "/v1"
+                self.console.print(f"[blue][INFO][/blue] Automatically appending /v1 to Ollama URL: {base_url}")
+
             model = self.prompt_value("Ollama model", "llama3.2")
             
             self.config["OLLAMA_BASE_URL"] = base_url

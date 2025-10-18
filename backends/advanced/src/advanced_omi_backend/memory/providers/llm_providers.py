@@ -10,6 +10,8 @@ memory action proposals using their respective APIs.
 
 import json
 import logging
+import os
+import httpx
 from typing import Any, Dict, List, Optional
 
 # TODO: Re-enable spacy when Docker build is fixed
@@ -237,6 +239,14 @@ class OpenAIProvider(LLMProviderBase):
             True if connection successful, False otherwise
         """
         try:
+            # For Ollama, just check if the base URL is reachable
+            if os.getenv("LLM_PROVIDER", "openai").lower() == "ollama":
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(self.base_url)
+                    response.raise_for_status()
+                return True
+
             import langfuse.openai as openai
             
             client = openai.AsyncOpenAI(
