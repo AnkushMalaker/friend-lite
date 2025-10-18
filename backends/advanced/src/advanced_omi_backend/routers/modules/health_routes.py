@@ -193,7 +193,14 @@ async def health_check():
         
         # Determine overall health for audioai service based on LLM and embedder status
         is_llm_healthy = "✅" in llm_health.get("status", "")
-        is_embedder_healthy = "✅" in llm_health.get("embedder_status", "") or llm_health.get("embedder_status") == "⚠️ Embedder Model Not Configured" # Not configured is not unhealthy
+        
+        # Determine embedder health based on provider
+        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
+        if llm_provider == "ollama":
+            is_embedder_healthy = "✅" in llm_health.get("embedder_status", "") or llm_health.get("embedder_status") == "⚠️ Embedder Model Not Configured"
+        else:
+            # For OpenAI and other providers, embedder status is not applicable, so consider it healthy
+            is_embedder_healthy = True
         
         audioai_overall_healthy = is_llm_healthy and is_embedder_healthy
 
