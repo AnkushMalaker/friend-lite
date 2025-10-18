@@ -194,8 +194,12 @@ def build_memory_config_from_env() -> MemoryConfig:
             if not base_url:
                 raise ValueError("OLLAMA_BASE_URL required for Ollama provider")
             
-            model = os.getenv("OLLAMA_MODEL") or "llama2"
-            embedding_model = "nomic-embed-text" # Hardcoded for now
+            model = os.getenv("OLLAMA_MODEL")
+            if not model:
+                raise ValueError("OLLAMA_MODEL required for Ollama provider")
+            embedding_model = os.getenv("OLLAMA_EMBEDDER_MODEL")
+            if not embedding_model:
+                raise ValueError("OLLAMA_EMBEDDER_MODEL required for Ollama provider")
             memory_logger.info(f"🔧 Memory config: LLM={model}, Embedding={embedding_model}, Base URL={base_url}")
 
             llm_config = create_ollama_config(
