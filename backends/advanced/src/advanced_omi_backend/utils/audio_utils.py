@@ -267,68 +267,50 @@ async def _process_audio_cropping_with_relative_timestamps(
     chunk_repo: Optional['AudioChunksRepository'] = None,
 ) -> bool:
     """
-    Process audio cropping with automatic relative timestamp conversion.
-    This function handles both live processing and reprocessing scenarios.
+    Process audio cropping with speech segments already in relative format.
+
+    The segments are expected to be in relative format (seconds from audio start),
+    as provided by Deepgram transcription. No timestamp conversion is needed.
     """
     try:
-        # Convert absolute timestamps to relative timestamps
-        # Extract file start time from filename: timestamp_client_uuid.wav
-        filename = original_path.split("/")[-1]
-        logger.info(f"🕐 Parsing filename: {filename}")
-        filename_parts = filename.split("_")
-        if len(filename_parts) < 3:
-            logger.error(
-                f"Invalid filename format: {filename}. Expected format: timestamp_client_id_audio_uuid.wav"
-            )
-            return False
-
-        try:
-            file_start_timestamp = float(filename_parts[0])
-        except ValueError as e:
-            logger.error(f"Cannot parse timestamp from filename {filename}: {e}")
-            return False
-
-        # Convert speech segments to relative timestamps
-        relative_segments = []
-        for start_abs, end_abs in speech_segments:
+        # Validate input segments
+        validated_segments = []
+        for start_rel, end_rel in speech_segments:
             # Validate input timestamps
-            if start_abs >= end_abs:
+            if start_rel >= end_rel:
                 logger.warning(
-                    f"⚠️ Invalid speech segment: start={start_abs} >= end={end_abs}, skipping"
+                    f"⚠️ Invalid speech segment: start={start_rel} >= end={end_rel}, skipping"
                 )
                 continue
 
-            start_rel = start_abs - file_start_timestamp
-            end_rel = end_abs - file_start_timestamp
-
-            # Ensure relative timestamps are positive (sanity check)
+            # Ensure timestamps are positive (sanity check)
             if start_rel < 0:
                 logger.warning(
-                    f"⚠️ Negative start timestamp: {start_rel} (absolute: {start_abs}, file_start: {file_start_timestamp}), clamping to 0.0"
+                    f"⚠️ Negative start timestamp: {start_rel}, clamping to 0.0"
                 )
                 start_rel = 0.0
             if end_rel < 0:
                 logger.warning(
-                    f"⚠️ Negative end timestamp: {end_rel} (absolute: {end_abs}, file_start: {file_start_timestamp}), skipping segment"
+                    f"⚠️ Negative end timestamp: {end_rel}, skipping segment"
                 )
                 continue
 
-            relative_segments.append((start_rel, end_rel))
+            validated_segments.append((start_rel, end_rel))
 
-        logger.info(f"🕐 Converting timestamps for {audio_uuid}: file_start={file_start_timestamp}")
-        logger.info(f"🕐 Absolute segments: {speech_segments}")
-        logger.info(f"🕐 Relative segments: {relative_segments}")
+        logger.info(f"🕐 Processing cropping for {audio_uuid}")
+        logger.info(f"🕐 Input segments (relative timestamps): {speech_segments}")
+        logger.info(f"🕐 Validated segments: {validated_segments}")
 
-        # Validate that we have valid relative segments after conversion
-        if not relative_segments:
+        # Validate that we have valid segments
+        if not validated_segments:
             logger.warning(
-                f"No valid relative segments after timestamp conversion for {audio_uuid}"
+                f"No valid segments for cropping {audio_uuid}"
             )
             return False
 
-        success = await _crop_audio_with_ffmpeg(original_path, relative_segments, output_path)
+        success = await _crop_audio_with_ffmpeg(original_path, validated_segments, output_path)
         if success:
-            # Update database with cropped file info (keep original absolute timestamps for reference)
+            # Update database with cropped file info
             cropped_filename = output_path.split("/")[-1]
             if chunk_repo is not None:
                 await chunk_repo.update_cropped_audio(audio_uuid, cropped_filename, speech_segments)
