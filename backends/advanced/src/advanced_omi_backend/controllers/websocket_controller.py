@@ -21,7 +21,7 @@ from friend_lite.decoder import OmiOpusDecoder
 from advanced_omi_backend.auth import websocket_auth
 from advanced_omi_backend.client_manager import generate_client_id, get_client_manager
 from advanced_omi_backend.constants import OMI_CHANNELS, OMI_SAMPLE_RATE, OMI_SAMPLE_WIDTH
-from advanced_omi_backend.audio_utils import process_audio_chunk
+from advanced_omi_backend.utils.audio_utils import process_audio_chunk
 from advanced_omi_backend.services.audio_stream import AudioStreamProducer
 from advanced_omi_backend.services.audio_stream.producer import get_audio_stream_producer
 
@@ -128,7 +128,84 @@ async def create_client_state(client_id: str, user, device_name: Optional[str] =
 
 
 async def cleanup_client_state(client_id: str):
-    """Clean up and remove client state."""
+    """Clean up and remove client state, including cancelling speech detection job and marking session complete."""
+    # Cancel the speech detection job for this client
+    from advanced_omi_backend.controllers.queue_controller import redis_conn
+    from rq.job import Job
+    import redis.asyncio as redis
+
+    try:
+        job_id_key = f"speech_detection_job:{client_id}"
+        job_id_bytes = redis_conn.get(job_id_key)
+
+        if job_id_bytes:
+            job_id = job_id_bytes.decode()
+            logger.info(f"🛑 Cancelling speech detection job {job_id} for client {client_id}")
+
+            try:
+                # Fetch and cancel the job
+                job = Job.fetch(job_id, connection=redis_conn)
+                job.cancel()
+                logger.info(f"✅ Successfully cancelled speech detection job {job_id}")
+            except Exception as job_error:
+                logger.warning(f"⚠️ Failed to cancel job {job_id}: {job_error}")
+
+            # Clean up the tracking key
+            redis_conn.delete(job_id_key)
+            logger.info(f"🧹 Cleaned up job tracking key for client {client_id}")
+        else:
+            logger.debug(f"No speech detection job found for client {client_id}")
+    except Exception as e:
+        logger.warning(f"⚠️ Error during job cancellation for client {client_id}: {e}")
+
+    # Mark all active sessions for this client as complete AND delete Redis streams
+    try:
+        # Get async Redis client
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        async_redis = redis.from_url(redis_url, decode_responses=False)
+
+        # Find all session keys for this client and mark them complete
+        pattern = f"audio:session:*"
+        cursor = 0
+        sessions_closed = 0
+
+        while True:
+            cursor, keys = await async_redis.scan(cursor, match=pattern, count=100)
+
+            for key in keys:
+                # Check if this session belongs to this client
+                client_id_bytes = await async_redis.hget(key, "client_id")
+                if client_id_bytes and client_id_bytes.decode() == client_id:
+                    # Mark session as complete (WebSocket disconnected)
+                    await async_redis.hset(key, mapping={
+                        "status": "complete",
+                        "completed_at": str(time.time()),
+                        "completion_reason": "websocket_disconnect"
+                    })
+                    session_id = key.decode().replace("audio:session:", "")
+                    logger.info(f"📊 Marked session {session_id[:12]} as complete (WebSocket disconnect)")
+                    sessions_closed += 1
+
+            if cursor == 0:
+                break
+
+        if sessions_closed > 0:
+            logger.info(f"✅ Closed {sessions_closed} active session(s) for client {client_id}")
+
+        # Delete Redis Streams for this client
+        stream_pattern = f"audio:stream:{client_id}"
+        stream_key = await async_redis.exists(stream_pattern)
+        if stream_key:
+            await async_redis.delete(stream_pattern)
+            logger.info(f"🧹 Deleted Redis stream: {stream_pattern}")
+        else:
+            logger.debug(f"No Redis stream found for client {client_id}")
+
+        await async_redis.close()
+
+    except Exception as session_error:
+        logger.warning(f"⚠️ Error marking sessions complete for client {client_id}: {session_error}")
+
     # Use ClientManager for atomic client removal with cleanup
     client_manager = get_client_manager()
     removed = await client_manager.remove_client_with_cleanup(client_id)
@@ -251,7 +328,6 @@ async def _initialize_streaming_session(
     job_ids = start_streaming_jobs(
         session_id=client_state.stream_session_id,
         user_id=user_id,
-        user_email=user_email,
         client_id=client_id
     )
 
@@ -620,7 +696,7 @@ async def _process_batch_audio_complete(
         return
 
     try:
-        from advanced_omi_backend.audio_utils import write_audio_file
+        from advanced_omi_backend.utils.audio_utils import write_audio_file
         from advanced_omi_backend.models.conversation import create_conversation
 
         # Combine all chunks
@@ -664,14 +740,12 @@ async def _process_batch_audio_complete(
 
         application_logger.info(f"📝 Batch mode: Created conversation {conversation_id}")
 
-        # Enqueue complete batch processing job chain
-        from advanced_omi_backend.controllers.queue_controller import start_batch_processing_jobs
+        # Enqueue post-conversation processing job chain
+        from advanced_omi_backend.controllers.queue_controller import start_post_conversation_jobs
 
-        job_ids = start_batch_processing_jobs(
+        job_ids = start_post_conversation_jobs(
             conversation_id=conversation_id,
             audio_uuid=audio_uuid,
-            user_id=user_id,
-            user_email=user_email,
             audio_file_path=file_path
         )
 

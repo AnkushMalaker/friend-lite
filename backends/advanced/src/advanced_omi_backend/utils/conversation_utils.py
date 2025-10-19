@@ -13,6 +13,39 @@ from advanced_omi_backend.llm_client import async_generate
 logger = logging.getLogger(__name__)
 
 
+def is_meaningful_speech(combined_results: dict) -> bool:
+    """
+    Convenience wrapper to check if combined transcription results contain meaningful speech.
+
+    This is a shared helper used by both speech detection and conversation timeout logic.
+
+    Args:
+        combined_results: Combined results from TranscriptionResultsAggregator with:
+            - "text": str - Full transcript text
+            - "words": list - Word-level data with confidence and timing
+            - "segments": list - Speaker segments
+            - "chunk_count": int - Number of chunks processed
+
+    Returns:
+        bool: True if meaningful speech detected, False otherwise
+
+    Example:
+        >>> combined = await aggregator.get_combined_results(session_id)
+        >>> if is_meaningful_speech(combined):
+        >>>     print("Meaningful speech detected!")
+    """
+    if not combined_results.get("text"):
+        return False
+
+    transcript_data = {
+        "text": combined_results["text"],
+        "words": combined_results.get("words", [])
+    }
+
+    speech_analysis = analyze_speech(transcript_data)
+    return speech_analysis["has_speech"]
+
+
 def analyze_speech(transcript_data: dict) -> dict:
     """
     Analyze transcript for meaningful speech to determine if conversation should be created.
