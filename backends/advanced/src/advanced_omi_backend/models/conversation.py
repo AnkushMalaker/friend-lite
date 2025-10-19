@@ -30,6 +30,12 @@ class Conversation(Document):
         FRIEND_LITE = "friend_lite"
         OPENMEMORY_MCP = "openmemory_mcp"
 
+    class ConversationStatus(str, Enum):
+        """Conversation processing status."""
+        ACTIVE = "active"  # Has running jobs or open websocket
+        COMPLETED = "completed"  # All jobs succeeded
+        FAILED = "failed"  # One or more jobs failed
+
     # Nested Models
     class SpeakerSegment(BaseModel):
         """Individual speaker segment in a transcript."""
@@ -66,6 +72,10 @@ class Conversation(Document):
     audio_uuid: Indexed(str) = Field(description="Link to audio_chunks collection")
     user_id: Indexed(str) = Field(description="User who owns this conversation")
     client_id: Indexed(str) = Field(description="Client device identifier")
+
+    # Audio file reference
+    audio_path: Optional[str] = Field(None, description="Path to audio file (relative to CHUNK_DIR)")
+    cropped_audio_path: Optional[str] = Field(None, description="Path to cropped audio file (relative to CHUNK_DIR)")
 
     # Creation metadata
     created_at: Indexed(datetime) = Field(default_factory=datetime.utcnow, description="When the conversation was created")

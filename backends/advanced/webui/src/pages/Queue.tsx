@@ -24,28 +24,6 @@ import {
 } from 'lucide-react';
 import { queueApi } from '../services/api';
 
-interface QueueJob {
-  job_id: string;
-  job_type: string;
-  user_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'deferred' | 'waiting';
-  priority: 'low' | 'normal' | 'high';
-  data: {
-    description?: string;
-    [key: string]: any;
-  };
-  result?: any;
-  error_message?: string;
-  created_at: string;
-  started_at?: string;
-  completed_at?: string;
-  ended_at?: string;  // API returns this field instead of completed_at
-  retry_count: number;
-  max_retries: number;
-  progress_percent: number;
-  progress_message: string;
-}
-
 interface QueueStats {
   total_jobs: number;
   queued_jobs: number;
@@ -109,10 +87,12 @@ interface CompletedSession {
 }
 
 interface StreamingStatus {
-  active_sessions: StreamingSession[];
+  active_sessions: StreamingSession[];  // Kept for backward compatibility
   completed_sessions: CompletedSession[];
   stream_health: {
-    [provider: string]: StreamHealth;
+    [streamKey: string]: StreamHealth & {
+      stream_age_seconds?: number;
+    };
   };
   rq_queues: {
     [queue: string]: {
@@ -124,7 +104,6 @@ interface StreamingStatus {
 }
 
 const Queue: React.FC = () => {
-  const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<StreamingStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -150,6 +129,7 @@ const Queue: React.FC = () => {
   });
   const [flushing, setFlushing] = useState(false);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
   const [sessionJobs, setSessionJobs] = useState<{[sessionId: string]: any[]}>({});
   const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(() => {
@@ -176,49 +156,7 @@ const Queue: React.FC = () => {
     refreshingRef.current = refreshing;
   }, [refreshing]);
 
-  // Refresh jobs for all expanded, active, and completed sessions
-  const refreshSessionJobs = useCallback(async () => {
-    const currentExpanded = expandedSessionsRef.current;
-    const currentStreamingStatus = streamingStatusRef.current;
-
-    // Get all active session IDs
-    const activeSessionIds = currentStreamingStatus?.active_sessions
-      ?.filter(s => s.status !== 'complete')
-      .map(s => s.session_id) || [];
-
-    // Get all completed session IDs
-    const completedSessionIds = currentStreamingStatus?.completed_sessions
-      ?.map(s => s.session_id) || [];
-
-    // Get all session IDs that should have jobs loaded (expanded, active, or completed)
-    const sessionIdsToRefresh = new Set([...currentExpanded, ...activeSessionIds, ...completedSessionIds]);
-
-    if (sessionIdsToRefresh.size === 0) return;
-
-    // Fetch jobs for all sessions in parallel
-    const fetchPromises = Array.from(sessionIdsToRefresh).map(async (sessionId) => {
-      try {
-        const response = await queueApi.getJobsBySession(sessionId);
-        return { sessionId, jobs: response.data.jobs };
-      } catch (error) {
-        console.error(`❌ Failed to refresh jobs for session ${sessionId}:`, error);
-        return { sessionId, jobs: [] };
-      }
-    });
-
-    const results = await Promise.all(fetchPromises);
-
-    // Update session jobs state with all results
-    setSessionJobs(prev => {
-      const updated = { ...prev };
-      results.forEach(({ sessionId, jobs }) => {
-        updated[sessionId] = jobs;
-      });
-      return updated;
-    });
-  }, []);
-
-  // Main data fetch function
+  // Main data fetch function - uses consolidated dashboard endpoint
   const fetchData = useCallback(async () => {
     if (refreshingRef.current) {
       return;
@@ -227,20 +165,108 @@ const Queue: React.FC = () => {
     setRefreshing(true);
 
     try {
-      // Fetch all main data in parallel
-      await Promise.all([fetchJobs(), fetchStats(), fetchStreamingStatus()]);
+      const currentExpanded = expandedSessionsRef.current;
+      const expandedSessionIds = Array.from(currentExpanded);
 
-      // Then refresh session jobs
-      await refreshSessionJobs();
+      // Single API call to get all dashboard data
+      const response = await queueApi.getDashboard(expandedSessionIds);
+      const dashboardData = response.data;
 
+      // Extract jobs from response
+      const queuedJobs = dashboardData.jobs.queued || [];
+      const processingJobs = dashboardData.jobs.processing || [];
+      const completedJobs = dashboardData.jobs.completed || [];
+      const failedJobs = dashboardData.jobs.failed || [];
+
+      // Combine all jobs
+      const allFetchedJobs = [...queuedJobs, ...processingJobs, ...completedJobs, ...failedJobs];
+
+      console.log(`📊 Fetched ${allFetchedJobs.length} total jobs via consolidated endpoint`);
+      console.log(`  - Queued: ${queuedJobs.length}`);
+      console.log(`  - Processing: ${processingJobs.length}`);
+      console.log(`  - Completed: ${completedJobs.length}`);
+      console.log(`  - Failed: ${failedJobs.length}`);
+
+      // Debug: Log open_conversation_job details
+      const openConvJobs = allFetchedJobs.filter(j => j?.job_type === 'open_conversation_job');
+      console.log(`🔍 Found ${openConvJobs.length} open_conversation_job(s):`);
+      openConvJobs.forEach(job => {
+        console.log(`  Job ID: ${job.job_id}`);
+        console.log(`  Status: ${job.status}`);
+        console.log(`  meta.audio_uuid: ${job.meta?.audio_uuid}`);
+        console.log(`  meta.conversation_id: ${job.meta?.conversation_id}`);
+      });
+
+      // Group jobs by session_id (use audio_uuid from metadata)
+      const jobsBySession: {[sessionId: string]: any[]} = {};
+
+      allFetchedJobs.forEach(job => {
+        if (!job || !job.job_id) return; // Skip invalid jobs
+
+        // Extract session_id from meta.audio_uuid
+        const sessionId = job.meta?.audio_uuid;
+        if (sessionId) {
+          if (!jobsBySession[sessionId]) {
+            jobsBySession[sessionId] = [];
+          }
+          jobsBySession[sessionId].push(job);
+
+          // Debug logging for grouping
+          if (job.job_type === 'open_conversation_job') {
+            console.log(`✅ Grouped open_conversation_job ${job.job_id} under session ${sessionId}`);
+          }
+        } else {
+          // Log jobs that couldn't be grouped
+          console.log(`⚠️ Job ${job.job_id} (${job.job_type}) has no session_id - cannot group`);
+        }
+      });
+
+      // Merge session jobs from dashboard response
+      if (dashboardData.session_jobs) {
+        Object.entries(dashboardData.session_jobs).forEach(([sessionId, jobs]: [string, any]) => {
+          // Merge with existing jobs and deduplicate by job_id
+          const existingJobs = jobsBySession[sessionId] || [];
+          const existingJobIds = new Set(existingJobs.map((j: any) => j.job_id));
+          const newJobs = jobs.filter((j: any) => !existingJobIds.has(j.job_id));
+          jobsBySession[sessionId] = [...existingJobs, ...newJobs];
+        });
+      }
+
+      // Update state
+      setSessionJobs(jobsBySession);
+      setStats(dashboardData.stats);
+      setStreamingStatus(dashboardData.streaming_status);
       setLastUpdate(Date.now());
+
+      // Auto-expand active conversations (those with open_conversation_job in progress)
+      const newExpanded = new Set(expandedSessions);
+      let expandedCount = 0;
+
+      // Find all conversations with active open_conversation_job
+      Object.entries(jobsBySession).forEach(([_sessionId, jobs]) => {
+        const openConvJob = jobs.find((j: any) => j.job_type === 'open_conversation_job');
+        if (openConvJob && openConvJob.status === 'started') {
+          const conversationId = openConvJob.meta?.conversation_id;
+          if (conversationId && !expandedSessions.has(conversationId)) {
+            newExpanded.add(conversationId);
+            expandedCount++;
+            console.log(`🔓 Auto-expanding active conversation: ${conversationId}`);
+          }
+        }
+      });
+
+      // Update expanded sessions if any new active conversations found
+      if (expandedCount > 0) {
+        console.log(`📂 Auto-expanded ${expandedCount} active conversation(s)`);
+        setExpandedSessions(newExpanded);
+      }
     } catch (error) {
-      console.error('❌ Error fetching queue data:', error);
+      console.error('❌ Error fetching dashboard data:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [refreshSessionJobs]);
+  }, []);
 
   // Save auto-refresh preference to localStorage
   useEffect(() => {
@@ -267,70 +293,6 @@ const Queue: React.FC = () => {
     fetchData();
   }, [filters, pagination.offset, fetchData]);
 
-  const fetchJobs = async () => {
-    try {
-      const params = new URLSearchParams({
-        limit: pagination.limit.toString(),
-        offset: pagination.offset.toString(),
-        sort: 'created_at',
-        order: 'desc'
-      });
-
-      if (filters.status) params.append('status', filters.status);
-      if (filters.job_type) params.append('job_type', filters.job_type);
-      if (filters.priority) params.append('priority', filters.priority);
-
-      const response = await queueApi.getJobs(params);
-      const data = response.data;
-      setJobs(data.jobs);
-      setPagination(prev => ({
-        ...prev,
-        total: data.pagination.total,
-        has_more: data.pagination.has_more
-      }));
-    } catch (error) {
-      console.error('❌ Error fetching jobs:', error);
-    }
-  };
-
-  const fetchStats = async () => {
-    try {
-      const response = await queueApi.getStats();
-      const data = response.data;
-      setStats(data);
-    } catch (error) {
-      console.error('❌ Error fetching stats:', error);
-    }
-  };
-
-  const fetchStreamingStatus = async () => {
-    try {
-      const response = await queueApi.getStreamingStatus();
-      const data = response.data;
-      setStreamingStatus(data);
-
-      // Auto-expand active sessions
-      if (data.active_sessions && data.active_sessions.length > 0) {
-        setExpandedSessions(prev => {
-          const newExpanded = new Set(prev);
-          let hasChanges = false;
-
-          data.active_sessions.filter((s: StreamingSession) => s.status !== 'complete').forEach((session: StreamingSession) => {
-            if (!newExpanded.has(session.session_id)) {
-              newExpanded.add(session.session_id);
-              hasChanges = true;
-            }
-          });
-
-          return hasChanges ? newExpanded : prev;
-        });
-      }
-    } catch (error) {
-      console.error('❌ Error fetching streaming status:', error);
-      // Don't fail the whole page if streaming status fails
-      setStreamingStatus(null);
-    }
-  };
 
   const viewJobDetails = async (jobId: string) => {
     setLoadingJobDetails(true);
@@ -345,25 +307,42 @@ const Queue: React.FC = () => {
     }
   };
 
-  const retryJob = async (jobId: string) => {
-    try {
-      await queueApi.retryJob(jobId, false);
-      fetchJobs();
-    } catch (error) {
-      console.error('Error retrying job:', error);
-    }
-  };
+  // ESC key handler for modals
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedJob) {
+          setSelectedJob(null);
+        } else if (showFlushModal) {
+          setShowFlushModal(false);
+        }
+      }
+    };
 
-  const cancelJob = async (jobId: string) => {
-    if (!confirm('Are you sure you want to cancel this job?')) return;
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [selectedJob, showFlushModal]);
 
-    try {
-      await queueApi.cancelJob(jobId);
-      fetchJobs();
-    } catch (error) {
-      console.error('Error cancelling job:', error);
-    }
-  };
+  // Commented out - keeping for future use
+  // const retryJob = async (jobId: string) => {
+  //   try {
+  //     await queueApi.retryJob(jobId, false);
+  //     fetchData();
+  //   } catch (error) {
+  //     console.error('Error retrying job:', error);
+  //   }
+  // };
+
+  // const cancelJob = async (jobId: string) => {
+  //   if (!confirm('Are you sure you want to cancel this job?')) return;
+
+  //   try {
+  //     await queueApi.cancelJob(jobId);
+  //     fetchData();
+  //   } catch (error) {
+  //     console.error('Error cancelling job:', error);
+  //   }
+  // };
 
   const cleanupStuckWorkers = async () => {
     if (!confirm('This will clean up all stuck workers and pending messages. Continue?')) return;
@@ -380,8 +359,8 @@ const Queue: React.FC = () => {
         ).join('\n')
       }`);
 
-      // Refresh streaming status to show updated counts
-      fetchStreamingStatus();
+      // Refresh data to show updated counts
+      fetchData();
     } catch (error: any) {
       console.error('❌ Error during cleanup:', error);
       alert(`Failed to cleanup workers: ${error.response?.data?.error || error.message}`);
@@ -399,8 +378,8 @@ const Queue: React.FC = () => {
 
       alert(`✅ Cleanup complete!\n\nRemoved ${data.cleaned_count} old session(s)`);
 
-      // Refresh streaming status to show updated counts
-      fetchStreamingStatus();
+      // Refresh data to show updated counts
+      fetchData();
     } catch (error: any) {
       console.error('❌ Error during cleanup:', error);
       alert(`Failed to cleanup sessions: ${error.response?.data?.error || error.message}`);
@@ -409,7 +388,7 @@ const Queue: React.FC = () => {
 
   const applyFilters = () => {
     setPagination(prev => ({ ...prev, offset: 0 }));
-    fetchJobs();
+    fetchData();
   };
 
   const clearFilters = () => {
@@ -417,20 +396,6 @@ const Queue: React.FC = () => {
     setPagination(prev => ({ ...prev, offset: 0 }));
   };
 
-  const nextPage = () => {
-    if (pagination.has_more) {
-      setPagination(prev => ({ ...prev, offset: prev.offset + prev.limit }));
-    }
-  };
-
-  const prevPage = () => {
-    if (pagination.offset > 0) {
-      setPagination(prev => ({ 
-        ...prev, 
-        offset: Math.max(0, prev.offset - prev.limit) 
-      }));
-    }
-  };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -458,16 +423,6 @@ const Queue: React.FC = () => {
     }
   };
 
-  const getJobTypeShort = (type: string) => {
-    const typeMap: { [key: string]: string } = {
-      'process_audio_files': 'Process',
-      'process_single_audio_file': 'Process',
-      'reprocess_transcript': 'Reprocess',
-      'reprocess_memory': 'Memory'
-    };
-    return typeMap[type] || type;
-  };
-
   const getJobTypeIcon = (type: string) => {
     const iconClass = "w-3.5 h-3.5";
     switch (type) {
@@ -489,6 +444,11 @@ const Queue: React.FC = () => {
   };
 
   const getJobTypeColor = (type: string, status: string) => {
+    // Safety check for undefined/null values
+    if (!type || !status) {
+      return { bgColor: 'bg-gray-400', borderColor: 'border-gray-500' };
+    }
+
     // Base colors by job type
     let bgColor = 'bg-gray-400';
     let borderColor = 'border-gray-500';
@@ -542,213 +502,6 @@ const Queue: React.FC = () => {
     return { bgColor, borderColor };
   };
 
-  const renderJobTimeline = (jobs: any[], session: StreamingSession | CompletedSession) => {
-    if (!jobs || jobs.length === 0) return null;
-
-    // Sort jobs by created_at first
-    const sortedJobs = [...jobs].sort((a, b) =>
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
-
-    // Calculate timeline boundaries
-    // For active sessions, use session timestamps
-    // For completed sessions without started_at, use earliest job timestamp
-    let sessionStart: number;
-    let sessionEnd: number;
-
-    if ('started_at' in session) {
-      // Active session - use session.started_at
-      sessionStart = session.started_at * 1000;
-    } else {
-      // Completed session - calculate from jobs
-      // Use the earliest job timestamp (created_at or started_at)
-      const earliestTime = Math.min(...sortedJobs.map(j => {
-        const created = new Date(j.created_at).getTime();
-        const started = j.started_at ? new Date(j.started_at).getTime() : created;
-        return Math.min(created, started);
-      }));
-      sessionStart = earliestTime;
-    }
-
-    if ('completed_at' in session) {
-      // Completed session - use the latest job end time (not session.completed_at)
-      // This handles batch jobs that run after the session is marked complete
-      const latestJobEnd = Math.max(...sortedJobs.map(j => {
-        const completed = j.completed_at ? new Date(j.completed_at).getTime() : 0;
-        const ended = j.ended_at ? new Date(j.ended_at).getTime() : 0;
-        const started = j.started_at ? new Date(j.started_at).getTime() : 0;
-        return Math.max(completed, ended, started);
-      }));
-      // Use the later of: session completion or latest job end
-      sessionEnd = Math.max(session.completed_at * 1000, latestJobEnd);
-    } else {
-      // Active session - use current time
-      sessionEnd = Date.now();
-    }
-
-    const totalDuration = sessionEnd - sessionStart;
-
-    if (totalDuration <= 0) return null;
-
-    // Smart row assignment - place jobs in rows to avoid overlaps
-    const rows: any[][] = [];
-    sortedJobs.forEach(job => {
-      const jobStart = job.started_at ? new Date(job.started_at).getTime() : new Date(job.created_at).getTime();
-
-      // Find first row where this job doesn't overlap
-      let assignedRow = -1;
-      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-        const row = rows[rowIndex];
-        const lastJobInRow = row[row.length - 1];
-        // Calculate when the last job in this row ends (use Date.now() for active jobs)
-        const lastJobEnd = lastJobInRow.completed_at || lastJobInRow.ended_at
-          ? new Date((lastJobInRow.completed_at || lastJobInRow.ended_at)!).getTime()
-          : (lastJobInRow.status === 'processing' ? Date.now() : new Date(lastJobInRow.started_at || lastJobInRow.created_at).getTime());
-
-        // If this job starts after the last job in this row ends, we can use this row
-        if (jobStart >= lastJobEnd) {
-          assignedRow = rowIndex;
-          break;
-        }
-      }
-
-      // If no suitable row found, create a new one
-      if (assignedRow === -1) {
-        assignedRow = rows.length;
-        rows.push([]);
-      }
-
-      rows[assignedRow].push(job);
-      job._assignedRow = assignedRow;
-    });
-
-    // Calculate height based on number of rows needed
-    const rowCount = rows.length;
-    const timelineHeight = Math.max(4, rowCount * 2); // At least 4rem, 2rem per row
-
-    return (
-      <div className="mt-3 mb-2">
-        <div className="text-xs font-medium text-gray-700 mb-2">Timeline:</div>
-        <div className="relative bg-gray-100 rounded-lg border border-gray-200 overflow-visible" style={{ height: `${timelineHeight}rem` }}>
-          {/* Timeline grid lines */}
-          <div className="absolute inset-0 flex">
-            {[0, 25, 50, 75, 100].map(percent => (
-              <div
-                key={percent}
-                className="absolute h-full border-l border-gray-300"
-                style={{ left: `${percent}%` }}
-              />
-            ))}
-          </div>
-
-          {/* Job bars */}
-          {sortedJobs.map((job) => {
-            const jobStart = job.started_at ? new Date(job.started_at).getTime() : new Date(job.created_at).getTime();
-            const jobEnd = job.completed_at || job.ended_at
-              ? new Date((job.completed_at || job.ended_at)!).getTime()
-              : (job.status === 'processing' ? Date.now() : jobStart);
-
-            const startPercent = Math.max(0, ((jobStart - sessionStart) / totalDuration) * 100);
-            const duration = jobEnd - jobStart;
-            const widthPercent = Math.max(1, (duration / totalDuration) * 100);
-
-            // Color based on job type
-            const { bgColor, borderColor } = getJobTypeColor(job.job_type, job.status);
-
-            // Calculate position in assigned row
-            const rowIndex = job._assignedRow;
-            const rowHeight = 100 / rowCount;
-            const barHeight = Math.min(25, rowHeight * 0.6); // 60% of row height, max 25%
-            const topPercent = (rowIndex * rowHeight) + (rowHeight - barHeight) / 2;
-
-            // Format duration for display
-            const durationMs = jobEnd - jobStart;
-            let durationStr = '';
-            if (durationMs < 1000) durationStr = `${durationMs}ms`;
-            else if (durationMs < 60000) durationStr = `${(durationMs / 1000).toFixed(1)}s`;
-            else durationStr = `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`;
-
-            return (
-              <div
-                key={job.job_id}
-                className={`absolute ${bgColor} ${borderColor} border rounded shadow-sm group cursor-pointer transition-all hover:z-10 hover:scale-105`}
-                style={{
-                  left: `${startPercent}%`,
-                  width: `${widthPercent}%`,
-                  top: `${topPercent}%`,
-                  height: `${barHeight}%`
-                }}
-                title={`${job.job_type} - ${job.status} - ${durationStr}`}
-              >
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                    {getJobTypeIcon(job.job_type)}
-                  </div>
-                </div>
-
-                {/* Tooltip on hover - smart positioning to avoid viewport overflow */}
-                <div
-                  className="absolute bottom-full mb-1 px-2 py-1 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-20"
-                  style={{
-                    left: startPercent < 20 ? '0' : startPercent > 80 ? 'auto' : '50%',
-                    right: startPercent > 80 ? '0' : 'auto',
-                    transform: startPercent >= 20 && startPercent <= 80 ? 'translateX(-50%)' : 'none'
-                  }}
-                >
-                  <div className="font-medium">{job.job_type}</div>
-                  <div className="text-gray-300">{job.status} • {durationStr}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Timeline labels */}
-        <div className="flex justify-between text-xs text-gray-500 mt-1 px-1">
-          <span>0s</span>
-          <span>{(totalDuration / 1000).toFixed(0)}s</span>
-        </div>
-      </div>
-    );
-  };
-
-  const getJobResult = (job: QueueJob) => {
-    if (job.status !== 'completed' || !job.result) {
-      return <span className="text-sm text-gray-500">-</span>;
-    }
-
-    const result = job.result;
-
-    // Show different results based on job type
-    if (job.job_type === 'reprocess_transcript') {
-      const segments = result.transcript_segments || 0;
-      const speakers = result.speakers_identified || 0;
-
-      return (
-        <div className="text-sm text-gray-900">
-          <div>{segments} segments</div>
-          {speakers > 0 && (
-            <div className="text-xs text-green-600">{speakers} speakers identified</div>
-          )}
-        </div>
-      );
-    }
-
-    if (job.job_type === 'reprocess_memory') {
-      const memories = result.memory_count || 0;
-      return (
-        <div className="text-sm text-gray-900">
-          {memories} memories
-        </div>
-      );
-    }
-
-    return (
-      <div className="text-sm text-green-600">
-        ✓ Success
-      </div>
-    );
-  };
 
   const flushJobs = async () => {
     setFlushing(true);
@@ -812,7 +565,7 @@ const Queue: React.FC = () => {
     return `${Math.floor(durationMs / 3600000)}h ${Math.floor((durationMs % 3600000) / 60000)}m`;
   };
 
-  const toggleSessionExpansion = async (sessionId: string) => {
+  const toggleSessionExpansion = (sessionId: string) => {
     const newExpanded = new Set(expandedSessions);
 
     if (newExpanded.has(sessionId)) {
@@ -820,21 +573,25 @@ const Queue: React.FC = () => {
       newExpanded.delete(sessionId);
       setExpandedSessions(newExpanded);
     } else {
-      // Expand and fetch jobs if not already loaded
+      // Expand and trigger refresh to fetch jobs via dashboard endpoint
       newExpanded.add(sessionId);
       setExpandedSessions(newExpanded);
 
+      // Trigger a refresh if jobs not already loaded
       if (!sessionJobs[sessionId]) {
-        try {
-          const response = await queueApi.getJobsBySession(sessionId);
-          const data = response.data;
-          setSessionJobs(prev => ({ ...prev, [sessionId]: data.jobs }));
-        } catch (error) {
-          console.error(`❌ Failed to fetch jobs for session ${sessionId}:`, error);
-          setSessionJobs(prev => ({ ...prev, [sessionId]: [] }));
-        }
+        fetchData();
       }
     }
+  };
+
+  const toggleJobExpansion = (jobId: string) => {
+    const newExpanded = new Set(expandedJobs);
+    if (newExpanded.has(jobId)) {
+      newExpanded.delete(jobId);
+    } else {
+      newExpanded.add(jobId);
+    }
+    setExpandedJobs(newExpanded);
   };
 
   if (loading) {
@@ -977,7 +734,7 @@ const Queue: React.FC = () => {
       {streamingStatus && (
         <div className="bg-white rounded-lg border overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="text-lg font-medium">Audio Streaming Status</h3>
+            <h3 className="text-lg font-medium">Audio Streaming & Conversations</h3>
             <div className="flex items-center space-x-2">
               <button
                 onClick={cleanupOldSessions}
@@ -987,26 +744,27 @@ const Queue: React.FC = () => {
                 <RotateCcw className="w-4 h-4" />
                 <span>Cleanup Old Sessions</span>
               </button>
-              {streamingStatus?.active_sessions && streamingStatus.active_sessions.length > 0 && (
+              {streamingStatus?.stream_health && Object.keys(streamingStatus.stream_health).length > 0 && (
                 <button
                   onClick={async () => {
-                    if (!streamingStatus || !confirm(`Remove ALL ${streamingStatus.active_sessions.length} active sessions? This will force-delete all sessions including actively streaming ones.`)) return;
+                    const streamCount = Object.keys(streamingStatus.stream_health).length;
+                    if (!streamingStatus || !confirm(`Remove ALL ${streamCount} active streams? This will force-delete all streams including actively streaming ones.`)) return;
 
                     try {
                       const response = await queueApi.cleanupOldSessions(0); // 0 seconds = all sessions
                       const data = response.data;
-                      alert(`✅ Removed ${data.cleaned_count} session(s)`);
-                      fetchStreamingStatus();
+                      alert(`✅ Removed ${data.cleaned_count} stream(s)`);
+                      fetchData();
                     } catch (error: any) {
-                      console.error('❌ Error removing sessions:', error);
-                      alert(`Failed to remove sessions: ${error.response?.data?.error || error.message}`);
+                      console.error('❌ Error removing streams:', error);
+                      alert(`Failed to remove streams: ${error.response?.data?.error || error.message}`);
                     }
                   }}
                   className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm"
-                  title="Force remove ALL active sessions"
+                  title="Force remove ALL active streams"
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span>Remove All Sessions ({streamingStatus.active_sessions.length})</span>
+                  <span>Remove All Streams ({Object.keys(streamingStatus.stream_health).length})</span>
                 </button>
               )}
               <button
@@ -1023,236 +781,66 @@ const Queue: React.FC = () => {
           </div>
 
           <div className="p-6 space-y-6">
-            {/* Active and Completed Sessions Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Active Sessions */}
-              <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-3">Active Streaming Sessions</h4>
-                {streamingStatus?.active_sessions && streamingStatus.active_sessions.filter(s => s.status !== 'complete').length > 0 ? (
-                  <div className="space-y-2">
-                    {streamingStatus.active_sessions.filter(s => s.status !== 'complete').map((session) => {
-                      const isExpanded = expandedSessions.has(session.session_id);
-                      const jobs = sessionJobs[session.session_id] || [];
-
-                      return (
-                        <div key={session.session_id} className="bg-blue-50 rounded-lg border border-blue-200 overflow-hidden">
-                          <div
-                            className="flex items-center justify-between p-3 cursor-pointer hover:bg-blue-100 transition-colors"
-                            onClick={() => toggleSessionExpansion(session.session_id)}
-                          >
-                            <div className="flex-1">
-                              <div className="flex items-center space-x-2">
-                                {isExpanded ? (
-                                  <ChevronDown className="w-4 h-4 text-blue-600" />
-                                ) : (
-                                  <ChevronRight className="w-4 h-4 text-blue-600" />
-                                )}
-                                <Play className="w-4 h-4 text-blue-600 animate-pulse" />
-                                <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
-                                <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">{session.provider}</span>
-                                <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">{session.status}</span>
-                              </div>
-                              <div className="mt-1 text-xs text-gray-600">
-                                Session: {session.session_id.substring(0, 8)}... •
-                                Chunks: {session.chunks_published} •
-                                Duration: {Math.floor(session.age_seconds)}s •
-                                Idle: {session.idle_seconds.toFixed(1)}s
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Expanded Jobs Section */}
-                          {isExpanded && (
-                            <div className="border-t border-blue-200 bg-white p-3">
-                              {/* Timeline Visualization */}
-                              {renderJobTimeline(jobs, session)}
-
-                              <h5 className="text-xs font-medium text-gray-700 mb-2">Jobs for this session:</h5>
-                              {jobs.length > 0 ? (
-                                <div className="space-y-1">
-                                  {jobs.map((job, index) => (
-                                    <div key={job.job_id} className={`flex items-center justify-between p-2 bg-gray-50 rounded border ${getJobTypeColor(job.job_type, job.status).borderColor}`} style={{ borderLeftWidth: '12px' }}>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center space-x-2">
-                                          <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
-                                          <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
-                                          <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
-                                          <span className="text-xs font-medium text-gray-900 truncate">{job.job_type}</span>
-                                          <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
-                                            {job.status}
-                                          </span>
-                                          <span className="text-xs text-gray-500">{job.queue}</span>
-                                        </div>
-                                        <div className="mt-1 text-xs text-gray-600">
-                                          {job.started_at && (
-                                            <span>Started: {new Date(job.started_at).toLocaleTimeString()}</span>
-                                          )}
-                                          {job.started_at && (
-                                            <span> • Duration: {formatDuration(job)}</span>
-                                          )}
-                                        </div>
-                                      </div>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          viewJobDetails(job.job_id);
-                                        }}
-                                        className="ml-2 text-indigo-600 hover:text-indigo-900 flex-shrink-0"
-                                      >
-                                        <Eye className="w-3 h-3" />
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-xs text-gray-500 italic">No jobs found for this session</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
-                    No active sessions
-                  </div>
-                )}
-              </div>
-
-              {/* Completed Sessions */}
-              <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-3">Completed Sessions (Last Hour)</h4>
-                {streamingStatus?.completed_sessions && streamingStatus.completed_sessions.length > 0 ? (
-                  <div className="space-y-2">
-                    {streamingStatus.completed_sessions.map((session) => {
-                      const isExpanded = expandedSessions.has(session.session_id);
-                      const jobs = sessionJobs[session.session_id] || [];
-
-                      return (
-                        <div key={session.session_id} className={`rounded-lg border overflow-hidden ${
-                          session.has_conversation
-                            ? 'bg-green-50 border-green-200'
-                            : 'bg-gray-50 border-gray-200'
-                        }`}>
-                          <div
-                            className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${
-                              session.has_conversation
-                                ? 'hover:bg-green-100'
-                                : 'hover:bg-gray-100'
-                            }`}
-                            onClick={() => toggleSessionExpansion(session.session_id)}
-                          >
-                            <div className="flex-1">
-                              <div className="flex items-center space-x-2">
-                                {isExpanded ? (
-                                  <ChevronDown className={`w-4 h-4 ${session.has_conversation ? 'text-green-600' : 'text-gray-600'}`} />
-                                ) : (
-                                  <ChevronRight className={`w-4 h-4 ${session.has_conversation ? 'text-green-600' : 'text-gray-600'}`} />
-                                )}
-                                {session.has_conversation ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                ) : (
-                                  <XCircle className="w-4 h-4 text-gray-600" />
-                                )}
-                                <span className="text-sm font-medium text-gray-900">{session.client_id}</span>
-                                {session.has_conversation ? (
-                                  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Conversation</span>
-                                ) : (
-                                  <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">{session.reason || 'No speech'}</span>
-                                )}
-                              </div>
-                              <div className="mt-1 text-xs text-gray-600">
-                                Session: {session.session_id.substring(0, 8)}... •
-                                {new Date(session.completed_at * 1000).toLocaleTimeString()}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Expanded Jobs Section */}
-                          {isExpanded && (
-                            <div className={`border-t bg-white p-3 ${
-                              session.has_conversation ? 'border-green-200' : 'border-gray-200'
-                            }`}>
-                              {/* Timeline Visualization */}
-                              {renderJobTimeline(jobs, session)}
-
-                              <h5 className="text-xs font-medium text-gray-700 mb-2">Jobs for this session:</h5>
-                              {jobs.length > 0 ? (
-                                <div className="space-y-1">
-                                  {jobs.map((job, index) => (
-                                    <div key={job.job_id} className={`flex items-center justify-between p-2 bg-gray-50 rounded border ${getJobTypeColor(job.job_type, job.status).borderColor}`} style={{ borderLeftWidth: '12px' }}>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center space-x-2">
-                                          <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
-                                          <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
-                                          <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
-                                          <span className="text-xs font-medium text-gray-900 truncate">{job.job_type}</span>
-                                          <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
-                                            {job.status}
-                                          </span>
-                                          <span className="text-xs text-gray-500">{job.queue}</span>
-                                        </div>
-                                        <div className="mt-1 text-xs text-gray-600">
-                                          {job.started_at && (
-                                            <span>Started: {new Date(job.started_at).toLocaleTimeString()}</span>
-                                          )}
-                                          {job.started_at && (
-                                            <span> • Duration: {formatDuration(job)}</span>
-                                          )}
-                                        </div>
-                                      </div>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          viewJobDetails(job.job_id);
-                                        }}
-                                        className="ml-2 text-indigo-600 hover:text-indigo-900 flex-shrink-0"
-                                      >
-                                        <Eye className="w-3 h-3" />
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-xs text-gray-500 italic">No jobs found for this session</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
-                    No completed sessions
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Stream Health */}
+            {/* Stream Workers Section - Shows audio streams + listen jobs */}
             <div>
-              <h4 className="text-sm font-medium text-gray-700 mb-3">Stream Workers</h4>
+              <h4 className="text-sm font-medium text-gray-700 mb-3">Stream Workers (Client Sessions)</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {streamingStatus?.stream_health && Object.entries(streamingStatus.stream_health).map(([provider, health]) => (
-                  <div key={provider} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium capitalize">{provider}</span>
-                      {health.error ? (
-                        <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">Inactive</span>
-                      ) : (
-                        <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Active</span>
-                      )}
-                    </div>
+                {streamingStatus?.stream_health && Object.entries(streamingStatus.stream_health).map(([streamKey, health]) => {
+                  // Extract client_id from stream key (format: audio:stream:{client_id})
+                  const clientId = streamKey.replace('audio:stream:', '');
 
-                    {health.error ? (
-                      <p className="text-xs text-gray-500">{health.error}</p>
-                    ) : (
+                  // Find all listen jobs for this client with deduplication
+                  const allJobsRaw = Object.values(sessionJobs).flat().filter(job => job != null);
+
+                  // Deduplicate by job_id
+                  const jobMap = new Map();
+                  allJobsRaw.forEach((job: any) => {
+                    if (job && job.job_id) {
+                      jobMap.set(job.job_id, job);
+                    }
+                  });
+                  const allJobs = Array.from(jobMap.values());
+
+                  // Debug logging for listen job filtering
+                  console.log(`🔍 Stream ${streamKey}:`);
+                  console.log(`  - clientId extracted: ${clientId}`);
+                  console.log(`  - Total jobs available: ${allJobs.length}`);
+                  const speechDetectionJobs = allJobs.filter((job: any) => job && job.job_type === 'stream_speech_detection_job');
+                  console.log(`  - Speech detection jobs: ${speechDetectionJobs.length}`, speechDetectionJobs.map((j: any) => ({ job_id: j.job_id, meta_client_id: j.meta?.client_id })));
+
+                  // Get all listen jobs for this client (only active/queued/processing, not completed)
+                  const allListenJobs = allJobs.filter((job: any) =>
+                    job && job.job_type === 'stream_speech_detection_job' &&
+                    job.meta?.client_id === clientId &&
+                    job.status !== 'completed' &&
+                    job.status !== 'failed'
+                  );
+
+                  // Show only the LATEST active speech detection job (most recent created_at)
+                  // Completed ones have already exited and shouldn't be shown here
+                  const listenJobs = allListenJobs.length > 0
+                    ? [allListenJobs.sort((a, b) =>
+                        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+                      )[0]]
+                    : [];
+
+                  console.log(`  - All listen jobs (active): ${allListenJobs.length}, showing latest: ${listenJobs.length}`);
+
+                  return (
+                    <div key={streamKey} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium">{streamKey}</span>
+                        <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">Active</span>
+                      </div>
+
                       <div className="space-y-2">
                         <div className="flex justify-between text-xs">
                           <span className="text-gray-600">Stream Length:</span>
                           <span className="font-medium">{health.stream_length}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-600">Age:</span>
+                          <span className="font-medium">{(health.stream_age_seconds || 0).toFixed(0)}s</span>
                         </div>
                         <div className="flex justify-between text-xs">
                           <span className="text-gray-600">Pending:</span>
@@ -1262,7 +850,7 @@ const Queue: React.FC = () => {
                         </div>
                         {health.consumer_groups && health.consumer_groups.map((group) => (
                           <div key={group.name} className="mt-2 pt-2 border-t border-gray-200">
-                            <div className="text-xs text-gray-600 mb-1">Consumers:</div>
+                            <div className="text-xs text-gray-600 mb-1">{group.name}:</div>
                             {group.consumers.map((consumer) => (
                               <div key={consumer.name} className="flex justify-between text-xs pl-2">
                                 <span className="text-gray-700 truncate">{consumer.name}</span>
@@ -1273,10 +861,976 @@ const Queue: React.FC = () => {
                             ))}
                           </div>
                         ))}
+
+                        {/* Current Speech Detection Job */}
+                        {listenJobs.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-gray-200">
+                            <div className="text-xs text-gray-600 mb-1">Current Speech Detection:</div>
+                            {listenJobs.map((job) => {
+                              const runtime = job.started_at
+                                ? Math.floor((Date.now() - new Date(job.started_at).getTime()) / 1000)
+                                : 0;
+                              const minutes = Math.floor(runtime / 60);
+                              const seconds = runtime % 60;
+
+                              return (
+                                <div key={job.job_id} className="bg-white rounded p-2 space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-1">
+                                      {getStatusIcon(job.status)}
+                                      <span className="text-gray-700 font-medium text-xs">{job.job_type}</span>
+                                      <span className={`px-1 py-0.5 rounded text-xs ${getStatusColor(job.status)}`}>
+                                        {job.status}
+                                      </span>
+                                    </div>
+                                    <button
+                                      onClick={() => viewJobDetails(job.job_id)}
+                                      className="text-indigo-600 hover:text-indigo-900 flex-shrink-0"
+                                    >
+                                      <Eye className="w-3 h-3" />
+                                    </button>
+                                  </div>
+
+                                  {/* Job metadata */}
+                                  <div className="text-xs text-gray-600 space-y-0.5 pl-4">
+                                    <div className="flex justify-between">
+                                      <span>Job ID:</span>
+                                      <span className="font-mono text-gray-800">{job.job_id.substring(0, 12)}...</span>
+                                    </div>
+                                    {job.started_at && (
+                                      <div className="flex justify-between">
+                                        <span>Runtime:</span>
+                                        <span className="font-medium text-gray-800">{minutes}m {seconds}s</span>
+                                      </div>
+                                    )}
+                                    {job.created_at && (
+                                      <div className="flex justify-between">
+                                        <span>Created:</span>
+                                        <span className="text-gray-800">{new Date(job.created_at).toLocaleTimeString()}</span>
+                                      </div>
+                                    )}
+                                    {job.meta?.speech_detected_at && (
+                                      <div className="flex justify-between">
+                                        <span>Speech Detected:</span>
+                                        <span className="text-green-700 font-medium">{new Date(job.meta.speech_detected_at).toLocaleString()}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Active and Completed Conversations Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Active Conversations - Grouped by conversation_id */}
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-3">Active Conversations</h4>
+                {(() => {
+                  // Group all jobs by conversation_id with deduplication
+                  const allJobsRaw = Object.values(sessionJobs).flat().filter(job => job != null);
+
+                  // Deduplicate by job_id
+                  const jobMap = new Map();
+                  allJobsRaw.forEach((job: any) => {
+                    if (job && job.job_id) {
+                      jobMap.set(job.job_id, job);
+                    }
+                  });
+                  const allJobs = Array.from(jobMap.values());
+
+                  // Group ALL jobs by conversation_id (regardless of status)
+                  // Also link jobs by audio_uuid so persistence jobs get grouped with conversation
+                  const allConversationJobs = new Map<string, any[]>();
+                  const audioUuidToConversationId = new Map<string, string>();
+
+                  // First pass: collect conversation_id to audio_uuid mappings
+                  allJobs.forEach(job => {
+                    if (!job) return;
+                    const conversationId = job.meta?.conversation_id;
+                    const audioUuid = job.meta?.audio_uuid;
+
+                    if (conversationId && audioUuid) {
+                      audioUuidToConversationId.set(audioUuid, conversationId);
+                    }
+                  });
+
+                  // Second pass: group jobs by conversation_id or audio_uuid
+                  // EXCLUDE session-level jobs (like audio persistence)
+                  allJobs.forEach(job => {
+                    if (!job) return;
+
+                    // Skip session-level jobs (they run for entire session, not per conversation)
+                    // Also skip audio persistence jobs by job_type (for backward compatibility with old jobs)
+                    if (job.meta?.session_level === true || job.job_type === 'audio_streaming_persistence_job') {
+                      return;
+                    }
+
+                    const conversationId = job.meta?.conversation_id;
+                    const audioUuid = job.meta?.audio_uuid;
+
+                    // Determine the grouping key
+                    let groupKey = conversationId;
+                    if (!groupKey && audioUuid) {
+                      // Try to find conversation_id via audio_uuid mapping
+                      groupKey = audioUuidToConversationId.get(audioUuid);
+                    }
+
+                    if (groupKey) {
+                      if (!allConversationJobs.has(groupKey)) {
+                        allConversationJobs.set(groupKey, []);
+                      }
+                      allConversationJobs.get(groupKey)!.push(job);
+                    }
+                  });
+
+                  // Filter to only show conversations where at least one job is NOT completed
+                  const conversationMap = new Map<string, any[]>();
+                  allConversationJobs.forEach((jobs, conversationId) => {
+                    const hasActiveJob = jobs.some(j => j.status !== 'completed' && j.status !== 'failed');
+                    if (hasActiveJob) {
+                      conversationMap.set(conversationId, jobs);
+                    }
+                  });
+
+                  if (conversationMap.size === 0) {
+                    return (
+                      <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
+                        No active conversations
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-2">
+                      {Array.from(conversationMap.entries()).map(([conversationId, jobs]) => {
+                        const isExpanded = expandedSessions.has(conversationId);
+
+                        // Find the open_conversation_job for metadata
+                        const openConvJob = jobs.find(j => j.job_type === 'open_conversation_job');
+                        const meta = openConvJob?.meta || {};
+
+                        // Extract conversation info
+                        const clientId = meta.client_id || 'Unknown';
+                        const transcript = meta.transcript || '';
+                        const speakers = meta.speakers || [];
+                        const wordCount = meta.word_count || 0;
+                        const lastUpdate = meta.last_update || '';
+                        const createdAt = openConvJob?.created_at || null;
+
+                        return (
+                          <div key={conversationId} className="bg-cyan-50 rounded-lg border border-cyan-200 overflow-hidden">
+                            <div
+                              className="flex items-center justify-between p-3 cursor-pointer hover:bg-cyan-100 transition-colors"
+                              onClick={() => toggleSessionExpansion(conversationId)}
+                            >
+                              <div className="flex-1">
+                                <div className="flex items-center space-x-2">
+                                  {isExpanded ? (
+                                    <ChevronDown className="w-4 h-4 text-cyan-600" />
+                                  ) : (
+                                    <ChevronRight className="w-4 h-4 text-cyan-600" />
+                                  )}
+                                  <Brain className="w-4 h-4 text-cyan-600 animate-pulse" />
+                                  <span className="text-sm font-medium text-gray-900">{clientId}</span>
+                                  <span className="text-xs px-2 py-0.5 bg-cyan-100 text-cyan-700 rounded">Active</span>
+                                  {speakers.length > 0 && (
+                                    <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
+                                      {speakers.length} speaker{speakers.length > 1 ? 's' : ''}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="mt-1 text-xs text-gray-600">
+                                  Conversation: {conversationId.substring(0, 8)}... •
+                                  {createdAt && `Started: ${new Date(createdAt).toLocaleTimeString()} • `}
+                                  Words: {wordCount}
+                                  {lastUpdate && ` • Updated: ${new Date(lastUpdate).toLocaleTimeString()}`}
+                                </div>
+                                {transcript && (
+                                  <div className="mt-1 text-xs text-gray-700 italic truncate">
+                                    "{transcript.substring(0, 100)}{transcript.length > 100 ? '...' : ''}"
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                          {/* Expanded Jobs Section */}
+                          {isExpanded && (
+                            <div className="border-t border-cyan-200 bg-white p-3">
+                              {/* Pipeline Timeline */}
+                              <div className="mb-4">
+                                <h5 className="text-xs font-medium text-gray-700 mb-3">Pipeline Timeline:</h5>
+                                {(() => {
+                                  // Helper function to get display name from job type
+                                  const getJobDisplayName = (jobType: string) => {
+                                    const nameMap: { [key: string]: string } = {
+                                      'stream_speech_detection_job': 'Speech',
+                                      'open_conversation_job': 'Open',
+                                      'transcribe_full_audio_job': 'Transcript',
+                                      'recognise_speakers_job': 'Speakers',
+                                      'process_memory_job': 'Memory'
+                                    };
+                                    return nameMap[jobType] || jobType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                                  };
+
+                                  // Helper function to get icon for job type
+                                  const getJobIcon = (jobType: string) => {
+                                    if (jobType.includes('speech') || jobType.includes('detect')) return Brain;
+                                    if (jobType.includes('conversation') || jobType.includes('open')) return Brain;
+                                    if (jobType.includes('transcribe')) return FileText;
+                                    if (jobType.includes('speaker') || jobType.includes('recognise')) return Brain;
+                                    if (jobType.includes('memory')) return Brain;
+                                    return Brain; // Default icon
+                                  };
+
+                                  // Build dynamic pipeline from actual jobs with timing data
+                                  // Sort by start time to show chronological order
+                                  const jobsWithTiming = jobs
+                                    .filter(j => j && j.started_at)
+                                    .map(job => {
+                                      const startTime = new Date(job.started_at!).getTime();
+                                      const endTime = job.completed_at || job.ended_at
+                                        ? new Date((job.completed_at || job.ended_at)!).getTime()
+                                        : (job.status === 'processing' ? Date.now() : startTime);
+
+                                      return {
+                                        job,
+                                        startTime,
+                                        endTime,
+                                        duration: (endTime - startTime) / 1000,
+                                        name: getJobDisplayName(job.job_type),
+                                        icon: getJobIcon(job.job_type)
+                                      };
+                                    })
+                                    .sort((a, b) => a.startTime - b.startTime);
+
+                                  const jobTimes = jobsWithTiming;
+
+                                  // Find earliest start and latest end
+                                  const validTimes = jobTimes.filter(t => t !== null);
+                                  if (validTimes.length === 0) {
+                                    return (
+                                      <div className="text-xs text-gray-500 italic">No job timing data available</div>
+                                    );
+                                  }
+
+                                  const earliestStart = Math.min(...validTimes.map(t => t!.startTime));
+                                  const latestEnd = Math.max(...validTimes.map(t => t!.endTime));
+                                  const totalDuration = (latestEnd - earliestStart) / 1000; // in seconds
+
+                                  // Format duration for display
+                                  const formatDuration = (seconds: number) => {
+                                    if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
+                                    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+                                    const mins = Math.floor(seconds / 60);
+                                    const secs = Math.floor(seconds % 60);
+                                    return `${mins}m ${secs}s`;
+                                  };
+
+                                  // Generate time axis markers (0%, 25%, 50%, 75%, 100%)
+                                  const timeMarkers = [0, 0.25, 0.5, 0.75, 1].map(pct => ({
+                                    percent: pct * 100,
+                                    time: formatDuration(totalDuration * pct)
+                                  }));
+
+                                  return (
+                                    <div className="space-y-2">
+                                      {/* Time axis */}
+                                      <div className="relative h-4 border-b border-gray-300">
+                                        {timeMarkers.map((marker, idx) => (
+                                          <div
+                                            key={idx}
+                                            className="absolute"
+                                            style={{ left: `${marker.percent}%`, transform: 'translateX(-50%)' }}
+                                          >
+                                            <div className="w-px h-2 bg-gray-400"></div>
+                                            <div className="text-xs text-gray-500 mt-0.5 whitespace-nowrap">
+                                              {marker.time}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+
+                                      {/* Job timeline bars */}
+                                      <div className="space-y-2 mt-6">
+                                        {jobTimes.map((jobTime) => {
+                                          const { job, startTime, endTime, duration, name, icon: Icon } = jobTime;
+
+                                          // Calculate position and width as percentage of total timeline
+                                          const startPercent = ((startTime - earliestStart) / (latestEnd - earliestStart)) * 100;
+                                          const widthPercent = ((endTime - startTime) / (latestEnd - earliestStart)) * 100;
+
+                                          // Use job type colors
+                                          const jobColors = getJobTypeColor(job.job_type, job.status);
+                                          const barColor = jobColors.bgColor;
+                                          const borderColor = jobColors.borderColor;
+
+                                          return (
+                                            <div key={job.job_id} className="flex items-center space-x-2 h-8">
+                                              {/* Stage Icon */}
+                                              <div className={`w-8 h-8 rounded-full border-2 ${borderColor} ${barColor} flex items-center justify-center flex-shrink-0`}>
+                                                <Icon className="w-4 h-4 text-white" />
+                                              </div>
+
+                                              {/* Stage Name */}
+                                              <span className="text-xs text-gray-700 w-20 flex-shrink-0">{name}</span>
+
+                                              {/* Timeline Container */}
+                                              <div className="flex-1 relative h-6 bg-gray-100 rounded">
+                                                {/* Job Bar */}
+                                                <div
+                                                  className={`absolute h-6 rounded ${barColor} ${job.status === 'processing' ? 'animate-pulse' : ''} flex items-center justify-center`}
+                                                  style={{
+                                                    left: `${startPercent}%`,
+                                                    width: `${widthPercent}%`
+                                                  }}
+                                                  title={`Started: ${new Date(startTime).toLocaleTimeString()}\nDuration: ${formatDuration(duration)}`}
+                                                >
+                                                  <span className="text-xs text-white font-medium px-2 truncate">
+                                                    {formatDuration(duration)}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+
+                                      {/* Total Duration */}
+                                      <div className="text-xs text-gray-600 text-right mt-2">
+                                        Total: {formatDuration(totalDuration)}
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+
+                              <h5 className="text-xs font-medium text-gray-700 mb-2">Conversation Jobs:</h5>
+                              {jobs.filter(j => j != null && j.job_id).length > 0 ? (
+                                <div className="space-y-1">
+                                  {jobs
+                                    .filter(j => j != null && j.job_id)
+                                    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                                    .map((job, index) => (
+                                    <div key={job.job_id} className={`p-2 bg-gray-50 rounded border ${getJobTypeColor(job.job_type, job.status).borderColor}`} style={{ borderLeftWidth: '12px' }}>
+                                      <div
+                                        className="flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors rounded px-1 py-0.5"
+                                        onClick={() => toggleJobExpansion(job.job_id)}
+                                      >
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-center space-x-2">
+                                            <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
+                                            {expandedJobs.has(job.job_id) ? (
+                                              <ChevronDown className="w-3 h-3 text-gray-500" />
+                                            ) : (
+                                              <ChevronRight className="w-3 h-3 text-gray-500" />
+                                            )}
+                                            <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
+                                            <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
+                                            <span className="text-xs font-medium text-gray-900 truncate">{job.job_type}</span>
+                                            <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
+                                              {job.status}
+                                            </span>
+                                            <span className="text-xs text-gray-500">{job.queue}</span>
+                                            {/* Show memory count badge on collapsed card */}
+                                            {!expandedJobs.has(job.job_id) && job.job_type === 'process_memory_job' && job.result?.memories_created !== undefined && (
+                                              <span className="text-xs px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded">
+                                                {job.result.memories_created} memories
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Collapsible metadata section */}
+                                      {expandedJobs.has(job.job_id) && (
+                                        <div className="mt-1 text-xs text-gray-600 space-y-0.5">
+                                          <div>
+                                            {job.started_at && (
+                                              <span>Started: {new Date(job.started_at).toLocaleTimeString()}</span>
+                                            )}
+                                            {job.started_at && (
+                                              <span> • Duration: {formatDuration(job)}</span>
+                                            )}
+                                          </div>
+
+                                          {/* Show job-specific metadata */}
+                                          {job.meta && (
+                                            <div className="space-y-0.5 pl-2 border-l-2 border-gray-300">
+                                              {/* open_conversation_job metadata */}
+                                              {job.job_type === 'open_conversation_job' && (
+                                                <>
+                                                  {job.meta.word_count !== undefined && (
+                                                    <div>Words: <span className="font-medium">{job.meta.word_count}</span></div>
+                                                  )}
+                                                  {job.meta.speakers && job.meta.speakers.length > 0 && (
+                                                    <div>Speakers: <span className="font-medium">{job.meta.speakers.join(', ')}</span></div>
+                                                  )}
+                                                  {job.meta.inactivity_seconds !== undefined && (
+                                                    <div>Idle: <span className="font-medium">{Math.floor(job.meta.inactivity_seconds)}s</span></div>
+                                                  )}
+                                                  {job.meta.transcript && (
+                                                    <div className="italic text-gray-500 truncate max-w-md">
+                                                      "{job.meta.transcript.substring(0, 80)}..."
+                                                    </div>
+                                                  )}
+                                                </>
+                                              )}
+
+                                              {/* transcribe_full_audio_job metadata */}
+                                              {job.job_type === 'transcribe_full_audio_job' && job.result && (
+                                                <>
+                                                  {job.result.transcript && (
+                                                    <div>Transcript: <span className="font-medium">{job.result.transcript.length} chars</span></div>
+                                                  )}
+                                                  {job.result.processing_time_seconds && (
+                                                    <div>Processing: <span className="font-medium">{job.result.processing_time_seconds.toFixed(1)}s</span></div>
+                                                  )}
+                                                </>
+                                              )}
+
+                                              {/* recognise_speakers_job metadata */}
+                                              {job.job_type === 'recognise_speakers_job' && job.result && (
+                                                <>
+                                                  {job.result.identified_speakers && job.result.identified_speakers.length > 0 && (
+                                                    <div>Identified: <span className="font-medium">{job.result.identified_speakers.join(', ')}</span></div>
+                                                  )}
+                                                  {job.result.segment_count && (
+                                                    <div>Segments: <span className="font-medium">{job.result.segment_count}</span></div>
+                                                  )}
+                                                </>
+                                              )}
+
+                                              {/* process_memory_job metadata */}
+                                              {job.job_type === 'process_memory_job' && job.meta && (
+                                                <>
+                                                  {job.meta.memories_created !== undefined && (
+                                                    <div>Memories: <span className="font-medium">{job.meta.memories_created} created</span></div>
+                                                  )}
+                                                  {job.meta.processing_time && (
+                                                    <div>Processing: <span className="font-medium">{job.meta.processing_time.toFixed(1)}s</span></div>
+                                                  )}
+                                                  {job.meta.memory_details && job.meta.memory_details.length > 0 && (
+                                                    <div className="mt-2">
+                                                      <div className="text-xs font-medium text-gray-700 mb-1">Memories Created:</div>
+                                                      {job.meta.memory_details.map((memory: any, idx: number) => (
+                                                        <div key={idx} className="text-xs bg-pink-50 p-2 rounded mb-1">
+                                                          "{memory.text}"
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </>
+                                              )}
+
+                                              {/* Show conversation_id if present */}
+                                              {job.meta.conversation_id && (
+                                                <div className="font-mono text-gray-500">
+                                                  Conv: {job.meta.conversation_id.substring(0, 8)}...
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          viewJobDetails(job.job_id);
+                                        }}
+                                        className="ml-2 text-indigo-600 hover:text-indigo-900 flex-shrink-0"
+                                      >
+                                        <Eye className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-500 italic">No jobs found for this conversation</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Completed Conversations - Grouped by conversation_id */}
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-3">Completed Conversations (Last Hour)</h4>
+                {(() => {
+                  // Group all jobs by conversation_id for completed conversations with deduplication
+                  const allJobsRaw = Object.values(sessionJobs).flat().filter(job => job != null);
+
+                  // Deduplicate by job_id
+                  const jobMap = new Map();
+                  allJobsRaw.forEach((job: any) => {
+                    if (job && job.job_id) {
+                      jobMap.set(job.job_id, job);
+                    }
+                  });
+                  const allJobs = Array.from(jobMap.values());
+
+                  // Group ALL jobs by conversation_id (regardless of status)
+                  // Also link jobs by audio_uuid so persistence jobs get grouped with conversation
+                  const allConversationJobs = new Map<string, any[]>();
+                  const audioUuidToConversationId = new Map<string, string>();
+
+                  // First pass: collect conversation_id to audio_uuid mappings
+                  allJobs.forEach(job => {
+                    if (!job) return;
+                    const conversationId = job.meta?.conversation_id;
+                    const audioUuid = job.meta?.audio_uuid;
+
+                    if (conversationId && audioUuid) {
+                      audioUuidToConversationId.set(audioUuid, conversationId);
+                    }
+                  });
+
+                  // Second pass: group jobs by conversation_id or audio_uuid
+                  // EXCLUDE session-level jobs (like audio persistence)
+                  allJobs.forEach(job => {
+                    if (!job) return;
+
+                    // Skip session-level jobs (they run for entire session, not per conversation)
+                    // Also skip audio persistence jobs by job_type (for backward compatibility with old jobs)
+                    if (job.meta?.session_level === true || job.job_type === 'audio_streaming_persistence_job') {
+                      return;
+                    }
+
+                    const conversationId = job.meta?.conversation_id;
+                    const audioUuid = job.meta?.audio_uuid;
+
+                    // Determine the grouping key
+                    let groupKey = conversationId;
+                    if (!groupKey && audioUuid) {
+                      // Try to find conversation_id via audio_uuid mapping
+                      groupKey = audioUuidToConversationId.get(audioUuid);
+                    }
+
+                    if (groupKey) {
+                      if (!allConversationJobs.has(groupKey)) {
+                        allConversationJobs.set(groupKey, []);
+                      }
+                      allConversationJobs.get(groupKey)!.push(job);
+                    }
+                  });
+
+                  // Filter to only show conversations where ALL jobs are completed or failed
+                  const conversationMap = new Map<string, any[]>();
+                  allConversationJobs.forEach((jobs, conversationId) => {
+                    const allJobsComplete = jobs.every(j => j.status === 'completed' || j.status === 'failed');
+                    if (allJobsComplete) {
+                      conversationMap.set(conversationId, jobs);
+                    }
+                  });
+
+                  if (conversationMap.size === 0) {
+                    return (
+                      <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
+                        No completed conversations
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-2">
+                      {Array.from(conversationMap.entries()).map(([conversationId, jobs]) => {
+                        const isExpanded = expandedSessions.has(conversationId);
+
+                        // Find the open_conversation_job for metadata
+                        const openConvJob = jobs.find(j => j.job_type === 'open_conversation_job');
+                        const meta = openConvJob?.meta || {};
+
+                        // Find transcription job for title/summary
+                        const transcriptionJob = jobs.find(j => j.job_type === 'transcribe_full_audio_job');
+                        const transcriptionMeta = transcriptionJob?.meta || {};
+
+                        // Extract conversation info from metadata
+                        const clientId = meta.client_id || 'Unknown';
+                        const transcript = meta.transcript || '';
+                        const speakers = meta.speakers || [];
+                        const wordCount = meta.word_count || 0;
+                        const createdAt = openConvJob?.created_at || null;
+                        const title = transcriptionMeta.title || null;
+                        const summary = transcriptionMeta.summary || null;
+
+                        // Check if all jobs are complete
+                        const allComplete = jobs.every(j => j.status === 'completed');
+
+                        return (
+                          <div key={conversationId} className={`rounded-lg border overflow-hidden ${
+                            allComplete
+                              ? 'bg-green-50 border-green-200'
+                              : 'bg-yellow-50 border-yellow-200'
+                          }`}>
+                            <div
+                              className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${
+                                allComplete ? 'hover:bg-green-100' : 'hover:bg-yellow-100'
+                              }`}
+                              onClick={() => toggleSessionExpansion(conversationId)}
+                            >
+                              <div className="flex-1">
+                                <div className="flex items-center space-x-2">
+                                  {isExpanded ? (
+                                    <ChevronDown className={`w-4 h-4 ${allComplete ? 'text-green-600' : 'text-yellow-600'}`} />
+                                  ) : (
+                                    <ChevronRight className={`w-4 h-4 ${allComplete ? 'text-green-600' : 'text-yellow-600'}`} />
+                                  )}
+                                  {allComplete ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600" />
+                                  ) : (
+                                    <Clock className="w-4 h-4 text-yellow-600" />
+                                  )}
+                                  <span className="text-sm font-medium text-gray-900">{clientId}</span>
+                                  <span className={`text-xs px-2 py-0.5 rounded ${
+                                    allComplete ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                                  }`}>
+                                    {allComplete ? 'Complete' : 'Processing'}
+                                  </span>
+                                  {speakers.length > 0 && (
+                                    <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
+                                      {speakers.length} speaker{speakers.length > 1 ? 's' : ''}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="mt-1 text-xs text-gray-600">
+                                  Conversation: {conversationId.substring(0, 8)}... •
+                                  Words: {wordCount}
+                                  {createdAt && (
+                                    <> • Created: {new Date(createdAt).toLocaleString()}</>
+                                  )}
+                                </div>
+                                {/* Show title/summary for completed, or transcript for in-progress or when no title exists */}
+                                {allComplete ? (
+                                  <>
+                                    {title ? (
+                                      <div className="mt-1 text-sm font-medium text-gray-900">
+                                        {title}
+                                      </div>
+                                    ) : transcript ? (
+                                      <div className="mt-1 text-xs text-gray-700 italic truncate">
+                                        "{transcript.substring(0, 100)}{transcript.length > 100 ? '...' : ''}"
+                                      </div>
+                                    ) : null}
+                                    {summary && (
+                                      <div className="mt-1 text-xs text-gray-700 italic">
+                                        {summary}
+                                      </div>
+                                    )}
+                                  </>
+                                ) : (
+                                  transcript && (
+                                    <div className="mt-1 text-xs text-gray-700 italic truncate">
+                                      "{transcript.substring(0, 100)}{transcript.length > 100 ? '...' : ''}"
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Expanded Jobs Section */}
+                            {isExpanded && (
+                              <div className={`border-t bg-white p-3 ${
+                                allComplete ? 'border-green-200' : 'border-yellow-200'
+                              }`}>
+                                {/* Pipeline Timeline */}
+                                <div className="mb-4">
+                                  <h5 className="text-xs font-medium text-gray-700 mb-3">Pipeline Timeline:</h5>
+                                  {(() => {
+                                    // Helper function to get display name from job type
+                                    const getJobDisplayName = (jobType: string) => {
+                                      const nameMap: { [key: string]: string } = {
+                                        'stream_speech_detection_job': 'Speech',
+                                        'open_conversation_job': 'Open',
+                                        'transcribe_full_audio_job': 'Transcript',
+                                        'recognise_speakers_job': 'Speakers',
+                                        'process_memory_job': 'Memory'
+                                      };
+                                      return nameMap[jobType] || jobType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                                    };
+
+                                    // Helper function to get icon for job type
+                                    const getJobIcon = (jobType: string) => {
+                                      if (jobType.includes('speech') || jobType.includes('detect')) return Brain;
+                                      if (jobType.includes('conversation') || jobType.includes('open')) return Brain;
+                                      if (jobType.includes('transcribe')) return FileText;
+                                      if (jobType.includes('speaker') || jobType.includes('recognise')) return Brain;
+                                      if (jobType.includes('memory')) return Brain;
+                                      return Brain; // Default icon
+                                    };
+
+                                    // Build dynamic pipeline from actual jobs with timing data
+                                    // Sort by start time to show chronological order
+                                    const jobsWithTiming = jobs
+                                      .filter(j => j && j.started_at)
+                                      .map(job => {
+                                        const startTime = new Date(job.started_at!).getTime();
+                                        const endTime = job.completed_at || job.ended_at
+                                          ? new Date((job.completed_at || job.ended_at)!).getTime()
+                                          : (job.status === 'processing' ? Date.now() : startTime);
+
+                                        return {
+                                          job,
+                                          startTime,
+                                          endTime,
+                                          duration: (endTime - startTime) / 1000,
+                                          name: getJobDisplayName(job.job_type),
+                                          icon: getJobIcon(job.job_type)
+                                        };
+                                      })
+                                      .sort((a, b) => a.startTime - b.startTime);
+
+                                    const jobTimes = jobsWithTiming;
+
+                                    // Find earliest start and latest end
+                                    const validTimes = jobTimes.filter(t => t !== null);
+                                    if (validTimes.length === 0) {
+                                      return (
+                                        <div className="text-xs text-gray-500 italic">No job timing data available</div>
+                                      );
+                                    }
+
+                                    const earliestStart = Math.min(...validTimes.map(t => t!.startTime));
+                                    const latestEnd = Math.max(...validTimes.map(t => t!.endTime));
+                                    const totalDuration = (latestEnd - earliestStart) / 1000; // in seconds
+
+                                    // Format duration for display
+                                    const formatDuration = (seconds: number) => {
+                                      if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
+                                      if (seconds < 60) return `${seconds.toFixed(1)}s`;
+                                      const mins = Math.floor(seconds / 60);
+                                      const secs = Math.floor(seconds % 60);
+                                      return `${mins}m ${secs}s`;
+                                    };
+
+                                    // Generate time axis markers (0%, 25%, 50%, 75%, 100%)
+                                    const timeMarkers = [0, 0.25, 0.5, 0.75, 1].map(pct => ({
+                                      percent: pct * 100,
+                                      time: formatDuration(totalDuration * pct)
+                                    }));
+
+                                    return (
+                                      <div className="space-y-2">
+                                        {/* Time axis */}
+                                        <div className="relative h-4 border-b border-gray-300">
+                                          {timeMarkers.map((marker, idx) => (
+                                            <div
+                                              key={idx}
+                                              className="absolute"
+                                              style={{ left: `${marker.percent}%`, transform: 'translateX(-50%)' }}
+                                            >
+                                              <div className="w-px h-2 bg-gray-400"></div>
+                                              <div className="text-xs text-gray-500 mt-0.5 whitespace-nowrap">
+                                                {marker.time}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+
+                                        {/* Job timeline bars */}
+                                        <div className="space-y-2 mt-6">
+                                          {jobTimes.map((jobTime) => {
+                                            const { job, startTime, endTime, duration, name, icon: Icon } = jobTime;
+
+                                            // Calculate position and width as percentage of total timeline
+                                            const startPercent = ((startTime - earliestStart) / (latestEnd - earliestStart)) * 100;
+                                            const widthPercent = ((endTime - startTime) / (latestEnd - earliestStart)) * 100;
+
+                                            // Use job type colors
+                                            const jobColors = getJobTypeColor(job.job_type, job.status);
+                                            const barColor = jobColors.bgColor;
+                                            const borderColor = jobColors.borderColor;
+
+                                            return (
+                                              <div key={job.job_id} className="flex items-center space-x-2 h-8">
+                                                {/* Stage Icon */}
+                                                <div className={`w-8 h-8 rounded-full border-2 ${borderColor} ${barColor} flex items-center justify-center flex-shrink-0`}>
+                                                  <Icon className="w-4 h-4 text-white" />
+                                                </div>
+
+                                                {/* Stage Name */}
+                                                <span className="text-xs text-gray-700 w-20 flex-shrink-0">{name}</span>
+
+                                                {/* Timeline Container */}
+                                                <div className="flex-1 relative h-6 bg-gray-100 rounded">
+                                                  {/* Job Bar */}
+                                                  <div
+                                                    className={`absolute h-6 rounded ${barColor} ${job.status === 'processing' ? 'animate-pulse' : ''} flex items-center justify-center`}
+                                                    style={{
+                                                      left: `${startPercent}%`,
+                                                      width: `${widthPercent}%`
+                                                    }}
+                                                    title={`Started: ${new Date(startTime).toLocaleTimeString()}\nDuration: ${formatDuration(duration)}`}
+                                                  >
+                                                    <span className="text-xs text-white font-medium px-2 truncate">
+                                                      {formatDuration(duration)}
+                                                    </span>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+
+                                        {/* Total Duration */}
+                                        <div className="text-xs text-gray-600 text-right mt-2">
+                                          Total: {formatDuration(totalDuration)}
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+
+                                <h5 className="text-xs font-medium text-gray-700 mb-2">Conversation Jobs:</h5>
+                                {jobs.filter(j => j != null && j.job_id).length > 0 ? (
+                                  <div className="space-y-1">
+                                    {jobs
+                                      .filter(j => j != null && j.job_id)
+                                      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                                      .map((job, index) => (
+                                      <div key={job.job_id} className={`p-2 bg-gray-50 rounded border ${getJobTypeColor(job.job_type, job.status).borderColor}`} style={{ borderLeftWidth: '12px' }}>
+                                        <div className="flex items-center justify-between">
+                                          <div
+                                            className="flex-1 flex items-center space-x-2 cursor-pointer hover:bg-gray-100 transition-colors rounded px-1 py-0.5"
+                                            onClick={() => toggleJobExpansion(job.job_id)}
+                                          >
+                                            {expandedJobs.has(job.job_id) ? (
+                                              <ChevronDown className="w-3 h-3 text-gray-500 flex-shrink-0" />
+                                            ) : (
+                                              <ChevronRight className="w-3 h-3 text-gray-500 flex-shrink-0" />
+                                            )}
+                                            <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
+                                            <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
+                                            <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
+                                            <span className="text-xs font-medium text-gray-900 truncate">{job.job_type}</span>
+                                            <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
+                                              {job.status}
+                                            </span>
+                                            <span className="text-xs text-gray-500">{job.queue || job.data?.queue || 'unknown'}</span>
+                                            {/* Show memory count badge on collapsed card */}
+                                            {!expandedJobs.has(job.job_id) && job.job_type === 'process_memory_job' && job.result?.memories_created !== undefined && (
+                                              <span className="text-xs px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded">
+                                                {job.result.memories_created} memories
+                                              </span>
+                                            )}
+                                          </div>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              viewJobDetails(job.job_id);
+                                            }}
+                                            className="ml-2 text-indigo-600 hover:text-indigo-900 flex-shrink-0"
+                                          >
+                                            <Eye className="w-3 h-3" />
+                                          </button>
+                                        </div>
+
+                                        {/* Collapsible metadata section */}
+                                        {expandedJobs.has(job.job_id) && (
+                                          <div className="mt-1 text-xs text-gray-600 space-y-0.5 pl-4">
+                                            <div>
+                                              {job.started_at && (
+                                                <span>Started: {new Date(job.started_at).toLocaleTimeString()}</span>
+                                              )}
+                                              {job.started_at && (
+                                                <span> • Duration: {formatDuration(job)}</span>
+                                              )}
+                                            </div>
+
+                                            {/* Show job-specific metadata */}
+                                            {job.meta && (
+                                              <div className="space-y-0.5 pl-2 border-l-2 border-gray-300">
+                                                {/* open_conversation_job metadata */}
+                                                {job.job_type === 'open_conversation_job' && (
+                                                  <>
+                                                    {job.meta.word_count !== undefined && (
+                                                      <div>Words: <span className="font-medium">{job.meta.word_count}</span></div>
+                                                    )}
+                                                    {job.meta.speakers && job.meta.speakers.length > 0 && (
+                                                      <div>Speakers: <span className="font-medium">{job.meta.speakers.join(', ')}</span></div>
+                                                    )}
+                                                    {job.meta.inactivity_seconds !== undefined && (
+                                                      <div>Idle: <span className="font-medium">{Math.floor(job.meta.inactivity_seconds)}s</span></div>
+                                                    )}
+                                                    {job.meta.transcript && (
+                                                      <div className="italic text-gray-500 truncate max-w-md">
+                                                        "{job.meta.transcript.substring(0, 80)}..."
+                                                      </div>
+                                                    )}
+                                                  </>
+                                                )}
+
+                                                {/* transcribe_full_audio_job metadata */}
+                                                {job.job_type === 'transcribe_full_audio_job' && job.result && (
+                                                  <>
+                                                    {job.result.transcript && (
+                                                      <div>Transcript: <span className="font-medium">{job.result.transcript.length} chars</span></div>
+                                                    )}
+                                                    {job.result.processing_time_seconds && (
+                                                      <div>Processing: <span className="font-medium">{job.result.processing_time_seconds.toFixed(1)}s</span></div>
+                                                    )}
+                                                  </>
+                                                )}
+
+                                                {/* recognise_speakers_job metadata */}
+                                                {job.job_type === 'recognise_speakers_job' && job.result && (
+                                                  <>
+                                                    {job.result.identified_speakers && job.result.identified_speakers.length > 0 && (
+                                                      <div>Identified: <span className="font-medium">{job.result.identified_speakers.join(', ')}</span></div>
+                                                    )}
+                                                    {job.result.segment_count && (
+                                                      <div>Segments: <span className="font-medium">{job.result.segment_count}</span></div>
+                                                    )}
+                                                  </>
+                                                )}
+
+                                                {/* process_memory_job metadata */}
+                                                {job.job_type === 'process_memory_job' && job.result && (
+                                                  <>
+                                                    {job.result.memories_created !== undefined && (
+                                                      <div>Memories: <span className="font-medium">{job.result.memories_created} created</span></div>
+                                                    )}
+                                                    {job.result.processing_time_seconds && (
+                                                      <div>Processing: <span className="font-medium">{job.result.processing_time_seconds.toFixed(1)}s</span></div>
+                                                    )}
+                                                  </>
+                                                )}
+
+                                                {/* Show conversation_id if present */}
+                                                {job.meta.conversation_id && (
+                                                  <div className="font-mono text-gray-500">
+                                                    Conv: {job.meta.conversation_id.substring(0, 8)}...
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-gray-500 italic">No jobs found for this conversation</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -1352,109 +1906,7 @@ const Queue: React.FC = () => {
         </div>
       </div>
 
-      {/* Jobs Table */}
-      <div className="bg-white rounded-lg border overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-medium">Jobs</h3>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Date</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Job ID</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Type</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Duration</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Result</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {jobs.map((job) => (
-                <tr key={job.job_id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
-                    {new Date(job.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </td>
-                  <td className="px-4 py-3 max-w-xs">
-                    <div className="text-xs font-mono text-gray-900 truncate" title={job.job_id}>
-                      {job.job_id}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{getJobTypeShort(job.job_type)}</div>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
-                      {getStatusIcon(job.status)}
-                      <span className="ml-1">{job.status.charAt(0).toUpperCase() + job.status.slice(1)}</span>
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="text-sm text-gray-700 font-mono">
-                      {formatDuration(job)}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    {getJobResult(job)}
-                  </td>
-                  <td className="px-4 py-3 text-sm font-medium space-x-2 whitespace-nowrap">
-                    {job.status === 'failed' && (
-                      <button
-                        onClick={() => retryJob(job.job_id)}
-                        className="text-blue-600 hover:text-blue-900"
-                      >
-                        <RotateCcw className="w-4 h-4" />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => viewJobDetails(job.job_id)}
-                      className="text-indigo-600 hover:text-indigo-900"
-                      disabled={loadingJobDetails}
-                    >
-                      <Eye className="w-4 h-4" />
-                    </button>
-                    {(job.status === 'queued' || job.status === 'processing') && (
-                      <button
-                        onClick={() => cancelJob(job.job_id)}
-                        className="text-red-600 hover:text-red-900"
-                      >
-                        <StopCircle className="w-4 h-4" />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {pagination.total > pagination.limit && (
-          <div className="bg-white px-4 py-3 border-t border-gray-200 flex items-center justify-between">
-            <div className="text-sm text-gray-700">
-              Showing {pagination.offset + 1} to {Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total} results
-            </div>
-            <div className="flex space-x-2">
-              <button
-                onClick={prevPage}
-                disabled={pagination.offset === 0}
-                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
-              >
-                Previous
-              </button>
-              <button
-                onClick={nextPage}
-                disabled={!pagination.has_more}
-                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Old Jobs Table and Pagination - Removed in favor of session-based view above */}
 
       {/* Job Details Modal */}
       {selectedJob && (
@@ -1544,6 +1996,159 @@ const Queue: React.FC = () => {
                     <pre className="text-xs text-gray-900 bg-green-50 p-2 rounded overflow-auto max-h-64">
                       {JSON.stringify(selectedJob.result, null, 2)}
                     </pre>
+                  </div>
+                )}
+
+                {/* Formatted Job Metadata - Job-specific displays */}
+                {selectedJob.meta && Object.keys(selectedJob.meta).length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Job Metadata</label>
+
+                    {/* open_conversation_job formatted metadata */}
+                    {selectedJob.func_name?.includes('open_conversation_job') && (
+                      <div className="bg-blue-50 p-3 rounded mb-3 space-y-2">
+                        {selectedJob.meta.word_count !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Word Count:</span> {selectedJob.meta.word_count}
+                          </div>
+                        )}
+                        {selectedJob.meta.speakers && selectedJob.meta.speakers.length > 0 && (
+                          <div className="text-sm">
+                            <span className="font-medium">Speakers:</span> {selectedJob.meta.speakers.join(', ')}
+                          </div>
+                        )}
+                        {selectedJob.meta.transcript_length !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Transcript Length:</span> {selectedJob.meta.transcript_length} chars
+                          </div>
+                        )}
+                        {selectedJob.meta.duration_seconds !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Duration:</span> {selectedJob.meta.duration_seconds.toFixed(1)}s
+                          </div>
+                        )}
+                        {selectedJob.meta.inactivity_seconds !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Idle Time:</span> {Math.floor(selectedJob.meta.inactivity_seconds)}s
+                          </div>
+                        )}
+                        {selectedJob.meta.chunks_processed !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Chunks Processed:</span> {selectedJob.meta.chunks_processed}
+                          </div>
+                        )}
+                        {selectedJob.meta.transcript && (
+                          <div className="mt-2">
+                            <div className="text-sm font-medium mb-1">Transcript:</div>
+                            <div className="text-sm italic text-gray-700 bg-white p-2 rounded border border-gray-200 max-h-32 overflow-y-auto">
+                              "{selectedJob.meta.transcript}"
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* process_memory_job formatted metadata */}
+                    {selectedJob.func_name?.includes('process_memory_job') && selectedJob.meta.memory_details && selectedJob.meta.memory_details.length > 0 && (
+                      <div className="bg-pink-50 p-3 rounded mb-3 space-y-2">
+                        <div className="text-sm">
+                          <span className="font-medium">Memories Created:</span> {selectedJob.meta.memories_created || selectedJob.meta.memory_details.length}
+                        </div>
+                        {selectedJob.meta.processing_time !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Processing Time:</span> {selectedJob.meta.processing_time.toFixed(1)}s
+                          </div>
+                        )}
+                        <div className="mt-2">
+                          <div className="text-sm font-medium mb-1">Memory Details:</div>
+                          <div className="space-y-1">
+                            {selectedJob.meta.memory_details.map((mem: any, idx: number) => (
+                              <div key={idx} className="text-xs bg-pink-100 p-2 rounded border border-pink-200">
+                                {mem.text}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* stream_speech_detection_job formatted metadata */}
+                    {selectedJob.func_name?.includes('stream_speech_detection_job') && (
+                      <div className="bg-yellow-50 p-3 rounded mb-3 space-y-2">
+                        {selectedJob.meta.speech_detected_at && (
+                          <div className="text-sm">
+                            <span className="font-medium">Speech Detected At:</span> {new Date(selectedJob.meta.speech_detected_at).toLocaleString()}
+                          </div>
+                        )}
+                        {selectedJob.meta.detected_speakers && selectedJob.meta.detected_speakers.length > 0 && (
+                          <div className="text-sm">
+                            <span className="font-medium">Detected Speakers:</span> {selectedJob.meta.detected_speakers.join(', ')}
+                          </div>
+                        )}
+                        {selectedJob.meta.conversation_job_id && (
+                          <div className="text-sm">
+                            <span className="font-medium">Conversation Job:</span> {selectedJob.meta.conversation_job_id}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* transcribe_full_audio_job formatted metadata */}
+                    {selectedJob.func_name?.includes('transcribe_full_audio_job') && (selectedJob.meta.title || selectedJob.meta.summary) && (
+                      <div className="bg-purple-50 p-3 rounded mb-3 space-y-2">
+                        {selectedJob.meta.title && (
+                          <div className="text-sm">
+                            <span className="font-medium">Title:</span> {selectedJob.meta.title}
+                          </div>
+                        )}
+                        {selectedJob.meta.summary && (
+                          <div className="text-sm">
+                            <span className="font-medium">Summary:</span> {selectedJob.meta.summary}
+                          </div>
+                        )}
+                        {selectedJob.meta.transcript_length !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Transcript Length:</span> {selectedJob.meta.transcript_length} chars
+                          </div>
+                        )}
+                        {selectedJob.meta.word_count !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Word Count:</span> {selectedJob.meta.word_count}
+                          </div>
+                        )}
+                        {selectedJob.meta.processing_time !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Processing Time:</span> {selectedJob.meta.processing_time.toFixed(1)}s
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* process_cropping_job formatted metadata */}
+                    {selectedJob.func_name?.includes('process_cropping_job') && (
+                      <div className="bg-green-50 p-3 rounded mb-3 space-y-2">
+                        {selectedJob.meta.cropped_duration_seconds !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Cropped Duration:</span> {selectedJob.meta.cropped_duration_seconds.toFixed(1)}s
+                          </div>
+                        )}
+                        {selectedJob.meta.segments_cropped !== undefined && (
+                          <div className="text-sm">
+                            <span className="font-medium">Segments Cropped:</span> {selectedJob.meta.segments_cropped}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Raw JSON metadata (collapsible) */}
+                    <details className="mt-2">
+                      <summary className="text-sm font-medium text-gray-700 cursor-pointer hover:text-gray-900">
+                        Raw Metadata JSON
+                      </summary>
+                      <pre className="text-xs text-gray-900 bg-blue-50 p-2 rounded overflow-auto max-h-64 mt-2">
+                        {JSON.stringify(selectedJob.meta, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 )}
               </div>

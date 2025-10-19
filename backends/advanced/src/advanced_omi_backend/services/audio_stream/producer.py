@@ -248,7 +248,7 @@ class AudioStreamProducer:
 
             # Log every 10th chunk to avoid spam
             if session_buffer["chunk_count"] % 10 == 0 or session_buffer["chunk_count"] <= 5:
-                logger.info(
+                logger.debug(
                     f"📤 Added fixed-size chunk {chunk_id_formatted} to {stream_name} "
                     f"({len(chunk_audio)} bytes = {len(chunk_audio)/bytes_per_second:.3f}s, "
                     f"buffer remaining: {len(session_buffer['buffer'])} bytes)"
