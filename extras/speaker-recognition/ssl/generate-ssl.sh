@@ -2,23 +2,25 @@
 set -e
 
 # Generate self-signed SSL certificate for Friend-Lite Advanced Backend
-# Supports localhost and custom Tailscale IP
+# Supports localhost, IP addresses, and domain names
 
-TAILSCALE_IP="$1"
+SERVER_ADDRESS="$1"
 
-if [ -z "$TAILSCALE_IP" ]; then
-    echo "Usage: $0 <tailscale-ip>"
+if [ -z "$SERVER_ADDRESS" ]; then
+    echo "Usage: $0 <ip-or-domain>"
     echo "Example: $0 100.83.66.30"
+    echo "Example: $0 kraken.tail168755.ts.net"
     exit 1
 fi
 
-# Validate IP format
-if ! echo "$TAILSCALE_IP" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' > /dev/null; then
-    echo "Error: Invalid IP format. Expected format: xxx.xxx.xxx.xxx"
-    exit 1
+# Detect if it's an IP address or domain name
+if echo "$SERVER_ADDRESS" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' > /dev/null; then
+    IS_IP=true
+    echo "Generating SSL certificate for localhost and IP: $SERVER_ADDRESS"
+else
+    IS_IP=false
+    echo "Generating SSL certificate for localhost and domain: $SERVER_ADDRESS"
 fi
-
-echo "�� Generating SSL certificate for localhost and $TAILSCALE_IP"
 
 # Determine the output directory - we should be in backends/advanced when running
 SSL_DIR="ssl"
@@ -53,8 +55,14 @@ subjectAltName = @alt_names
 DNS.1 = localhost
 DNS.2 = *.localhost
 IP.1 = 127.0.0.1
-IP.2 = $TAILSCALE_IP
 EOF
+
+# Add custom address as either IP or DNS
+if [ "$IS_IP" = true ]; then
+    echo "IP.2 = $SERVER_ADDRESS" >> $OUTPUT_DIR/server.conf
+else
+    echo "DNS.3 = $SERVER_ADDRESS" >> $OUTPUT_DIR/server.conf
+fi
 
 # Generate private key
 openssl genrsa -out $OUTPUT_DIR/server.key 2048
@@ -72,10 +80,10 @@ rm $OUTPUT_DIR/server.csr $OUTPUT_DIR/server.conf
 chmod 600 $OUTPUT_DIR/server.key
 chmod 644 $OUTPUT_DIR/server.crt
 
-echo "✅ SSL certificate generated successfully"
+echo "SSL certificate generated successfully"
 echo "   - Certificate: $OUTPUT_DIR/server.crt"
 echo "   - Private key: $OUTPUT_DIR/server.key"
-echo "   - Valid for: localhost, *.localhost, 127.0.0.1, $TAILSCALE_IP"
+echo "   - Valid for: localhost, *.localhost, 127.0.0.1, $SERVER_ADDRESS"
 echo ""
 echo "Certificate Details:"
 openssl x509 -in $OUTPUT_DIR/server.crt -text -noout | grep -A 1 "Subject Alternative Name" || echo "   (Certificate generated successfully)"
