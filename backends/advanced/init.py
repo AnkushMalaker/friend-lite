@@ -336,6 +336,27 @@ class FriendLiteSetup:
                     self.console.print(f"[yellow][WARNING][/yellow] nginx.conf generation failed: {e}")
             else:
                 self.console.print("[yellow][WARNING][/yellow] nginx.conf.template not found")
+
+            # Generate Caddyfile from template
+            self.console.print("[blue][INFO][/blue] Creating Caddyfile configuration...")
+            caddyfile_template = script_dir / "Caddyfile.template"
+            if caddyfile_template.exists():
+                try:
+                    with open(caddyfile_template, 'r') as f:
+                        caddyfile_content = f.read()
+
+                    # Replace TAILSCALE_IP with server_ip
+                    caddyfile_content = caddyfile_content.replace('TAILSCALE_IP', server_ip)
+
+                    with open('Caddyfile', 'w') as f:
+                        f.write(caddyfile_content)
+
+                    self.console.print(f"[green][SUCCESS][/green] Caddyfile created for: {server_ip}")
+
+                except Exception as e:
+                    self.console.print(f"[yellow][WARNING][/yellow] Caddyfile generation failed: {e}")
+            else:
+                self.console.print("[yellow][WARNING][/yellow] Caddyfile.template not found")
         else:
             self.config["HTTPS_ENABLED"] = "false"
 
@@ -345,11 +366,7 @@ class FriendLiteSetup:
         env_template = Path(".env.template")
 
         # Backup existing .env if it exists
-        if env_path.exists():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = env_path.with_suffix(f'.backup.{timestamp}')
-            shutil.copy2(env_path, backup_path)
-            self.console.print(f"[blue][INFO][/blue] Backed up existing .env to {backup_path.name}")
+        self.backup_existing_env()
 
         # Copy template to .env
         if env_template.exists():

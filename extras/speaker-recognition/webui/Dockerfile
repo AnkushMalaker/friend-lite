@@ -16,6 +16,10 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Copy and set executable permissions for healthcheck script
+COPY healthcheck.sh /app/healthcheck.sh
+RUN chmod +x /app/healthcheck.sh
+
 # Note: Port is determined at runtime by REACT_UI_PORT env var
 # Actual port binding is configured in docker-compose.yml
 

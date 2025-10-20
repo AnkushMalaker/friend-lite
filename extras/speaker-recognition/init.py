@@ -124,6 +124,14 @@ class SpeakerRecognitionSetup:
             compute_mode = "gpu" if choice == "2" else "cpu"
 
         self.config["COMPUTE_MODE"] = compute_mode
+
+        # Set CUDA_VERSION for Docker build
+        if compute_mode == "cpu":
+            self.config["CUDA_VERSION"] = "cpu"
+        else:
+            # Default to cu121 for GPU mode (can be overridden in .env)
+            self.config["CUDA_VERSION"] = "cu121"
+
         self.console.print(f"[blue][INFO][/blue] Using {compute_mode.upper()} mode")
 
     def setup_deepgram(self):
@@ -220,11 +228,7 @@ class SpeakerRecognitionSetup:
         env_template = Path(".env.template")
 
         # Backup existing .env if it exists
-        if env_path.exists():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = env_path.with_suffix(f'.backup.{timestamp}')
-            shutil.copy2(env_path, backup_path)
-            self.console.print(f"[blue][INFO][/blue] Backed up existing .env to {backup_path.name}")
+        self.backup_existing_env()
 
         # Copy template to .env
         if env_template.exists():

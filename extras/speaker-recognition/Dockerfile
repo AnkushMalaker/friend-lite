@@ -2,6 +2,9 @@ FROM python:3.12-bookworm
 
 ARG CUDA_VERSION
 
+# Capture build arg as environment variable for runtime
+ENV CUDA_VERSION=${CUDA_VERSION}
+
 # Install system dependencies including PortAudio for pyaudio
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -38,4 +41,5 @@ ENV PYTHONPATH=/app
 EXPOSE 8085
 
 # Run the service
-CMD ["uv", "run", "--extra", "${CUDA_VERSION}", "--no-dev", "simple-speaker-service"] 
+# Use shell form to allow environment variable expansion
+CMD uv run --extra ${CUDA_VERSION} --no-dev simple-speaker-service 
