@@ -124,6 +124,14 @@ class SpeakerRecognitionSetup:
             compute_mode = "gpu" if choice == "2" else "cpu"
 
         self.config["COMPUTE_MODE"] = compute_mode
+
+        # Set CUDA_VERSION for Docker build
+        if compute_mode == "cpu":
+            self.config["CUDA_VERSION"] = "cpu"
+        else:
+            # Default to cu121 for GPU mode (can be overridden in .env)
+            self.config["CUDA_VERSION"] = "cu121"
+
         self.console.print(f"[blue][INFO][/blue] Using {compute_mode.upper()} mode")
 
     def setup_deepgram(self):
