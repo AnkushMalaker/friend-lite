@@ -200,7 +200,7 @@ services:
 
 
 
-  # Use tailscale instead 
+  # Use tailscale instead
   # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
   # ngrok:
   #   image: ngrok/ngrok:latest
@@ -211,6 +211,10 @@ services:
   #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
   #   command: "http proxy:80 --url=${NGROK_URL} --basic-auth=${NGROK_BASIC_AUTH}"
 
+# Shared network for cross-project communication
+networks:
+  default:
+    name: friend-network
 
 # Question: These are named volumes, but they are not being used, right? Can we remove them?
 # volumes:
