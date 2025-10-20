@@ -27,10 +27,67 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "alembic>=1.13.0",
     # Data processing
-    "pandas>=2.2.0",
-    "scikit-learn>=1.4.0", # For t-SNE/UMAP visualization
+    "pandas>=2.0.0",
+    "scikit-learn>=1.4.0",
     "umap-learn>=0.5.3",
+    "faiss-cpu>=1.9",
 ]
+
+[project.optional-dependencies]
+local-audio = [
+    "easy-audio-interfaces[local-audio]>=0.7.1",
+]
+
+cu121 = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+]
+
+cu126 = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+]
+
+cu128 = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cu121" },
+        { extra = "cu126" },
+        { extra = "cu128" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu121", extra = "cu121" },
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu128", extra = "cu128" },
+]
+torchaudio = [
+    { index = "pytorch-cu121", extra = "cu121" },
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu128", extra = "cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
@@ -39,27 +96,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[project.optional-dependencies]
-local-audio = [
-    "easy-audio-interfaces[local-audio]>=0.7.1",
-]
-
 [project.scripts]
 simple-speaker-service = "simple_speaker_recognition.api.service:main"
 simple-speaker-web = "simple_speaker_recognition.web.app:main"
 
 [dependency-groups]
-cpu = [
-    "faiss-cpu>=1.9",
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
-    "numpy==1.23.5",  # Ensure numpy compatibility with faiss-cpu   
-]
-gpu = [
-    "faiss-cpu>=1.9",  # Use CPU FAISS for compatibility, GPU PyTorch for performance
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
-]
 dev = [
     "black>=25.1.0",
     "isort>=6.0.1",
@@ -67,18 +108,8 @@ dev = [
 
 test = [
     "pytest",
-    "requests",  # For integration tests
+    "requests",
 ]
 
-[tool.uv]
-# dev & cpu are installed automatically
-default-groups = ["dev", "cpu"]
-# cpu and gpu can never coexist
-conflicts = [
-    [
-        { group = "cpu" },
-        { group = "gpu" },
-    ],
-]
 [tool.isort]
-profile = "black" 
+profile = "black"

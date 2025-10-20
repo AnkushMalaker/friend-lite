@@ -8,18 +8,25 @@ import wave
 from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode, parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import numpy as np
 import torch
 import websockets
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pyannote.audio import Model
 from pyannote.audio.pipelines import VoiceActivityDetection
-
 from simple_speaker_recognition.api.core.utils import (
     safe_format_confidence,
-    validate_confidence
+    validate_confidence,
 )
 from simple_speaker_recognition.core.models import SpeakerStatus
 from simple_speaker_recognition.core.unified_speaker_db import UnifiedSpeakerDB
@@ -121,7 +128,7 @@ class SpeakerChangeDetector:
             log.info("Loading Pyannote VAD model...")
             self.vad_model = Model.from_pretrained(
                 "pyannote/segmentation-3.0",
-                use_auth_token=self.hf_token
+                token=self.hf_token
             )
             
             # Create VAD pipeline

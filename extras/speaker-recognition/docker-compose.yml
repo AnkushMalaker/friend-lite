@@ -3,11 +3,10 @@ services:
   speaker-service:
     &base-speaker-service
     profiles: ["cpu"]
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        COMPUTE_MODE: cpu
     image: speaker-recognition:latest
     env_file:
       - .env
@@ -45,7 +44,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        COMPUTE_MODE: gpu
+        CUDA_VERSION: ${CUDA_VERSION:-cu121}
     deploy:
       resources:
         reservations:
@@ -56,6 +55,7 @@ services:
   
   # React Web UI
   web-ui:
+    platform: linux/amd64
     build:
       context: webui
       dockerfile: Dockerfile

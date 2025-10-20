@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import get_key
 from rich import print as rprint
 from rich.console import Console
 from rich.prompt import Confirm
@@ -16,27 +17,14 @@ from rich.prompt import Confirm
 console = Console()
 
 def read_env_value(env_file_path, key):
-    """Read a value from an .env file"""
-    try:
-        env_path = Path(env_file_path)
-        if not env_path.exists():
-            return None
-        
-        with open(env_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith(f'{key}=') and not line.startswith('#'):
-                    # Extract value after = sign
-                    value = line.split('=', 1)[1]
-                    # Remove quotes if present
-                    if value.startswith('"') and value.endswith('"'):
-                        value = value[1:-1]
-                    elif value.startswith("'") and value.endswith("'"):
-                        value = value[1:-1]
-                    return value if value else None
+    """Read a value from an .env file using python-dotenv"""
+    env_path = Path(env_file_path)
+    if not env_path.exists():
         return None
-    except Exception:
-        return None
+
+    value = get_key(str(env_path), key)
+    # get_key returns None if key doesn't exist or value is empty
+    return value if value else None
 
 SERVICES = {
     'backend': {
@@ -50,17 +38,17 @@ SERVICES = {
     'extras': {
         'speaker-recognition': {
             'path': 'extras/speaker-recognition',
-            'cmd': ['./setup.sh'],
+            'cmd': ['uv', 'run', '--with-requirements', 'setup-requirements.txt', 'python', 'init.py'],
             'description': 'Speaker identification and enrollment'
         },
         'asr-services': {
-            'path': 'extras/asr-services', 
+            'path': 'extras/asr-services',
             'cmd': ['./setup.sh'],
             'description': 'Offline speech-to-text (Parakeet)'
         },
         'openmemory-mcp': {
             'path': 'extras/openmemory-mcp',
-            'cmd': ['./setup.sh'], 
+            'cmd': ['./setup.sh'],
             'description': 'OpenMemory MCP server'
         }
     }
@@ -71,18 +59,18 @@ def check_service_exists(service_name, service_config):
     service_path = Path(service_config['path'])
     if not service_path.exists():
         return False, f"Directory {service_path} does not exist"
-    
-    # For advanced backend, check if init.py exists
-    if service_name == 'advanced':
+
+    # For services with Python init scripts, check if init.py exists
+    if service_name in ['advanced', 'speaker-recognition']:
         script_path = service_path / 'init.py'
         if not script_path.exists():
             return False, f"Script {script_path} does not exist"
     else:
-        # For extras, check if setup.sh exists
+        # For other extras, check if setup.sh exists
         script_path = service_path / 'setup.sh'
         if not script_path.exists():
             return False, f"Script {script_path} does not exist (will be created in Phase 2)"
-    
+
     return True, "OK"
 
 def select_services():
@@ -161,19 +149,24 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
         if service_name == 'speaker-recognition' and https_enabled and server_ip:
             cmd.extend(['--enable-https', '--server-ip', server_ip])
         
-        # For speaker-recognition, try to pass API keys if available
+        # For speaker-recognition, try to pass API keys and config if available
         if service_name == 'speaker-recognition':
             # Pass Deepgram API key from backend if available
             backend_env_path = 'backends/advanced/.env'
             deepgram_key = read_env_value(backend_env_path, 'DEEPGRAM_API_KEY')
             if deepgram_key and deepgram_key != 'your_deepgram_api_key_here':
                 cmd.extend(['--deepgram-api-key', deepgram_key])
-            
+
             # Pass HF Token from existing speaker recognition .env if available
             speaker_env_path = 'extras/speaker-recognition/.env'
             hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
             if hf_token and hf_token != 'your_huggingface_token_here':
                 cmd.extend(['--hf-token', hf_token])
+
+            # Pass compute mode from existing .env if available
+            compute_mode = read_env_value(speaker_env_path, 'COMPUTE_MODE')
+            if compute_mode in ['cpu', 'gpu']:
+                cmd.extend(['--compute-mode', compute_mode])
         
         # For openmemory-mcp, try to pass OpenAI API key from backend if available
         if service_name == 'openmemory-mcp':
@@ -248,7 +241,7 @@ def main():
     server_ip = None
     
     # Check if we have services that benefit from HTTPS
-    https_services = {'advanced', 'speaker-recognition'}
+    https_services = {'advanced', 'speaker-recognition'} # advanced will always need https then
     needs_https = bool(https_services.intersection(selected_services))
     
     if needs_https:
@@ -336,6 +329,7 @@ def main():
     # Show individual service usage
     console.print(f"\n💡 [dim]Tip: You can also setup services individually:[/dim]")
     console.print(f"[dim]   cd backends/advanced && uv run --with-requirements setup-requirements.txt python init.py[/dim]")
+    console.print(f"[dim]   cd extras/speaker-recognition && uv run --with-requirements setup-requirements.txt python init.py[/dim]")
 
 if __name__ == "__main__":
     main()

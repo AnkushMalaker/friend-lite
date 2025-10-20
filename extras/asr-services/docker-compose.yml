@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile_Parakeet
+      args:
+        CUDA_VERSION: ${CUDA_VERSION:-cu121}
     image: parakeet-asr:latest
     ports:
       - "${PARAKEET_HOST_PORT:-8767}:${PARAKEET_CONTAINER_PORT:-8765}"

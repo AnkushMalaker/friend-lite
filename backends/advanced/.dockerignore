@@ -15,3 +15,5 @@
 !ssl
 !nginx.conf
 !nginx.conf.template
+!start.sh
+!start-workers.sh

@@ -16,8 +16,8 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Expose port
-EXPOSE 5173
+# Note: Port is determined at runtime by REACT_UI_PORT env var
+# Actual port binding is configured in docker-compose.yml
 
 # Start development server
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

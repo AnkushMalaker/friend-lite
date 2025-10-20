@@ -13,9 +13,9 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from rich import print as rprint
+from dotenv import set_key
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -340,63 +340,35 @@ class FriendLiteSetup:
             self.config["HTTPS_ENABLED"] = "false"
 
     def generate_env_file(self):
-        """Generate the .env file from configuration"""
-        env_content = f"""# =============================================================================
-# Friend-Lite Advanced Backend Configuration
-# Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-# =============================================================================
+        """Generate .env file from template and update with configuration"""
+        env_path = Path(".env")
+        env_template = Path(".env.template")
 
-# Authentication
-AUTH_SECRET_KEY={self.config.get('AUTH_SECRET_KEY', '')}
-ADMIN_EMAIL={self.config.get('ADMIN_EMAIL', '')}
-ADMIN_PASSWORD={self.config.get('ADMIN_PASSWORD', '')}
+        # Backup existing .env if it exists
+        if env_path.exists():
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = env_path.with_suffix(f'.backup.{timestamp}')
+            shutil.copy2(env_path, backup_path)
+            self.console.print(f"[blue][INFO][/blue] Backed up existing .env to {backup_path.name}")
 
-# Transcription Provider
-TRANSCRIPTION_PROVIDER={self.config.get('TRANSCRIPTION_PROVIDER', '')}
-DEEPGRAM_API_KEY={self.config.get('DEEPGRAM_API_KEY', '')}
-MISTRAL_API_KEY={self.config.get('MISTRAL_API_KEY', '')}
-MISTRAL_MODEL={self.config.get('MISTRAL_MODEL', '')}
+        # Copy template to .env
+        if env_template.exists():
+            shutil.copy2(env_template, env_path)
+            self.console.print("[blue][INFO][/blue] Copied .env.template to .env")
+        else:
+            self.console.print("[yellow][WARNING][/yellow] .env.template not found, creating new .env")
+            env_path.touch(mode=0o600)
 
-# LLM Provider  
-LLM_PROVIDER={self.config.get('LLM_PROVIDER', '')}
-OPENAI_API_KEY={self.config.get('OPENAI_API_KEY', '')}
-OPENAI_MODEL={self.config.get('OPENAI_MODEL', '')}
-OPENAI_BASE_URL={self.config.get('OPENAI_BASE_URL', '')}
-OLLAMA_BASE_URL={self.config.get('OLLAMA_BASE_URL', '')}
-OLLAMA_MODEL={self.config.get('OLLAMA_MODEL', '')}
-# Memory Provider
-MEMORY_PROVIDER={self.config.get('MEMORY_PROVIDER', 'friend_lite')}
-QDRANT_BASE_URL={self.config.get('QDRANT_BASE_URL', 'qdrant')}
-OPENMEMORY_MCP_URL={self.config.get('OPENMEMORY_MCP_URL', '')}
-OPENMEMORY_CLIENT_NAME={self.config.get('OPENMEMORY_CLIENT_NAME', '')}
-OPENMEMORY_USER_ID={self.config.get('OPENMEMORY_USER_ID', '')}
+        # Update configured values using set_key
+        env_path_str = str(env_path)
+        for key, value in self.config.items():
+            if value:  # Only set non-empty values
+                set_key(env_path_str, key, value)
 
-# Optional Services
-SPEAKER_SERVICE_URL={self.config.get('SPEAKER_SERVICE_URL', '')}
-PARAKEET_ASR_URL={self.config.get('PARAKEET_ASR_URL', '')}
+        # Ensure secure permissions
+        os.chmod(env_path, 0o600)
 
-# Network Configuration
-BACKEND_PUBLIC_PORT={self.config.get('BACKEND_PUBLIC_PORT', '8000')}
-WEBUI_PORT={self.config.get('WEBUI_PORT', '5173')}
-
-# Database
-MONGODB_URI=mongodb://mongo:27017
-DATABASE_NAME=friend_db
-
-# CORS (supports Tailscale IPs automatically)
-CORS_ORIGINS=http://localhost:3000,http://localhost:5173
-
-# Logging
-LOG_LEVEL=INFO
-"""
-        
-        # Create .env file with secure permissions (owner read/write only)
-        env_path = ".env"
-        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
-        with os.fdopen(fd, 'w') as f:
-            f.write(env_content)
-        
-        self.console.print("[green][SUCCESS][/green] .env file created successfully with secure permissions")
+        self.console.print("[green][SUCCESS][/green] .env file configured successfully with secure permissions")
 
     def copy_config_templates(self):
         """Copy other configuration files"""

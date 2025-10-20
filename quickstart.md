@@ -20,10 +20,20 @@ Think of it like having Siri/Alexa, but it's **your own AI** running on **your h
 - **Tailscale** - Connects securely to your home computer
 - **Friend-Lite Mobile App** - Interface for your OMI device and conversations
 
-### AI Services (You'll Get API Keys)
-- **Deepgram** - Converts speech to text (free credits available)
-- **OpenAI** - Powers memory extraction and insights (pay per use)
-- **Optional: Hugging Face** - For speaker recognition (free)
+### AI Services (Choose Your Path)
+
+**Option A: Cloud Services (Easiest - Recommended for Beginners)**
+- **Deepgram** - Speech-to-text ($200 free credits, then pay per use)
+- **OpenAI** - Memory extraction (~$1-5/month typical usage)
+- Best quality, minimal setup, small monthly cost
+
+**Option B: Local Services (Free but More Complex)**
+- **Parakeet ASR** - Offline speech-to-text (runs on your computer)
+- **Ollama** - Local AI models (runs on your computer)
+- Completely free and private, requires more powerful hardware
+
+**Optional Add-ons (Both Paths)**
+- **Hugging Face** - Speaker recognition (free API key)
 
 ## Step 1: Install Required Software
 
@@ -59,27 +69,37 @@ sudo tailscale up
 
 *Log in with the same account you used on your computer*
 
-## Step 2: Get Your AI API Keys
+## Step 2: Choose Your AI Services Path
 
-You need accounts with AI services (most have free tiers):
+### Path A: Cloud Services (Recommended for Beginners)
 
-### Deepgram (Speech-to-Text) - Required
+**Deepgram (Speech-to-Text)**
 1. Go to [console.deepgram.com](https://console.deepgram.com)
 2. Sign up for free account (get $200 free credits)
 3. Go to "API Keys" → Create new key
 4. **Copy the key** - you'll need it in setup
 
-### OpenAI (AI Brain) - Required  
+**OpenAI (AI Brain)**
 1. Go to [platform.openai.com](https://platform.openai.com)
 2. Create account and add payment method (typically costs $1-5/month)
 3. Go to "API Keys" → Create new key
 4. **Copy the key** - you'll need it in setup
 
-### Hugging Face (Speaker Recognition) - Optional
+**Optional: Hugging Face (Speaker Recognition)**
 1. Go to [huggingface.co](https://huggingface.co/join)
 2. Create free account
 3. Go to Settings → Access Tokens → Create new token
 4. **Copy the token** - for identifying different speakers
+
+### Path B: Local Services (Free & Private)
+
+**No API keys needed!** Everything runs on your computer.
+
+The setup wizard will automatically download and configure:
+- **Parakeet ASR** - Local speech-to-text service
+- **Ollama** - Local AI model runner
+
+*Note: First-time setup will download AI models (this can take time and storage space)*
 
 ## Step 3: Download and Setup Friend-Lite
 
@@ -93,7 +113,7 @@ cd friend-lite
 
 **Run the setup wizard:**
 ```bash
-uv run --with-requirements setup-requirements.txt python init.py
+uv run --with-requirements setup-requirements.txt python wizard.py
 ```
 
 ### What the Setup Wizard Will Ask You
@@ -103,20 +123,37 @@ The wizard will ask questions - here's what to answer:
 **"Admin email"**: Your email (for logging into web dashboard)
 **"Admin password"**: Password for web dashboard (8+ characters)
 
-**"Choose transcription provider"**: Choose 1 (Deepgram)
+#### For Cloud Services (Path A):
+
+**"Choose transcription provider"**: Choose `deepgram`
 **"Deepgram API key"**: Paste the key you got from Deepgram
 
-**"Choose LLM provider"**: Choose 1 (OpenAI) 
+**"Choose LLM provider"**: Choose `openai`
 **"OpenAI API key"**: Paste the key you got from OpenAI
 **"OpenAI model"**: Keep default (gpt-4o-mini)
+
+#### For Local Services (Path B):
+
+**"Choose transcription provider"**: Choose `parakeet`
+- The wizard will configure local Parakeet ASR service
+- No API key needed
+
+**"Choose LLM provider"**: Choose `ollama`
+- The wizard will configure local Ollama
+- No API key needed
+- Default model: llama3.2 (will be downloaded automatically)
+
+#### Optional (Both Paths):
 
 **"Enable Speaker Recognition"**: Say Yes if you got Hugging Face token
 **"Hugging Face token"**: Paste your token (if you got one)
 
+#### HTTPS Setup (Required for Both):
+
 **"Enable HTTPS"**: **Say Yes** (needed for phone connection)
-**"Server IP for SSL certificate"**: 
+**"Server IP for SSL certificate"**:
 - Run `tailscale ip` in another terminal
-- Copy the IP that starts with `100.` (like `100.64.1.5`)  
+- Copy the IP that starts with `100.` (like `100.64.1.5`)
 - Paste that IP here
 
 *The wizard creates all the configuration files automatically*
@@ -211,10 +248,18 @@ Before connecting your phone, make sure everything works:
 - **Certificate warnings**: Click "Advanced" → "Proceed" in browser
 - **Test connection fails**: Verify you're using `https://` and correct Tailscale IP
 
-### API Issues
+### Service Issues
+
+**Cloud Services (Deepgram/OpenAI):**
 - **Transcription not working**: Check Deepgram API key is correct
 - **No memories created**: Check OpenAI API key and account has credits
 - **High costs**: Switch to `gpt-4o-mini` model for cheaper processing
+
+**Local Services (Parakeet/Ollama):**
+- **Parakeet not starting**: Check `docker compose ps` - Parakeet container should be running
+- **Slow transcription**: Local ASR is slower than cloud services, this is normal
+- **Ollama model download stuck**: Check internet connection, models can be large (5-20GB)
+- **Out of memory errors**: Local services need sufficient RAM, try smaller Ollama models
 
 ## Need Help?
 
