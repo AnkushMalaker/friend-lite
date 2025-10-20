@@ -63,7 +63,7 @@ services:
       dockerfile: Dockerfile
     profiles: ["cpu", "gpu"]
     ports:
-      - "${REACT_UI_PORT}:${REACT_UI_PORT}"
+      - "${REACT_UI_PORT:-5173}:${REACT_UI_PORT:-5173}"
     volumes:
       - ./webui/src:/app/src
       - ./webui/public:/app/public
@@ -80,7 +80,7 @@ services:
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "https://localhost:${REACT_UI_PORT}"]
+      test: ["CMD", "/app/healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3

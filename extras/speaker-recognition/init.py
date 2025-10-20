@@ -228,11 +228,7 @@ class SpeakerRecognitionSetup:
         env_template = Path(".env.template")
 
         # Backup existing .env if it exists
-        if env_path.exists():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = env_path.with_suffix(f'.backup.{timestamp}')
-            shutil.copy2(env_path, backup_path)
-            self.console.print(f"[blue][INFO][/blue] Backed up existing .env to {backup_path.name}")
+        self.backup_existing_env()
 
         # Copy template to .env
         if env_template.exists():

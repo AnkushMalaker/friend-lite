@@ -1,0 +1,12 @@
+*
+!package.json
+!package-lock.json
+!index.html
+!vite.config.ts
+!tailwind.config.js
+!postcss.config.js
+!tsconfig.json
+!tsconfig.node.json
+!healthcheck.sh
+!src
+!public
