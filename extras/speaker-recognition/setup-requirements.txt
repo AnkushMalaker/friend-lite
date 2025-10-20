@@ -1,0 +1,3 @@
+# Dependencies for speaker-recognition setup script
+rich>=13.0.0
+python-dotenv>=1.0.0
