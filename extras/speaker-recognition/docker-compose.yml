@@ -103,3 +103,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+# Shared network for cross-project communication
+networks:
+  default:
+    name: friend-network

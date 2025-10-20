@@ -305,7 +305,8 @@ def main():
         
     elif args.command == 'stop':
         if args.all:
-            services = list(SERVICES.keys())
+            # Only stop configured services (like start --all does)
+            services = [s for s in SERVICES.keys() if check_service_configured(s)]
         elif args.services:
             # Validate service names
             invalid_services = [s for s in args.services if s not in SERVICES]
