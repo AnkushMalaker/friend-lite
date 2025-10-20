@@ -116,7 +116,7 @@ print_info "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
 
 # Install dependencies with uv
 print_info "Installing dependencies with uv..."
-uv sync --group cpu --group test --no-default-groups
+uv sync --extra cpu --group test
 
 print_info "Environment variables configured for testing"
 
