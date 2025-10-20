@@ -156,17 +156,20 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
             deepgram_key = read_env_value(backend_env_path, 'DEEPGRAM_API_KEY')
             if deepgram_key and deepgram_key != 'your_deepgram_api_key_here':
                 cmd.extend(['--deepgram-api-key', deepgram_key])
+                console.print("[blue][INFO][/blue] Found existing DEEPGRAM_API_KEY from backend config, reusing")
 
             # Pass HF Token from existing speaker recognition .env if available
             speaker_env_path = 'extras/speaker-recognition/.env'
             hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
             if hf_token and hf_token != 'your_huggingface_token_here':
                 cmd.extend(['--hf-token', hf_token])
+                console.print("[blue][INFO][/blue] Found existing HF_TOKEN, reusing")
 
             # Pass compute mode from existing .env if available
             compute_mode = read_env_value(speaker_env_path, 'COMPUTE_MODE')
             if compute_mode in ['cpu', 'gpu']:
                 cmd.extend(['--compute-mode', compute_mode])
+                console.print(f"[blue][INFO][/blue] Found existing COMPUTE_MODE ({compute_mode}), reusing")
         
         # For openmemory-mcp, try to pass OpenAI API key from backend if available
         if service_name == 'openmemory-mcp':
@@ -174,6 +177,7 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
             openai_key = read_env_value(backend_env_path, 'OPENAI_API_KEY')
             if openai_key and openai_key != 'your-openai-key-here':
                 cmd.extend(['--openai-api-key', openai_key])
+                console.print("[blue][INFO][/blue] Found existing OPENAI_API_KEY from backend config, reusing")
     
     console.print(f"\n🔧 [bold]Setting up {service_name}...[/bold]")
     
