@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from advanced_omi_backend.utils.audio_utils import (
+from advanced_omi_backend.audio_utils import (
     _process_audio_cropping_with_relative_timestamps,
 )
 from advanced_omi_backend.client_manager import (

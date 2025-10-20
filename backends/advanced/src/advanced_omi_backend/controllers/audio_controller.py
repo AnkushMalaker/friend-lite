@@ -12,7 +12,7 @@ import uuid
 from fastapi import UploadFile
 from fastapi.responses import JSONResponse
 
-from advanced_omi_backend.utils.audio_utils import AudioValidationError, write_audio_file
+from advanced_omi_backend.audio_utils import AudioValidationError, write_audio_file
 from advanced_omi_backend.models.job import JobPriority
 from advanced_omi_backend.models.user import User
 from advanced_omi_backend.models.conversation import create_conversation
