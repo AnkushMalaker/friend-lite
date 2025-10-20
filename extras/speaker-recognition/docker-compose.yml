@@ -43,6 +43,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        CUDA_VERSION: ${CUDA_VERSION:-cu121}
     deploy:
       resources:
         reservations:
