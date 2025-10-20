@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        COMPUTE_MODE: ${COMPUTE_MODE:-cpu}
+        CUDA_VERSION: ${COMPUTE_MODE:-cpu}
     image: speaker-recognition:test
     ports:
       # Map host test port (default 8086) to container port 8085
