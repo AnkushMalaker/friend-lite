@@ -78,27 +78,29 @@ def main() -> None:
                 logger.error("Queue Error: %s", e)
                 
 
-    async def find_and_set_omi_mac() -> None:
+    async def find_and_set_omi_mac() -> str:
         devices = await list_devices()
         assert len(devices) == 1, "Expected 1 Omi device, got %d" % len(devices)
-        OMI_MAC = devices[0].address
-        set_key(env_path, "OMI_MAC", OMI_MAC)
-        logger.info("OMI_MAC set to %s and saved to .env" % OMI_MAC)
+        discovered_mac = devices[0].address
+        set_key(env_path, "OMI_MAC", discovered_mac)
+        logger.info("OMI_MAC set to %s and saved to .env" % discovered_mac)
+        return discovered_mac
 
     async def run() -> None:
         logger.info("Starting OMI Bluetooth connection and audio streaming")
         if not OMI_MAC:
-            await find_and_set_omi_mac()
+            mac_address = await find_and_set_omi_mac()
         else:
-            logger.info("using OMI_MAC from .env: %s" % OMI_MAC)
+            mac_address = OMI_MAC
+            logger.info("using OMI_MAC from .env: %s" % mac_address)
 
         # First, verify device is available by attempting to connect
         logger.info("Checking if device is available...")
         try:
-            async with BleakClient(OMI_MAC) as test_client:
-                logger.info(f"Successfully connected to device {OMI_MAC}")
+            async with BleakClient(mac_address) as test_client:
+                logger.info(f"Successfully connected to device {mac_address}")
         except Exception as e:
-            logger.error(f"Failed to connect to device {OMI_MAC}: {e}")
+            logger.error(f"Failed to connect to device {mac_address}: {e}")
             logger.error("Exiting without creating audio sink or backend connection")
             return
 
@@ -147,7 +149,7 @@ def main() -> None:
         async with file_sink:
             try:
                 await asyncio.gather(
-                    listen_to_omi(OMI_MAC, OMI_CHAR_UUID, handle_ble_data),
+                    listen_to_omi(mac_address, OMI_CHAR_UUID, handle_ble_data),
                     process_audio(),
                     backend_stream_wrapper(),
                 )
