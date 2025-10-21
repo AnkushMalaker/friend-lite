@@ -138,6 +138,11 @@ const Queue: React.FC = () => {
     return saved !== null ? saved === 'true' : true;
   });
 
+  // Completed conversations pagination
+  const [completedConvPage, setCompletedConvPage] = useState(1);
+  const [completedConvItemsPerPage] = useState(10);
+  const [completedConvTimeRange, setCompletedConvTimeRange] = useState(24); // hours
+
   // Use refs to track current state in interval
   const expandedSessionsRef = useRef<Set<string>>(new Set());
   const streamingStatusRef = useRef<StreamingStatus | null>(null);
@@ -1227,11 +1232,6 @@ const Queue: React.FC = () => {
                                         <div className="flex-1 min-w-0">
                                           <div className="flex items-center space-x-2">
                                             <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
-                                            {expandedJobs.has(job.job_id) ? (
-                                              <ChevronDown className="w-3 h-3 text-gray-500" />
-                                            ) : (
-                                              <ChevronRight className="w-3 h-3 text-gray-500" />
-                                            )}
                                             <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
                                             <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
                                             <span className="text-xs font-medium text-gray-900 truncate">{job.job_type}</span>
@@ -1367,7 +1367,25 @@ const Queue: React.FC = () => {
 
               {/* Completed Conversations - Grouped by conversation_id */}
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-3">Completed Conversations (Last Hour)</h4>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-medium text-gray-700">Completed Conversations</h4>
+                  <div className="flex items-center space-x-2">
+                    <label className="text-xs text-gray-600">Time range:</label>
+                    <select
+                      value={completedConvTimeRange}
+                      onChange={(e) => {
+                        setCompletedConvTimeRange(Number(e.target.value));
+                        setCompletedConvPage(1); // Reset to first page
+                      }}
+                      className="text-xs border border-gray-300 rounded px-2 py-1"
+                    >
+                      <option value={1}>Last 1 hour</option>
+                      <option value={6}>Last 6 hours</option>
+                      <option value={24}>Last 24 hours</option>
+                      <option value={168}>Last 7 days</option>
+                    </select>
+                  </div>
+                </div>
                 {(() => {
                   // Group all jobs by conversation_id for completed conversations with deduplication
                   const allJobsRaw = Object.values(sessionJobs).flat().filter(job => job != null);
@@ -1443,9 +1461,42 @@ const Queue: React.FC = () => {
                     );
                   }
 
+                  // Convert to array and filter by time range
+                  const now = Date.now();
+                  const timeRangeMs = completedConvTimeRange * 60 * 60 * 1000; // hours to milliseconds
+
+                  let conversationsArray = Array.from(conversationMap.entries())
+                    .map(([conversationId, jobs]) => {
+                      // Find the open_conversation_job for created_at
+                      const openConvJob = jobs.find(j => j.job_type === 'open_conversation_job');
+                      const createdAt = openConvJob?.created_at ? new Date(openConvJob.created_at).getTime() : 0;
+                      return { conversationId, jobs, createdAt };
+                    })
+                    .filter(({ createdAt }) => {
+                      // Filter by time range
+                      return createdAt > 0 && (now - createdAt) <= timeRangeMs;
+                    })
+                    .sort((a, b) => b.createdAt - a.createdAt); // Most recent first
+
+                  // Apply pagination
+                  const totalConversations = conversationsArray.length;
+                  const totalPages = Math.ceil(totalConversations / completedConvItemsPerPage);
+                  const startIndex = (completedConvPage - 1) * completedConvItemsPerPage;
+                  const endIndex = startIndex + completedConvItemsPerPage;
+                  const paginatedConversations = conversationsArray.slice(startIndex, endIndex);
+
+                  if (conversationsArray.length === 0) {
+                    return (
+                      <div className="text-center py-8 text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
+                        No completed conversations in the selected time range
+                      </div>
+                    );
+                  }
+
                   return (
-                    <div className="space-y-2">
-                      {Array.from(conversationMap.entries()).map(([conversationId, jobs]) => {
+                    <>
+                      <div className="space-y-2">
+                        {paginatedConversations.map(({ conversationId, jobs }) => {
                         const isExpanded = expandedSessions.has(conversationId);
 
                         // Find the open_conversation_job for metadata
@@ -1705,11 +1756,6 @@ const Queue: React.FC = () => {
                                             className="flex-1 flex items-center space-x-2 cursor-pointer hover:bg-gray-100 transition-colors rounded px-1 py-0.5"
                                             onClick={() => toggleJobExpansion(job.job_id)}
                                           >
-                                            {expandedJobs.has(job.job_id) ? (
-                                              <ChevronDown className="w-3 h-3 text-gray-500 flex-shrink-0" />
-                                            ) : (
-                                              <ChevronRight className="w-3 h-3 text-gray-500 flex-shrink-0" />
-                                            )}
                                             <span className="text-xs font-mono text-gray-500 flex-shrink-0">#{index + 1}</span>
                                             <span className="flex-shrink-0">{getJobTypeIcon(job.job_type)}</span>
                                             <span className="flex-shrink-0">{getStatusIcon(job.status)}</span>
@@ -1829,6 +1875,43 @@ const Queue: React.FC = () => {
                         );
                       })}
                     </div>
+
+                      {/* Pagination Controls */}
+                      {totalPages > 1 && (
+                        <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200">
+                          <div className="text-xs text-gray-600">
+                            Showing {startIndex + 1}-{Math.min(endIndex, totalConversations)} of {totalConversations} conversations
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              onClick={() => setCompletedConvPage(Math.max(1, completedConvPage - 1))}
+                              disabled={completedConvPage === 1}
+                              className={`px-3 py-1 text-xs rounded ${
+                                completedConvPage === 1
+                                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                  : 'bg-blue-500 text-white hover:bg-blue-600'
+                              }`}
+                            >
+                              Previous
+                            </button>
+                            <span className="text-xs text-gray-600">
+                              Page {completedConvPage} of {totalPages}
+                            </span>
+                            <button
+                              onClick={() => setCompletedConvPage(Math.min(totalPages, completedConvPage + 1))}
+                              disabled={completedConvPage === totalPages}
+                              className={`px-3 py-1 text-xs rounded ${
+                                completedConvPage === totalPages
+                                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                  : 'bg-blue-500 text-white hover:bg-blue-600'
+                              }`}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
                   );
                 })()}
               </div>
@@ -1966,7 +2049,7 @@ const Queue: React.FC = () => {
                 {selectedJob.args && selectedJob.args.length > 0 && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Arguments</label>
-                    <pre className="text-xs text-gray-900 bg-gray-50 p-2 rounded overflow-auto max-h-64">
+                    <pre className="text-xs text-gray-900 bg-gray-50 p-2 rounded overflow-auto max-h-64 whitespace-pre-wrap break-words">
                       {JSON.stringify(selectedJob.args, null, 2)}
                     </pre>
                   </div>
@@ -1975,7 +2058,7 @@ const Queue: React.FC = () => {
                 {selectedJob.kwargs && Object.keys(selectedJob.kwargs).length > 0 && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Keyword Arguments</label>
-                    <pre className="text-xs text-gray-900 bg-gray-50 p-2 rounded overflow-auto max-h-64">
+                    <pre className="text-xs text-gray-900 bg-gray-50 p-2 rounded overflow-auto max-h-64 whitespace-pre-wrap break-words">
                       {JSON.stringify(selectedJob.kwargs, null, 2)}
                     </pre>
                   </div>
@@ -1984,7 +2067,7 @@ const Queue: React.FC = () => {
                 {selectedJob.error_message && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Error</label>
-                    <pre className="text-xs text-red-600 bg-red-50 p-2 rounded overflow-auto max-h-64">
+                    <pre className="text-xs text-red-600 bg-red-50 p-2 rounded overflow-auto max-h-64 whitespace-pre-wrap break-words">
                       {selectedJob.error_message}
                     </pre>
                   </div>
@@ -1993,7 +2076,7 @@ const Queue: React.FC = () => {
                 {selectedJob.result && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Result</label>
-                    <pre className="text-xs text-gray-900 bg-green-50 p-2 rounded overflow-auto max-h-64">
+                    <pre className="text-xs text-gray-900 bg-green-50 p-2 rounded overflow-auto max-h-64 whitespace-pre-wrap break-words">
                       {JSON.stringify(selectedJob.result, null, 2)}
                     </pre>
                   </div>
@@ -2145,7 +2228,7 @@ const Queue: React.FC = () => {
                       <summary className="text-sm font-medium text-gray-700 cursor-pointer hover:text-gray-900">
                         Raw Metadata JSON
                       </summary>
-                      <pre className="text-xs text-gray-900 bg-blue-50 p-2 rounded overflow-auto max-h-64 mt-2">
+                      <pre className="text-xs text-gray-900 bg-blue-50 p-2 rounded overflow-auto max-h-64 mt-2 whitespace-pre-wrap break-words">
                         {JSON.stringify(selectedJob.meta, null, 2)}
                       </pre>
                     </details>

@@ -86,6 +86,7 @@ async def get_job(
             "func_name": job.func_name if hasattr(job, 'func_name') else "",
             "args": job.args,
             "kwargs": job.kwargs,
+            "meta": job.meta if job.meta else {},
             "result": job.result,
             "error_message": str(job.exc_info) if job.exc_info else None,
         }
@@ -199,6 +200,9 @@ async def get_jobs_by_session(
                 "ended_at": job.ended_at.isoformat() if job.ended_at else None,
                 "description": job.description or "",
                 "result": job.result,
+                "meta": job.meta if job.meta else {},
+                "args": job.args,
+                "kwargs": job.kwargs if job.kwargs else {},
                 "error_message": str(job.exc_info) if job.exc_info else None,
             })
 
@@ -799,8 +803,10 @@ async def get_dashboard_data(
         async def fetch_streaming_status():
             """Fetch streaming status."""
             try:
+                # Import session_controller for streaming status
+                from advanced_omi_backend.controllers import session_controller
                 # Use the actual request object from the parent function
-                return await system_controller.get_streaming_status(request)
+                return await session_controller.get_streaming_status(request)
             except Exception as e:
                 logger.error(f"Error fetching streaming status: {e}")
                 return {"active_sessions": [], "stream_health": {}, "rq_queues": {}}

@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field, model_validator
 from enum import Enum
+import uuid
 
 from beanie import Document, Indexed
 
@@ -68,7 +69,7 @@ class Conversation(Document):
         metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional provider-specific metadata")
 
     # Core identifiers
-    conversation_id: Indexed(str, unique=True) = Field(description="Unique conversation identifier")
+    conversation_id: Indexed(str, unique=True) = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique conversation identifier")
     audio_uuid: Indexed(str) = Field(description="Link to audio_chunks collection")
     user_id: Indexed(str) = Field(description="User who owns this conversation")
     client_id: Indexed(str) = Field(description="Client device identifier")
@@ -290,10 +291,10 @@ class Conversation(Document):
 
 # Factory function for creating conversations
 def create_conversation(
-    conversation_id: str,
     audio_uuid: str,
     user_id: str,
     client_id: str,
+    conversation_id: Optional[str] = None,
     title: Optional[str] = None,
     summary: Optional[str] = None,
     transcript: Optional[str] = None,
@@ -303,10 +304,10 @@ def create_conversation(
     Factory function to create a new conversation.
 
     Args:
-        conversation_id: Unique conversation identifier
         audio_uuid: Link to audio_chunks collection
         user_id: User who owns this conversation
         client_id: Client device identifier
+        conversation_id: Optional unique conversation identifier (auto-generated if not provided)
         title: Optional conversation title
         summary: Optional conversation summary
         transcript: Optional transcript text
@@ -315,20 +316,26 @@ def create_conversation(
     Returns:
         Conversation instance
     """
-    return Conversation(
-        conversation_id=conversation_id,
-        audio_uuid=audio_uuid,
-        user_id=user_id,
-        client_id=client_id,
-        created_at=datetime.now(),
-        title=title,
-        summary=summary,
-        transcript=transcript or "",
-        segments=segments or [],
-        transcript_versions=[],
-        active_transcript_version=None,
-        memory_versions=[],
-        active_memory_version=None,
-        memories=[],
-        memory_count=0
-    )
+    # Build the conversation data
+    conv_data = {
+        "audio_uuid": audio_uuid,
+        "user_id": user_id,
+        "client_id": client_id,
+        "created_at": datetime.now(),
+        "title": title,
+        "summary": summary,
+        "transcript": transcript or "",
+        "segments": segments or [],
+        "transcript_versions": [],
+        "active_transcript_version": None,
+        "memory_versions": [],
+        "active_memory_version": None,
+        "memories": [],
+        "memory_count": 0
+    }
+
+    # Only set conversation_id if provided, otherwise let the model auto-generate it
+    if conversation_id is not None:
+        conv_data["conversation_id"] = conversation_id
+
+    return Conversation(**conv_data)

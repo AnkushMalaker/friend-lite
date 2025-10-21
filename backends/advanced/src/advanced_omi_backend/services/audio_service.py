@@ -5,35 +5,16 @@ This service handles audio chunk streaming, processing, and coordination
 using Redis Streams for event-driven architecture.
 """
 
-import asyncio
-import json
 import logging
 import os
 import time
-import uuid
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import redis.asyncio as aioredis
 from wyoming.audio import AudioChunk
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
-
-
-@dataclass
-class AudioStreamMessage:
-    """Message format for audio stream."""
-    client_id: str
-    user_id: str
-    user_email: str
-    audio_data: bytes
-    audio_rate: int
-    audio_width: int
-    audio_channels: int
-    audio_uuid: Optional[str] = None
-    timestamp: Optional[int] = None
 
 
 class AudioStreamService:

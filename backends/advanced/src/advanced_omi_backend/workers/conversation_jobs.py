@@ -42,10 +42,7 @@ async def open_conversation_job(
     Note: user_email is fetched from the database when needed.
     """
     from advanced_omi_backend.services.audio_stream import TranscriptionResultsAggregator
-    from advanced_omi_backend.models.conversation import Conversation
-
-    import uuid
-    from advanced_omi_backend.models.conversation import create_conversation
+    from advanced_omi_backend.models.conversation import Conversation, create_conversation
     from rq import get_current_job
 
     logger.info(f"📝 Creating and opening conversation for session {session_id} (speech detected at {speech_detected_at})")
@@ -53,10 +50,8 @@ async def open_conversation_job(
     # Get current job for meta storage
     current_job = get_current_job()
 
-    # Create minimal streaming conversation
-    conversation_id = str(uuid.uuid4())
+    # Create minimal streaming conversation (conversation_id auto-generated)
     conversation = create_conversation(
-        conversation_id=conversation_id,
         audio_uuid=session_id,
         user_id=user_id,
         client_id=client_id,
@@ -66,6 +61,7 @@ async def open_conversation_job(
 
     # Save to database
     await conversation.insert()
+    conversation_id = conversation.conversation_id  # Get the auto-generated ID
     logger.info(f"✅ Created streaming conversation {conversation_id} for session {session_id}")
 
     # Update speech detection job metadata with conversation_id
@@ -288,7 +284,9 @@ async def open_conversation_job(
         job_ids = start_post_conversation_jobs(
             conversation_id=conversation_id,
             audio_uuid=session_id,
-            audio_file_path=file_path
+            audio_file_path=file_path,
+            user_id=user_id,
+            post_transcription=True  # Run batch transcription for streaming audio
         )
 
         logger.info(
@@ -344,20 +342,28 @@ async def open_conversation_job(
             # Session still active - enqueue new speech detection for next conversation
             logger.info(f"🔄 Enqueueing new speech detection (conversation #{conversation_count + 1})")
 
-            from advanced_omi_backend.controllers.queue_controller import transcription_queue
+            from advanced_omi_backend.controllers.queue_controller import transcription_queue, redis_conn, JOB_RESULT_TTL
             from advanced_omi_backend.workers.transcription_jobs import stream_speech_detection_job
 
+            # Enqueue speech detection job for next conversation (audio persistence keeps running)
             speech_job = transcription_queue.enqueue(
                 stream_speech_detection_job,
                 session_id,
                 user_id,
                 client_id,
                 job_timeout=3600,
-                result_ttl=600,
+                result_ttl=JOB_RESULT_TTL,
                 job_id=f"speech-detect_{session_id[:12]}_{conversation_count}",
                 description=f"Speech detection for conversation #{conversation_count + 1}",
                 meta={'audio_uuid': session_id, 'client_id': client_id, 'session_level': True}
             )
+
+            # Store job ID for cleanup (keyed by client_id for WebSocket cleanup)
+            try:
+                redis_conn.set(f"speech_detection_job:{client_id}", speech_job.id, ex=3600)
+                logger.info(f"📌 Stored speech detection job ID for client {client_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to store job ID for {client_id}: {e}")
 
             logger.info(f"✅ Enqueued speech detection job {speech_job.id}")
         else:

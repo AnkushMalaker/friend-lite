@@ -62,6 +62,7 @@ localhost {
     }
 }
 
+
 # Production configuration (uncomment and modify for your domain)
 # yourdomain.com {
 #     # Caddy automatically obtains Let's Encrypt certificates

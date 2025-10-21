@@ -8,7 +8,7 @@ dependencies = [
     "fastapi>=0.115.12",
     "uvicorn>=0.34.2",
     "scipy>=1.10.0",
-    "pyannote.audio>=3.3.2",
+    "pyannote.audio==3.1.1",  # Version 3.3+ requires torchcodec which lacks ARM wheels
     "aiohttp>=3.8.0",
     "python-multipart>=0.0.6",
     "pydantic>=2.0.0",

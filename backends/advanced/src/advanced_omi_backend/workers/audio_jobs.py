@@ -14,220 +14,11 @@ from advanced_omi_backend.models.job import JobPriority, async_job
 
 from advanced_omi_backend.controllers.queue_controller import (
     default_queue,
-    _ensure_beanie_initialized,
     JOB_RESULT_TTL,
 )
+from advanced_omi_backend.models.job import _ensure_beanie_initialized
 
 logger = logging.getLogger(__name__)
-
-
-def process_audio_job(
-    client_id: str,
-    user_id: str,
-    user_email: str,
-    audio_data: bytes,
-    audio_rate: int,
-    audio_width: int,
-    audio_channels: int,
-    audio_uuid: Optional[str] = None,
-    timestamp: Optional[int] = None
-) -> Dict[str, Any]:
-    """
-    RQ job function for audio file writing and database entry creation.
-
-    This function is executed by RQ workers and can survive server restarts.
-    """
-    import asyncio
-    import time
-    import uuid
-    from pathlib import Path
-    from wyoming.audio import AudioChunk
-    from easy_audio_interfaces.filesystem.filesystem_interfaces import LocalFileSink
-    from advanced_omi_backend.database import get_collections
-
-    try:
-        logger.info(f"🔄 RQ: Starting audio processing for client {client_id}")
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        try:
-            async def process():
-                # Get repository
-                collections = get_collections()
-                from advanced_omi_backend.database import AudioChunksRepository
-                from advanced_omi_backend.config import CHUNK_DIR
-                repository = AudioChunksRepository(collections["chunks_col"])
-
-                # Use CHUNK_DIR from config
-                chunk_dir = CHUNK_DIR
-
-                # Ensure directory exists
-                chunk_dir.mkdir(parents=True, exist_ok=True)
-
-                # Create audio UUID if not provided
-                final_audio_uuid = audio_uuid or uuid.uuid4().hex
-                final_timestamp = timestamp or int(time.time())
-
-                # Create filename and file sink
-                wav_filename = f"{final_timestamp}_{client_id}_{final_audio_uuid}.wav"
-                file_path = chunk_dir / wav_filename
-
-                # Create file sink
-                sink = LocalFileSink(
-                    file_path=str(file_path),
-                    sample_rate=int(audio_rate),
-                    channels=int(audio_channels),
-                    sample_width=int(audio_width)
-                )
-
-                # Open sink and write audio
-                await sink.open()
-                audio_chunk = AudioChunk(
-                    rate=audio_rate,
-                    width=audio_width,
-                    channels=audio_channels,
-                    audio=audio_data
-                )
-                await sink.write(audio_chunk)
-                await sink.close()
-
-                # Create database entry
-                await repository.create_chunk(
-                    audio_uuid=final_audio_uuid,
-                    audio_path=wav_filename,
-                    client_id=client_id,
-                    timestamp=final_timestamp,
-                    user_id=user_id,
-                    user_email=user_email,
-                )
-
-                logger.info(f"✅ RQ: Completed audio processing for client {client_id}, file: {wav_filename}")
-
-                # Enqueue transcript processing for this audio file
-                # First ensure Beanie is initialized for this worker process
-                await _ensure_beanie_initialized()
-
-                # Create a conversation entry
-                from advanced_omi_backend.models.conversation import create_conversation
-                import uuid as uuid_lib
-
-                conversation_id = str(uuid_lib.uuid4())
-                conversation = create_conversation(
-                    conversation_id=conversation_id,
-                    audio_uuid=final_audio_uuid,
-                    user_id=user_id,
-                    client_id=client_id
-                )
-                # Set placeholder title/summary
-                conversation.title = "Processing..."
-                conversation.summary = "Transcript processing in progress"
-                await conversation.insert()
-
-                logger.info(f"📝 RQ: Created conversation {conversation_id} for audio {final_audio_uuid}")
-
-                # Now enqueue transcript processing (runs outside async context)
-                version_id = str(uuid_lib.uuid4())
-
-                return {
-                    "success": True,
-                    "audio_uuid": final_audio_uuid,
-                    "conversation_id": conversation_id,
-                    "wav_filename": wav_filename,
-                    "client_id": client_id,
-                    "version_id": version_id,
-                    "file_path": str(file_path)
-                }
-
-            result = loop.run_until_complete(process())
-
-            # Enqueue transcript processing job chain (outside async context)
-            if result.get("success") and result.get("conversation_id"):
-                from .transcription_jobs import transcribe_full_audio_job, recognise_speakers_job
-                from .memory_jobs import process_memory_job
-                from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, default_queue, JOB_RESULT_TTL
-
-                conversation_id = result["conversation_id"]
-
-                # Job 1: Transcribe audio to text
-                transcript_job = transcription_queue.enqueue(
-                    transcribe_full_audio_job,
-                    conversation_id,
-                    result["audio_uuid"],
-                    result["file_path"],
-                    result["version_id"],
-                    user_id,
-                    "upload",
-                    job_timeout=600,
-                    result_ttl=JOB_RESULT_TTL,
-                    job_id=f"upload_{conversation_id[:8]}",
-                    description=f"Transcribe audio for {conversation_id[:8]}",
-                    meta={'audio_uuid': result["audio_uuid"], 'conversation_id': conversation_id}
-                )
-                logger.info(f"📥 RQ: Enqueued transcription job {transcript_job.id}")
-
-                # Job 2: Recognize speakers (depends on transcription)
-                speaker_job = transcription_queue.enqueue(
-                    recognise_speakers_job,
-                    conversation_id,
-                    result["version_id"],
-                    result["file_path"],
-                    user_id,
-                    "",  # transcript_text - will be read from DB
-                    [],  # words - will be read from DB
-                    depends_on=transcript_job,
-                    job_timeout=600,
-                    result_ttl=JOB_RESULT_TTL,
-                    job_id=f"speaker_{conversation_id[:8]}",
-                    description=f"Recognize speakers for {conversation_id[:8]}",
-                    meta={'audio_uuid': result["audio_uuid"], 'conversation_id': conversation_id}
-                )
-                logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id} (depends on {transcript_job.id})")
-
-                # Job 3: Audio cropping (depends on speaker recognition)
-                cropping_job = default_queue.enqueue(
-                    process_cropping_job,
-                    conversation_id,
-                    result["file_path"],
-                    user_id,
-                    depends_on=speaker_job,
-                    job_timeout=300,
-                    result_ttl=JOB_RESULT_TTL,
-                    job_id=f"crop_{conversation_id[:8]}",
-                    description=f"Crop audio for {conversation_id[:8]}",
-                    meta={'audio_uuid': result["audio_uuid"], 'conversation_id': conversation_id}
-                )
-                logger.info(f"📥 RQ: Enqueued audio cropping job {cropping_job.id} (depends on {speaker_job.id})")
-
-                # Job 4: Extract memories (depends on cropping)
-                memory_job = memory_queue.enqueue(
-                    process_memory_job,
-                    None,  # client_id - will be read from conversation in DB
-                    user_id,
-                    "",  # user_email - will be read from user in DB
-                    conversation_id,
-                    depends_on=cropping_job,
-                    job_timeout=1800,
-                    result_ttl=JOB_RESULT_TTL,
-                    job_id=f"memory_{conversation_id[:8]}",
-                    description=f"Extract memories for {conversation_id[:8]}",
-                    meta={'audio_uuid': result["audio_uuid"], 'conversation_id': conversation_id}
-                )
-                logger.info(f"📥 RQ: Enqueued memory job {memory_job.id} (depends on {cropping_job.id})")
-
-                result["transcript_job_id"] = transcript_job.id
-                result["speaker_job_id"] = speaker_job.id
-                result["cropping_job_id"] = cropping_job.id
-                result["memory_job_id"] = memory_job.id
-
-            return result
-
-        finally:
-            loop.close()
-
-    except Exception as e:
-        logger.error(f"❌ RQ: Audio processing failed for client {client_id}: {e}")
-        raise
 
 
 @async_job(redis=True, beanie=True)
@@ -628,56 +419,9 @@ async def audio_streaming_persistence_job(
 
 # Enqueue wrapper functions
 
-def enqueue_audio_processing(
-    client_id: str,
-    user_id: str,
-    user_email: str,
-    audio_data: bytes,
-    audio_rate: int,
-    audio_width: int,
-    audio_channels: int,
-    audio_uuid: Optional[str] = None,
-    timestamp: Optional[int] = None,
-    priority: JobPriority = JobPriority.NORMAL
-):
-    """
-    Enqueue an audio processing job (file writing + DB entry).
-
-    Returns RQ Job object for tracking.
-    """
-    timeout_mapping = {
-        JobPriority.URGENT: 120,  # 2 minutes
-        JobPriority.HIGH: 90,     # 1.5 minutes
-        JobPriority.NORMAL: 60,   # 1 minute
-        JobPriority.LOW: 30       # 30 seconds
-    }
-
-    job = default_queue.enqueue(
-        process_audio_job,
-        client_id,
-        user_id,
-        user_email,
-        audio_data,
-        audio_rate,
-        audio_width,
-        audio_channels,
-        audio_uuid,
-        timestamp,
-        job_timeout=timeout_mapping.get(priority, 60),
-        result_ttl=JOB_RESULT_TTL,
-        job_id=f"audio_{client_id}_{audio_uuid or 'new'}",
-        description=f"Process audio for client {client_id}",
-        meta={'audio_uuid': audio_uuid} if audio_uuid else {}
-    )
-
-    logger.info(f"📥 RQ: Enqueued audio job {job.id} for client {client_id}")
-    return job
-
-
 def enqueue_cropping(
     conversation_id: str,
     audio_path: str,
-    user_id: str,
     priority: JobPriority = JobPriority.NORMAL
 ):
     """
@@ -686,7 +430,6 @@ def enqueue_cropping(
     Args:
         conversation_id: Conversation ID
         audio_path: Path to audio file
-        user_id: User ID
         priority: Job priority level
 
     Returns:
@@ -703,7 +446,6 @@ def enqueue_cropping(
         process_cropping_job,
         conversation_id,
         audio_path,
-        user_id,
         job_timeout=timeout_mapping.get(priority, 180),
         result_ttl=JOB_RESULT_TTL,
         job_id=f"crop_{conversation_id[:12]}",

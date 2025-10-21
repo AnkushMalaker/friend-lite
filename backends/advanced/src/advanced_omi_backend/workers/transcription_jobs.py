@@ -15,7 +15,6 @@ from advanced_omi_backend.models.job import JobPriority, BaseRQJob, async_job
 from advanced_omi_backend.controllers.queue_controller import (
     transcription_queue,
     redis_conn,
-    _ensure_beanie_initialized,
     JOB_RESULT_TTL,
     REDIS_URL,
 )

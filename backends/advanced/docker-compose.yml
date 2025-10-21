@@ -31,7 +31,7 @@ services:
       - NEO4J_HOST=${NEO4J_HOST}
       - NEO4J_USER=${NEO4J_USER}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
-      - CORS_ORIGINS=http://localhost:3010,http://localhost:8000,https://localhost:3010,https://localhost:8000,https://100.105.225.45,https://localhost
+      - CORS_ORIGINS=${CORS_ORIGINS}
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       qdrant:

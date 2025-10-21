@@ -7,11 +7,15 @@ import os
 from pathlib import Path
 from typing import Dict, Set
 
-def get_config_env_variables() -> Set[str]:
-    """Get list of variable names defined in config.env"""
-    config_env_path = Path(__file__).parent.parent.parent / "config.env"
+def get_config_env_variables(config_filename: str = "config.env") -> Set[str]:
+    """Get list of variable names defined in config file
+
+    Args:
+        config_filename: Name of the config file (default: "config.env")
+    """
+    config_env_path = Path(__file__).parent.parent.parent / config_filename
     variables = set()
-    
+
     if config_env_path.exists():
         with open(config_env_path, 'r') as f:
             for line in f:
@@ -19,7 +23,7 @@ def get_config_env_variables() -> Set[str]:
                 if line and not line.startswith('#') and '=' in line:
                     var_name = line.split('=')[0].strip()
                     variables.add(var_name)
-    
+
     return variables
 
 def get_resolved_env_vars() -> Dict[str, str]:

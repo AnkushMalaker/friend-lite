@@ -7,7 +7,7 @@ Resource         ../resources/setup_resources.robot
 Resource         ../resources/user_resources.robot
 Suite Setup      Suite Setup
 Test Setup       Clear Test Databases
-Suite Teardown   Suite Teardown
+Suite Teardown   Delete All Sessions
 
 *** Variables ***
 # Test users are now imported from test_env.py via resource files

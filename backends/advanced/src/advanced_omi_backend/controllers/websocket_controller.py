@@ -724,12 +724,10 @@ async def _process_batch_audio_complete(
             f"✅ Batch mode: Wrote audio file {wav_filename} ({duration:.1f}s)"
         )
 
-        # Create conversation immediately for batch audio
-        conversation_id = str(uuid.uuid4())
+        # Create conversation immediately for batch audio (conversation_id auto-generated)
         version_id = str(uuid.uuid4())
 
         conversation = create_conversation(
-            conversation_id=conversation_id,
             audio_uuid=audio_uuid,
             user_id=user_id,
             client_id=client_id,
@@ -737,6 +735,7 @@ async def _process_batch_audio_complete(
             summary="Processing batch audio..."
         )
         await conversation.insert()
+        conversation_id = conversation.conversation_id  # Get the auto-generated ID
 
         application_logger.info(f"📝 Batch mode: Created conversation {conversation_id}")
 
@@ -746,7 +745,9 @@ async def _process_batch_audio_complete(
         job_ids = start_post_conversation_jobs(
             conversation_id=conversation_id,
             audio_uuid=audio_uuid,
-            audio_file_path=file_path
+            audio_file_path=file_path,
+            user_id=None,  # Will be read from conversation in DB by jobs
+            post_transcription=True  # Run batch transcription for uploads
         )
 
         application_logger.info(

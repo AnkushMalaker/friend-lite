@@ -116,6 +116,20 @@ class ApiService {
     await api.delete(`/speakers/${speakerId}`)
   }
 
+  // Speaker audio file management
+  async getSpeakerAudioFiles(speakerId: string): Promise<any> {
+    const response = await api.get(`/speakers/${speakerId}/audio`)
+    return response.data
+  }
+
+  async deleteSpeakerAudioFile(speakerId: string, filename: string): Promise<void> {
+    await api.delete(`/speakers/${speakerId}/audio/${filename}`)
+  }
+
+  getSpeakerAudioFileUrl(speakerId: string, filename: string): string {
+    return `/api/speakers/${speakerId}/audio/${filename}`
+  }
+
   // Enrollment
   async enrollSpeaker(
     speakerId: string,
