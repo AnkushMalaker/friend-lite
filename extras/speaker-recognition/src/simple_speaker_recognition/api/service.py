@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     max_file_seconds: int = Field(default=180, description="Maximum file duration in seconds")
     deepgram_api_key: Optional[str] = Field(default=None, description="Deepgram API key for wrapper service")
     deepgram_base_url: str = Field(default="https://api.deepgram.com", description="Deepgram API base URL")
+    elevenlabs_api_key: Optional[str] = Field(default=None, description="ElevenLabs API key for wrapper service")
     hf_token: Optional[str] = Field(default=None, description="Hugging Face token for Pyannote models")
 
     class Config:
@@ -51,6 +52,10 @@ auth = Settings()  # Load other settings from env vars or .env file
 # Override Deepgram API key from environment if available
 if os.getenv("DEEPGRAM_API_KEY"):
     auth.deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
+
+# Override ElevenLabs API key from environment if available
+if os.getenv("ELEVENLABS_API_KEY"):
+    auth.elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
 
 # Set HF token in auth settings for consistency
 auth.hf_token = hf_token
@@ -132,15 +137,17 @@ from .routers import (
     enrollment_router,
     identification_router,
     deepgram_router,
+    elevenlabs_router,
     websocket_router
 )
 
 # Include routers with appropriate tags and prefixes
 app.include_router(users_router, tags=["users"])
-app.include_router(speakers_router, tags=["speakers"])  
+app.include_router(speakers_router, tags=["speakers"])
 app.include_router(enrollment_router, tags=["enrollment"])
 app.include_router(identification_router, tags=["identification"])
 app.include_router(deepgram_router, tags=["deepgram"])
+app.include_router(elevenlabs_router, tags=["elevenlabs"])
 app.include_router(websocket_router, tags=["websocket"])
 
 

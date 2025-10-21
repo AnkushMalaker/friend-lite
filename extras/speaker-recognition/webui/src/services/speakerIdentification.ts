@@ -6,8 +6,9 @@
 
 import { apiService } from './api'
 import { transcribeWithDeepgram, processDeepgramResponse, calculateConfidenceSummary, DeepgramResponse } from './deepgram'
+import { transcribeWithElevenLabs, processElevenLabsResponse, calculateConfidenceSummary as calculateElevenLabsConfidenceSummary, ElevenLabsResponse } from './elevenlabs'
 
-export type ProcessingMode = 'diarization-only' | 'speaker-identification' | 'deepgram-enhanced' | 'deepgram-transcript-internal-speakers' | 'diarize-identify-match'
+export type ProcessingMode = 'diarization-only' | 'speaker-identification' | 'deepgram-enhanced' | 'deepgram-transcript-internal-speakers' | 'diarize-identify-match' | 'elevenlabs-enhanced'
 
 export interface SpeakerSegment {
   start: number
@@ -51,6 +52,7 @@ export interface ProcessingResult {
     low_confidence: number
   }
   deepgram_response?: DeepgramResponse
+  elevenlabs_response?: ElevenLabsResponse
   processing_time?: number
   error?: string
 }
@@ -93,6 +95,9 @@ export class SpeakerIdentificationService {
           break
         case 'deepgram-transcript-internal-speakers':
           result = await this.processWithHybrid(audioFile, options)
+          break
+        case 'elevenlabs-enhanced':
+          result = await this.processWithElevenLabs(audioFile, options)
           break
         case 'diarization-only':
           result = await this.processWithDiarizationOnly(audioFile, options)
@@ -217,6 +222,60 @@ export class SpeakerIdentificationService {
       }
     } catch (error) {
       throw new Error(`Deepgram processing failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Process with ElevenLabs transcription + speaker enhancement
+   */
+  private async processWithElevenLabs(
+    audioFile: File | Blob,
+    options: ProcessingOptions
+  ): Promise<ProcessingResult> {
+    try {
+      const filename = audioFile instanceof File ? audioFile.name : 'Audio'
+
+      // Use ElevenLabs service
+      const elevenlabsResponse = await transcribeWithElevenLabs(audioFile, {
+        enhanceSpeakers: options.enhanceSpeakers !== false,
+        userId: options.userId,
+        speakerConfidenceThreshold: options.confidenceThreshold || 0.15,
+        numSpeakers: options.maxSpeakers
+      })
+
+      // Process response using ElevenLabs service
+      const elevenlabsSegments = processElevenLabsResponse(elevenlabsResponse)
+
+      // Convert to SpeakerSegment format
+      const speakerSegments: SpeakerSegment[] = elevenlabsSegments.map(segment => ({
+        start: segment.start,
+        end: segment.end,
+        speaker_id: segment.speakerId || `speaker_${segment.speaker}`,
+        speaker_name: segment.speakerName || `Speaker ${segment.speaker}`,
+        confidence: segment.confidence,
+        text: segment.text,
+        identified_speaker_id: segment.identifiedSpeakerId,
+        identified_speaker_name: segment.identifiedSpeakerName,
+        speaker_identification_confidence: segment.speakerIdentificationConfidence,
+        speaker_status: segment.speakerStatus
+      }))
+
+      // Calculate confidence summary
+      const confidenceSummary = calculateElevenLabsConfidenceSummary(elevenlabsSegments)
+
+      return {
+        id: Math.random().toString(36),
+        filename,
+        duration: this.estimateDuration(speakerSegments),
+        status: 'completed',
+        created_at: new Date().toISOString(),
+        mode: 'elevenlabs-enhanced',
+        speakers: speakerSegments,
+        confidence_summary: confidenceSummary,
+        elevenlabs_response: elevenlabsResponse
+      }
+    } catch (error) {
+      throw new Error(`ElevenLabs processing failed: ${error.message}`)
     }
   }
 
@@ -514,6 +573,11 @@ export class SpeakerIdentificationService {
         mode: 'deepgram-enhanced',
         name: 'Deepgram Enhanced',
         description: 'Deepgram transcription + diarization + replace speakers with enrolled IDs'
+      },
+      {
+        mode: 'elevenlabs-enhanced',
+        name: 'ElevenLabs Enhanced',
+        description: 'ElevenLabs transcription (99 languages) + diarization + speaker identification'
       },
       {
         mode: 'deepgram-transcript-internal-speakers',

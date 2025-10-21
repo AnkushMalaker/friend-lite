@@ -248,6 +248,13 @@ class SpeakerRecognitionSetup:
             self.config["DEEPGRAM_API_KEY"] = self.args.deepgram_api_key
             self.console.print("[green][SUCCESS][/green] Deepgram API key configured from command line")
 
+    def setup_elevenlabs(self):
+        """Configure ElevenLabs API key if provided"""
+        # Only set if provided via command line
+        if hasattr(self.args, 'elevenlabs_api_key') and self.args.elevenlabs_api_key:
+            self.config["ELEVENLABS_API_KEY"] = self.args.elevenlabs_api_key
+            self.console.print("[green][SUCCESS][/green] ElevenLabs API key configured from command line")
+
     def setup_https(self):
         """Configure HTTPS settings"""
         # Check if HTTPS configuration provided via command line
@@ -413,6 +420,7 @@ class SpeakerRecognitionSetup:
             self.setup_hf_token()
             self.setup_compute_mode()
             self.setup_deepgram()
+            self.setup_elevenlabs()
             self.setup_https()
 
             # Generate files
@@ -446,6 +454,8 @@ def main():
                        help="Compute mode: cpu or gpu (default: prompt user)")
     parser.add_argument("--deepgram-api-key",
                        help="Deepgram API key (optional)")
+    parser.add_argument("--elevenlabs-api-key",
+                       help="ElevenLabs API key (optional)")
     parser.add_argument("--enable-https", action="store_true",
                        help="Enable HTTPS configuration (default: prompt user)")
     parser.add_argument("--server-ip",

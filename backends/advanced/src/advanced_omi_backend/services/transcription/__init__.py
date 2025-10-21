@@ -20,6 +20,9 @@ from advanced_omi_backend.services.transcription.parakeet import (
     ParakeetProvider,
     ParakeetStreamingProvider,
 )
+from advanced_omi_backend.services.transcription.elevenlabs import (
+    ElevenLabsProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,7 @@ def get_transcription_provider(
     """
     deepgram_key = os.getenv("DEEPGRAM_API_KEY")
     parakeet_url = os.getenv("PARAKEET_ASR_URL")
+    elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
 
     if provider_name:
         provider_name = provider_name.lower()
@@ -87,6 +91,16 @@ def get_transcription_provider(
         else:
             return ParakeetProvider(parakeet_url)
 
+    elif provider_name == "elevenlabs":
+        if not elevenlabs_key:
+            raise RuntimeError(
+                "ElevenLabs transcription provider requested but ELEVENLABS_API_KEY not configured"
+            )
+        logger.info(f"Using ElevenLabs transcription provider in {mode} mode")
+        if mode == "streaming":
+            raise RuntimeError("ElevenLabs does not support streaming mode - use batch mode")
+        return ElevenLabsProvider(elevenlabs_key)
+
     # Auto-select provider based on available configuration (when provider_name is None)
     if provider_name is None:
         # Check TRANSCRIPTION_PROVIDER environment variable first
@@ -124,4 +138,5 @@ __all__ = [
     "DeepgramStreamConsumer",
     "ParakeetProvider",
     "ParakeetStreamingProvider",
+    "ElevenLabsProvider",
 ]
