@@ -8,15 +8,35 @@ echo "🚀 Starting OpenMemory MCP installation for Friend-Lite..."
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 USER="${USER:-$(whoami)}"
 
-# Check for .env file first
+# Check for .env file first, load if exists
 if [ -f .env ]; then
     echo "📝 Loading configuration from .env file..."
     export $(cat .env | grep -v '^#' | xargs)
+else
+    # Create .env from template if it doesn't exist
+    if [ -f .env.template ]; then
+        echo "📝 Creating .env from template..."
+        cp .env.template .env
+    fi
 fi
 
+# If OPENAI_API_KEY is provided via environment but not in .env, write it
+if [ -n "$OPENAI_API_KEY" ] && [ -f .env ]; then
+    # Update or add OPENAI_API_KEY in .env file
+    if grep -q "^OPENAI_API_KEY=" .env 2>/dev/null; then
+        # Key exists, update it
+        sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=${OPENAI_API_KEY}|" .env
+    else
+        # Key doesn't exist, append it
+        echo "OPENAI_API_KEY=${OPENAI_API_KEY}" >> .env
+    fi
+    echo "✅ Updated .env with provided OPENAI_API_KEY"
+fi
+
+# Final check
 if [ -z "$OPENAI_API_KEY" ]; then
     echo "❌ OPENAI_API_KEY not set."
-    echo "   Option 1: Create a .env file from .env.template and add your key"
+    echo "   Option 1: Edit .env file and add your key"
     echo "   Option 2: Run with: OPENAI_API_KEY=your_api_key ./run.sh"
     echo "   Option 3: Export it: export OPENAI_API_KEY=your_api_key"
     exit 1

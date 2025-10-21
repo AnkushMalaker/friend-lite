@@ -8,11 +8,9 @@ services:
       - ./data/mem0_storage:/qdrant/storage
     restart: unless-stopped
 
-  # OpenMemory MCP Server (built from local cache)
+  # OpenMemory MCP Server (official image)
   openmemory-mcp:
-    build:
-      context: ./cache/mem0/openmemory/api
-      dockerfile: Dockerfile
+    image: mem0/openmemory-mcp:latest
     env_file:
       - .env
     environment:

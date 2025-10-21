@@ -4,6 +4,7 @@ Friend-Lite Root Setup Orchestrator
 Handles service selection and delegation only - no configuration duplication
 """
 
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -73,7 +74,7 @@ SERVICES = {
         },
         'openmemory-mcp': {
             'path': 'extras/openmemory-mcp',
-            'cmd': ['./setup.sh'],
+            'cmd': ['./run.sh'],
             'description': 'OpenMemory MCP server'
         }
     }
@@ -88,6 +89,11 @@ def check_service_exists(service_name, service_config):
     # For services with Python init scripts, check if init.py exists
     if service_name in ['advanced', 'speaker-recognition']:
         script_path = service_path / 'init.py'
+        if not script_path.exists():
+            return False, f"Script {script_path} does not exist"
+    elif service_name == 'openmemory-mcp':
+        # OpenMemory MCP uses run.sh
+        script_path = service_path / 'run.sh'
         if not script_path.exists():
             return False, f"Script {script_path} does not exist"
     else:
@@ -152,28 +158,31 @@ def cleanup_unselected_services(selected_services):
 
 def run_service_setup(service_name, selected_services, https_enabled=False, server_ip=None):
     """Execute individual service setup script"""
+    # Initialize env_vars for all services
+    env_vars = None
+
     if service_name == 'advanced':
         service = SERVICES['backend'][service_name]
-        
+
         # For advanced backend, pass URLs of other selected services and HTTPS config
         cmd = service['cmd'].copy()
         if 'speaker-recognition' in selected_services:
             cmd.extend(['--speaker-service-url', 'http://host.docker.internal:8085'])
         if 'asr-services' in selected_services:
             cmd.extend(['--parakeet-asr-url', 'http://host.docker.internal:8767'])
-        
+
         # Add HTTPS configuration
         if https_enabled and server_ip:
             cmd.extend(['--enable-https', '--server-ip', server_ip])
-            
+
     else:
         service = SERVICES['extras'][service_name]
         cmd = service['cmd'].copy()
-        
+
         # Add HTTPS configuration for services that support it
         if service_name == 'speaker-recognition' and https_enabled and server_ip:
             cmd.extend(['--enable-https', '--server-ip', server_ip])
-        
+
         # For speaker-recognition, try to pass API keys and config if available
         if service_name == 'speaker-recognition':
             # Pass Deepgram API key from backend if available
@@ -195,29 +204,31 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
             if compute_mode in ['cpu', 'gpu']:
                 cmd.extend(['--compute-mode', compute_mode])
                 console.print(f"[blue][INFO][/blue] Found existing COMPUTE_MODE ({compute_mode}), reusing")
-        
-        # For openmemory-mcp, try to pass OpenAI API key from backend if available
+
+        # For openmemory-mcp, prepare environment variables
         if service_name == 'openmemory-mcp':
             backend_env_path = 'backends/advanced/.env'
             openai_key = read_env_value(backend_env_path, 'OPENAI_API_KEY')
             if openai_key and not is_placeholder(openai_key, 'your_openai_api_key_here', 'your-openai-api-key-here', 'your_openai_key_here', 'your-openai-key-here'):
-                cmd.extend(['--openai-api-key', openai_key])
+                env_vars = os.environ.copy()
+                env_vars['OPENAI_API_KEY'] = openai_key
                 console.print("[blue][INFO][/blue] Found existing OPENAI_API_KEY from backend config, reusing")
-    
+
     console.print(f"\n🔧 [bold]Setting up {service_name}...[/bold]")
-    
+
     # Check if service exists before running
     exists, msg = check_service_exists(service_name, service)
     if not exists:
         console.print(f"❌ {service_name} setup failed: {msg}")
         return False
-    
+
     try:
         result = subprocess.run(
-            cmd, 
+            cmd,
             cwd=service['path'],
             check=True,
-            timeout=300  # 5 minute timeout for service setup
+            timeout=300,  # 5 minute timeout for service setup
+            env=env_vars
         )
         
         console.print(f"✅ {service_name} setup completed")
