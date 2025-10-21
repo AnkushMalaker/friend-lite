@@ -29,8 +29,8 @@ The root orchestrator handles service selection and delegates configuration to i
 ### Service Scripts
 - **Backend**: `backends/advanced/init.py` - Complete Python-based interactive setup
 - **Speaker Recognition**: `extras/speaker-recognition/setup.sh` - Simple bash setup
-- **ASR Services**: `extras/asr-services/setup.sh` - Service startup script  
-- **OpenMemory MCP**: `extras/openmemory-mcp/setup.sh` - External server startup
+- **ASR Services**: `extras/asr-services/setup.sh` - Service startup script
+- **OpenMemory MCP**: `extras/openmemory-mcp/run.sh` - External server startup (uses official Docker image)
 
 ## Usage
 
