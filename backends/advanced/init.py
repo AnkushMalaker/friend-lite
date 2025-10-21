@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from dotenv import set_key
+from dotenv import get_key, set_key
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -100,6 +100,26 @@ class FriendLiteSetup:
             shutil.copy2(env_path, backup_path)
             self.console.print(f"[blue][INFO][/blue] Backed up existing .env file to {backup_path}")
 
+    def read_existing_env_value(self, key: str) -> str:
+        """Read a value from existing .env file"""
+        env_path = Path(".env")
+        if not env_path.exists():
+            return None
+
+        value = get_key(str(env_path), key)
+        # get_key returns None if key doesn't exist or value is empty
+        return value if value else None
+
+    def mask_api_key(self, key: str, show_chars: int = 5) -> str:
+        """Mask API key showing only first and last few characters"""
+        if not key or len(key) <= show_chars * 2:
+            return key
+
+        # Remove quotes if present
+        key_clean = key.strip("'\"")
+
+        return f"{key_clean[:show_chars]}{'*' * min(15, len(key_clean) - show_chars * 2)}{key_clean[-show_chars:]}"
+
     def setup_authentication(self):
         """Configure authentication settings"""
         self.print_section("Authentication Setup")
@@ -128,8 +148,17 @@ class FriendLiteSetup:
         if choice == "1":
             self.console.print("[blue][INFO][/blue] Deepgram selected")
             self.console.print("Get your API key from: https://console.deepgram.com/")
-            
-            api_key = self.prompt_value("Deepgram API key (leave empty to skip)", "")
+
+            # Check for existing API key
+            existing_key = self.read_existing_env_value("DEEPGRAM_API_KEY")
+            if existing_key and existing_key not in ['your_deepgram_api_key_here', 'your-deepgram-key-here']:
+                masked_key = self.mask_api_key(existing_key)
+                prompt_text = f"Deepgram API key ({masked_key}) [press Enter to reuse, or enter new]"
+                api_key_input = self.prompt_value(prompt_text, "")
+                api_key = api_key_input if api_key_input else existing_key
+            else:
+                api_key = self.prompt_value("Deepgram API key (leave empty to skip)", "")
+
             if api_key:
                 self.config["TRANSCRIPTION_PROVIDER"] = "deepgram"
                 self.config["DEEPGRAM_API_KEY"] = api_key
@@ -141,10 +170,19 @@ class FriendLiteSetup:
             self.config["TRANSCRIPTION_PROVIDER"] = "mistral"
             self.console.print("[blue][INFO][/blue] Mistral selected")
             self.console.print("Get your API key from: https://console.mistral.ai/")
-            
-            api_key = self.prompt_value("Mistral API key (leave empty to skip)", "")
+
+            # Check for existing API key
+            existing_key = self.read_existing_env_value("MISTRAL_API_KEY")
+            if existing_key and existing_key not in ['your_mistral_api_key_here', 'your-mistral-key-here']:
+                masked_key = self.mask_api_key(existing_key)
+                prompt_text = f"Mistral API key ({masked_key}) [press Enter to reuse, or enter new]"
+                api_key_input = self.prompt_value(prompt_text, "")
+                api_key = api_key_input if api_key_input else existing_key
+            else:
+                api_key = self.prompt_value("Mistral API key (leave empty to skip)", "")
+
             model = self.prompt_value("Mistral model", "voxtral-mini-2507")
-            
+
             if api_key:
                 self.config["MISTRAL_API_KEY"] = api_key
                 self.config["MISTRAL_MODEL"] = model
@@ -178,11 +216,20 @@ class FriendLiteSetup:
             self.config["LLM_PROVIDER"] = "openai"
             self.console.print("[blue][INFO][/blue] OpenAI selected")
             self.console.print("Get your API key from: https://platform.openai.com/api-keys")
-            
-            api_key = self.prompt_value("OpenAI API key (leave empty to skip)", "")
+
+            # Check for existing API key
+            existing_key = self.read_existing_env_value("OPENAI_API_KEY")
+            if existing_key and existing_key not in ['your_openai_api_key_here', 'your-openai-key-here']:
+                masked_key = self.mask_api_key(existing_key)
+                prompt_text = f"OpenAI API key ({masked_key}) [press Enter to reuse, or enter new]"
+                api_key_input = self.prompt_value(prompt_text, "")
+                api_key = api_key_input if api_key_input else existing_key
+            else:
+                api_key = self.prompt_value("OpenAI API key (leave empty to skip)", "")
+
             model = self.prompt_value("OpenAI model", "gpt-4o-mini")
             base_url = self.prompt_value("OpenAI base URL (for proxies/compatible APIs)", "https://api.openai.com/v1")
-            
+
             if api_key:
                 self.config["OPENAI_API_KEY"] = api_key
                 self.config["OPENAI_MODEL"] = model
