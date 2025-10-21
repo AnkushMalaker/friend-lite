@@ -53,7 +53,7 @@ class DeepgramProvider(BatchTranscriptionProvider):
 
             headers = {"Authorization": f"Token {self.api_key}", "Content-Type": "audio/raw"}
 
-            logger.info(f"Sending {len(audio_data)} bytes to Deepgram API")
+            logger.debug(f"Sending {len(audio_data)} bytes to Deepgram API")
 
             # Calculate dynamic timeout based on audio file size
             estimated_duration = len(audio_data) / (sample_rate * 2 * 1)  # 16-bit mono
@@ -128,7 +128,7 @@ class DeepgramProvider(BatchTranscriptionProvider):
                                 segments.append(current_segment)
                         else:
                             transcript = alternative.get("transcript", "").strip()
-                            logger.info(
+                            logger.debug(
                                 f"Deepgram basic transcription successful: {len(transcript)} characters"
                             )
 
@@ -264,7 +264,7 @@ class DeepgramStreamingProvider(StreamingTranscriptionProvider):
                 "stream_id": str(uuid.uuid4())
             }
             
-            logger.info(f"Deepgram WebSocket connected for client {client_id}")
+            logger.debug(f"Deepgram WebSocket connected for client {client_id}")
             
         except Exception as e:
             logger.error(f"Failed to start Deepgram streaming for {client_id}: {e}")
