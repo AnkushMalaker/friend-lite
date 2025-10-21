@@ -8,7 +8,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        CUDA_VERSION: ${CUDA_VERSION:-cpu}
+        PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cpu}
     image: speaker-recognition:latest
     env_file:
       - .env
@@ -46,7 +46,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        CUDA_VERSION: ${CUDA_VERSION:-cu121}
+        PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cu121}
     deploy:
       resources:
         reservations:
@@ -108,3 +108,4 @@ services:
 networks:
   default:
     name: friend-network
+    external: true

@@ -65,6 +65,27 @@ class SpeakerRecognitionSetup:
                 self.console.print("[red][ERROR][/red] Token is required for speaker recognition")
                 sys.exit(1)
 
+    def read_existing_env_value(self, key: str) -> str:
+        """Read a value from existing .env file"""
+        env_path = Path(".env")
+        if not env_path.exists():
+            return None
+
+        from dotenv import get_key
+        value = get_key(str(env_path), key)
+        # get_key returns None if key doesn't exist or value is empty
+        return value if value else None
+
+    def mask_api_key(self, key: str, show_chars: int = 5) -> str:
+        """Mask API key showing only first and last few characters"""
+        if not key or len(key) <= show_chars * 2:
+            return key
+
+        # Remove quotes if present
+        key_clean = key.strip("'\"")
+
+        return f"{key_clean[:show_chars]}{'*' * min(15, len(key_clean) - show_chars * 2)}{key_clean[-show_chars:]}"
+
     def prompt_choice(self, prompt: str, choices: Dict[str, str], default: str = "1") -> str:
         """Prompt for a choice from options"""
         self.console.print(prompt)
@@ -103,9 +124,65 @@ class SpeakerRecognitionSetup:
             self.config["HF_TOKEN"] = self.args.hf_token
             self.console.print("[green][SUCCESS][/green] HF Token configured from command line")
         else:
-            hf_token = self.prompt_password("HF Token")
-            self.config["HF_TOKEN"] = hf_token
-            self.console.print("[green][SUCCESS][/green] HF Token configured")
+            # Check for existing token
+            existing_token = self.read_existing_env_value("HF_TOKEN")
+            if existing_token and existing_token not in ['your_huggingface_token_here', 'your-hf-token-here']:
+                masked_token = self.mask_api_key(existing_token)
+                self.console.print(f"[blue][INFO][/blue] Found existing token: {masked_token}")
+                try:
+                    reuse = Confirm.ask("Use existing HF Token?", default=True)
+                except EOFError:
+                    reuse = True
+
+                if reuse:
+                    self.config["HF_TOKEN"] = existing_token
+                    self.console.print("[green][SUCCESS][/green] HF Token configured (reused)")
+                else:
+                    hf_token = self.prompt_password("HF Token")
+                    self.config["HF_TOKEN"] = hf_token
+                    self.console.print("[green][SUCCESS][/green] HF Token configured")
+            else:
+                hf_token = self.prompt_password("HF Token")
+                self.config["HF_TOKEN"] = hf_token
+                self.console.print("[green][SUCCESS][/green] HF Token configured")
+
+    def detect_cuda_version(self) -> str:
+        """Detect system CUDA version from nvidia-smi"""
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                # Try to get CUDA version from nvidia-smi
+                result = subprocess.run(
+                    ["nvidia-smi"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    output = result.stdout
+                    # Parse CUDA Version from nvidia-smi output
+                    # Format: "CUDA Version: 12.6"
+                    import re
+                    match = re.search(r'CUDA Version:\s*(\d+)\.(\d+)', output)
+                    if match:
+                        major, minor = match.groups()
+                        cuda_ver = f"{major}.{minor}"
+
+                        # Map to available PyTorch CUDA versions
+                        if cuda_ver >= "12.8":
+                            return "cu128"
+                        elif cuda_ver >= "12.6":
+                            return "cu126"
+                        elif cuda_ver >= "12.1":
+                            return "cu121"
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        return "cu121"  # Default fallback
 
     def setup_compute_mode(self):
         """Configure compute mode (CPU/GPU)"""
@@ -125,14 +202,44 @@ class SpeakerRecognitionSetup:
 
         self.config["COMPUTE_MODE"] = compute_mode
 
-        # Set CUDA_VERSION for Docker build
+        # Set PYTORCH_CUDA_VERSION for Docker build
         if compute_mode == "cpu":
-            self.config["CUDA_VERSION"] = "cpu"
+            self.config["PYTORCH_CUDA_VERSION"] = "cpu"
         else:
-            # Default to cu121 for GPU mode (can be overridden in .env)
-            self.config["CUDA_VERSION"] = "cu121"
+            # Detect system CUDA version and suggest as default
+            detected_cuda = self.detect_cuda_version()
 
-        self.console.print(f"[blue][INFO][/blue] Using {compute_mode.upper()} mode")
+            # Map to default choice number
+            cuda_to_choice = {
+                "cu121": "1",
+                "cu126": "2",
+                "cu128": "3"
+            }
+            default_choice = cuda_to_choice.get(detected_cuda, "2")
+
+            self.console.print()
+            self.console.print(f"[blue][INFO][/blue] Detected CUDA version: {detected_cuda}")
+            self.console.print()
+
+            cuda_choices = {
+                "1": "CUDA 12.1 (cu121)",
+                "2": "CUDA 12.6 (cu126)",
+                "3": "CUDA 12.8 (cu128)"
+            }
+            cuda_choice = self.prompt_choice(
+                "Choose CUDA version for PyTorch:",
+                cuda_choices,
+                default_choice
+            )
+
+            choice_to_cuda = {
+                "1": "cu121",
+                "2": "cu126",
+                "3": "cu128"
+            }
+            self.config["PYTORCH_CUDA_VERSION"] = choice_to_cuda[cuda_choice]
+
+        self.console.print(f"[blue][INFO][/blue] Using {compute_mode.upper()} mode with PyTorch CUDA version: {self.config['PYTORCH_CUDA_VERSION']}")
 
     def setup_deepgram(self):
         """Configure Deepgram API key if provided"""

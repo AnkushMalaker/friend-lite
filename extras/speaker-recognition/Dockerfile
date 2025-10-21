@@ -1,9 +1,9 @@
 FROM python:3.12-bookworm
 
-ARG CUDA_VERSION
+ARG PYTORCH_CUDA_VERSION
 
 # Capture build arg as environment variable for runtime
-ENV CUDA_VERSION=${CUDA_VERSION}
+ENV PYTORCH_CUDA_VERSION=${PYTORCH_CUDA_VERSION}
 
 # Install system dependencies including PortAudio for pyaudio
 RUN apt-get update && apt-get install -y \
@@ -27,8 +27,8 @@ COPY pyproject.toml ./
 RUN mkdir -p src/simple_speaker_recognition
 COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 
-# Install dependencies and package  
-RUN uv sync --no-dev --extra ${CUDA_VERSION}
+# Install dependencies and package
+RUN uv sync --no-dev --extra ${PYTORCH_CUDA_VERSION}
 
 # Create directories
 RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
@@ -42,4 +42,4 @@ EXPOSE 8085
 
 # Run the service
 # Use shell form to allow environment variable expansion
-CMD uv run --extra ${CUDA_VERSION} --no-dev simple-speaker-service 
+CMD uv run --extra ${PYTORCH_CUDA_VERSION} --no-dev simple-speaker-service 
