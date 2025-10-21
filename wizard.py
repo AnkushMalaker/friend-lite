@@ -26,6 +26,31 @@ def read_env_value(env_file_path, key):
     # get_key returns None if key doesn't exist or value is empty
     return value if value else None
 
+def is_placeholder(value, *placeholder_variants):
+    """
+    Check if a value is a placeholder by normalizing both the value and placeholders.
+    Treats 'your-key-here' and 'your_key_here' as equivalent.
+
+    Args:
+        value: The value to check
+        placeholder_variants: One or more placeholder strings to check against
+
+    Returns:
+        True if value matches any placeholder variant (after normalization)
+    """
+    if not value:
+        return True
+
+    # Normalize by replacing hyphens with underscores
+    normalized_value = value.replace('-', '_').lower()
+
+    for placeholder in placeholder_variants:
+        normalized_placeholder = placeholder.replace('-', '_').lower()
+        if normalized_value == normalized_placeholder:
+            return True
+
+    return False
+
 SERVICES = {
     'backend': {
         'advanced': {
@@ -154,14 +179,14 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
             # Pass Deepgram API key from backend if available
             backend_env_path = 'backends/advanced/.env'
             deepgram_key = read_env_value(backend_env_path, 'DEEPGRAM_API_KEY')
-            if deepgram_key and deepgram_key != 'your_deepgram_api_key_here':
+            if deepgram_key and not is_placeholder(deepgram_key, 'your_deepgram_api_key_here', 'your-deepgram-api-key-here'):
                 cmd.extend(['--deepgram-api-key', deepgram_key])
                 console.print("[blue][INFO][/blue] Found existing DEEPGRAM_API_KEY from backend config, reusing")
 
             # Pass HF Token from existing speaker recognition .env if available
             speaker_env_path = 'extras/speaker-recognition/.env'
             hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
-            if hf_token and hf_token != 'your_huggingface_token_here':
+            if hf_token and not is_placeholder(hf_token, 'your_huggingface_token_here', 'your-huggingface-token-here'):
                 cmd.extend(['--hf-token', hf_token])
                 console.print("[blue][INFO][/blue] Found existing HF_TOKEN, reusing")
 
@@ -175,7 +200,7 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
         if service_name == 'openmemory-mcp':
             backend_env_path = 'backends/advanced/.env'
             openai_key = read_env_value(backend_env_path, 'OPENAI_API_KEY')
-            if openai_key and openai_key != 'your-openai-key-here':
+            if openai_key and not is_placeholder(openai_key, 'your_openai_api_key_here', 'your-openai-api-key-here', 'your_openai_key_here', 'your-openai-key-here'):
                 cmd.extend(['--openai-api-key', openai_key])
                 console.print("[blue][INFO][/blue] Found existing OPENAI_API_KEY from backend config, reusing")
     
