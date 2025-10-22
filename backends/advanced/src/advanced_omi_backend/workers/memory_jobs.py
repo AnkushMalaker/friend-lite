@@ -20,19 +20,23 @@ logger = logging.getLogger(__name__)
 
 @async_job(redis=True, beanie=True)
 async def process_memory_job(
-    client_id: str,
-    user_id: str,
-    user_email: str,
     conversation_id: str,
     redis_client=None
 ) -> Dict[str, Any]:
     """
     RQ job function for memory extraction and processing from conversations.
 
+    V2 Architecture:
+        1. Extracts memories from conversation transcript
+        2. Checks primary speakers filter if configured
+        3. Uses configured memory provider (friend_lite or openmemory_mcp)
+        4. Stores memory references in conversation document
+
+    Note: Listening jobs are restarted by open_conversation_job (not here).
+    This allows users to resume talking immediately after conversation closes,
+    without waiting for memory processing to complete.
+
     Args:
-        client_id: Client identifier
-        user_id: User ID
-        user_email: User email
         conversation_id: Conversation ID to process
         redis_client: Redis client (injected by decorator)
 
@@ -52,20 +56,18 @@ async def process_memory_job(
         logger.warning(f"No conversation found for {conversation_id}")
         return {"success": False, "error": "Conversation not found"}
 
-    # Read client_id and user_email from conversation/user if not provided
-    # (Parameters may be empty if called via job dependency)
-    actual_client_id = client_id or conversation_model.client_id
-    actual_user_email = user_email
+    # Get client_id, user_id, and user_email from conversation/user
+    client_id = conversation_model.client_id
+    user_id = conversation_model.user_id
 
-    if not actual_user_email:
-        user = await get_user_by_id(user_id)
-        if user:
-            actual_user_email = user.email
-        else:
-            logger.warning(f"Could not find user {user_id}")
-            actual_user_email = ""
+    user = await get_user_by_id(user_id)
+    if user:
+        user_email = user.email
+    else:
+        logger.warning(f"Could not find user {user_id}")
+        user_email = ""
 
-    logger.info(f"🔄 Processing memory for conversation {conversation_id}, client={actual_client_id}, user={user_id}")
+    logger.info(f"🔄 Processing memory for conversation {conversation_id}, client={client_id}, user={user_id}")
 
     # Extract conversation text from transcript segments
     full_conversation = ""
@@ -116,10 +118,10 @@ async def process_memory_job(
     memory_service = get_memory_service()
     memory_result = await memory_service.add_memory(
         full_conversation,
-        actual_client_id,
+        client_id,
         conversation_id,
         user_id,
-        actual_user_email,
+        user_email,
         allow_update=True,
     )
 
@@ -140,17 +142,38 @@ async def process_memory_job(
             processing_time = time.time() - start_time
             logger.info(f"✅ Completed memory processing for conversation {conversation_id} - created {len(created_memory_ids)} memories in {processing_time:.2f}s")
 
-            # Mark session as complete in Redis (this is the last job in the chain)
-            if conversation_model and conversation_model.audio_uuid:
-                session_key = f"audio:session:{conversation_model.audio_uuid}"
+            # Update job metadata with memory information
+            from rq import get_current_job
+            current_job = get_current_job()
+            if current_job:
+                if not current_job.meta:
+                    current_job.meta = {}
+
+                # Fetch memory details to display in UI
+                memory_details = []
                 try:
-                    await redis_client.hset(session_key, mapping={
-                        "status": "complete",
-                        "completed_at": str(time.time())
-                    })
-                    logger.info(f"✅ Marked session {conversation_model.audio_uuid} as complete (all jobs finished)")
+                    for memory_id in created_memory_ids[:5]:  # Limit to first 5 for display
+                        memory_entry = await memory_service.get_memory(memory_id, user_id)
+                        if memory_entry:
+                            memory_details.append({
+                                "memory_id": memory_id,
+                                "text": memory_entry.get("text", "")[:200]  # First 200 chars
+                            })
                 except Exception as e:
-                    logger.warning(f"⚠️ Could not mark session as complete: {e}")
+                    logger.warning(f"Failed to fetch memory details for UI: {e}")
+
+                current_job.meta.update({
+                    "conversation_id": conversation_id,
+                    "memories_created": len(created_memory_ids),
+                    "memory_ids": created_memory_ids[:5],  # Store first 5 IDs
+                    "memory_details": memory_details,
+                    "processing_time": processing_time
+                })
+                current_job.save_meta()
+
+            # NOTE: Listening jobs are restarted by open_conversation_job (not here)
+            # This allows users to resume talking immediately after conversation closes,
+            # without waiting for memory processing to complete.
 
             return {
                 "success": True,
@@ -158,18 +181,7 @@ async def process_memory_job(
                 "processing_time": processing_time
             }
         else:
-            # Mark session as complete even if no memories created
-            if conversation_model and conversation_model.audio_uuid:
-                session_key = f"audio:session:{conversation_model.audio_uuid}"
-                try:
-                    await redis_client.hset(session_key, mapping={
-                        "status": "complete",
-                        "completed_at": str(time.time())
-                    })
-                    logger.info(f"✅ Marked session {conversation_model.audio_uuid} as complete (no memories)")
-                except Exception as e:
-                    logger.warning(f"⚠️ Could not mark session as complete: {e}")
-
+            # No memories created - still successful
             return {"success": True, "memories_created": 0, "skipped": True}
     else:
         return {"success": False, "error": "Memory service returned False"}

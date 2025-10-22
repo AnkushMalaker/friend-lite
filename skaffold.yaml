@@ -118,6 +118,10 @@ profiles:
               master.persistence.storageClass: "openebs-hostpath"
               master.service.nameOverride: "redis"
               replica.replicaCount: "0"  # Single instance for development
+              master.resources.requests.memory: "256Mi"
+              master.resources.limits.memory: "512Mi"
+              master.resources.requests.cpu: "100m"
+              master.resources.limits.cpu: "200m"
 
   # Application profile - frequently updated
   - name: advanced-backend

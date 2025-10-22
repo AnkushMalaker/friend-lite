@@ -13,9 +13,9 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from dotenv import get_key, set_key
+from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -100,26 +100,6 @@ class FriendLiteSetup:
             shutil.copy2(env_path, backup_path)
             self.console.print(f"[blue][INFO][/blue] Backed up existing .env file to {backup_path}")
 
-    def read_existing_env_value(self, key: str) -> str:
-        """Read a value from existing .env file"""
-        env_path = Path(".env")
-        if not env_path.exists():
-            return None
-
-        value = get_key(str(env_path), key)
-        # get_key returns None if key doesn't exist or value is empty
-        return value if value else None
-
-    def mask_api_key(self, key: str, show_chars: int = 5) -> str:
-        """Mask API key showing only first and last few characters"""
-        if not key or len(key) <= show_chars * 2:
-            return key
-
-        # Remove quotes if present
-        key_clean = key.strip("'\"")
-
-        return f"{key_clean[:show_chars]}{'*' * min(15, len(key_clean) - show_chars * 2)}{key_clean[-show_chars:]}"
-
     def setup_authentication(self):
         """Configure authentication settings"""
         self.print_section("Authentication Setup")
@@ -148,17 +128,8 @@ class FriendLiteSetup:
         if choice == "1":
             self.console.print("[blue][INFO][/blue] Deepgram selected")
             self.console.print("Get your API key from: https://console.deepgram.com/")
-
-            # Check for existing API key
-            existing_key = self.read_existing_env_value("DEEPGRAM_API_KEY")
-            if existing_key and existing_key not in ['your_deepgram_api_key_here', 'your-deepgram-key-here']:
-                masked_key = self.mask_api_key(existing_key)
-                prompt_text = f"Deepgram API key ({masked_key}) [press Enter to reuse, or enter new]"
-                api_key_input = self.prompt_value(prompt_text, "")
-                api_key = api_key_input if api_key_input else existing_key
-            else:
-                api_key = self.prompt_value("Deepgram API key (leave empty to skip)", "")
-
+            
+            api_key = self.prompt_value("Deepgram API key (leave empty to skip)", "")
             if api_key:
                 self.config["TRANSCRIPTION_PROVIDER"] = "deepgram"
                 self.config["DEEPGRAM_API_KEY"] = api_key
@@ -170,19 +141,10 @@ class FriendLiteSetup:
             self.config["TRANSCRIPTION_PROVIDER"] = "mistral"
             self.console.print("[blue][INFO][/blue] Mistral selected")
             self.console.print("Get your API key from: https://console.mistral.ai/")
-
-            # Check for existing API key
-            existing_key = self.read_existing_env_value("MISTRAL_API_KEY")
-            if existing_key and existing_key not in ['your_mistral_api_key_here', 'your-mistral-key-here']:
-                masked_key = self.mask_api_key(existing_key)
-                prompt_text = f"Mistral API key ({masked_key}) [press Enter to reuse, or enter new]"
-                api_key_input = self.prompt_value(prompt_text, "")
-                api_key = api_key_input if api_key_input else existing_key
-            else:
-                api_key = self.prompt_value("Mistral API key (leave empty to skip)", "")
-
+            
+            api_key = self.prompt_value("Mistral API key (leave empty to skip)", "")
             model = self.prompt_value("Mistral model", "voxtral-mini-2507")
-
+            
             if api_key:
                 self.config["MISTRAL_API_KEY"] = api_key
                 self.config["MISTRAL_MODEL"] = model
@@ -216,20 +178,11 @@ class FriendLiteSetup:
             self.config["LLM_PROVIDER"] = "openai"
             self.console.print("[blue][INFO][/blue] OpenAI selected")
             self.console.print("Get your API key from: https://platform.openai.com/api-keys")
-
-            # Check for existing API key
-            existing_key = self.read_existing_env_value("OPENAI_API_KEY")
-            if existing_key and existing_key not in ['your_openai_api_key_here', 'your-openai-key-here']:
-                masked_key = self.mask_api_key(existing_key)
-                prompt_text = f"OpenAI API key ({masked_key}) [press Enter to reuse, or enter new]"
-                api_key_input = self.prompt_value(prompt_text, "")
-                api_key = api_key_input if api_key_input else existing_key
-            else:
-                api_key = self.prompt_value("OpenAI API key (leave empty to skip)", "")
-
+            
+            api_key = self.prompt_value("OpenAI API key (leave empty to skip)", "")
             model = self.prompt_value("OpenAI model", "gpt-4o-mini")
             base_url = self.prompt_value("OpenAI base URL (for proxies/compatible APIs)", "https://api.openai.com/v1")
-
+            
             if api_key:
                 self.config["OPENAI_API_KEY"] = api_key
                 self.config["OPENAI_MODEL"] = model
@@ -383,56 +336,67 @@ class FriendLiteSetup:
                     self.console.print(f"[yellow][WARNING][/yellow] nginx.conf generation failed: {e}")
             else:
                 self.console.print("[yellow][WARNING][/yellow] nginx.conf.template not found")
-
-            # Generate Caddyfile from template
-            self.console.print("[blue][INFO][/blue] Creating Caddyfile configuration...")
-            caddyfile_template = script_dir / "Caddyfile.template"
-            if caddyfile_template.exists():
-                try:
-                    with open(caddyfile_template, 'r') as f:
-                        caddyfile_content = f.read()
-
-                    # Replace TAILSCALE_IP with server_ip
-                    caddyfile_content = caddyfile_content.replace('TAILSCALE_IP', server_ip)
-
-                    with open('Caddyfile', 'w') as f:
-                        f.write(caddyfile_content)
-
-                    self.console.print(f"[green][SUCCESS][/green] Caddyfile created for: {server_ip}")
-
-                except Exception as e:
-                    self.console.print(f"[yellow][WARNING][/yellow] Caddyfile generation failed: {e}")
-            else:
-                self.console.print("[yellow][WARNING][/yellow] Caddyfile.template not found")
         else:
             self.config["HTTPS_ENABLED"] = "false"
 
     def generate_env_file(self):
-        """Generate .env file from template and update with configuration"""
-        env_path = Path(".env")
-        env_template = Path(".env.template")
+        """Generate the .env file from configuration"""
+        env_content = f"""# =============================================================================
+# Friend-Lite Advanced Backend Configuration
+# Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+# =============================================================================
 
-        # Backup existing .env if it exists
-        self.backup_existing_env()
+# Authentication
+AUTH_SECRET_KEY={self.config.get('AUTH_SECRET_KEY', '')}
+ADMIN_EMAIL={self.config.get('ADMIN_EMAIL', '')}
+ADMIN_PASSWORD={self.config.get('ADMIN_PASSWORD', '')}
 
-        # Copy template to .env
-        if env_template.exists():
-            shutil.copy2(env_template, env_path)
-            self.console.print("[blue][INFO][/blue] Copied .env.template to .env")
-        else:
-            self.console.print("[yellow][WARNING][/yellow] .env.template not found, creating new .env")
-            env_path.touch(mode=0o600)
+# Transcription Provider
+TRANSCRIPTION_PROVIDER={self.config.get('TRANSCRIPTION_PROVIDER', '')}
+DEEPGRAM_API_KEY={self.config.get('DEEPGRAM_API_KEY', '')}
+MISTRAL_API_KEY={self.config.get('MISTRAL_API_KEY', '')}
+MISTRAL_MODEL={self.config.get('MISTRAL_MODEL', '')}
 
-        # Update configured values using set_key
-        env_path_str = str(env_path)
-        for key, value in self.config.items():
-            if value:  # Only set non-empty values
-                set_key(env_path_str, key, value)
+# LLM Provider  
+LLM_PROVIDER={self.config.get('LLM_PROVIDER', '')}
+OPENAI_API_KEY={self.config.get('OPENAI_API_KEY', '')}
+OPENAI_MODEL={self.config.get('OPENAI_MODEL', '')}
+OPENAI_BASE_URL={self.config.get('OPENAI_BASE_URL', '')}
+OLLAMA_BASE_URL={self.config.get('OLLAMA_BASE_URL', '')}
+OLLAMA_MODEL={self.config.get('OLLAMA_MODEL', '')}
+# Memory Provider
+MEMORY_PROVIDER={self.config.get('MEMORY_PROVIDER', 'friend_lite')}
+QDRANT_BASE_URL={self.config.get('QDRANT_BASE_URL', 'qdrant')}
+OPENMEMORY_MCP_URL={self.config.get('OPENMEMORY_MCP_URL', '')}
+OPENMEMORY_CLIENT_NAME={self.config.get('OPENMEMORY_CLIENT_NAME', '')}
+OPENMEMORY_USER_ID={self.config.get('OPENMEMORY_USER_ID', '')}
 
-        # Ensure secure permissions
-        os.chmod(env_path, 0o600)
+# Optional Services
+SPEAKER_SERVICE_URL={self.config.get('SPEAKER_SERVICE_URL', '')}
+PARAKEET_ASR_URL={self.config.get('PARAKEET_ASR_URL', '')}
 
-        self.console.print("[green][SUCCESS][/green] .env file configured successfully with secure permissions")
+# Network Configuration
+BACKEND_PUBLIC_PORT={self.config.get('BACKEND_PUBLIC_PORT', '8000')}
+WEBUI_PORT={self.config.get('WEBUI_PORT', '5173')}
+
+# Database
+MONGODB_URI=mongodb://mongo:27017
+DATABASE_NAME=friend_db
+
+# CORS (supports Tailscale IPs automatically)
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+
+# Logging
+LOG_LEVEL=INFO
+"""
+        
+        # Create .env file with secure permissions (owner read/write only)
+        env_path = ".env"
+        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.write(env_content)
+        
+        self.console.print("[green][SUCCESS][/green] .env file created successfully with secure permissions")
 
     def copy_config_templates(self):
         """Copy other configuration files"""

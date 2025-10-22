@@ -35,6 +35,11 @@ Run Client Queue Tests
     [Tags]             client    queue    suite
     Run Tests    client_queue_tests.robot
 
+Run RQ Persistence Tests
+    [Documentation]    Execute Redis Queue persistence tests
+    [Tags]             rq    persistence    redis    suite
+    Run Tests    rq_persistence_tests.robot
+
 Run System Admin Tests
     [Documentation]    Execute system and admin tests
     [Tags]             system    admin    suite

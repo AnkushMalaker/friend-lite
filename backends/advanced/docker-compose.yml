@@ -31,7 +31,7 @@ services:
       - NEO4J_HOST=${NEO4J_HOST}
       - NEO4J_USER=${NEO4J_USER}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
-      - CORS_ORIGINS=http://localhost:3010,http://localhost:8000,https://localhost:3010,https://localhost:8000,https://100.105.225.45,https://localhost
+      - CORS_ORIGINS=${CORS_ORIGINS}
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       qdrant:
@@ -200,7 +200,7 @@ services:
 
 
 
-  # Use tailscale instead
+  # Use tailscale instead 
   # UNCOMMENT OUT FOR LOCAL DEMO - EXPOSES to internet
   # ngrok:
   #   image: ngrok/ngrok:latest
@@ -211,10 +211,6 @@ services:
   #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
   #   command: "http proxy:80 --url=${NGROK_URL} --basic-auth=${NGROK_BASIC_AUTH}"
 
-# Shared network for cross-project communication
-networks:
-  default:
-    name: friend-network
 
 # Question: These are named volumes, but they are not being used, right? Can we remove them?
 # volumes:

@@ -13,7 +13,7 @@
 # For production, replace 'localhost' with your domain name and Caddy
 # will automatically obtain Let's Encrypt certificates.
 
-localhost TAILSCALE_IP {
+localhost {
     # Enable automatic HTTPS
     tls internal
 
@@ -61,6 +61,7 @@ localhost TAILSCALE_IP {
         reverse_proxy webui:80
     }
 }
+
 
 # Production configuration (uncomment and modify for your domain)
 # yourdomain.com {

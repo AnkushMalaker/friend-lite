@@ -185,9 +185,8 @@ config-docker: ## Generate Docker Compose configuration files
 	@CONFIG_FILE=config.env.dev python3 scripts/generate-docker-configs.py
 	@echo "✅ Docker Compose configuration files generated"
 
-config-k8s: ## Generate Kubernetes configuration files (Skaffold env + ConfigMap/Secret)
+config-k8s: ## Generate Kubernetes configuration files (ConfigMap/Secret only - no .env files)
 	@echo "☸️  Generating Kubernetes configuration files..."
-	@python3 scripts/generate-docker-configs.py
 	@python3 scripts/generate-k8s-configs.py
 	@echo "📦 Applying ConfigMap and Secret to Kubernetes..."
 	@kubectl apply -f k8s-manifests/configmap.yaml -n $(APPLICATION_NAMESPACE) 2>/dev/null || echo "⚠️  ConfigMap not applied (cluster not available?)"

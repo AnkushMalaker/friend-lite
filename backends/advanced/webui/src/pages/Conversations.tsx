@@ -101,7 +101,11 @@ export default function Conversations() {
   const formatDate = (timestamp: number | string) => {
     // Handle both Unix timestamp (number) and ISO string
     if (typeof timestamp === 'string') {
-      return new Date(timestamp).toLocaleString()
+      // If the string doesn't include timezone info, append 'Z' to treat as UTC
+      const isoString = timestamp.endsWith('Z') || timestamp.includes('+') || timestamp.includes('T') && timestamp.split('T')[1].includes('-')
+        ? timestamp
+        : timestamp + 'Z'
+      return new Date(isoString).toLocaleString()
     }
     // If timestamp is 0, return placeholder
     if (timestamp === 0) {
@@ -207,19 +211,19 @@ export default function Conversations() {
     }
   }
 
-  const toggleTranscriptExpansion = async (audioUuid: string) => {
+  const toggleTranscriptExpansion = async (conversationId: string) => {
     // If already expanded, just collapse
-    if (expandedTranscripts.has(audioUuid)) {
+    if (expandedTranscripts.has(conversationId)) {
       setExpandedTranscripts(prev => {
         const newSet = new Set(prev)
-        newSet.delete(audioUuid)
+        newSet.delete(conversationId)
         return newSet
       })
       return
     }
 
-    // Find the conversation by audio_uuid
-    const conversation = conversations.find(c => c.audio_uuid === audioUuid)
+    // Find the conversation by conversation_id
+    const conversation = conversations.find(c => c.conversation_id === conversationId)
     if (!conversation || !conversation.conversation_id) {
       console.error('Cannot expand transcript: conversation_id missing')
       return
@@ -227,7 +231,7 @@ export default function Conversations() {
 
     // If segments are already loaded, just expand
     if (conversation.segments && conversation.segments.length > 0) {
-      setExpandedTranscripts(prev => new Set(prev).add(audioUuid))
+      setExpandedTranscripts(prev => new Set(prev).add(conversationId))
       return
     }
 
@@ -237,12 +241,12 @@ export default function Conversations() {
       if (response.status === 200 && response.data.conversation) {
         // Update the conversation in state with full segments and transcript
         setConversations(prev => prev.map(c =>
-          c.audio_uuid === audioUuid
+          c.conversation_id === conversationId
             ? { ...c, segments: response.data.conversation.segments, transcript: response.data.conversation.transcript }
             : c
         ))
         // Expand the transcript
-        setExpandedTranscripts(prev => new Set(prev).add(audioUuid))
+        setExpandedTranscripts(prev => new Set(prev).add(conversationId))
       }
     } catch (err: any) {
       console.error('Failed to fetch conversation details:', err)
@@ -557,7 +561,7 @@ export default function Conversations() {
                 {/* Transcript Header with Expand/Collapse */}
                 <div
                   className="flex items-center justify-between cursor-pointer p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
-                  onClick={() => toggleTranscriptExpansion(conversation.audio_uuid)}
+                  onClick={() => conversation.conversation_id && toggleTranscriptExpansion(conversation.conversation_id)}
                 >
                   <h3 className="font-medium text-gray-900 dark:text-gray-100">
                     Transcript {((conversation.segments && conversation.segments.length > 0) || conversation.segment_count) && (
@@ -567,7 +571,7 @@ export default function Conversations() {
                     )}
                   </h3>
                   <div className="flex items-center space-x-2">
-                    {expandedTranscripts.has(conversation.audio_uuid) ? (
+                    {conversation.conversation_id && expandedTranscripts.has(conversation.conversation_id) ? (
                       <ChevronUp className="h-5 w-5 text-gray-500 dark:text-gray-400 transition-transform duration-200" />
                     ) : (
                       <ChevronDown className="h-5 w-5 text-gray-500 dark:text-gray-400 transition-transform duration-200" />
@@ -576,7 +580,7 @@ export default function Conversations() {
                 </div>
 
                 {/* Transcript Content - Conditionally Rendered */}
-                {expandedTranscripts.has(conversation.audio_uuid) && (
+                {conversation.conversation_id && expandedTranscripts.has(conversation.conversation_id) && (
                   <div className="animate-in slide-in-from-top-2 duration-300 ease-out space-y-4">
                     {conversation.segments && conversation.segments.length > 0 ? (
                       <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600">

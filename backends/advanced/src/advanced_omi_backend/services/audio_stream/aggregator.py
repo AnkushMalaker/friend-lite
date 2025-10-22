@@ -68,7 +68,7 @@ class TranscriptionResultsAggregator:
             # Log detailed result info
             chunk_ids = [r["chunk_id"] for r in results]
             total_text_length = sum(len(r["text"]) for r in results)
-            logger.info(
+            logger.debug(
                 f"🔄 Retrieved {len(results)} results for session {session_id}: "
                 f"chunks={chunk_ids}, total_text={total_text_length} chars"
             )
@@ -143,7 +143,7 @@ class TranscriptionResultsAggregator:
             "provider": provider
         }
 
-        logger.info(
+        logger.debug(
             f"📦 Combined {len(results)} chunks for session {session_id}: "
             f"{len(full_text)} chars, {len(all_words)} words, {len(all_segments)} segments"
         )

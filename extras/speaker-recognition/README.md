@@ -42,26 +42,13 @@ This generates SSL certificates and configures nginx for your IP address.
 
 ### 4. Start the system
 ```bash
-# For CPU-only
-docker compose --profile cpu up --build -d
-
-# For GPU acceleration
-docker compose --profile gpu up --build -d
+docker-compose up --build -d
 ```
 
 This starts three services:
 - **FastAPI backend** on port 8085 (internal API service)
 - **React web UI** on port configured by REACT_UI_PORT (defaults vary by mode)
 - **Nginx proxy** on ports 8444 (HTTPS) and 8081 (HTTP redirect)
-
-**⚠️ Important**: Use the same profile when stopping:
-```bash
-# Stop CPU services
-docker compose --profile cpu down
-
-# Stop GPU services
-docker compose --profile gpu down
-```
 
 ### 5. Access the Web UI
 
@@ -384,11 +371,11 @@ The React UI is configured with HTTPS enabled by default (`REACT_UI_HTTPS=true`)
 ## 🚨 Troubleshooting
 
 **Can't access the web UI?**
-- Check if services are running: `docker compose --profile cpu ps` (or `--profile gpu`)
-- View logs: `docker compose --profile cpu logs web-ui`
+- Check if services are running: `docker-compose ps`
+- View logs: `docker-compose logs web-ui`
 
 **Speaker service not responding?**
-- Check backend logs: `docker compose --profile cpu logs speaker-service`
+- Check backend logs: `docker-compose logs speaker-service`
 - Verify HF_TOKEN is set correctly
 
 **Models not downloading?**
@@ -808,7 +795,7 @@ pip install pyaudio
 
 ```bash
 # Start the speaker service first
-docker compose --profile cpu up -d
+docker-compose up -d
 
 # Enroll a new speaker (records 10 seconds)
 python laptop_client.py enroll --speaker-id "john" --speaker-name "John Doe" --duration 10

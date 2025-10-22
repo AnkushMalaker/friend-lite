@@ -475,7 +475,7 @@ class SpeakerRecognitionClient:
         import uuid
         from pathlib import Path
         from advanced_omi_backend.utils.audio_extraction import extract_audio_for_results
-        from advanced_omi_backend.audio_utils import write_pcm_to_wav
+        from advanced_omi_backend.utils.audio_utils import write_pcm_to_wav
 
         logger.info(f"🎤 [SPEAKER CHECK] Starting speaker check for session {session_id}")
         logger.info(f"🎤 [SPEAKER CHECK] Client: {client_id}, User: {user_id}")

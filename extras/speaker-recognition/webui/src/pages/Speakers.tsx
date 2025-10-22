@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Search, Download, Trash2, Eye, BarChart3, User, Clock, CheckCircle, XCircle, Upload, FileJson } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useUser } from '../contexts/UserContext'
 import { apiService } from '../services/api'
 import { formatDuration } from '../utils/audioUtils'
@@ -32,6 +33,7 @@ interface SpeakerStats {
 
 export default function Speakers() {
   const { user } = useUser()
+  const navigate = useNavigate()
   const [speakers, setSpeakers] = useState<Speaker[]>([])
   const [stats, setStats] = useState<SpeakerStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -39,7 +41,6 @@ export default function Speakers() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed' | 'failed'>('all')
   const [sortBy, setSortBy] = useState<'name' | 'created_at' | 'audio_sample_count' | 'total_audio_duration' | 'average_quality'>('name')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
-  const [selectedSpeaker, setSelectedSpeaker] = useState<Speaker | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'speakers' | 'analysis'>('speakers')
   const [showImportDialog, setShowImportDialog] = useState(false)
@@ -457,28 +458,25 @@ export default function Speakers() {
       {filteredAndSortedSpeakers().length > 0 ? (
         <div className="bg-white border rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+            <table className="w-full divide-y divide-gray-200">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Speaker
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                    Name
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                     Status
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Audio Count
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                    Samples
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                     Duration
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Quality
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                     Created
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                     Actions
                   </th>
                 </tr>
@@ -486,62 +484,51 @@ export default function Speakers() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredAndSortedSpeakers().map((speaker) => (
                   <tr key={speaker.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex items-center">
-                        <div className="flex-shrink-0 h-10 w-10">
-                          <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                            <User className="h-5 w-5 text-blue-600" />
+                        <div className="flex-shrink-0 h-8 w-8">
+                          <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
+                            <User className="h-4 w-4 text-blue-600" />
                           </div>
                         </div>
-                        <div className="ml-4">
+                        <div className="ml-3">
                           <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{speaker.name}</div>
-                          <div className="text-sm text-gray-500">ID: {speaker.id}</div>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-3 whitespace-nowrap">
                       <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(speaker.enrollment_status)}`}>
                         {getStatusIcon(speaker.enrollment_status)}
-                        <span>{speaker.enrollment_status}</span>
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                      {speaker.audio_sample_count || 0} samples
+                    <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                      {speaker.audio_sample_count || 0}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                      {speaker.total_audio_duration ? formatDuration(speaker.total_audio_duration) : 'N/A'}
+                    <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                      {speaker.total_audio_duration ? formatDuration(speaker.total_audio_duration) : '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {speaker.average_quality ? (
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(speaker.average_quality)}`}>
-                          {speaker.average_quality.toFixed(1)} dB ({getQualityLabel(speaker.average_quality)})
-                        </span>
-                      ) : (
-                        <span className="text-gray-500 text-xs">N/A</span>
-                      )}
+                    <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-500">
+                      {speaker.created_at ? new Date(speaker.created_at).toLocaleDateString() : '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {speaker.created_at ? new Date(speaker.created_at).toLocaleDateString() : 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex justify-end space-x-2">
+                    <td className="px-3 py-3 whitespace-nowrap text-right text-sm font-medium">
+                      <div className="flex justify-end space-x-1">
                         <button
-                          onClick={() => setSelectedSpeaker(speaker)}
-                          className="p-1 text-blue-600 hover:text-blue-800"
-                          title="View Details"
+                          onClick={() => navigate('/enrollment', { state: { speakerName: speaker.name } })}
+                          className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded"
+                          title="Add More Samples"
                         >
                           <Eye className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => exportSpeakerData(speaker)}
-                          className="p-1 text-green-600 hover:text-green-800"
+                          className="p-1.5 text-green-600 hover:text-green-800 hover:bg-green-50 rounded"
                           title="Export Data"
                         >
                           <Download className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => setShowDeleteConfirm(speaker.id)}
-                          className="p-1 text-red-600 hover:text-red-800"
+                          className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
                           title="Delete Speaker"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -563,66 +550,6 @@ export default function Speakers() {
               ? "No speakers have been enrolled yet." 
               : "No speakers match your current filters."}
           </p>
-        </div>
-      )}
-
-      {/* Speaker Details Modal */}
-      {selectedSpeaker && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto">
-            <div className="p-6 border-b">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Speaker Details</h2>
-                <button
-                  onClick={() => setSelectedSpeaker(null)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-            <div className="p-6 space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Name</label>
-                  <p className="text-gray-900 dark:text-gray-100">{selectedSpeaker.name}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Status</label>
-                  <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(selectedSpeaker.enrollment_status)}`}>
-                    {getStatusIcon(selectedSpeaker.enrollment_status)}
-                    <span>{selectedSpeaker.enrollment_status}</span>
-                  </span>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Audio Samples</label>
-                  <p className="text-gray-900 dark:text-gray-100">{selectedSpeaker.audio_sample_count || 0}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Total Duration</label>
-                  <p className="text-gray-900 dark:text-gray-100">{formatDuration(selectedSpeaker.total_audio_duration || 0)}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Average Quality</label>
-                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(selectedSpeaker.average_quality)}`}>
-                    {selectedSpeaker.average_quality.toFixed(1)} dB ({getQualityLabel(selectedSpeaker.average_quality)})
-                  </span>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Created</label>
-                  <p className="text-gray-900 dark:text-gray-100">{new Date(selectedSpeaker.created_at).toLocaleString()}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Last Updated</label>
-                  <p className="text-gray-900 dark:text-gray-100">{new Date(selectedSpeaker.updated_at).toLocaleString()}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Last Enrollment</label>
-                  <p className="text-gray-900 dark:text-gray-100">{new Date(selectedSpeaker.last_enrollment).toLocaleString()}</p>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       )}
         </>

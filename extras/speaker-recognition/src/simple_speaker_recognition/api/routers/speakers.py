@@ -261,6 +261,107 @@ async def download_speaker_audio_file(speaker_id: str, filename: str, db: Unifie
     )
 
 
+@router.delete("/speakers/{speaker_id}/audio/{filename}")
+async def delete_speaker_audio_file(speaker_id: str, filename: str, db: UnifiedSpeakerDB = Depends(get_db)):
+    """Delete a specific audio file for a speaker and update manifest."""
+    # Extract user_id from speaker_id for authorization
+    user_id = extract_user_id_from_speaker_id(speaker_id)
+
+    # Check if speaker exists
+    db_session = get_db_session()
+    try:
+        speaker = db_session.query(Speaker).filter(
+            Speaker.id == speaker_id,
+            Speaker.user_id == user_id
+        ).first()
+
+        if not speaker:
+            raise HTTPException(404, f"Speaker {speaker_id} not found for user {user_id}")
+
+    finally:
+        db_session.close()
+
+    # Get paths
+    auth = get_auth()
+    speaker_audio_dir = auth.enrollment_audio_dir / str(user_id) / speaker_id
+    file_path = speaker_audio_dir / filename
+    manifest_path = speaker_audio_dir / "enrollment_manifest.json"
+
+    # Security check: ensure file is within the expected directory
+    try:
+        file_path = file_path.resolve()
+        speaker_audio_dir = speaker_audio_dir.resolve()
+        if not str(file_path).startswith(str(speaker_audio_dir)):
+            raise HTTPException(403, "Access to file outside speaker directory is forbidden")
+    except Exception:
+        raise HTTPException(400, "Invalid file path")
+
+    if not file_path.exists():
+        raise HTTPException(404, f"Audio file {filename} not found for speaker {speaker_id}")
+
+    if not file_path.is_file():
+        raise HTTPException(400, f"Path {filename} is not a file")
+
+    try:
+        # Delete the audio file
+        file_path.unlink()
+        log.info(f"Deleted audio file: {file_path}")
+
+        # Update manifest if it exists
+        if manifest_path.exists():
+            with open(manifest_path, "r") as f:
+                manifest_data = json.load(f)
+
+            # Remove file from manifest
+            audio_files = manifest_data.get("audio_files", [])
+            removed_file = None
+            updated_files = []
+
+            for audio_file in audio_files:
+                if audio_file.get("filename") == filename:
+                    removed_file = audio_file
+                else:
+                    updated_files.append(audio_file)
+
+            if removed_file:
+                # Update manifest
+                manifest_data["audio_files"] = updated_files
+                manifest_data["total_files"] = len(updated_files)
+                manifest_data["last_updated"] = datetime.utcnow().isoformat() + "Z"
+
+                # Recalculate total duration
+                total_duration = sum(f.get("duration", 0.0) for f in updated_files)
+                manifest_data["total_duration"] = total_duration
+
+                with open(manifest_path, "w") as f:
+                    json.dump(manifest_data, f, indent=2)
+
+                log.info(f"Updated manifest for speaker {speaker_id}: removed {filename}")
+
+                # Update database counts
+                db_session = get_db_session()
+                try:
+                    speaker = db_session.query(Speaker).filter(Speaker.id == speaker_id).first()
+                    if speaker:
+                        speaker.audio_sample_count = len(updated_files)
+                        speaker.total_audio_duration = total_duration
+                        speaker.updated_at = datetime.utcnow()
+                        db_session.commit()
+                        log.info(f"Updated speaker {speaker_id} counts in database")
+                finally:
+                    db_session.close()
+
+        return {
+            "deleted": True,
+            "filename": filename,
+            "remaining_files": len(updated_files) if manifest_path.exists() else 0
+        }
+
+    except Exception as e:
+        log.error(f"Error deleting audio file {filename} for speaker {speaker_id}: {e}")
+        raise HTTPException(500, f"Failed to delete audio file: {str(e)}")
+
+
 @router.post("/speakers/reset")
 async def reset_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = Depends(get_db)):
     """Reset all speakers (optionally for a specific user)."""
@@ -274,7 +375,7 @@ async def reset_speakers(user_id: Optional[int] = None, db: UnifiedSpeakerDB = D
             db_session.commit()
         finally:
             db_session.close()
-    
+
     return {"reset": True}
 
 

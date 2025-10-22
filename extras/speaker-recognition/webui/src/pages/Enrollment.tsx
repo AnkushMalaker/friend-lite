@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Mic, MicOff, Upload, Play, Pause, Save, Trash2, CheckCircle, AlertCircle } from 'lucide-react'
 import { useUser } from '../contexts/UserContext'
 import { calculateFileHash, isAudioFile } from '../utils/fileHash'
@@ -36,13 +37,17 @@ interface EnrollmentAudio {
 
 export default function Enrollment() {
   const { user } = useUser()
+  const location = useLocation()
   const [sessions, setSessions] = useState<EnrollmentSession[]>([])
   const [currentSession, setCurrentSession] = useState<EnrollmentSession | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  
+  const [existingSpeaker, setExistingSpeaker] = useState<any | null>(null)
+  const [existingAudioFiles, setExistingAudioFiles] = useState<any[]>([])
+  const [playingExistingAudioUrl, setPlayingExistingAudioUrl] = useState<string | null>(null)
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -56,17 +61,17 @@ export default function Enrollment() {
       if (mediaRecorderRef.current) {
         mediaRecorderRef.current.stop()
       }
-      
+
       // Clear interval
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current)
       }
-      
+
       // Stop audio playback
       if (audioSourceRef.current) {
         audioSourceRef.current.stop()
       }
-      
+
       // Close audio context
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
         audioContextRef.current.close()
@@ -86,6 +91,47 @@ export default function Enrollment() {
     setSessions(prev => [...prev, newSession])
     setCurrentSession(newSession)
   }, [])
+
+  // Handle pre-filled speaker name from navigation state (from "Add More Samples" button)
+  useEffect(() => {
+    const loadExistingSpeaker = async () => {
+      if (location.state?.speakerName && !currentSession && user) {
+        const speakerName = location.state.speakerName
+        console.log(`Loading existing speaker: ${speakerName}`)
+
+        try {
+          // Fetch existing speaker data
+          const speakersResponse = await apiService.get('/speakers')
+          const speaker = speakersResponse.data.speakers?.find(
+            (s: any) => s.user_id === user.id && s.name === speakerName
+          )
+
+          if (speaker) {
+            console.log(`Found existing speaker:`, speaker)
+            setExistingSpeaker(speaker)
+
+            // Fetch existing audio files for this speaker
+            try {
+              const audioFilesResponse = await apiService.getSpeakerAudioFiles(speaker.id)
+              console.log(`Loaded ${audioFilesResponse.audio_files?.length || 0} existing audio files`)
+              setExistingAudioFiles(audioFilesResponse.audio_files || [])
+            } catch (audioError) {
+              console.error('Failed to load existing audio files:', audioError)
+              setExistingAudioFiles([])
+            }
+          }
+        } catch (error) {
+          console.error('Failed to load existing speaker:', error)
+        }
+
+        createNewSession(speakerName)
+        // Clear the navigation state after using it
+        window.history.replaceState({}, document.title)
+      }
+    }
+
+    loadExistingSpeaker()
+  }, [location.state, currentSession, user, createNewSession])
 
   const calculateSessionQuality = useCallback((audioFiles: EnrollmentAudio[]): 'excellent' | 'good' | 'fair' | 'poor' => {
     if (audioFiles.length === 0) return 'poor'
@@ -133,12 +179,34 @@ export default function Enrollment() {
     }
 
     try {
-      // Check if HTTPS is required
-      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+      // Check if HTTPS is required (allow localhost, 127.0.0.1, and other local IPs)
+      const hostname = window.location.hostname
+      const protocol = window.location.protocol
+
+      const isLocalHost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname) ||
+                          hostname.startsWith('192.168.') ||
+                          hostname.startsWith('10.') ||
+                          hostname.startsWith('172.16.')
+
+      console.log('🎤 Recording check:', {
+        protocol: protocol,
+        hostname: hostname,
+        isLocalHost: isLocalHost,
+        navigatorExists: !!navigator.mediaDevices,
+        getUserMediaExists: !!navigator.mediaDevices?.getUserMedia
+      })
+
+      if (protocol !== 'https:' && !isLocalHost) {
         alert('Microphone access requires HTTPS. Please use HTTPS or localhost.')
         return
       }
 
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Your browser does not support microphone access. Please use Chrome, Firefox, or Edge.')
+        return
+      }
+
+      console.log('🎤 Requesting microphone access...')
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
@@ -191,9 +259,14 @@ export default function Enrollment() {
       
       mediaRecorder.start(250) // Increased interval for better stability
       
-    } catch (error) {
-      console.error('Failed to start recording:', error)
-      
+    } catch (error: any) {
+      console.error('❌ Failed to start recording:', error)
+      console.error('Error details:', {
+        name: error.name,
+        message: error.message,
+        constraint: error.constraint
+      })
+
       // Clean up if recording failed
       setIsRecording(false)
       setRecordingTime(0)
@@ -201,18 +274,20 @@ export default function Enrollment() {
         clearInterval(recordingIntervalRef.current)
         recordingIntervalRef.current = null
       }
-      
+
       let errorMessage = 'Failed to access microphone. '
       if (error.name === 'NotAllowedError') {
-        errorMessage += 'Please allow microphone access and try again.'
+        errorMessage += 'Please allow microphone access and try again.\n\n'
+        errorMessage += 'Check: Click the 🔒 or ⓘ icon in the address bar and allow microphone access.'
       } else if (error.name === 'NotFoundError') {
         errorMessage += 'No microphone found. Please check your device.'
       } else if (error.name === 'NotSupportedError') {
         errorMessage += 'Recording not supported in this browser.'
       } else {
-        errorMessage += 'Please check permissions and try again.'
+        errorMessage += `Please check permissions and try again.\n\n`
+        errorMessage += `Error: ${error.name || 'Unknown'} - ${error.message || 'No details'}`
       }
-      
+
       alert(errorMessage)
     }
   }, [currentSession])
@@ -388,8 +463,76 @@ export default function Enrollment() {
       audioSourceRef.current.stop()
       audioSourceRef.current = null
       setPlayingAudioId(null)
+      setPlayingExistingAudioUrl(null)
     }
   }, [])
+
+  const playExistingAudio = useCallback(async (audioFileUrl: string) => {
+    try {
+      // Stop any currently playing audio
+      if (audioSourceRef.current) {
+        audioSourceRef.current.stop()
+        audioSourceRef.current = null
+      }
+
+      // Fetch the audio file
+      const response = await fetch(audioFileUrl)
+      const arrayBuffer = await response.arrayBuffer()
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = createAudioContext()
+      }
+
+      const audioBuffer = await decodeAudioData(audioContextRef.current, arrayBuffer)
+      const source = audioContextRef.current.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(audioContextRef.current.destination)
+
+      source.start(0)
+      audioSourceRef.current = source
+      setPlayingExistingAudioUrl(audioFileUrl)
+
+      source.onended = () => {
+        setPlayingExistingAudioUrl(null)
+        audioSourceRef.current = null
+      }
+
+    } catch (error) {
+      console.error('Failed to play existing audio:', error)
+      setPlayingExistingAudioUrl(null)
+    }
+  }, [])
+
+  const deleteExistingAudioFile = useCallback(async (filename: string) => {
+    if (!existingSpeaker) return
+
+    const confirmed = confirm(`Are you sure you want to delete ${filename}? This cannot be undone.`)
+    if (!confirmed) return
+
+    try {
+      await apiService.deleteSpeakerAudioFile(existingSpeaker.id, filename)
+
+      // Remove from local state
+      setExistingAudioFiles(prev => prev.filter(f => f.filename !== filename))
+
+      // Update speaker stats
+      setExistingSpeaker((prev: any) => {
+        if (!prev) return null
+        const remainingFiles = existingAudioFiles.filter(f => f.filename !== filename)
+        const totalDuration = remainingFiles.reduce((sum, f) => sum + (f.duration || 0), 0)
+        return {
+          ...prev,
+          audio_sample_count: remainingFiles.length,
+          total_audio_duration: totalDuration
+        }
+      })
+
+      console.log(`Deleted audio file: ${filename}`)
+    } catch (error) {
+      console.error('Failed to delete audio file:', error)
+      alert('Failed to delete audio file. Please try again.')
+    }
+  }, [existingSpeaker, existingAudioFiles])
 
   const removeAudio = useCallback((audioId: string) => {
     if (!currentSession) return
@@ -404,52 +547,92 @@ export default function Enrollment() {
 
   const submitEnrollment = useCallback(async () => {
     if (!currentSession || !user) return
-    
+
     if (currentSession.audioFiles.length === 0) {
       alert('Please add at least one audio sample before submitting.')
       return
     }
-    
+
     if (currentSession.quality === 'poor') {
       const proceed = confirm(
         'The audio quality is poor. This may result in reduced speaker recognition accuracy. Continue anyway?'
       )
       if (!proceed) return
     }
-    
+
     setIsSubmitting(true)
     updateSession(currentSession.id, { status: 'processing' })
-    
+
     try {
+      // Check if speaker already exists with this name
+      const speakersResponse = await apiService.get('/speakers')
+      const existingSpeaker = speakersResponse.data.speakers?.find(
+        (s: any) => s.user_id === user.id && s.name === currentSession.speakerName
+      )
+
       const formData = new FormData()
-      
-      // Generate unique speaker ID with user prefix (treating user as a "folder")
-      const speakerId = `user_${user.id}_${currentSession.speakerName.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`
-      
-      // BatchEnrollRequest expects exactly these field names
-      formData.append('speaker_name', currentSession.speakerName)
-      formData.append('speaker_id', speakerId)
-      
-      // Add all audio files (backend expects 'files' field for batch enrollment)
-      for (const audio of currentSession.audioFiles) {
-        formData.append('files', audio.blob, audio.name)
+
+      if (existingSpeaker) {
+        // Update existing speaker using append endpoint
+        console.log(`Updating existing speaker: ${existingSpeaker.id}`)
+        formData.append('speaker_id', existingSpeaker.id)
+
+        // Add all audio files (backend expects 'files' field for append)
+        for (const audio of currentSession.audioFiles) {
+          formData.append('files', audio.blob, audio.name)
+        }
+
+        const response = await apiService.post('/enroll/append', formData, {
+          timeout: 120000, // 2 minutes for enrollment operations
+        })
+
+        updateSession(currentSession.id, { status: 'completed' })
+        const message = `Speaker updated successfully! Added ${response.data.new_samples} samples (${response.data.saved_files || 0} files saved). Total: ${response.data.total_samples} samples, ${response.data.total_duration}s.`
+        alert(message)
+        setCurrentSession(null)
+        setExistingSpeaker(null)
+
+      } else {
+        // Create new speaker using batch endpoint
+        const speakerId = `user_${user.id}_${currentSession.speakerName.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`
+        console.log(`Creating new speaker: ${speakerId}`)
+
+        formData.append('speaker_name', currentSession.speakerName)
+        formData.append('speaker_id', speakerId)
+
+        // Add all audio files (backend expects 'files' field for batch enrollment)
+        for (const audio of currentSession.audioFiles) {
+          formData.append('files', audio.blob, audio.name)
+        }
+
+        const response = await apiService.post('/enroll/batch', formData, {
+          timeout: 120000, // 2 minutes for enrollment operations
+        })
+
+        updateSession(currentSession.id, { status: 'completed' })
+        const message = response.data?.audio_saved
+          ? `Speaker enrollment completed successfully! ${response.data.saved_files || 0} audio files saved.`
+          : 'Speaker enrollment completed successfully!'
+        alert(message)
+        setCurrentSession(null)
+        setExistingSpeaker(null)
       }
-      
-      const response = await apiService.post('/enroll/batch', formData, {
-        timeout: 120000, // 2 minutes for enrollment operations
-      })
-      
-      updateSession(currentSession.id, { status: 'completed' })
-      const message = response.data?.audio_saved 
-        ? `Speaker enrollment completed successfully! ${response.data.saved_files || 0} audio files saved.`
-        : 'Speaker enrollment completed successfully!'
-      alert(message)
-      setCurrentSession(null)
-      
+
     } catch (error) {
       console.error('Failed to submit enrollment:', error)
       updateSession(currentSession.id, { status: 'failed' })
-      alert('Failed to submit enrollment. Please try again.')
+
+      // Better error messages
+      let errorMessage = 'Failed to submit enrollment. '
+      if (error.response?.status === 400) {
+        errorMessage += error.response.data?.detail || 'Please check your input and try again.'
+      } else if (error.response?.status === 404) {
+        errorMessage += 'Speaker not found. Please try creating a new enrollment.'
+      } else {
+        errorMessage += 'Please try again.'
+      }
+
+      alert(errorMessage)
     } finally {
       setIsSubmitting(false)
     }
@@ -506,10 +689,96 @@ export default function Enrollment() {
           <span className="font-medium">💾 Audio Storage:</span> All enrollment audio files are automatically saved for future reference and reprocessing.
         </p>
       </div>
-      
+
       <p className="text-gray-600 dark:text-gray-300">
         Enroll new speakers by uploading audio files or recording directly in your browser.
       </p>
+
+      {/* Existing Speaker Info */}
+      {existingSpeaker && currentSession && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+          <h3 className="text-lg font-semibold text-green-900 mb-3">📊 Existing Speaker Profile</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <p className="text-sm text-green-700 font-medium">Current Samples</p>
+              <p className="text-2xl font-bold text-green-900">{existingSpeaker.audio_sample_count || 0}</p>
+            </div>
+            <div>
+              <p className="text-sm text-green-700 font-medium">Total Duration</p>
+              <p className="text-2xl font-bold text-green-900">{formatDuration(existingSpeaker.total_audio_duration || 0)}</p>
+            </div>
+            <div>
+              <p className="text-sm text-green-700 font-medium">Enrolled</p>
+              <p className="text-lg font-bold text-green-900">
+                {existingSpeaker.created_at ? new Date(existingSpeaker.created_at).toLocaleDateString() : 'Unknown'}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-green-700 font-medium">Last Updated</p>
+              <p className="text-lg font-bold text-green-900">
+                {existingSpeaker.updated_at ? new Date(existingSpeaker.updated_at).toLocaleDateString() : 'Unknown'}
+              </p>
+            </div>
+          </div>
+          <p className="mt-3 text-sm text-green-700">
+            ℹ️ Adding more samples below will update this speaker's voice profile using a weighted average of all samples.
+          </p>
+        </div>
+      )}
+
+      {/* Existing Audio Files List */}
+      {existingSpeaker && existingAudioFiles.length > 0 && (
+        <div className="bg-white border rounded-lg p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">🎵 Existing Audio Samples</h3>
+            <span className="text-sm text-gray-500">{existingAudioFiles.length} files</span>
+          </div>
+          <div className="space-y-3">
+            {existingAudioFiles.map((audioFile: any) => {
+              const audioFileUrl = apiService.getSpeakerAudioFileUrl(existingSpeaker.id, audioFile.filename)
+              return (
+                <div
+                  key={audioFile.filename}
+                  className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
+                >
+                  <div className="flex items-center space-x-4">
+                    <div>
+                      <p className="font-medium text-gray-900">{audioFile.filename}</p>
+                      <div className="flex items-center space-x-3 text-sm text-gray-500">
+                        <span>{audioFile.duration ? formatDuration(audioFile.duration * 1000) : 'Unknown duration'}</span>
+                        <span className="text-green-600">• saved</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => playingExistingAudioUrl === audioFileUrl ? stopAudio() : playExistingAudio(audioFileUrl)}
+                      className={`p-2 rounded ${
+                        playingExistingAudioUrl === audioFileUrl
+                          ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                          : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                      }`}
+                      title="Play audio"
+                    >
+                      {playingExistingAudioUrl === audioFileUrl ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                    </button>
+                    <button
+                      onClick={() => deleteExistingAudioFile(audioFile.filename)}
+                      className="p-2 bg-red-100 text-red-700 rounded hover:bg-red-200"
+                      title="Delete audio file"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-4 text-sm text-gray-600">
+            💡 You can add more samples below or remove existing ones. Changes take effect immediately.
+          </p>
+        </div>
+      )}
 
       {/* Current Session */}
       {currentSession && (
@@ -529,7 +798,10 @@ export default function Enrollment() {
             </div>
             <div className="flex space-x-2">
               <button
-                onClick={() => setCurrentSession(null)}
+                onClick={() => {
+                  setCurrentSession(null)
+                  setExistingSpeaker(null)
+                }}
                 className="px-3 py-1 text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100"
               >
                 Cancel
@@ -576,7 +848,7 @@ export default function Enrollment() {
                 <div className="text-sm text-gray-500 dark:text-gray-400 space-y-1">
                   <p>Speak clearly for 10-30 seconds</p>
                   <p className="text-xs">
-                    {location.protocol !== 'https:' && location.hostname !== 'localhost' 
+                    {window.location.protocol !== 'https:' && window.location.hostname !== 'localhost'
                       ? '⚠️ HTTPS required for microphone access'
                       : '✓ Ready to record'}
                   </p>
