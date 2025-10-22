@@ -243,12 +243,19 @@ class FriendLiteSetup:
             self.console.print("[blue][INFO][/blue] Ollama selected")
             
             base_url = self.prompt_value("Ollama server URL", "http://host.docker.internal:11434")
+            if not base_url.endswith("/v1"):
+                base_url = base_url.rstrip("/") + "/v1"
+                self.console.print(f"[blue][INFO][/blue] Automatically appending /v1 to Ollama URL: {base_url}")
+
             model = self.prompt_value("Ollama model", "llama3.2")
+            
+            embedder_model = self.prompt_value("Ollama embedder model", "nomic-embed-text:latest")
             
             self.config["OLLAMA_BASE_URL"] = base_url
             self.config["OLLAMA_MODEL"] = model
+            self.config["OLLAMA_EMBEDDER_MODEL"] = embedder_model
             self.console.print("[green][SUCCESS][/green] Ollama configured")
-            self.console.print("[yellow][WARNING][/yellow] Make sure Ollama is running and the model is pulled")
+            self.console.print("[yellow][WARNING][/yellow] Make sure Ollama is running and all required models (LLM and embedder) are pulled")
 
         elif choice == "3":
             self.console.print("[blue][INFO][/blue] Skipping LLM setup - memory extraction disabled")
