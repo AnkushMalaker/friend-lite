@@ -148,8 +148,9 @@ def build_memory_config_from_env() -> MemoryConfig:
         memory_config = config_loader.get_memory_extraction_config()
         
         # Get LLM provider from environment
-        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
-        if llm_provider not in ["openai", "ollama"]:
+        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
+        memory_logger.info(f"LLM_PROVIDER: {llm_provider}")
+        if llm_provider not in [p.value for p in LLMProvider]:
             raise ValueError(f"Unsupported LLM provider: {llm_provider}")
         
         llm_config = None
