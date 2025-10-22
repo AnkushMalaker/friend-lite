@@ -8,17 +8,17 @@ Clone, run setup wizard, start services, access at http://localhost:5173
 
 ## Screenshots
 
-### WebUI Dashboard
+*[WebUI Dashboard - Screenshot coming soon]*
 
-![WebUI Dashboard](.assets/advanced-dashboard-webui.png)
+![WebUI Dashboard](screenshots/dashboard.png)
 
-### Memory Search
-
-![Memory Search](.assets/memory-dashboard.png)
-
-*[Mobile App - Screenshot coming soon]*
+*[Mobile App - Screenshot coming soon]*  
 
 ![Mobile App](screenshots/mobile-app.png)
+
+*[Memory Search - Screenshot coming soon]*
+
+![Memory Search](screenshots/memory-search.png)
 
 ## What's Included
 

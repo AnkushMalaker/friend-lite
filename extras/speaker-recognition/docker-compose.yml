@@ -1,25 +1,30 @@
 services:
-  # Base Speaker Recognition Service Configuration
+  # FastAPI Speaker Recognition Service
   speaker-service:
-    &base-speaker-service
-    profiles: ["cpu"]
-    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cpu}
     image: speaker-recognition:latest
     env_file:
       - .env
     ports:
       - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"
     volumes:
+      # Mount source code for development (live reload)
       - ./src:/app/src
+      # Persist Hugging Face cache (models) between restarts
       - ./model_cache:/models
       - ./audio_chunks:/app/audio_chunks
       - ./debug:/app/debug
+      # Persist speaker database (faiss.index + speakers.json)
       - ./speaker_data:/app/data
+    # deploy:
+    #       resources:
+    #         reservations:
+    #           devices:
+    #             - driver: nvidia
+    #               count: all
+    #               capabilities: [gpu]
     environment:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
@@ -46,7 +51,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cu121}
+        CUDA_VERSION: ${CUDA_VERSION:-cu121}
     deploy:
       resources:
         reservations:
@@ -57,14 +62,13 @@ services:
   
   # React Web UI
   web-ui:
-    platform: linux/amd64
     build:
       context: webui
       dockerfile: Dockerfile
-    profiles: ["cpu", "gpu"]
     ports:
-      - "${REACT_UI_PORT:-5173}:${REACT_UI_PORT:-5173}"
+      - "${REACT_UI_PORT}:${REACT_UI_PORT}"
     volumes:
+      # Mount source code for development (live reload)
       - ./webui/src:/app/src
       - ./webui/public:/app/public
       - ./webui/package.json:/app/package.json
@@ -78,9 +82,11 @@ services:
       - REACT_UI_HTTPS=${REACT_UI_HTTPS}
       - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST}
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT}
+    depends_on:
+      - speaker-service
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:${REACT_UI_PORT}"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -88,14 +94,14 @@ services:
   # Nginx reverse proxy for unified HTTPS endpoint
   nginx:
     image: nginx:alpine
-    profiles: ["cpu", "gpu"]
     ports:
       - "8444:443"
-      - "8081:80"
+      - "8081:80"  
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
+      - speaker-service
       - web-ui
     restart: unless-stopped
     healthcheck:
@@ -103,9 +109,3 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-# Shared network for cross-project communication
-networks:
-  default:
-    name: friend-network
-    external: true

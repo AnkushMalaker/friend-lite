@@ -66,7 +66,6 @@ class AudioChunksRepository:
         user_id=None,
         user_email=None,
         transcript=None,
-        speakers_identified=None,
         memories=None,
         transcription_status="PENDING",
         memory_processing_status="PENDING",
@@ -84,8 +83,7 @@ class AudioChunksRepository:
                 "provider": None,
                 "created_at": datetime.now(UTC).isoformat(),
                 "processing_run_id": None,
-                "raw_data": {},
-                "speakers_identified": speakers_identified or []
+                "raw_data": {}
             })
             active_transcript_version = version_id
 
@@ -123,7 +121,6 @@ class AudioChunksRepository:
 
             # Compatibility fields (computed from active versions)
             "transcript": transcript or [],
-            "speakers_identified": speakers_identified or [],
             "memories": memories or [],
             "transcription_status": transcription_status,
             "memory_processing_status": memory_processing_status,
@@ -152,8 +149,7 @@ class AudioChunksRepository:
                 "provider": None,
                 "created_at": datetime.now(UTC).isoformat(),
                 "processing_run_id": None,
-                "raw_data": {},
-                "speakers_identified": []
+                "raw_data": {}
             }
 
             result = await self.col.update_one(
@@ -183,12 +179,6 @@ class AudioChunksRepository:
 
         return result.modified_count > 0
 
-    async def add_speaker(self, audio_uuid, speaker_id):
-        """Add a speaker to the speakers_identified list if not already present."""
-        await self.col.update_one(
-            {"audio_uuid": audio_uuid},
-            {"$addToSet": {"speakers_identified": speaker_id}},
-        )
 
     async def store_raw_transcript_data(self, audio_uuid, raw_data, provider):
         """Store raw transcript data from transcription provider."""
@@ -414,8 +404,7 @@ class AudioChunksRepository:
                 "provider": provider,
                 "created_at": datetime.now(UTC).isoformat(),
                 "processing_run_id": None,
-                "raw_data": {},
-                "speakers_identified": []
+                "raw_data": {}
             }
             if error_message:
                 version_data["error_message"] = error_message

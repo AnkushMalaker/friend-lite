@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 
 from advanced_omi_backend.auth import current_active_user, current_superuser
-from advanced_omi_backend.controllers import system_controller
+from advanced_omi_backend.controllers import system_controller, session_controller, queue_controller
 from advanced_omi_backend.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -133,16 +133,16 @@ async def delete_all_user_memories(current_user: User = Depends(current_active_u
 @router.get("/streaming/status")
 async def get_streaming_status(request: Request, current_user: User = Depends(current_superuser)):
     """Get status of active streaming sessions and Redis Streams health. Admin only."""
-    return await system_controller.get_streaming_status(request)
+    return await session_controller.get_streaming_status(request)
 
 
 @router.post("/streaming/cleanup")
 async def cleanup_stuck_stream_workers(request: Request, current_user: User = Depends(current_superuser)):
     """Clean up stuck Redis Stream workers and pending messages. Admin only."""
-    return await system_controller.cleanup_stuck_stream_workers(request)
+    return await queue_controller.cleanup_stuck_stream_workers(request)
 
 
 @router.post("/streaming/cleanup-sessions")
 async def cleanup_old_sessions(request: Request, max_age_seconds: int = 3600, current_user: User = Depends(current_superuser)):
     """Clean up old session tracking metadata. Admin only."""
-    return await system_controller.cleanup_old_sessions(request, max_age_seconds)
+    return await session_controller.cleanup_old_sessions(request, max_age_seconds)

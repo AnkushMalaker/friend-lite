@@ -8,20 +8,22 @@ This module provides:
 - Beanie initialization for workers
 """
 
+import asyncio
 import os
 import logging
+import uuid
+from datetime import datetime
 from typing import Dict, Any, Optional
 
 import redis
 from rq import Queue, Worker
 from rq.job import Job
+from rq.registry import ScheduledJobRegistry, DeferredJobRegistry
 
 from advanced_omi_backend.models.job import JobPriority
+from advanced_omi_backend.models.conversation import Conversation
 
 logger = logging.getLogger(__name__)
-
-# Global flag to track if Beanie is initialized in this process
-_beanie_initialized = False
 
 # Redis connection configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -30,6 +32,7 @@ redis_conn = redis.from_url(REDIS_URL)
 # Queue name constants
 TRANSCRIPTION_QUEUE = "transcription"
 MEMORY_QUEUE = "memory"
+AUDIO_QUEUE = "audio"
 DEFAULT_QUEUE = "default"
 
 # Job retention configuration
@@ -38,6 +41,7 @@ JOB_RESULT_TTL = int(os.getenv("RQ_RESULT_TTL", 3600))  # 1 hour default
 # Create queues with custom result TTL
 transcription_queue = Queue(TRANSCRIPTION_QUEUE, connection=redis_conn, default_timeout=300)
 memory_queue = Queue(MEMORY_QUEUE, connection=redis_conn, default_timeout=300)
+audio_queue = Queue(AUDIO_QUEUE, connection=redis_conn, default_timeout=3600)  # 1 hour timeout for long sessions
 default_queue = Queue(DEFAULT_QUEUE, connection=redis_conn, default_timeout=300)
 
 
@@ -46,50 +50,14 @@ def get_queue(queue_name: str = DEFAULT_QUEUE) -> Queue:
     queues = {
         TRANSCRIPTION_QUEUE: transcription_queue,
         MEMORY_QUEUE: memory_queue,
+        AUDIO_QUEUE: audio_queue,
         DEFAULT_QUEUE: default_queue,
     }
     return queues.get(queue_name, default_queue)
 
 
-async def _ensure_beanie_initialized():
-    """Ensure Beanie is initialized in the current process (for RQ workers)."""
-    global _beanie_initialized
-
-    if _beanie_initialized:
-        return
-
-    try:
-        from motor.motor_asyncio import AsyncIOMotorClient
-        from beanie import init_beanie
-        from advanced_omi_backend.models.conversation import Conversation
-        from advanced_omi_backend.models.audio_file import AudioFile
-        from advanced_omi_backend.models.user import User
-
-        # Get MongoDB URI from environment
-        mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-
-        # Create MongoDB client
-        client = AsyncIOMotorClient(mongodb_uri)
-        database = client.get_default_database("friend-lite")
-
-        # Initialize Beanie
-        await init_beanie(
-            database=database,
-            document_models=[User, Conversation, AudioFile],
-        )
-
-        _beanie_initialized = True
-        logger.info("✅ Beanie initialized in RQ worker process")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize Beanie in RQ worker: {e}")
-        raise
-
-
 def get_job_stats() -> Dict[str, Any]:
     """Get statistics about jobs in all queues matching frontend expectations."""
-    from datetime import datetime
-
     total_jobs = 0
     queued_jobs = 0
     processing_jobs = 0
@@ -98,7 +66,7 @@ def get_job_stats() -> Dict[str, Any]:
     cancelled_jobs = 0
     deferred_jobs = 0  # Jobs waiting for dependencies (depends_on)
 
-    for queue_name in [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, DEFAULT_QUEUE]:
+    for queue_name in [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, AUDIO_QUEUE, DEFAULT_QUEUE]:
         queue = get_queue(queue_name)
 
         queued_jobs += len(queue)
@@ -136,7 +104,7 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
     """
     all_jobs = []
 
-    queues_to_check = [queue_name] if queue_name else [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, DEFAULT_QUEUE]
+    queues_to_check = [queue_name] if queue_name else [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, AUDIO_QUEUE, DEFAULT_QUEUE]
 
     for qname in queues_to_check:
         queue = get_queue(qname)
@@ -172,6 +140,7 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
                             "queue": qname,
                         },
                         "result": job.result if hasattr(job, 'result') else None,
+                        "meta": job.meta if job.meta else {},  # Include job metadata
                         "error_message": str(job.exc_info) if job.exc_info else None,
                         "created_at": job.created_at.isoformat() if job.created_at else None,
                         "started_at": job.started_at.isoformat() if job.started_at else None,
@@ -207,12 +176,8 @@ def all_jobs_complete_for_session(session_id: str) -> bool:
     """
     Check if all jobs associated with a session are in terminal states.
 
-    A session is considered complete only when all its jobs are in terminal states
-    (completed, failed, or cancelled). Jobs that are queued or processing keep the
-    session in active state.
-
-    This function now traverses dependency chains to find dependent jobs that may
-    not be in any registry yet (they're stored via job.dependent_ids).
+    Only checks jobs with audio_uuid in job.meta (no backward compatibility).
+    Traverses dependency chains to include dependent jobs.
 
     Args:
         session_id: The audio_uuid (session ID) to check jobs for
@@ -220,135 +185,79 @@ def all_jobs_complete_for_session(session_id: str) -> bool:
     Returns:
         True if all jobs are complete (or no jobs found), False if any job is still processing
     """
-    from rq.registry import ScheduledJobRegistry, DeferredJobRegistry
-    from advanced_omi_backend.models.conversation import Conversation
-    import asyncio
+    processed_job_ids = set()
 
-    # First, get conversation_id(s) for this session (for memory jobs)
-    conversation_ids = set()
-    try:
-        # Run async query in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        conversations = loop.run_until_complete(
-            Conversation.find(Conversation.audio_uuid == session_id).to_list()
-        )
-        conversation_ids = {conv.conversation_id for conv in conversations}
-        loop.close()
-    except Exception as e:
-        logger.debug(f"Error fetching conversations for session {session_id}: {e}")
-
-    processed_job_ids = set()  # Track which jobs we've already checked
-    session_jobs_found = []  # Track all jobs found for this session
-
-    def check_job_and_dependents(job):
-        """
-        Recursively check a job and all its dependents.
-        Returns True if all are terminal, False if any are non-terminal.
-        """
+    def is_job_complete(job):
+        """Recursively check if job and all its dependents are terminal."""
         if job.id in processed_job_ids:
             return True
-
         processed_job_ids.add(job.id)
 
-        # Check if this job is in a terminal state
-        is_terminal = job.is_finished or job.is_failed or job.is_canceled
-
-        if not is_terminal:
-            # Job is still queued, processing, or scheduled - session not complete
-            logger.debug(f"Job {job.id} ({job.func_name}) is not terminal (queued/processing/scheduled)")
+        # Check if this job is terminal
+        if not (job.is_finished or job.is_failed or job.is_canceled):
+            logger.debug(f"Job {job.id} ({job.func_name}) is not terminal")
             return False
 
-        # Check dependent jobs (jobs that depend on this one)
-        try:
-            dependent_ids = job.dependent_ids
-            if dependent_ids:
-                logger.debug(f"Job {job.id} has {len(dependent_ids)} dependents")
-                for dep_id in dependent_ids:
-                    try:
-                        dep_job = Job.fetch(dep_id, connection=redis_conn)
-                        # Recursively check dependent job
-                        if not check_job_and_dependents(dep_job):
-                            return False
-                    except Exception as e:
-                        logger.debug(f"Error fetching dependent job {dep_id}: {e}")
-        except Exception as e:
-            logger.debug(f"Error checking dependents for job {job.id}: {e}")
+        # Check dependent jobs
+        for dep_id in (job.dependent_ids or []):
+            try:
+                dep_job = Job.fetch(dep_id, connection=redis_conn)
+                if not is_job_complete(dep_job):
+                    return False
+            except Exception as e:
+                logger.debug(f"Error fetching dependent job {dep_id}: {e}")
 
         return True
 
-    # Check all queues and registries
-    for queue in [transcription_queue, memory_queue, default_queue]:
-        # Check all job registries for this queue (including scheduled/deferred)
+    # Find all jobs for this session
+    all_queues = [transcription_queue, memory_queue, audio_queue, default_queue]
+    for queue in all_queues:
         registries = [
-            queue.job_ids,  # Queued jobs
-            queue.started_job_registry.get_job_ids(),  # Processing jobs
-            queue.finished_job_registry.get_job_ids(),  # Completed
-            queue.failed_job_registry.get_job_ids(),  # Failed
-            queue.canceled_job_registry.get_job_ids(),  # Cancelled
-            ScheduledJobRegistry(queue=queue).get_job_ids(),  # Scheduled (dependent jobs)
-            DeferredJobRegistry(queue=queue).get_job_ids(),  # Deferred (retrying)
+            queue.job_ids,
+            queue.started_job_registry.get_job_ids(),
+            queue.finished_job_registry.get_job_ids(),
+            queue.failed_job_registry.get_job_ids(),
+            queue.canceled_job_registry.get_job_ids(),
+            ScheduledJobRegistry(queue=queue).get_job_ids(),
+            DeferredJobRegistry(queue=queue).get_job_ids(),
         ]
 
         for job_ids in registries:
             for job_id in job_ids:
                 try:
                     job = Job.fetch(job_id, connection=redis_conn)
-                    matches_session = False
 
-                    # Check job.meta first (preferred method for all new jobs)
-                    if job.meta and 'audio_uuid' in job.meta:
-                        if job.meta['audio_uuid'] == session_id:
-                            matches_session = True
-                    # FALLBACK: Check args for backward compatibility
-                    elif job.args and len(job.args) > 0:
-                        # Check args[0] first (most common for streaming jobs)
-                        if job.args[0] == session_id:
-                            matches_session = True
-                        # Check args[1] for transcription jobs
-                        elif len(job.args) > 1 and job.args[1] == session_id:
-                            matches_session = True
-                        # Check args[3] for memory jobs (conversation_id)
-                        elif len(job.args) > 3 and job.args[3] in conversation_ids:
-                            matches_session = True
-
-                    if matches_session:
-                        session_jobs_found.append(job.id)
-                        # Check this job and all its dependents
-                        if not check_job_and_dependents(job):
-                            logger.debug(f"Session {session_id} has incomplete jobs (found {len(session_jobs_found)} jobs)")
+                    # Only check jobs with audio_uuid in meta
+                    if job.meta and job.meta.get('audio_uuid') == session_id:
+                        if not is_job_complete(job):
                             return False
-
                 except Exception as e:
                     logger.debug(f"Error checking job {job_id}: {e}")
-                    continue
 
-    # All jobs are in terminal states (or no jobs found)
-    logger.debug(f"Session {session_id} all jobs complete ({len(session_jobs_found)} jobs checked)")
     return True
 
 
 def start_streaming_jobs(
     session_id: str,
     user_id: str,
-    user_email: str,
     client_id: str
 ) -> Dict[str, str]:
     """
-    Enqueue jobs for streaming audio session.
+    Enqueue jobs for streaming audio session (initial session setup).
 
-    This starts the parallel job processing for a streaming session:
+    This starts the parallel job processing for a NEW streaming session:
     1. Speech detection job - monitors transcription results for speech
-    2. Audio persistence job - writes audio chunks to WAV file
+    2. Audio persistence job - writes audio chunks to WAV file (file rotation per conversation)
 
     Args:
         session_id: Stream session ID (audio_uuid)
         user_id: User identifier
-        user_email: User email
         client_id: Client identifier
 
     Returns:
         Dict with job IDs: {'speech_detection': job_id, 'audio_persistence': job_id}
+
+    Note: user_email is fetched from the database when needed.
     """
     from advanced_omi_backend.workers.transcription_jobs import stream_speech_detection_job
     from advanced_omi_backend.workers.audio_jobs import audio_streaming_persistence_job
@@ -358,30 +267,37 @@ def start_streaming_jobs(
         stream_speech_detection_job,
         session_id,
         user_id,
-        user_email,
         client_id,
         job_timeout=3600,  # 1 hour for long recordings
         result_ttl=JOB_RESULT_TTL,
         job_id=f"speech-detect_{session_id[:12]}",
         description=f"Stream speech detection for {session_id[:12]}",
-        meta={'audio_uuid': session_id}
+        meta={'audio_uuid': session_id, 'client_id': client_id, 'session_level': True}
     )
     logger.info(f"📥 RQ: Enqueued speech detection job {speech_job.id}")
 
-    # Enqueue audio persistence job in parallel
-    audio_job = transcription_queue.enqueue(
+    # Store job ID for cleanup (keyed by client_id for easy WebSocket cleanup)
+    try:
+        redis_conn.set(f"speech_detection_job:{client_id}", speech_job.id, ex=3600)  # 1 hour TTL
+        logger.info(f"📌 Stored speech detection job ID for client {client_id}")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to store job ID for {client_id}: {e}")
+
+    # Enqueue audio persistence job on dedicated audio queue
+    # NOTE: This job handles file rotation for multiple conversations automatically
+    # Runs for entire session, not tied to individual conversations
+    audio_job = audio_queue.enqueue(
         audio_streaming_persistence_job,
         session_id,
         user_id,
-        user_email,
         client_id,
         job_timeout=3600,  # 1 hour for long recordings
         result_ttl=JOB_RESULT_TTL,
         job_id=f"audio-persist_{session_id[:12]}",
-        description=f"Audio persistence for {session_id[:12]}",
-        meta={'audio_uuid': session_id}
+        description=f"Audio persistence for session {session_id[:12]}",
+        meta={'audio_uuid': session_id, 'session_level': True}  # Mark as session-level job
     )
-    logger.info(f"📥 RQ: Enqueued audio persistence job {audio_job.id}")
+    logger.info(f"📥 RQ: Enqueued audio persistence job {audio_job.id} on audio queue")
 
     return {
         'speech_detection': speech_job.id,
@@ -389,90 +305,106 @@ def start_streaming_jobs(
     }
 
 
-def start_batch_processing_jobs(
+def start_post_conversation_jobs(
     conversation_id: str,
     audio_uuid: str,
+    audio_file_path: str,
     user_id: str,
-    user_email: str,
-    audio_file_path: str
+    post_transcription: bool = True,
+    transcript_version_id: Optional[str] = None,
+    depends_on_job = None
 ) -> Dict[str, str]:
     """
-    Enqueue complete batch processing job chain with dependencies.
+    Start post-conversation processing jobs after conversation is created.
 
-    This creates the full processing pipeline:
-    1. Transcription job (transcribe audio file)
-    2. Speaker recognition job (depends on transcription)
-    3. Memory extraction job (depends on speaker recognition)
+    This creates the standard processing chain after a conversation is created:
+    1. Audio cropping job - Removes silence from audio
+    2. [Optional] Transcription job - Batch transcription (if post_transcription=True)
+    3. Speaker recognition job - Identifies speakers in audio
+    4. Memory extraction job - Extracts memories from conversation
 
     Args:
         conversation_id: Conversation identifier
-        audio_uuid: Audio file UUID
-        user_id: User identifier
-        user_email: User email
+        audio_uuid: Audio UUID for job tracking
         audio_file_path: Path to audio file
+        user_id: User identifier
+        post_transcription: If True, run batch transcription step (for uploads)
+                           If False, skip transcription (streaming already has it)
+        transcript_version_id: Transcript version ID (auto-generated if None)
+        depends_on_job: Optional job dependency for cropping job
 
     Returns:
-        Dict with job IDs: {
-            'transcription': job_id,
-            'speaker_recognition': job_id,
-            'memory': job_id
-        }
+        Dict with job IDs (transcription will be None if post_transcription=False)
     """
-    import uuid
-    from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job
-    from advanced_omi_backend.workers.transcription_jobs import recognise_speakers_job
+    from advanced_omi_backend.workers.transcription_jobs import (
+        transcribe_full_audio_job,
+        recognise_speakers_job,
+    )
+    from advanced_omi_backend.workers.audio_jobs import process_cropping_job
     from advanced_omi_backend.workers.memory_jobs import process_memory_job
 
-    # Generate version IDs for transcript and speaker processing
-    transcript_version_id = str(uuid.uuid4())
+    version_id = transcript_version_id or str(uuid.uuid4())
 
-    # Step 1: Transcription job (no dependencies)
-    # Signature: transcribe_full_audio_job(conversation_id, audio_uuid, audio_path, version_id, user_id, trigger, redis_client)
-    transcription_job = transcription_queue.enqueue(
-        transcribe_full_audio_job,
+    # Step 1: Audio cropping job
+    cropping_job = default_queue.enqueue(
+        process_cropping_job,
         conversation_id,
-        audio_uuid,
         audio_file_path,
-        transcript_version_id,
-        user_id,
-        "batch",  # trigger
-        job_timeout=getattr(transcribe_full_audio_job, 'job_timeout', 1800),  # Use decorator default or 30 min
-        result_ttl=getattr(transcribe_full_audio_job, 'result_ttl', JOB_RESULT_TTL),
-        job_id=f"transcribe_{audio_uuid[:12]}",
-        description=f"Transcribe audio {audio_uuid[:12]}",
+        job_timeout=300,  # 5 minutes
+        result_ttl=JOB_RESULT_TTL,
+        depends_on=depends_on_job,
+        job_id=f"crop_{audio_uuid[:12]}",
+        description=f"Crop audio for {audio_uuid[:12]}",
         meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
     )
-    logger.info(f"📥 RQ: Enqueued transcription job {transcription_job.id}")
+    logger.info(f"📥 RQ: Enqueued cropping job {cropping_job.id}")
 
-    # Step 2: Speaker recognition job (depends on transcription)
-    # Signature: recognise_speakers_job(conversation_id, version_id, audio_path, user_id, transcript_text, words, redis_client)
+    # Step 2: Transcription job (conditional)
+    transcription_job = None
+    if post_transcription:
+        transcription_job = transcription_queue.enqueue(
+            transcribe_full_audio_job,
+            conversation_id,
+            audio_uuid,
+            audio_file_path,
+            version_id,
+            "batch",  # trigger
+            job_timeout=1800,  # 30 minutes
+            result_ttl=JOB_RESULT_TTL,
+            depends_on=cropping_job,
+            job_id=f"transcribe_{audio_uuid[:12]}",
+            description=f"Transcribe audio {audio_uuid[:12]}",
+            meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
+        )
+        logger.info(f"📥 RQ: Enqueued transcription job {transcription_job.id} (depends on {cropping_job.id})")
+        speaker_depends_on = transcription_job
+    else:
+        logger.info(f"⏭️  RQ: Skipping transcription (streaming already has transcript)")
+        speaker_depends_on = cropping_job
+
+    # Step 3: Speaker recognition job
     speaker_job = transcription_queue.enqueue(
         recognise_speakers_job,
         conversation_id,
-        transcript_version_id,
+        version_id,
         audio_file_path,
-        user_id,
         "",  # transcript_text - will be read from DB
         [],  # words - will be read from DB
-        job_timeout=getattr(recognise_speakers_job, 'job_timeout', 1200),  # Use decorator default or 20 min
-        result_ttl=getattr(recognise_speakers_job, 'result_ttl', JOB_RESULT_TTL),
-        depends_on=transcription_job,
+        job_timeout=1200,  # 20 minutes
+        result_ttl=JOB_RESULT_TTL,
+        depends_on=speaker_depends_on,
         job_id=f"speaker_{audio_uuid[:12]}",
         description=f"Speaker recognition for {audio_uuid[:12]}",
         meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
     )
-    logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id} (depends on {transcription_job.id})")
+    logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id} (depends on {speaker_depends_on.id})")
 
-    # Step 3: Memory extraction job (depends on speaker recognition)
-    # Signature: process_memory_job(client_id, user_id, user_email, conversation_id, redis_client)
+    # Step 4: Memory extraction job
     memory_job = memory_queue.enqueue(
         process_memory_job,
-        None,  # client_id - will be read from conversation in DB
-        user_id,
-        user_email,
         conversation_id,
-        job_timeout=getattr(process_memory_job, 'job_timeout', 900),  # Use decorator default or 15 min
-        result_ttl=getattr(process_memory_job, 'result_ttl', JOB_RESULT_TTL),
+        job_timeout=900,  # 15 minutes
+        result_ttl=JOB_RESULT_TTL,
         depends_on=speaker_job,
         job_id=f"memory_{audio_uuid[:12]}",
         description=f"Memory extraction for {audio_uuid[:12]}",
@@ -481,10 +413,13 @@ def start_batch_processing_jobs(
     logger.info(f"📥 RQ: Enqueued memory extraction job {memory_job.id} (depends on {speaker_job.id})")
 
     return {
-        'transcription': transcription_job.id,
+        'cropping': cropping_job.id,
+        'transcription': transcription_job.id if transcription_job else None,
         'speaker_recognition': speaker_job.id,
         'memory': memory_job.id
     }
+
+
 
 
 def get_queue_health() -> Dict[str, Any]:
@@ -507,7 +442,7 @@ def get_queue_health() -> Dict[str, Any]:
         return health
 
     # Check each queue
-    for queue_name in [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, DEFAULT_QUEUE]:
+    for queue_name in [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, AUDIO_QUEUE, DEFAULT_QUEUE]:
         queue = get_queue(queue_name)
         health["queues"][queue_name] = {
             "count": len(queue),
@@ -538,3 +473,214 @@ def get_queue_health() -> Dict[str, Any]:
         })
 
     return health
+
+# needs tidying but works for now
+async def cleanup_stuck_stream_workers(request):
+    """Clean up stuck Redis Stream consumers and pending messages from all active streams."""
+    import time
+    from fastapi.responses import JSONResponse
+
+    try:
+        # Get Redis client from request.app.state (initialized during startup)
+        redis_client = request.app.state.redis_audio_stream
+
+        if not redis_client:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Redis client for audio streaming not initialized"}
+            )
+
+        cleanup_results = {}
+        total_cleaned = 0
+        total_deleted_consumers = 0
+        total_deleted_streams = 0
+        current_time = time.time()
+
+        # Discover all audio streams (per-client streams)
+        stream_keys = await redis_client.keys("audio:stream:*")
+
+        for stream_key in stream_keys:
+            stream_name = stream_key.decode() if isinstance(stream_key, bytes) else stream_key
+
+            try:
+                # First check stream age - delete old streams (>1 hour) immediately
+                stream_info = await redis_client.execute_command('XINFO', 'STREAM', stream_name)
+
+                # Parse stream info
+                info_dict = {}
+                for i in range(0, len(stream_info), 2):
+                    key_name = stream_info[i].decode() if isinstance(stream_info[i], bytes) else str(stream_info[i])
+                    info_dict[key_name] = stream_info[i+1]
+
+                stream_length = int(info_dict.get("length", 0))
+                last_entry = info_dict.get("last-entry")
+
+                # Check if stream is old
+                should_delete_stream = False
+                stream_age = 0
+
+                if stream_length == 0:
+                    should_delete_stream = True
+                    stream_age = 0
+                elif last_entry and isinstance(last_entry, list) and len(last_entry) > 0:
+                    try:
+                        last_id = last_entry[0]
+                        if isinstance(last_id, bytes):
+                            last_id = last_id.decode()
+                        last_timestamp_ms = int(last_id.split('-')[0])
+                        last_timestamp_s = last_timestamp_ms / 1000
+                        stream_age = current_time - last_timestamp_s
+
+                        # Delete streams older than 1 hour (3600 seconds)
+                        if stream_age > 3600:
+                            should_delete_stream = True
+                    except (ValueError, IndexError):
+                        pass
+
+                if should_delete_stream:
+                    await redis_client.delete(stream_name)
+                    total_deleted_streams += 1
+                    cleanup_results[stream_name] = {
+                        "message": f"Deleted old stream (age: {stream_age:.0f}s, length: {stream_length})",
+                        "cleaned": 0,
+                        "deleted_consumers": 0,
+                        "deleted_stream": True,
+                        "stream_age": stream_age
+                    }
+                    continue
+
+                # Get consumer groups
+                groups = await redis_client.execute_command('XINFO', 'GROUPS', stream_name)
+
+                if not groups:
+                    cleanup_results[stream_name] = {"message": "No consumer groups found", "cleaned": 0, "deleted_stream": False}
+                    continue
+
+                # Parse first group
+                group_dict = {}
+                group = groups[0]
+                for i in range(0, len(group), 2):
+                    key = group[i].decode() if isinstance(group[i], bytes) else str(group[i])
+                    value = group[i+1]
+                    if isinstance(value, bytes):
+                        try:
+                            value = value.decode()
+                        except UnicodeDecodeError:
+                            value = str(value)
+                    group_dict[key] = value
+
+                group_name = group_dict.get("name", "unknown")
+                if isinstance(group_name, bytes):
+                    group_name = group_name.decode()
+
+                pending_count = int(group_dict.get("pending", 0))
+
+                # Get consumers for this group to check per-consumer pending
+                consumers = await redis_client.execute_command('XINFO', 'CONSUMERS', stream_name, group_name)
+
+                cleaned_count = 0
+                total_consumer_pending = 0
+
+                # Clean up pending messages for each consumer AND delete dead consumers
+                deleted_consumers = 0
+                for consumer in consumers:
+                    consumer_dict = {}
+                    for i in range(0, len(consumer), 2):
+                        key = consumer[i].decode() if isinstance(consumer[i], bytes) else str(consumer[i])
+                        value = consumer[i+1]
+                        if isinstance(value, bytes):
+                            try:
+                                value = value.decode()
+                            except UnicodeDecodeError:
+                                value = str(value)
+                        consumer_dict[key] = value
+
+                    consumer_name = consumer_dict.get("name", "unknown")
+                    if isinstance(consumer_name, bytes):
+                        consumer_name = consumer_name.decode()
+
+                    consumer_pending = int(consumer_dict.get("pending", 0))
+                    consumer_idle_ms = int(consumer_dict.get("idle", 0))
+                    total_consumer_pending += consumer_pending
+
+                    # Check if consumer is dead (idle > 5 minutes = 300000ms)
+                    is_dead = consumer_idle_ms > 300000
+
+                    if consumer_pending > 0:
+                        logger.info(f"Found {consumer_pending} pending messages for consumer {consumer_name} (idle: {consumer_idle_ms}ms)")
+
+                        # Get pending messages for this specific consumer
+                        try:
+                            pending_messages = await redis_client.execute_command(
+                                'XPENDING', stream_name, group_name, '-', '+', str(consumer_pending), consumer_name
+                            )
+
+                            # XPENDING returns flat list: [msg_id, consumer, idle_ms, delivery_count, msg_id, ...]
+                            # Parse in groups of 4
+                            for i in range(0, len(pending_messages), 4):
+                                if i < len(pending_messages):
+                                    msg_id = pending_messages[i]
+                                    if isinstance(msg_id, bytes):
+                                        msg_id = msg_id.decode()
+
+                                    # Claim the message to a cleanup worker
+                                    try:
+                                        await redis_client.execute_command(
+                                            'XCLAIM', stream_name, group_name, 'cleanup-worker', '0', msg_id
+                                        )
+
+                                        # Acknowledge it immediately
+                                        await redis_client.xack(stream_name, group_name, msg_id)
+                                        cleaned_count += 1
+                                    except Exception as claim_error:
+                                        logger.warning(f"Failed to claim/ack message {msg_id}: {claim_error}")
+
+                        except Exception as consumer_error:
+                            logger.error(f"Error processing consumer {consumer_name}: {consumer_error}")
+
+                    # Delete dead consumers (idle > 5 minutes with no pending messages)
+                    if is_dead and consumer_pending == 0:
+                        try:
+                            await redis_client.execute_command(
+                                'XGROUP', 'DELCONSUMER', stream_name, group_name, consumer_name
+                            )
+                            deleted_consumers += 1
+                            logger.info(f"🧹 Deleted dead consumer {consumer_name} (idle: {consumer_idle_ms}ms)")
+                        except Exception as delete_error:
+                            logger.warning(f"Failed to delete consumer {consumer_name}: {delete_error}")
+
+                if total_consumer_pending == 0 and deleted_consumers == 0:
+                    cleanup_results[stream_name] = {"message": "No pending messages or dead consumers", "cleaned": 0, "deleted_consumers": 0, "deleted_stream": False}
+                    continue
+
+                total_cleaned += cleaned_count
+                total_deleted_consumers += deleted_consumers
+                cleanup_results[stream_name] = {
+                    "message": f"Cleaned {cleaned_count} pending messages, deleted {deleted_consumers} dead consumers",
+                    "cleaned": cleaned_count,
+                    "deleted_consumers": deleted_consumers,
+                    "deleted_stream": False,
+                    "original_pending": pending_count
+                }
+
+            except Exception as e:
+                cleanup_results[stream_name] = {
+                    "error": str(e),
+                    "cleaned": 0
+                }
+
+        return {
+            "success": True,
+            "total_cleaned": total_cleaned,
+            "total_deleted_consumers": total_deleted_consumers,
+            "total_deleted_streams": total_deleted_streams,
+            "streams": cleanup_results,  # New key for per-stream results
+            "providers": cleanup_results,  # Keep for backward compatibility with frontend
+            "timestamp": time.time()
+        }
+
+    except Exception as e:
+        logger.error(f"Error cleaning up stuck workers: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to cleanup stuck workers: {str(e)}"}
+        )

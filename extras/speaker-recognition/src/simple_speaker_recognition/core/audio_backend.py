@@ -77,20 +77,10 @@ class AudioBackend:
                 kwargs['min_speakers'] = min_speakers
             if max_speakers is not None:
                 kwargs['max_speakers'] = max_speakers
-
-            output = self.diar(str(path), **kwargs)
-            logger.info(f"Diarization output: {output}")
-
-            # In pyannote.audio 4.0+, the pipeline returns a DiarizeOutput object
-            # We need to access .speaker_diarization to get the Annotation object
-            if hasattr(output, 'speaker_diarization'):
-                diarization = output.speaker_diarization
-                logger.info(f"Using speaker_diarization from output (pyannote 4.0+)")
-            else:
-                # Fallback for older versions (3.x) that return Annotation directly
-                diarization = output
-                logger.info(f"Using output directly as Annotation (pyannote 3.x)")
-
+            
+            diarization = self.diar(str(path), **kwargs)
+            logger.info(f"Diarization: {diarization}")
+            
             # Apply PyAnnote's built-in gap filling using support() method with configurable collar
             # This fills gaps shorter than collar seconds between segments from same speaker
             diarization = diarization.support(collar=collar)

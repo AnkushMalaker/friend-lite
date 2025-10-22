@@ -12,13 +12,19 @@ sys.path.append(str(Path(__file__).parent / 'lib'))
 
 from env_utils import get_config_env_variables, get_skaffold_variables, format_variable
 
-def generate_env_file(service_name: str, output_path: str):
-    """Generate a .env file for a service with only config.env variables."""
+def generate_env_file(service_name: str, output_path: str, config_filename: str = "config.env"):
+    """Generate a .env file for a service with only config.env variables.
+
+    Args:
+        service_name: Name of the service
+        output_path: Path to output .env file
+        config_filename: Name of the config file to read (default: "config.env")
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Get list of variables defined in config.env
-    config_variables = get_config_env_variables()
+
+    # Get list of variables defined in config file
+    config_variables = get_config_env_variables(config_filename)
     
     # For skaffold, only include variables actually used by Skaffold templates
     if service_name == 'skaffold':
@@ -40,7 +46,14 @@ def generate_env_file(service_name: str, output_path: str):
 
 def main():
     """Generate Docker Compose configuration files."""
-    
+
+    # Get config filename from command line argument or environment variable
+    config_filename = os.environ.get('CONFIG_FILE', 'config.env')
+    if len(sys.argv) > 1:
+        config_filename = sys.argv[1]
+
+    print(f"Using config file: {config_filename}")
+
     # Define output files
     outputs = {
         'advanced-backend': 'backends/advanced/.env',
@@ -52,10 +65,10 @@ def main():
         'omi-webhook-compatible': 'backends/other-backends/omi-webhook-compatible/.env',
         'skaffold': 'skaffold.env',
     }
-    
+
     for service_name, output_path in outputs.items():
         print(f"Generating {service_name} configuration...")
-        generate_env_file(service_name, output_path)
+        generate_env_file(service_name, output_path, config_filename)
         print(f"✅ {service_name} configuration generated")
 
 if __name__ == "__main__":

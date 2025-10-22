@@ -72,35 +72,31 @@ def run_compose_command(service_name, command, build=False):
     cmd = ['docker', 'compose']
     
     # Handle speaker-recognition service specially
-    if service_name == 'speaker-recognition' and command in ['up', 'down']:
-        # Read configuration to determine profile
+    if service_name == 'speaker-recognition' and command == 'up':
+        # Read configuration to determine how to start
         env_file = service_path / '.env'
         if env_file.exists():
             env_values = dotenv_values(env_file)
             compute_mode = env_values.get('COMPUTE_MODE', 'cpu')
-
-            # Add profile flag for both up and down commands
-            if compute_mode == 'gpu':
-                cmd.extend(['--profile', 'gpu'])
-            else:
-                cmd.extend(['--profile', 'cpu'])
-
-            if command == 'up':
-                https_enabled = env_values.get('REACT_UI_HTTPS', 'false')
-                if https_enabled.lower() == 'true':
-                    # HTTPS mode: start with profile for all services (includes nginx)
-                    cmd.extend(['up', '-d'])
+            https_enabled = env_values.get('REACT_UI_HTTPS', 'false')
+            
+            if https_enabled.lower() == 'true':
+                # HTTPS mode: start with profile for all services (includes nginx)
+                if compute_mode == 'gpu':
+                    cmd.extend(['--profile', 'gpu'])
                 else:
-                    # HTTP mode: start specific services with profile (no nginx)
-                    cmd.extend(['up', '-d', 'speaker-service-gpu' if compute_mode == 'gpu' else 'speaker-service-cpu', 'web-ui'])
-            elif command == 'down':
-                cmd.extend(['down'])
-        else:
-            # Fallback: no profile
-            if command == 'up':
+                    cmd.extend(['--profile', 'cpu'])
                 cmd.extend(['up', '-d'])
-            elif command == 'down':
-                cmd.extend(['down'])
+            else:
+                # HTTP mode: start specific services with profile (no nginx)
+                if compute_mode == 'gpu':
+                    cmd.extend(['--profile', 'gpu'])
+                else:
+                    cmd.extend(['--profile', 'cpu'])
+                cmd.extend(['up', '-d', 'speaker-service-gpu' if compute_mode == 'gpu' else 'speaker-service-cpu', 'web-ui'])
+        else:
+            # Fallback: just start base service
+            cmd.extend(['up', '-d'])
     else:
         # Standard compose commands for other services
         if command == 'up':
@@ -305,8 +301,7 @@ def main():
         
     elif args.command == 'stop':
         if args.all:
-            # Only stop configured services (like start --all does)
-            services = [s for s in SERVICES.keys() if check_service_configured(s)]
+            services = list(SERVICES.keys())
         elif args.services:
             # Validate service names
             invalid_services = [s for s in args.services if s not in SERVICES]
