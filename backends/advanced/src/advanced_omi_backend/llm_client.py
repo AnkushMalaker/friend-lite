@@ -77,7 +77,7 @@ class OpenAILLMClient(LLMClient):
     ) -> str:
         """Generate text completion using OpenAI-compatible API."""
         try:
-            model_name = self.model or model
+            model_name = model or self.model
             temp = temperature or self.temperature
             
             # Build completion parameters
