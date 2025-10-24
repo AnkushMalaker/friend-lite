@@ -28,7 +28,6 @@ from advanced_omi_backend.users import User
 logger = logging.getLogger(__name__)
 
 # Configuration from environment variables
-CHAT_LLM_MODEL = os.getenv("CHAT_LLM_MODEL") or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 CHAT_TEMPERATURE = float(os.getenv("CHAT_TEMPERATURE", "0.7"))
 MAX_MEMORY_CONTEXT = 5  # Maximum number of memories to include in context
 MAX_CONVERSATION_HISTORY = 10  # Maximum conversation turns to keep in context
@@ -383,7 +382,6 @@ If no relevant memories are available, respond normally based on the conversatio
             # In the future, this should be replaced with actual streaming
             response_content = self.llm_client.generate(
                 prompt=full_prompt,
-                model=CHAT_LLM_MODEL,
                 temperature=CHAT_TEMPERATURE
             )
 
