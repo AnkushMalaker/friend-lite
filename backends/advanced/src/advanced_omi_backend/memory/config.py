@@ -247,10 +247,13 @@ def get_embedding_dims(llm_config: Dict[str, Any]) -> int:
     Query the embedding endpoint and return the embedding vector length.
     Works for OpenAI and OpenAI-compatible endpoints (e.g., Ollama).
     """
-    embedding_model=llm_config['embedding_model']
+    embedding_model = llm_config.get('embedding_model')
     try:
         import langfuse.openai as openai
-        client = openai.OpenAI(api_key=llm_config.get('api_key'), base_url=llm_config['base_url'])
+        client = openai.OpenAI(
+            api_key=llm_config.get('api_key'), 
+            base_url=llm_config.get('base_url')
+        )
         response = client.embeddings.create(
             model=embedding_model,
             input="hello world"
@@ -260,9 +263,9 @@ def get_embedding_dims(llm_config: Dict[str, Any]) -> int:
             return 1536
         return len(embedding)
 
-    except Exception as e:
+    except (ImportError, KeyError, AttributeError, IndexError, TypeError, ValueError) as e:
         embedding_dims = 1536 # default
-        memory_logger.error(f"Failed to get embedding dimensions: {e}")
+        memory_logger.exception(f"Failed to get embedding dimensions for model '{embedding_model}'")
         if embedding_model == "text-embedding-3-small":
             embedding_dims = 1536
         elif embedding_model == "text-embedding-3-large":
@@ -273,6 +276,5 @@ def get_embedding_dims(llm_config: Dict[str, Any]) -> int:
             embedding_dims = 768
         else:
             # Default for OpenAI embedding models
-            memory_logger.info(f"Embedding model is unrecognized setting default value {e}")
-            embedding_dims = 1536
+            memory_logger.info(f"Unrecognized embedding model '{embedding_model}', using default dimension {embedding_dims}")
         return embedding_dims
