@@ -286,10 +286,9 @@ Friend-Lite supports multiple transcription services:
 TRANSCRIPTION_PROVIDER=deepgram
 DEEPGRAM_API_KEY=your-deepgram-key-here
 
-# Option 2: Mistral (Voxtral models)
-TRANSCRIPTION_PROVIDER=mistral
-MISTRAL_API_KEY=your-mistral-key-here
-MISTRAL_MODEL=voxtral-mini-2507
+# Option 2: ElevenLabs (99 languages, speaker diarization)
+TRANSCRIPTION_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=your-elevenlabs-key-here
 
 # Option 3: Local ASR (Parakeet)
 PARAKEET_ASR_URL=http://host.docker.internal:8767

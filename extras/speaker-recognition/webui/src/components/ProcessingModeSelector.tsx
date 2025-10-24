@@ -60,6 +60,15 @@ const PROCESSING_MODES: ProcessingModeConfig[] = [
     features: ['High-quality transcription', 'Speaker diarization', 'Enhanced speaker identification', 'Word-level timing']
   },
   {
+    mode: 'elevenlabs-enhanced',
+    name: 'ElevenLabs Transcribe',
+    description: '99-language transcription with speaker diarization',
+    icon: '🌍',
+    color: 'bg-indigo-600 hover:bg-indigo-700',
+    requirements: ['ElevenLabs API key'],
+    features: ['99 language support', 'Speaker diarization (up to 32 speakers)', 'Word-level timestamps', 'Speaker identification']
+  },
+  {
     mode: 'deepgram-transcript-internal-speakers',
     name: 'Hybrid Mode',
     description: 'Deepgram transcription + internal diarization',
@@ -439,15 +448,15 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
       {/* Mode Selection */}
       <div className="space-y-4">
         <h4 className="font-medium text-gray-900">Choose Processing Mode</h4>
-        
+
         {/* Grid Layout for Modes */}
-        <div className="grid md:grid-cols-2 gap-4">
-          {PROCESSING_MODES.slice(0, 2).map((config) => (
+        <div className="grid md:grid-cols-3 gap-4">
+          {PROCESSING_MODES.slice(0, 3).map((config) => (
             <div
               key={config.mode}
               className={`border rounded-lg p-4 cursor-pointer transition-colors ${
-                selectedMode === config.mode 
-                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-400' 
+                selectedMode === config.mode
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-400'
                   : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
               }`}
               onClick={() => onModeChange(config.mode)}
@@ -457,7 +466,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 <div className="flex-1">
                   <h5 className="font-medium text-gray-900 dark:text-gray-100">{config.name}</h5>
                   <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{config.description}</p>
-                  
+
                   {/* Requirements */}
                   {config.requirements && (
                     <div className="mt-2">
@@ -466,7 +475,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                       </span>
                     </div>
                   )}
-                  
+
                   {/* Features */}
                   <div className="mt-2">
                     <div className="flex flex-wrap gap-1">

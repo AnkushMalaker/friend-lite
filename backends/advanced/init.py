@@ -135,14 +135,14 @@ class FriendLiteSetup:
     def setup_transcription(self):
         """Configure transcription provider"""
         self.print_section("Speech-to-Text Configuration")
-        
+
         choices = {
             "1": "Deepgram (recommended - high quality, requires API key)",
-            "2": "Mistral (Voxtral models - requires API key)", 
+            "2": "ElevenLabs (99 languages, speaker diarization - requires API key)",
             "3": "Offline (Parakeet ASR - requires GPU, runs locally)",
             "4": "None (skip transcription setup)"
         }
-        
+
         choice = self.prompt_choice("Choose your transcription provider:", choices, "1")
 
         if choice == "1":
@@ -167,26 +167,23 @@ class FriendLiteSetup:
                 self.console.print("[yellow][WARNING][/yellow] No API key provided - transcription will not work")
 
         elif choice == "2":
-            self.config["TRANSCRIPTION_PROVIDER"] = "mistral"
-            self.console.print("[blue][INFO][/blue] Mistral selected")
-            self.console.print("Get your API key from: https://console.mistral.ai/")
+            self.console.print("[blue][INFO][/blue] ElevenLabs selected")
+            self.console.print("Get your API key from: https://elevenlabs.io/app/settings/api-keys")
 
             # Check for existing API key
-            existing_key = self.read_existing_env_value("MISTRAL_API_KEY")
-            if existing_key and existing_key not in ['your_mistral_api_key_here', 'your-mistral-key-here']:
+            existing_key = self.read_existing_env_value("ELEVENLABS_API_KEY")
+            if existing_key and existing_key not in ['your_elevenlabs_api_key_here', 'your-elevenlabs-key-here']:
                 masked_key = self.mask_api_key(existing_key)
-                prompt_text = f"Mistral API key ({masked_key}) [press Enter to reuse, or enter new]"
+                prompt_text = f"ElevenLabs API key ({masked_key}) [press Enter to reuse, or enter new]"
                 api_key_input = self.prompt_value(prompt_text, "")
                 api_key = api_key_input if api_key_input else existing_key
             else:
-                api_key = self.prompt_value("Mistral API key (leave empty to skip)", "")
-
-            model = self.prompt_value("Mistral model", "voxtral-mini-2507")
+                api_key = self.prompt_value("ElevenLabs API key (leave empty to skip)", "")
 
             if api_key:
-                self.config["MISTRAL_API_KEY"] = api_key
-                self.config["MISTRAL_MODEL"] = model
-                self.console.print("[green][SUCCESS][/green] Mistral configured")
+                self.config["TRANSCRIPTION_PROVIDER"] = "elevenlabs"
+                self.config["ELEVENLABS_API_KEY"] = api_key
+                self.console.print("[green][SUCCESS][/green] ElevenLabs configured")
             else:
                 self.console.print("[yellow][WARNING][/yellow] No API key provided - transcription will not work")
 

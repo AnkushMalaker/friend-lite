@@ -183,6 +183,12 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
                 cmd.extend(['--deepgram-api-key', deepgram_key])
                 console.print("[blue][INFO][/blue] Found existing DEEPGRAM_API_KEY from backend config, reusing")
 
+            # Pass ElevenLabs API key from backend if available
+            elevenlabs_key = read_env_value(backend_env_path, 'ELEVENLABS_API_KEY')
+            if elevenlabs_key and not is_placeholder(elevenlabs_key, 'your_elevenlabs_api_key_here', 'your-elevenlabs-api-key-here'):
+                cmd.extend(['--elevenlabs-api-key', elevenlabs_key])
+                console.print("[blue][INFO][/blue] Found existing ELEVENLABS_API_KEY from backend config, reusing")
+
             # Pass HF Token from existing speaker recognition .env if available
             speaker_env_path = 'extras/speaker-recognition/.env'
             hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
