@@ -105,6 +105,7 @@ services:
 
   # Caddy reverse proxy - provides HTTPS for microphone access
   # Access at: https://localhost (accepts self-signed cert warning)
+  # Only starts when HTTPS is configured (Caddyfile exists)
   caddy:
     image: caddy:2-alpine
     ports:
@@ -118,6 +119,8 @@ services:
       friend-backend:
         condition: service_healthy
     restart: unless-stopped
+    profiles:
+      - https
 
   # Development webui service (use with docker-compose --profile dev up)
   webui-dev:

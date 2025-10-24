@@ -59,17 +59,24 @@ def run_compose_command(service_name, command, build=False):
     """Run docker compose command for a service"""
     service = SERVICES[service_name]
     service_path = Path(service['path'])
-    
+
     if not service_path.exists():
         console.print(f"[red]❌ Service directory not found: {service_path}[/red]")
         return False
-        
+
     compose_file = service_path / service['compose_file']
     if not compose_file.exists():
         console.print(f"[red]❌ Docker compose file not found: {compose_file}[/red]")
         return False
-    
+
     cmd = ['docker', 'compose']
+
+    # For backend service, check if HTTPS is configured (Caddyfile exists)
+    if service_name == 'backend':
+        caddyfile_path = service_path / 'Caddyfile'
+        if caddyfile_path.exists() and caddyfile_path.is_file():
+            # Enable HTTPS profile to start Caddy service
+            cmd.extend(['--profile', 'https'])
     
     # Handle speaker-recognition service specially
     if service_name == 'speaker-recognition' and command in ['up', 'down']:
