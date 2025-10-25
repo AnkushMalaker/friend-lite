@@ -1,6 +1,6 @@
 /**
  * InferLive Page - Refactored to use shared components
- * Real-time transcription and speaker identification with dramatically reduced complexity
+ * Real-time transcription and speaker identification with dramatically reduced code complexity
  */
 
 import React, { useEffect, useRef } from 'react'
@@ -160,9 +160,9 @@ export default function InferLive() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">User Required</h3>
-        <p className="text-gray-500">Please select a user to access live inference.</p>
+        <Users className="h-16 w-16 text-muted mx-auto mb-4" />
+        <h3 className="heading-sm mb-2">User Required</h3>
+        <p className="text-muted">Please select a user to access live inference.</p>
       </div>
     )
   }
@@ -172,9 +172,9 @@ export default function InferLive() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Live Inference (Complex)</h1>
-          <p className="text-gray-600">Real-time transcription and speaker identification</p>
-          <p className="text-sm text-gray-500">Direct Deepgram streaming with client-side processing and multiple service coordination</p>
+          <h1 className="heading-lg">🎙️ Live Inference (Complex)</h1>
+          <p className="text-secondary">Real-time transcription and speaker identification</p>
+          <p className="text-sm text-muted">Direct Deepgram streaming with client-side processing and multiple service coordination</p>
         </div>
       </div>
 
@@ -199,20 +199,20 @@ export default function InferLive() {
 
       {/* Session Stats */}
       {deepgram.isStreaming && (
-        <div className="bg-white border rounded-lg p-4">
+        <div className="card p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-6">
               <div className="flex items-center space-x-2">
-                <Clock className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900 dark:text-gray-100">{formatDuration(deepgram.stats.sessionDuration)}</span>
+                <Clock className="h-4 w-4 text-muted" />
+                <span className="text-sm text-primary">{formatDuration(deepgram.stats.sessionDuration)}</span>
               </div>
               <div className="flex items-center space-x-2">
-                <Volume2 className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900 dark:text-gray-100">{deepgram.stats.totalWords} words</span>
+                <Volume2 className="h-4 w-4 text-muted" />
+                <span className="text-sm text-primary">{deepgram.stats.totalWords} words</span>
               </div>
               <div className="flex items-center space-x-2">
-                <Users className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900 dark:text-gray-100">{deepgram.stats.identifiedSpeakers.size} speakers</span>
+                <Users className="h-4 w-4 text-muted" />
+                <span className="text-sm text-primary">{deepgram.stats.identifiedSpeakers.size} speakers</span>
               </div>
             </div>
           </div>
@@ -221,12 +221,12 @@ export default function InferLive() {
 
       {/* Connection Error */}
       {deepgram.connectionStatus === 'error' && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 dark:bg-red-900 dark:border-red-800">
           <div className="flex items-center space-x-2">
-            <div className="text-red-600">❌</div>
+            <div className="text-red-600 dark:text-red-400">❌</div>
             <div>
-              <h4 className="text-red-800 font-medium">Connection Error</h4>
-              <p className="text-red-600 text-sm">Failed to connect to Deepgram. Please check your API key and internet connection.</p>
+              <h4 className="text-red-800 dark:text-red-200 font-medium">Connection Error</h4>
+              <p className="text-sm text-red-600 dark:text-red-400">Failed to connect to Deepgram. Please check your API key and internet connection.</p>
             </div>
           </div>
         </div>
@@ -234,15 +234,15 @@ export default function InferLive() {
 
       {/* Recording Status */}
       {deepgram.isStreaming && (
-        <div className="bg-white border rounded-lg p-4">
+        <div className="card p-4">
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2">
               <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
-              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Recording</span>
+              <span className="text-sm font-medium text-primary">Recording</span>
             </div>
             <div className="flex items-center space-x-2">
-              <Mic className="h-4 w-4 text-gray-500" />
-              <span className="text-sm text-gray-600">
+              <Mic className="h-4 w-4 text-muted" />
+              <span className="text-sm text-secondary">
                 Status: {deepgram.connectionStatus === 'connected' ? '✅ Connected' : deepgram.connectionStatus}
               </span>
             </div>
@@ -257,8 +257,8 @@ export default function InferLive() {
           disabled={!deepgram.apiKey || deepgram.connectionStatus === 'connecting'}
           className={`flex items-center space-x-2 px-8 py-4 rounded-lg font-medium text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
             deepgram.isStreaming
-              ? 'bg-red-600 text-white hover:bg-red-700'
-              : 'bg-blue-600 text-white hover:bg-blue-700'
+              ? 'bg-red-600 text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-800'
+              : 'bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800'
           }`}
         >
           <Mic className="h-6 w-6" />
@@ -287,7 +287,7 @@ export default function InferLive() {
         <div className="flex justify-center">
           <button
             onClick={deepgram.clearTranscripts}
-            className="px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            className="px-4 py-2 border rounded-md transition-colors text-secondary hover-bg"
           >
             Clear Transcripts
           </button>

@@ -129,14 +129,14 @@ export const AudioRecordingControls: React.FC<AudioRecordingControlsProps> = ({
 
   return (
     <div className={`border rounded-lg p-4 ${className}`}>
-      <h4 className="font-medium mb-3">🎤 Record Audio</h4>
+      <h4 className="mb-3 heading-sm">🎤 Record Audio</h4>
       
       {/* Recording Status */}
       <div className="text-center space-y-4">
         {/* Status Indicator */}
         <div className={`flex items-center justify-center space-x-2 font-medium ${getStatusColor()}`}>
           {getStatusIcon()}
-          <span>{getStatusText()}</span>
+          <span className='text-primary'>{getStatusText()}</span>
         </div>
 
         {/* Recording Controls */}
@@ -171,7 +171,7 @@ export const AudioRecordingControls: React.FC<AudioRecordingControlsProps> = ({
         </div>
 
         {/* Browser Compatibility Info */}
-        <div className="text-sm text-gray-500 space-y-1">
+        <div className="text-sm text-primary space-y-1">
           <p>Record audio for speaker identification</p>
           <p className="text-xs">
             {location.protocol !== 'https:' && location.hostname !== 'localhost' 
@@ -200,11 +200,11 @@ export const AudioRecordingControls: React.FC<AudioRecordingControlsProps> = ({
             
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div className="text-center">
-                <div className="text-gray-500">Duration</div>
+                <div className="text-primary">Duration</div>
                 <div className="font-medium">{formatDuration(processedAudio.buffer.duration * 1000)}</div>
               </div>
               <div className="text-center">
-                <div className="text-gray-500">Sample Rate</div>
+                <div className="text-primary">Sample Rate</div>
                 <div className="font-medium">{(processedAudio.buffer.sampleRate / 1000).toFixed(1)} kHz</div>
               </div>
             </div>

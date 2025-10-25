@@ -86,9 +86,9 @@ export default function Inference() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">User Required</h3>
-        <p className="text-gray-500 dark:text-gray-400">Please select a user to access inference features.</p>
+        <Users className="h-16 w-16 text-muted mx-auto mb-4" />
+        <h3 className="heading-sm mb-2">User Required</h3>
+        <p className="text-muted">Please select a user to access inference features.</p>
       </div>
     )
   }
@@ -97,8 +97,8 @@ export default function Inference() {
     <div className="max-w-4xl mx-auto space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">🎯 Speaker Inference</h1>
-        <p className="text-gray-600 mt-2">
+        <h1 className="heading-lg">🎯 Speaker Inference</h1>
+        <p className="text-secondary mt-2">
           Upload audio files or record live audio for speaker identification and transcription
         </p>
       </div>
@@ -106,10 +106,10 @@ export default function Inference() {
       {/* Audio Input Section */}
       <div className="grid md:grid-cols-2 gap-6">
         {/* File Upload */}
-        <div className="border rounded-lg p-6">
+        <div className="card p-6">
           <div className="flex items-center space-x-2 mb-4">
-            <Upload className="h-5 w-5 text-gray-600" />
-            <h4 className="font-medium text-gray-900 dark:text-gray-100">Upload Audio File</h4>
+            <Upload className="h-5 w-5 text-secondary" />
+            <h4 className="font-medium text-primary">Upload Audio File</h4>
           </div>
           <FileUploader
             onUpload={handleFileUpload}
@@ -117,7 +117,7 @@ export default function Inference() {
             multiple={false}
             disabled={speakerProcessing.isProcessing || recording.recordingState.isRecording}
           />
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+          <p className="text-sm text-muted mt-2">
             WAV files recommended for best compatibility
           </p>
         </div>
@@ -132,25 +132,25 @@ export default function Inference() {
 
       {/* Audio Visualization */}
       {audioForProcessing && (
-        <div className="bg-white border rounded-lg p-6">
-          <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-4">🎵 {audioForProcessing.filename}</h4>
+        <div className="card p-6">
+          <h4 className="font-medium text-primary mb-4">🎵 {audioForProcessing.filename}</h4>
           
           {/* Audio Info */}
           <div className="grid grid-cols-3 gap-4 text-sm mb-4">
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Duration:</span>
+              <span className="text-muted">Duration:</span>
               <span className="ml-2 font-medium">
                 {(audioForProcessing.buffer.duration / 60).toFixed(1)} min
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Sample Rate:</span>
+              <span className="text-muted">Sample Rate:</span>
               <span className="ml-2 font-medium">
                 {(audioForProcessing.buffer.sampleRate / 1000).toFixed(1)} kHz
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Channels:</span>
+              <span className="text-muted">Channels:</span>
               <span className="ml-2 font-medium">{audioForProcessing.buffer.channels}</span>
             </div>
           </div>
@@ -164,14 +164,14 @@ export default function Inference() {
 
           {/* Audio Quality Info */}
           {audioForProcessing.quality && (
-            <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div className="mt-4 p-3 card-secondary rounded-lg">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">Audio Quality:</span>
+                <span className="text-secondary">Audio Quality:</span>
                 <span className={`font-medium ${
-                  audioForProcessing.quality.level === 'excellent' ? 'text-green-600' :
-                  audioForProcessing.quality.level === 'good' ? 'text-blue-600' :
-                  audioForProcessing.quality.level === 'fair' ? 'text-yellow-600' :
-                  'text-red-600'
+                  audioForProcessing.quality.level === 'excellent' ? 'text-green-600 dark:text-green-400' :
+                  audioForProcessing.quality.level === 'good' ? 'text-blue-600 dark:text-blue-400' :
+                  audioForProcessing.quality.level === 'fair' ? 'text-yellow-600 dark:text-yellow-400' :
+                  'text-red-600 dark:text-red-400'
                 }`}>
                   {audioForProcessing.quality.level.charAt(0).toUpperCase() + audioForProcessing.quality.level.slice(1)}
                   ({audioForProcessing.quality.snr.toFixed(1)} dB SNR)
@@ -206,10 +206,10 @@ export default function Inference() {
 
       {/* Processing Progress */}
       {speakerProcessing.processingProgress && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 dark:bg-blue-900 dark:border-blue-800">
           <div className="flex items-center space-x-2">
             <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-            <span className="text-blue-800 font-medium">{speakerProcessing.processingProgress}</span>
+            <span className="text-blue-800 dark:text-blue-200 font-medium">{speakerProcessing.processingProgress}</span>
           </div>
         </div>
       )}
@@ -219,7 +219,7 @@ export default function Inference() {
         {/* Results History */}
         {speakerProcessing.results.length > 0 && (
           <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">📊 Processing History</h2>
+            <h2 className="heading-md">📊 Processing History</h2>
             
             <div className="space-y-3">
               {speakerProcessing.results.map((result) => (
@@ -227,25 +227,25 @@ export default function Inference() {
                   key={result.id}
                   className={`border rounded-lg p-4 cursor-pointer transition-colors ${
                     speakerProcessing.selectedResult?.id === result.id 
-                      ? 'border-blue-500 bg-blue-50' 
-                      : 'border-gray-200 hover:border-gray-300'
+                      ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900' 
+                      : 'border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600'
                   }`}
                   onClick={() => speakerProcessing.selectResult(result)}
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="font-medium text-gray-900 dark:text-gray-100">{result.filename}</h3>
-                      <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
+                      <h3 className="font-medium text-primary">{result.filename}</h3>
+                      <div className="flex items-center space-x-4 mt-1 text-sm text-muted">
                         <span>{(result.duration / 60).toFixed(1)} min</span>
                         <span>{new Date(result.created_at).toLocaleString()}</span>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          result.status === 'completed' ? 'bg-green-100 text-green-800' :
-                          result.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                          'bg-red-100 text-red-800'
+                          result.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                          result.status === 'processing' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' :
+                          'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                         }`}>
                           {result.status}
                         </span>
-                        <span className="px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-800">
+                        <span className="px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
                           {result.mode}
                         </span>
                       </div>
@@ -254,8 +254,8 @@ export default function Inference() {
                     {result.status === 'completed' && (
                       <div className="flex items-center space-x-4">
                         <div className="text-right text-sm">
-                          <div className="text-gray-900 dark:text-gray-100 font-medium">{result.speakers.length} segments</div>
-                          <div className="text-gray-500">
+                          <div className="text-primary font-medium">{result.speakers.length} segments</div>
+                          <div className="text-muted">
                             {result.confidence_summary.high_confidence} high conf.
                           </div>
                         </div>
@@ -264,7 +264,7 @@ export default function Inference() {
                             e.stopPropagation()
                             speakerProcessing.exportResult(result)
                           }}
-                          className="p-2 text-green-600 hover:text-green-800 border border-green-200 rounded"
+                          className="p-2 text-green-600 hover:text-green-800 border border-green-200 rounded dark:text-green-400 dark:hover:text-green-300 dark:border-green-700"
                           title="Export Results"
                         >
                           <Upload className="h-4 w-4" />
@@ -286,16 +286,16 @@ export default function Inference() {
             showExport={true}
             showStats={true}
             onExport={speakerProcessing.exportResult}
-            className="bg-white border rounded-lg p-6"
+            className="card p-6"
           />
         )}
 
         {/* No results message */}
         {speakerProcessing.results.length === 0 && !speakerProcessing.isProcessing && (
           <div className="text-center py-12">
-            <Users className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No Results Yet</h3>
-            <p className="text-gray-500">
+            <Users className="h-12 w-12 text-muted mx-auto mb-4" />
+            <h3 className="heading-sm mb-2">No Results Yet</h3>
+            <p className="text-muted">
               Upload an audio file or record audio to start speaker identification
             </p>
           </div>

@@ -262,11 +262,11 @@ export const SpeakerResultsDisplay: React.FC<SpeakerResultsDisplayProps> = ({
   if (displaySegments.length === 0) {
     return (
       <div className={`text-center py-8 ${className}`}>
-        <Users className="h-12 w-12 text-gray-300 mx-auto mb-2" />
-        <h3 className="text-lg font-medium text-gray-900 mb-2">
+        <Users className="h-12 w-12 text-primary mx-auto mb-2" />
+        <h3 className="heading-sm mb-2">
           {isLiveMode ? 'No Live Transcription Yet' : 'No Results'}
         </h3>
-        <p className="text-gray-500">
+        <p className="text-muted">
           {isLiveMode 
             ? 'Start speaking to see live transcription and speaker identification'
             : 'Process audio to see speaker identification results'}

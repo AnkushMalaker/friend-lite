@@ -127,14 +127,14 @@ export default function FileUploader({
           </div>
           
           <div>
-            <p className={`text-lg font-medium ${disabled ? 'text-gray-400 dark:text-gray-500' : 'text-gray-900 dark:text-gray-100'}`}>
+            <p className={`text-lg font-medium ${disabled ? 'text-primary-disabled' : 'text-primary'}`}>
               {isDragOver ? 'Drop files here' : (title || 'Upload Audio Files')}
             </p>
-            <p className={`text-sm ${disabled ? 'text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}>
+            <p className={`text-sm ${disabled ? 'text-muted-disabled' : 'text-muted'}`}>
               Drag and drop or click to select files
             </p>
             {accept.includes('audio') && (
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+              <p className="text-xs text-primary-disabled mt-1">
                 Supported: WAV, FLAC, MP3, M4A, OGG
               </p>
             )}
@@ -149,7 +149,7 @@ export default function FileUploader({
       {/* Selected Files List */}
       {selectedFiles.length > 0 && (
         <div className="mt-4 space-y-2">
-          <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">Selected Files:</h4>
+          <h4 className="text-sm font-medium text-primary">Selected Files:</h4>
           <div className="space-y-2">
             {selectedFiles.map((file, index) => (
               <div
@@ -159,8 +159,8 @@ export default function FileUploader({
                 <div className="flex items-center space-x-3">
                   <FileAudio className="h-5 w-5 text-blue-500" />
                   <div>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{file.name}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">{formatFileSize(file.size)}</p>
+                    <p className="text-sm font-medium text-primary">{file.name}</p>
+                    <p className="text-xs text-muted">{formatFileSize(file.size)}</p>
                   </div>
                 </div>
                 <button

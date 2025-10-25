@@ -5,8 +5,8 @@ export const ThemeSwitcher = () => {
     const { isDark, toggleTheme } = useTheme();
     return <button
         onClick={toggleTheme}
-        className="px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300 transition-colors"
+        className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-600 dark:text-gray-300"
     >
-        {isDark ? <Moon /> : <Sun />}
+        {isDark ? <Moon className="" /> : <Sun className="" />}
     </button>;
 }

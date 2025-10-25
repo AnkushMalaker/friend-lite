@@ -111,7 +111,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
       <div className={`space-y-3 ${className}`}>
         {/* Mode Selection Dropdown */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="input-label mb-1">
             Processing Mode
           </label>
           <select
@@ -152,7 +152,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
         {showSettings && (
           <>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="input-label mb-1">
                 Confidence Threshold: {confidenceThreshold.toFixed(2)}
               </label>
               <input
@@ -165,7 +165,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 className="w-full"
                 disabled={isProcessing}
               />
-              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <div className="flex justify-between text-xs text-muted mt-1">
                 <span>Less Strict</span>
                 <span>More Strict</span>
               </div>
@@ -173,7 +173,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
 
             {/* Min Speakers */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="input-label mb-1">
                 Min Speakers: {minSpeakers}
               </label>
               <input
@@ -193,7 +193,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 className="w-full"
                 disabled={isProcessing}
               />
-              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <div className="flex justify-between text-xs text-muted mt-1">
                 <span>1</span>
                 <span>8</span>
               </div>
@@ -201,7 +201,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
 
             {/* Max Speakers */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="input-label mb-1">
                 Max Speakers: {maxSpeakers}
               </label>
               <input
@@ -221,7 +221,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 className="w-full"
                 disabled={isProcessing}
               />
-              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <div className="flex justify-between text-xs text-muted mt-1">
                 <span>1</span>
                 <span>8</span>
               </div>
@@ -230,7 +230,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
             {/* Collar Parameter */}
             {onCollarChange && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="input-label mb-1">
                   Segment Collar: {collar.toFixed(1)}s
                 </label>
                 <input
@@ -243,11 +243,11 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                   className="w-full"
                   disabled={isProcessing}
                 />
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <div className="flex justify-between text-xs text-muted mt-1">
                   <span>0s</span>
                   <span>5s</span>
                 </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <p className="text-xs text-muted mt-1">
                   Merges segments separated by gaps shorter than this value
                 </p>
               </div>
@@ -256,7 +256,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
             {/* Min Duration Off Parameter */}
             {onMinDurationOffChange && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="input-label mb-1">
                   Min Silence Duration: {minDurationOff.toFixed(1)}s
                 </label>
                 <input
@@ -269,11 +269,11 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                   className="w-full"
                   disabled={isProcessing}
                 />
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <div className="flex justify-between text-xs text-muted mt-1">
                   <span>0s</span>
                   <span>3s</span>
                 </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <p className="text-xs text-muted mt-1">
                   Minimum silence before treating as segment boundary
                 </p>
               </div>
@@ -298,15 +298,15 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
     <div className={`space-y-6 ${className}`}>
       {/* Settings Panel */}
       {showSettings && (
-        <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+        <div className="card p-4">
           <div className="flex items-center space-x-2 mb-3">
             <Settings className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-            <h4 className="font-medium text-gray-900 dark:text-gray-100">Processing Settings</h4>
+            <h4 className="font-medium text-primary">Processing Settings</h4>
           </div>
           
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 dark:text-gray-300 mb-1">
+              <label className="input-label dark:text-gray-300 mb-1">
                 Confidence Threshold: {confidenceThreshold.toFixed(2)}
               </label>
               <input
@@ -319,7 +319,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 className="w-full"
                 disabled={isProcessing}
               />
-              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <div className="flex justify-between text-xs text-muted mt-1">
                 <span>Less Strict</span>
                 <span>More Strict</span>
               </div>
@@ -327,7 +327,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
 
             {/* Min Speakers */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="input-label mb-1">
                 Min Speakers: {minSpeakers}
               </label>
               <input
@@ -347,7 +347,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 className="w-full"
                 disabled={isProcessing}
               />
-              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <div className="flex justify-between text-xs text-muted mt-1">
                 <span>1</span>
                 <span>8</span>
               </div>
@@ -355,7 +355,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
 
             {/* Max Speakers */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="input-label mb-1">
                 Max Speakers: {maxSpeakers}
               </label>
               <input
@@ -375,7 +375,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                 className="w-full"
                 disabled={isProcessing}
               />
-              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <div className="flex justify-between text-xs text-muted mt-1">
                 <span>1</span>
                 <span>8</span>
               </div>
@@ -384,7 +384,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
             {/* Collar Parameter */}
             {onCollarChange && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 dark:text-gray-300 mb-1">
+                <label className="input-label mb-1">
                   Segment Collar: {collar.toFixed(1)}s
                 </label>
                 <input
@@ -397,11 +397,11 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                   className="w-full"
                   disabled={isProcessing}
                 />
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <div className="flex justify-between text-xs text-muted mt-1">
                   <span>0s</span>
                   <span>5s</span>
                 </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <p className="text-xs text-muted mt-1">
                   Merges segments separated by gaps shorter than this value
                 </p>
               </div>
@@ -410,7 +410,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
             {/* Min Duration Off Parameter */}
             {onMinDurationOffChange && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="input-label mb-1">
                   Min Silence Duration: {minDurationOff.toFixed(1)}s
                 </label>
                 <input
@@ -423,11 +423,11 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                   className="w-full"
                   disabled={isProcessing}
                 />
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <div className="flex justify-between text-xs text-muted mt-1">
                   <span>0s</span>
                   <span>3s</span>
                 </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <p className="text-xs text-muted mt-1">
                   Minimum silence before treating as segment boundary
                 </p>
               </div>
@@ -455,8 +455,8 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
               <div className="flex items-start space-x-3">
                 <span className="text-2xl">{config.icon}</span>
                 <div className="flex-1">
-                  <h5 className="font-medium text-gray-900 dark:text-gray-100">{config.name}</h5>
-                  <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{config.description}</p>
+                  <h5 className="heading-sm">{config.name}</h5>
+                  <p className="text-sm text-secondary mt-1">{config.description}</p>
                   
                   {/* Requirements */}
                   {config.requirements && (
@@ -471,7 +471,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
                   <div className="mt-2">
                     <div className="flex flex-wrap gap-1">
                       {config.features.slice(0, 2).map((feature, index) => (
-                        <span key={index} className="text-xs text-gray-500 dark:text-gray-400">
+                        <span key={index} className="text-xs text-muted">
                           • {feature}
                         </span>
                       ))}
@@ -495,8 +495,8 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
           <div className="flex items-start space-x-3">
             <span className="text-2xl">🔄</span>
             <div className="flex-1">
-              <h5 className="font-medium text-gray-900 dark:text-gray-100">Hybrid: Deepgram Transcription + Internal Diarization</h5>
-              <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">Best of both: High-quality transcription with accurate speaker segmentation</p>
+              <h5 className="heading-sm">Hybrid: Deepgram Transcription + Internal Diarization</h5>
+              <p className="text-sm text-secondary mt-1">Best of both: High-quality transcription with accurate speaker segmentation</p>
               
               <div className="mt-2">
                 <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-800">
@@ -507,7 +507,7 @@ export const ProcessingModeSelector: React.FC<ProcessingModeSelectorProps> = ({
               <div className="mt-2">
                 <div className="flex flex-wrap gap-1">
                   {PROCESSING_MODES[2].features.map((feature, index) => (
-                    <span key={index} className="text-xs text-gray-500 dark:text-gray-400">
+                    <span key={index} className="text-xs text-muted">
                       • {feature}
                     </span>
                   ))}

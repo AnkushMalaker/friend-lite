@@ -37,7 +37,7 @@ export default function UserSelector() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center space-x-2 text-gray-500">
+      <div className="flex items-center space-x-2 text-muted">
         <User className="h-5 w-5" />
         <span>Loading...</span>
       </div>
@@ -49,42 +49,42 @@ export default function UserSelector() {
       {/* Current User Display / Dropdown Trigger */}
       <button
         onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-        className="flex items-center space-x-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+        className="flex items-center space-x-2 px-3 py-2 card-secondary hover-bg rounded-md transition-colors"
       >
-        <User className="h-5 w-5 text-gray-600" />
-        <span className="text-sm font-medium text-gray-900">
+        <User className="h-5 w-5 text-secondary" />
+        <span className="text-sm font-medium text-primary">
           {user ? user.username : 'Select User'}
         </span>
-        <ChevronDown className="h-4 w-4 text-gray-500" />
+        <ChevronDown className="h-4 w-4 text-muted" />
       </button>
 
       {/* Dropdown Menu */}
       {isDropdownOpen && (
-        <div className="absolute right-0 mt-2 w-64 bg-white rounded-md shadow-lg border z-50">
+        <div className="absolute right-0 mt-2 w-64 card shadow-lg z-50">
           <div className="py-2">
             {/* Existing Users */}
             {users.length > 0 && (
               <>
-                <div className="px-3 py-1 text-xs font-medium text-gray-500 uppercase tracking-wide">
+                <div className="px-3 py-1 text-xs font-medium text-muted uppercase tracking-wide">
                   Select User
                 </div>
                 {users.map((u) => (
                   <button
                     key={u.id}
                     onClick={() => handleSelectUser(u.username)}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 transition-colors ${
-                      user?.id === u.id ? 'bg-blue-50 text-blue-900' : 'text-gray-700'
+                    className={`w-full text-left px-3 py-2 text-sm transition-colors hover-bg ${
+                      user?.id === u.id ? 'bg-blue-50 dark:bg-blue-900 text-blue-900 dark:text-blue-100' : 'text-secondary'
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <span>{u.username}</span>
                       {user?.id === u.id && (
-                        <span className="text-xs text-blue-600">Current</span>
+                        <span className="text-xs text-blue-600 dark:text-blue-300">Current</span>
                       )}
                     </div>
                   </button>
                 ))}
-                <div className="border-t my-2"></div>
+                <div className="border-t my-2 border-gray-200 dark:border-gray-700"></div>
               </>
             )}
 
@@ -92,7 +92,7 @@ export default function UserSelector() {
             {!isCreating ? (
               <button
                 onClick={() => setIsCreating(true)}
-                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center space-x-2"
+                className="w-full text-left px-3 py-2 text-sm transition-colors flex items-center space-x-2 text-secondary hover-bg"
               >
                 <Plus className="h-4 w-4" />
                 <span>Create New User</span>
@@ -105,7 +105,7 @@ export default function UserSelector() {
                     value={newUsername}
                     onChange={(e) => setNewUsername(e.target.value)}
                     placeholder="Username"
-                    className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="input-primary"
                     autoFocus
                     disabled={isSubmitting}
                   />
@@ -113,7 +113,7 @@ export default function UserSelector() {
                     <button
                       type="submit"
                       disabled={!newUsername.trim() || isSubmitting}
-                      className="flex-1 px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isSubmitting ? 'Creating...' : 'Create'}
                     </button>
@@ -123,7 +123,7 @@ export default function UserSelector() {
                         setIsCreating(false)
                         setNewUsername('')
                       }}
-                      className="flex-1 px-2 py-1 text-xs bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                      className="btn-secondary"
                       disabled={isSubmitting}
                     >
                       Cancel
