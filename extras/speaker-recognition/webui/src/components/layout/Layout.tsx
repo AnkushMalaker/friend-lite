@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { Mic, Music, FileText, Users, Brain, User, Radio, Wifi } from 'lucide-react'
 import UserSelector from '../UserSelector'
 import ConnectionStatus from '../ConnectionStatus'
+import { ThemeSwitcher } from '../ThemeSwitcher'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -35,6 +36,8 @@ export default function Layout({ children }: LayoutProps) {
             </div>
             <div className="flex items-center space-x-4">
               <ConnectionStatus />
+              <div className="border-l border-gray-300 h-6"></div>
+                <ThemeSwitcher />
               <div className="border-l border-gray-300 h-6"></div>
               <UserSelector />
             </div>

@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg: #fff;
+  --text: #222;
+}
+[data-theme="dark"] {
+  --bg: #222;
+  --text: #fff;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
 @layer components {
   /* Card/Container styles */
   .card {
