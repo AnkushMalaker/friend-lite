@@ -764,7 +764,7 @@ export default function Annotation() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-500 dark:text-gray-400">Please select a user to continue.</p>
+        <p className="text-muted">Please select a user to continue.</p>
       </div>
     )
   }
@@ -772,23 +772,23 @@ export default function Annotation() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">📝 Annotation Tool</h1>
+        <h1 className="text-2xl font-bold text-primary">📝 Annotation Tool</h1>
         {hasUnsavedChanges && (
-          <div className="flex items-center space-x-2 text-amber-600">
+          <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400">
             <AlertCircle className="h-5 w-5" />
             <span className="text-sm font-medium">Unsaved changes</span>
           </div>
         )}
       </div>
 
-      <p className="text-gray-600 dark:text-gray-300">
+      <p className="text-secondary">
         Upload audio files and create speaker annotations with timeline visualization.
       </p>
 
       {/* File Upload */}
       <div className="grid md:grid-cols-2 gap-6">
         <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6">
-          <h3 className="text-lg font-medium mb-4">📁 Upload Audio File</h3>
+          <h3 className="text-lg font-medium mb-4 text-primary">📁 Upload Audio File</h3>
           <FileUploader
             onUpload={handleFileUpload}
             accept=".wav,.flac,.mp3,.m4a,.ogg"
@@ -798,8 +798,8 @@ export default function Annotation() {
         </div>
 
         {/* Import JSON */}
-        <div className="border-2 border-dashed border-blue-300 dark:border-blue-600 rounded-lg p-6">
-          <h3 className="text-lg font-medium mb-4">📄 Import Deepgram JSON</h3>
+        <div className="card-2 p-6">
+          <h3 className="text-lg font-medium mb-4 text-primary">📄 Import Deepgram JSON</h3>
           <FileUploader
             onUpload={handleDeepgramUpload}
             accept=".json"
@@ -808,14 +808,14 @@ export default function Annotation() {
             title="Upload Transcript JSON"
           />
           {!audioData && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Upload audio file first</p>
+            <p className="text-sm text-muted mt-2">Upload audio file first</p>
           )}
         </div>
       </div>
 
       {/* Processing Mode Selector - Full Width Section */}
       <div className="border-2 border-dashed border-green-300 dark:border-green-600 rounded-lg p-6">
-        <h3 className="text-xl font-medium mb-4 text-gray-900 dark:text-gray-100">🎯 Speaker Processing Modes</h3>
+        <h3 className="text-xl font-medium mb-4 text-primary">🎯 Speaker Processing Modes</h3>
         
         {audioData ? (
           <ProcessingModeSelector
@@ -848,7 +848,7 @@ export default function Annotation() {
             compact={true}
           />
         ) : (
-          <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+          <div className="text-center py-12 text-muted">
             <p className="text-lg">Upload audio file first to enable processing modes</p>
           </div>
         )}
@@ -856,8 +856,8 @@ export default function Annotation() {
 
       {isLoading && (
         <div className="text-center py-8">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <p className="mt-2 text-gray-600">Processing audio file...</p>
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 dark:border-blue-400"></div>
+          <p className="mt-2 text-secondary">Processing audio file...</p>
         </div>
       )}
 
@@ -865,8 +865,8 @@ export default function Annotation() {
         <>
           {/* Audio Information */}
           <div className="card-secondary p-4">
-            <h3 className="text-lg font-medium mb-2">🎵 {audioData.file.name}</h3>
-            <div className="grid grid-cols-3 gap-4 text-sm">
+            <h3 className="mb-2 heading-sm">🎵 {audioData.file.name}</h3>
+            <div className="grid grid-cols-3 gap-4 text-sm text-secondary">
               <div>Duration: {formatDuration(audioData.buffer.duration * 1000)}</div>
               <div>Sample Rate: {(audioData.buffer.sampleRate / 1000).toFixed(1)} kHz</div>
               <div>Segments: {segments.length}</div>
@@ -876,10 +876,10 @@ export default function Annotation() {
           {/* Waveform with segments */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium">📊 Timeline</h3>
+              <h3 className="heading-sm">📊 Timeline</h3>
               <button
                 onClick={addManualSegment}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="px-4 py-2 btn-2"
               >
                 Add Segment
               </button>
@@ -908,11 +908,11 @@ export default function Annotation() {
 
           {/* Segments List */}
           <div className="space-y-4">
-            <h3 className="text-lg font-medium">🗣️ Speaker Segments</h3>
+            <h3 className="heading-sm">🗣️ Speaker Segments</h3>
             
             {/* Filter Controls */}
             {segments.length > 0 && (
-              <div className="flex flex-wrap items-center gap-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border">
+              <div className="flex flex-wrap items-center gap-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border dark:border-gray-700">
                 {/* Speaker Filter */}
                 <div className="relative speaker-filter-dropdown">
                   <button
@@ -922,7 +922,7 @@ export default function Annotation() {
                     <Filter className="h-4 w-4" />
                     <span className="text-sm">Filter Speakers</span>
                     {selectedSpeakers.size > 0 && (
-                      <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+                      <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full dark:bg-blue-900 dark:text-blue-200">
                         {selectedSpeakers.size}
                       </span>
                     )}
@@ -957,7 +957,7 @@ export default function Annotation() {
                               className="rounded"
                             />
                             <span className="text-sm">{speaker}</span>
-                            <span className="text-xs text-gray-500">({count})</span>
+                            <span className="text-xs text-muted">({count})</span>
                           </label>
                         ))}
                       </div>
@@ -967,7 +967,7 @@ export default function Annotation() {
                             e.stopPropagation()
                             selectAllSpeakers()
                           }}
-                          className="flex-1 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
+                          className="flex-1 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800"
                         >
                           Select All
                         </button>
@@ -976,7 +976,7 @@ export default function Annotation() {
                             e.stopPropagation()
                             clearAllSpeakers()
                           }}
-                          className="flex-1 px-2 py-1 text-xs bg-gray-100 text-gray-800 rounded hover:bg-gray-200"
+                          className="flex-1 px-2 py-1 text-xs bg-gray-100 text-gray-800 rounded hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                         >
                           Clear All
                         </button>
@@ -1061,7 +1061,7 @@ export default function Annotation() {
                     step="0.1"
                     min={minDuration}
                   />
-                  <span className="text-sm text-gray-500">
+                  <span className="text-sm text-muted">
                     ({filteredSegments.length} segments)
                   </span>
                 </div>
@@ -1070,7 +1070,7 @@ export default function Annotation() {
                 {hasActiveFilters && (
                   <button
                     onClick={clearAllFilters}
-                    className="flex items-center space-x-1 px-2 py-1 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                    className="flex items-center space-x-1 px-2 py-1 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-900 rounded transition-colors"
                   >
                     <X className="h-3 w-3" />
                     <span>Clear Filters</span>
@@ -1099,20 +1099,20 @@ export default function Annotation() {
 
           {/* Speaker Management */}
           <div className="card-secondary p-4">
-            <h3 className="text-lg font-medium mb-4">👥 Manage Speakers</h3>
+            <h3 className="text-lg font-medium mb-4 dark:text-gray-100">👥 Manage Speakers</h3>
             <div className="flex space-x-2">
               <input
                 type="text"
                 value={newSpeakerName}
                 onChange={(e) => setNewSpeakerName(e.target.value)}
                 placeholder="New speaker name"
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
                 onKeyPress={(e) => e.key === 'Enter' && addSpeaker()}
               />
               <button
                 onClick={addSpeaker}
                 disabled={!newSpeakerName.trim()}
-                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 dark:bg-green-700 dark:hover:bg-green-800"
               >
                 Add Speaker
               </button>
@@ -1123,8 +1123,8 @@ export default function Annotation() {
                   key={index}
                   className={`px-3 py-1 rounded-full text-sm ${
                     speaker.id 
-                      ? 'bg-green-100 text-green-800' 
-                      : 'bg-blue-100 text-blue-800'
+                      ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+                      : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
                   }`}
                   title={speaker.id ? 'Enrolled speaker' : 'Temporary label'}
                 >
@@ -1137,7 +1137,7 @@ export default function Annotation() {
           {/* Speaker Segments Summary */}
           {segments.length > 0 && (
             <div className="card-secondary p-4">
-              <h3 className="text-lg font-medium mb-4">📊 Speaker Segments Summary</h3>
+              <h3 className="text-lg font-medium mb-4 dark:text-gray-100">📊 Speaker Segments Summary</h3>
               <div className="space-y-2">
                 {Array.from(new Set(segments.map(s => s.speakerLabel).filter(Boolean))).map(speakerLabel => {
                   const speakerSegments = segments.filter(s => s.speakerLabel === speakerLabel)
@@ -1149,12 +1149,12 @@ export default function Annotation() {
                       <div className="flex items-center space-x-2">
                         <span className={`px-2 py-1 rounded-full text-xs ${
                           speaker?.id 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-blue-100 text-blue-800'
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
                         }`}>
                           {speakerLabel}
                         </span>
-                        <span className="text-sm text-gray-600">
+                        <span className="text-sm text-secondary">
                           {speakerSegments.length} segments • {formatDuration(totalDuration * 1000)}
                         </span>
                       </div>
@@ -1162,7 +1162,7 @@ export default function Annotation() {
                         <button
                           onClick={() => enrollSpeaker(speakerLabel!, speaker?.id)}
                           disabled={enrollingSpeaker === speakerLabel}
-                          className="flex items-center space-x-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                          className="flex items-center space-x-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 dark:bg-green-700 dark:hover:bg-green-800"
                         >
                           <UserPlus className="h-3 w-3" />
                           <span>
@@ -1175,7 +1175,7 @@ export default function Annotation() {
                         </button>
                         <button
                           onClick={() => exportSpeakerSegments(speakerLabel!)}
-                          className="flex items-center space-x-1 px-2 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                          className="flex items-center space-x-1 px-2 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800"
                         >
                           <Download className="h-3 w-3" />
                           <span>Export</span>
@@ -1212,14 +1212,14 @@ export default function Annotation() {
           </div>
 
           {/* Save and Export Actions */}
-          <div className="flex justify-end space-x-3 pt-6 border-t">
+          <div className="flex justify-end space-x-3 pt-6 border-t dark:border-gray-700">
             {deepgramResponse && (
               <button
                 onClick={() => setShowJsonOutput(!showJsonOutput)}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-md ${
                   showJsonOutput 
-                    ? 'bg-blue-600 text-white hover:bg-blue-700' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
                 }`}
               >
                 <span>📄</span>
@@ -1229,7 +1229,7 @@ export default function Annotation() {
             <button
               onClick={saveAnnotations}
               disabled={!hasUnsavedChanges || segments.length === 0}
-              className="flex items-center space-x-2 px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center space-x-2 px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-green-700 dark:hover:bg-green-800"
             >
               <Save className="h-4 w-4" />
               <span>Save Annotations</span>
@@ -1237,7 +1237,7 @@ export default function Annotation() {
             <button
               onClick={exportAnnotations}
               disabled={segments.length === 0}
-              className="flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-700 dark:hover:bg-blue-800"
             >
               <Download className="h-4 w-4" />
               <span>Export JSON</span>
@@ -1251,7 +1251,7 @@ export default function Annotation() {
                 <h4 className="font-medium text-primary">🔍 Debug Output</h4>
                 <button
                   onClick={() => setShowJsonOutput(!showJsonOutput)}
-                  className="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+                  className="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                 >
                   <span>{showJsonOutput ? 'Hide' : 'Show'} JSON</span>
                 </button>
@@ -1321,9 +1321,9 @@ function SegmentEditor({
 
   const getLabelIcon = (label: string) => {
     switch (label) {
-      case 'CORRECT': return <CheckCircle className="h-4 w-4 text-green-500" />
-      case 'INCORRECT': return <XCircle className="h-4 w-4 text-red-500" />
-      default: return <AlertCircle className="h-4 w-4 text-yellow-500" />
+      case 'CORRECT': return <CheckCircle className="h-4 w-4 text-green-500 dark:text-green-400" />
+      case 'INCORRECT': return <XCircle className="h-4 w-4 text-red-500 dark:text-red-400" />
+      default: return <AlertCircle className="h-4 w-4 text-yellow-500 dark:text-yellow-400" />
     }
   }
 
@@ -1348,7 +1348,7 @@ function SegmentEditor({
     <div
       className={`border rounded-lg p-4 cursor-pointer transition-colors ${
         isSelected 
-          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900' 
+          ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900' 
           : getLabelColor(segment.label)
       }`}
       onClick={onSelect}
@@ -1422,7 +1422,7 @@ function SegmentEditor({
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Label</label>
+              <label className="input-label mb-1">Label</label>
               <select
                 value={segment.label}
                 onChange={(e) => onUpdate({ label: e.target.value as any })}
@@ -1436,30 +1436,30 @@ function SegmentEditor({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Transcription</label>
+            <label className="block text-sm font-medium mb-1 dark:text-gray-300">Transcription</label>
             <textarea
               value={segment.transcription || ''}
               onChange={(e) => onUpdate({ transcription: e.target.value })}
               placeholder="Enter transcription..."
-              className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+              className="w-full px-2 py-1 border border-gray-300 rounded text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
               rows={2}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Notes</label>
+            <label className="block text-sm font-medium mb-1 text-secondary">Notes</label>
             <input
               type="text"
               value={segment.notes || ''}
               onChange={(e) => onUpdate({ notes: e.target.value })}
               placeholder="Optional notes..."
-              className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+              className="w-full px-2 py-1 border border-gray-300 rounded text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
             />
           </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Start (s)</label>
+              <label className="input-label mb-1">Start (s)</label>
               <input
                 type="number"
                 step="0.1"
@@ -1476,7 +1476,7 @@ function SegmentEditor({
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">End (s)</label>
+              <label className="input-label mb-1">End (s)</label>
               <input
                 type="number"
                 step="0.1"
@@ -1493,7 +1493,7 @@ function SegmentEditor({
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="input-label mb-1">
                 Confidence {segment.confidence && `(${getConfidenceLabel(segment.confidence)})`}
               </label>
               <input
@@ -1506,11 +1506,11 @@ function SegmentEditor({
                 className={`w-full px-2 py-1 border rounded text-sm ${
                   segment.confidence 
                     ? segment.confidence >= 0.7 
-                      ? 'border-green-300 bg-green-50' 
+                      ? 'border-green-300 bg-green-50 dark:border-green-700 dark:bg-green-900' 
                       : segment.confidence >= 0.4 
-                        ? 'border-yellow-300 bg-yellow-50'
-                        : 'border-red-300 bg-red-50'
-                    : 'border-gray-300'
+                        ? 'border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-900'
+                        : 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900'
+                    : 'border-gray-300 dark:border-gray-600'
                 }`}
               />
             </div>

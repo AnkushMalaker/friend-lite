@@ -102,7 +102,7 @@ export default function ConnectionStatus() {
       onClick={() => checkBackendConnection()}
     >
       <Circle className={`h-3 w-3 ${getStatusColor()} ${status.status === 'connected' ? 'fill-current' : ''}`} />
-      <span className="text-gray-600">{getStatusText()}</span>
+      <span className="text-gray-500 dark:text-gray-400">{getStatusText()}</span>
     </div>
   )
 }

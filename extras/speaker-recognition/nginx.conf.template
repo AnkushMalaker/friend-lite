@@ -46,7 +46,7 @@ http {
     }
     
     upstream web_ui {
-        server web-ui:5175;
+        server web-ui:WEB_UI_PORT_PLACEHOLDER;
     }
     
     # HTTPS Server

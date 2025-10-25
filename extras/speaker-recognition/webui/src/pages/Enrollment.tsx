@@ -457,10 +457,10 @@ export default function Enrollment() {
 
   const getQualityColor = useCallback((quality: string) => {
     switch (quality) {
-      case 'excellent': return 'text-green-600 bg-green-100'
-      case 'good': return 'text-blue-600 bg-blue-100'
-      case 'fair': return 'text-yellow-600 bg-yellow-100'
-      default: return 'text-red-600 bg-red-100'
+      case 'excellent': return 'text-green-600 bg-green-100 dark:bg-green-900 dark:text-green-200'
+      case 'good': return 'text-blue-600 bg-blue-100 dark:bg-blue-900 dark:text-blue-200'
+      case 'fair': return 'text-yellow-600 bg-yellow-100 dark:bg-yellow-900 dark:text-yellow-200'
+      default: return 'text-red-600 bg-red-100 dark:bg-red-900 dark:text-red-200'
     }
   }, [])
 
@@ -477,7 +477,7 @@ export default function Enrollment() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-500 dark:text-gray-400">Please select a user to continue.</p>
+        <p className="text-muted">Please select a user to continue.</p>
       </div>
     )
   }
@@ -485,7 +485,7 @@ export default function Enrollment() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Speaker Enrollment</h1>
+        <h1 className="heading-lg">🎙️ Speaker Enrollment</h1>
         {!currentSession && (
           <button
             onClick={() => {
@@ -494,35 +494,35 @@ export default function Enrollment() {
                 createNewSession(name.trim())
               }
             }}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800"
           >
             New Enrollment
           </button>
         )}
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-        <p className="text-blue-800 text-sm">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 dark:bg-blue-900 dark:border-blue-800">
+        <p className="text-blue-800 text-sm dark:text-blue-200">
           <span className="font-medium">💾 Audio Storage:</span> All enrollment audio files are automatically saved for future reference and reprocessing.
         </p>
       </div>
       
-      <p className="text-gray-600 dark:text-gray-300">
+      <p className="text-secondary">
         Enroll new speakers by uploading audio files or recording directly in your browser.
       </p>
 
       {/* Current Session */}
       {currentSession && (
-        <div className="bg-white border rounded-lg p-6">
+        <div className="card p-6">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{currentSession.speakerName}</h2>
+              <h2 className="heading-md">{currentSession.speakerName}</h2>
               <div className="flex items-center space-x-4 mt-2">
                 <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(currentSession.quality)}`}>
                   {getQualityIcon(currentSession.quality)}
                   <span>{currentSession.quality.charAt(0).toUpperCase() + currentSession.quality.slice(1)}</span>
                 </span>
-                <span className="text-sm text-gray-500 dark:text-gray-400">
+                <span className="text-sm text-muted">
                   {currentSession.audioFiles.length} samples • {formatDuration(currentSession.totalDuration)}
                 </span>
               </div>
@@ -530,14 +530,14 @@ export default function Enrollment() {
             <div className="flex space-x-2">
               <button
                 onClick={() => setCurrentSession(null)}
-                className="px-3 py-1 text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100"
+                className="px-3 py-1 text-secondary hover:text-primary"
               >
                 Cancel
               </button>
               <button
                 onClick={submitEnrollment}
                 disabled={isSubmitting || currentSession.audioFiles.length === 0}
-                className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 dark:bg-green-700 dark:hover:bg-green-800"
               >
                 <Save className="h-4 w-4" />
                 <span>{isSubmitting ? 'Submitting...' : 'Submit Enrollment'}</span>
@@ -547,33 +547,33 @@ export default function Enrollment() {
 
           {/* Recording Section */}
           <div className="grid md:grid-cols-2 gap-6 mb-6">
-            <div className="border rounded-lg p-4">
-              <h3 className="text-lg font-medium mb-4">🎤 Record Audio</h3>
+            <div className="card p-4">
+              <h3 className="heading-sm mb-4">🎤 Record Audio</h3>
               <div className="text-center space-y-4">
                 {!isRecording ? (
                   <button
                     onClick={startRecording}
-                    className="flex items-center space-x-2 px-6 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 mx-auto"
+                    className="flex items-center space-x-2 px-6 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 mx-auto dark:bg-red-700 dark:hover:bg-red-800"
                   >
                     <Mic className="h-5 w-5" />
                     <span>Start Recording</span>
                   </button>
                 ) : (
                   <div className="space-y-3">
-                    <div className="flex items-center justify-center space-x-2 text-red-600">
+                    <div className="flex items-center justify-center space-x-2 text-red-600 dark:text-red-400">
                       <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
                       <span className="font-medium">Recording... {formatDuration(recordingTime)}</span>
                     </div>
                     <button
                       onClick={stopRecording}
-                      className="flex items-center space-x-2 px-6 py-3 bg-gray-600 text-white rounded-md hover:bg-gray-700 mx-auto"
+                      className="flex items-center space-x-2 px-6 py-3 bg-gray-600 text-white rounded-md hover:bg-gray-700 mx-auto dark:bg-gray-700 dark:hover:bg-gray-800"
                     >
                       <MicOff className="h-5 w-5" />
                       <span>Stop Recording</span>
                     </button>
                   </div>
                 )}
-                <div className="text-sm text-gray-500 dark:text-gray-400 space-y-1">
+                <div className="text-sm text-muted space-y-1">
                   <p>Speak clearly for 10-30 seconds</p>
                   <p className="text-xs">
                     {location.protocol !== 'https:' && location.hostname !== 'localhost' 
@@ -585,8 +585,8 @@ export default function Enrollment() {
             </div>
 
             {/* File Upload Section */}
-            <div className="border rounded-lg p-4">
-              <h3 className="text-lg font-medium mb-4">📁 Upload Audio</h3>
+            <div className="card p-4">
+              <h3 className="heading-sm mb-4">📁 Upload Audio</h3>
               <FileUploader
                 onUpload={handleFileUpload}
                 accept=".wav"
@@ -599,8 +599,8 @@ export default function Enrollment() {
           {currentSession.audioFiles.length > 0 && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-medium">Audio Samples</h3>
-                <span className="text-sm text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                <h3 className="heading-sm">Audio Samples</h3>
+                <span className="text-sm text-green-600 bg-green-100 px-2 py-1 rounded-full dark:bg-green-900 dark:text-green-200">
                   💾 Files will be saved during enrollment
                 </span>
               </div>
@@ -608,20 +608,20 @@ export default function Enrollment() {
                 {currentSession.audioFiles.map((audio) => (
                   <div
                     key={audio.id}
-                    className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg"
+                    className="flex items-center justify-between p-4 card-secondary rounded-lg"
                   >
                     <div className="flex items-center space-x-4">
                       <div>
-                        <p className="font-medium text-gray-900 dark:text-gray-100">{audio.name}</p>
-                        <div className="flex items-center space-x-3 text-sm text-gray-500 dark:text-gray-400">
+                        <p className="font-medium text-primary">{audio.name}</p>
+                        <div className="flex items-center space-x-3 text-sm text-muted">
                           <span>{formatDuration(audio.duration)}</span>
                           <span>SNR: {audio.snr.toFixed(1)} dB</span>
                           <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs ${getQualityColor(audio.quality)}`}>
                             {getQualityIcon(audio.quality)}
                             <span>{audio.quality}</span>
                           </span>
-                          <span className="text-blue-600">({audio.source})</span>
-                          <span className="text-green-600">• will be saved</span>
+                          <span className="text-blue-600 dark:text-blue-400">({audio.source})</span>
+                          <span className="text-green-600 dark:text-green-400">• will be saved</span>
                         </div>
                       </div>
                     </div>
@@ -630,15 +630,15 @@ export default function Enrollment() {
                         onClick={() => playingAudioId === audio.id ? stopAudio() : playAudio(audio)}
                         className={`p-2 rounded ${
                           playingAudioId === audio.id
-                            ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                            : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                            ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800'
+                            : 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800'
                         }`}
                       >
                         {playingAudioId === audio.id ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                       </button>
                       <button
                         onClick={() => removeAudio(audio.id)}
-                        className="p-2 bg-red-100 text-red-700 rounded hover:bg-red-200"
+                        className="p-2 bg-red-100 text-red-700 rounded hover:bg-red-200 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -651,9 +651,9 @@ export default function Enrollment() {
 
 
           {/* Quality Guidelines */}
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h4 className="font-medium text-blue-800 mb-2">Quality Guidelines</h4>
-            <ul className="text-sm text-blue-700 space-y-1">
+          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg dark:bg-blue-900 dark:border-blue-800">
+            <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">Quality Guidelines</h4>
+            <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
               <li>• Excellent: 60+ seconds, 5+ samples, 30+ dB SNR</li>
               <li>• Good: 30+ seconds, 3+ samples, 20+ dB SNR</li>
               <li>• Fair: 15+ seconds, 2+ samples, 15+ dB SNR</li>
@@ -667,16 +667,16 @@ export default function Enrollment() {
       {/* Previous Sessions */}
       {sessions.length > 0 && !currentSession && (
         <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Previous Enrollments</h2>
+          <h2 className="heading-md">Previous Enrollments</h2>
           <div className="space-y-3">
             {sessions.map((session) => (
               <div
                 key={session.id}
-                className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
+                className="flex items-center justify-between p-4 card-secondary rounded-lg"
               >
                 <div>
-                  <p className="font-medium text-gray-900 dark:text-gray-100">{session.speakerName}</p>
-                  <div className="flex items-center space-x-3 text-sm text-gray-500 dark:text-gray-400">
+                  <p className="font-medium text-primary">{session.speakerName}</p>
+                  <div className="flex items-center space-x-3 text-sm text-muted">
                     <span>{session.audioFiles.length} samples</span>
                     <span>{formatDuration(session.totalDuration)}</span>
                     <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs ${getQualityColor(session.quality)}`}>
@@ -684,10 +684,10 @@ export default function Enrollment() {
                       <span>{session.quality}</span>
                     </span>
                     <span className={`px-2 py-1 rounded-full text-xs ${
-                      session.status === 'completed' ? 'bg-green-100 text-green-800' :
-                      session.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                      session.status === 'failed' ? 'bg-red-100 text-red-800' :
-                      'bg-gray-100 text-gray-800'
+                      session.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                      session.status === 'processing' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' :
+                      session.status === 'failed' ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' :
+                      'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
                     }`}>
                       {session.status}
                     </span>
@@ -696,7 +696,7 @@ export default function Enrollment() {
                 <button
                   onClick={() => setCurrentSession(session)}
                   disabled={session.status === 'processing'}
-                  className="px-3 py-1 text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                  className="px-3 py-1 text-blue-600 hover:text-blue-800 disabled:opacity-50 dark:text-blue-400 dark:hover:text-blue-300"
                 >
                   {session.status === 'draft' ? 'Continue' : 'View'}
                 </button>
@@ -709,9 +709,9 @@ export default function Enrollment() {
       {/* Empty State */}
       {sessions.length === 0 && !currentSession && (
         <div className="text-center py-12">
-          <Mic className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No Enrollments Yet</h3>
-          <p className="text-gray-500 dark:text-gray-400 mb-4">Start by creating a new speaker enrollment session.</p>
+          <Mic className="h-16 w-16 text-gray-300 dark:text-gray-500 mx-auto mb-4" />
+          <h3 className="heading-sm mb-2">No Enrollments Yet</h3>
+          <p className="text-muted mb-4">Start by creating a new speaker enrollment session.</p>
           <button
             onClick={() => {
               const name = prompt('Enter speaker name:')
@@ -719,7 +719,7 @@ export default function Enrollment() {
                 createNewSession(name.trim())
               }
             }}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800"
           >
             Create First Enrollment
           </button>

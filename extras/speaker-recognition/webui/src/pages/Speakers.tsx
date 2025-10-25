@@ -253,10 +253,10 @@ export default function Speakers() {
   }, [importFile, importMergeStrategy, user, loadSpeakers])
 
   const getQualityColor = useCallback((quality: number) => {
-    if (quality >= 25) return 'text-green-600 bg-green-100'
-    if (quality >= 20) return 'text-blue-600 bg-blue-100'
-    if (quality >= 15) return 'text-yellow-600 bg-yellow-100'
-    return 'text-red-600 bg-red-100'
+    if (quality >= 25) return 'text-green-600 bg-green-100 dark:bg-green-900 dark:text-green-200'
+    if (quality >= 20) return 'text-blue-600 bg-blue-100 dark:bg-blue-900 dark:text-blue-200'
+    if (quality >= 15) return 'text-yellow-600 bg-yellow-100 dark:bg-yellow-900 dark:text-yellow-200'
+    return 'text-red-600 bg-red-100 dark:bg-red-900 dark:text-red-200'
   }, [])
 
   const getQualityLabel = useCallback((quality: number) => {
@@ -268,10 +268,10 @@ export default function Speakers() {
 
   const getStatusColor = useCallback((status: string) => {
     switch (status) {
-      case 'completed': return 'text-green-600 bg-green-100'
-      case 'pending': return 'text-yellow-600 bg-yellow-100'
-      case 'failed': return 'text-red-600 bg-red-100'
-      default: return 'text-gray-600 bg-gray-100'
+      case 'completed': return 'text-green-600 bg-green-100 dark:bg-green-900 dark:text-green-200'
+      case 'pending': return 'text-yellow-600 bg-yellow-100 dark:bg-yellow-900 dark:text-yellow-200'
+      case 'failed': return 'text-red-600 bg-red-100 dark:bg-red-900 dark:text-red-200'
+      default: return 'text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-200'
     }
   }, [])
 
@@ -286,7 +286,7 @@ export default function Speakers() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-500 dark:text-gray-400">Please select a user to continue.</p>
+        <p className="text-muted">Please select a user to continue.</p>
       </div>
     )
   }
@@ -294,7 +294,7 @@ export default function Speakers() {
   if (isLoading) {
     return (
       <div className="text-center py-12">
-        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 dark:border-blue-400"></div>
         <p className="mt-2 text-gray-600 dark:text-gray-300">Loading speakers...</p>
       </div>
     )
@@ -303,11 +303,11 @@ export default function Speakers() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">👥 Speaker Management</h1>
+        <h1 className="heading-lg">👥 Speaker Management</h1>
         <div className="flex space-x-2">
           <button
             onClick={exportAllSpeakers}
-            className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+            className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800"
             title="Export all speakers to JSON"
           >
             <Download className="h-4 w-4" />
@@ -315,7 +315,7 @@ export default function Speakers() {
           </button>
           <label
             htmlFor="import-file"
-            className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 cursor-pointer"
+            className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-800 cursor-pointer"
             title="Import speakers from JSON"
           >
             <Upload className="h-4 w-4" />
@@ -331,7 +331,7 @@ export default function Speakers() {
           />
           <button
             onClick={loadSpeakers}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800"
           >
             Refresh
           </button>
@@ -343,14 +343,14 @@ export default function Speakers() {
       </p>
 
       {/* Tab Navigation */}
-      <div className="border-b border-gray-200">
+      <div className="border-b border-gray-200 dark:border-gray-700">
         <nav className="-mb-px flex space-x-8">
           <button
             onClick={() => setActiveTab('speakers')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'speakers'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-blue-500 text-blue-600 dark:border-blue-400 dark:text-blue-400'
+                : 'border-transparent text-muted hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             👥 Speakers List
@@ -359,8 +359,8 @@ export default function Speakers() {
             onClick={() => setActiveTab('analysis')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'analysis'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-blue-500 text-blue-600 dark:border-blue-400 dark:text-blue-400'
+                : 'border-transparent text-muted hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             📊 Embedding Analysis
@@ -374,27 +374,27 @@ export default function Speakers() {
           {/* Statistics Cards */}
           {stats && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border rounded-lg p-4">
-            <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Speakers</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.total_speakers}</div>
+          <div className="p-4 card">
+            <div className="text-sm font-medium text-muted">Total Speakers</div>
+            <div className="heading-lg">{stats.total_speakers}</div>
           </div>
-          <div className="bg-white border rounded-lg p-4">
-            <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Audio Samples</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.total_audio_samples}</div>
+          <div className="p-4 card">
+            <div className="text-sm font-medium text-muted">Audio Samples</div>
+            <div className="heading-lg">{stats.total_audio_samples}</div>
           </div>
-          <div className="bg-white border rounded-lg p-4">
-            <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Duration</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{formatDuration(stats.total_duration)}</div>
+          <div className="p-4 card">
+            <div className="text-sm font-medium text-muted">Total Duration</div>
+            <div className="heading-lg">{formatDuration(stats.total_duration)}</div>
           </div>
-          <div className="bg-white border rounded-lg p-4">
-            <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Avg Quality</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.average_quality.toFixed(1)} dB</div>
+          <div className="p-4 card">
+            <div className="text-sm font-medium text-muted">Avg Quality</div>
+            <div className="heading-lg">{stats.average_quality.toFixed(1)} dB</div>
           </div>
         </div>
       )}
 
       {/* Filters and Search */}
-      <div className="bg-white border rounded-lg p-4">
+      <div className="bg-white border rounded-lg p-4 dark:bg-gray-800 dark:border-gray-700">
         <div className="grid md:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Search</label>
@@ -405,17 +405,17 @@ export default function Speakers() {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Search speakers..."
-                className="pl-10 w-full px-3 py-2 border border-gray-300 rounded-md"
+                className="pl-10 w-full px-3 py-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
               />
             </div>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
             >
               <option value="all">All Statuses</option>
               <option value="completed">Completed</option>
@@ -425,11 +425,11 @@ export default function Speakers() {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Sort By</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Sort By</label>
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
             >
               <option value="name">Name</option>
               <option value="created_at">Created Date</option>
@@ -440,11 +440,11 @@ export default function Speakers() {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Order</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Order</label>
             <select
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as any)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
             >
               <option value="asc">Ascending</option>
               <option value="desc">Descending</option>
@@ -455,47 +455,47 @@ export default function Speakers() {
 
       {/* Speakers List */}
       {filteredAndSortedSpeakers().length > 0 ? (
-        <div className="bg-white border rounded-lg overflow-hidden">
+        <div className="bg-white border rounded-lg overflow-hidden dark:bg-gray-800 dark:border-gray-700">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider">
                     Speaker
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider">
                     Status
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider">
                     Audio Count
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider">
                     Duration
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider">
                     Quality
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider">
                     Created
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-right text-xs font-medium text-muted uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {filteredAndSortedSpeakers().map((speaker) => (
-                  <tr key={speaker.id} className="hover:bg-gray-50">
+                  <tr key={speaker.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <div className="flex-shrink-0 h-10 w-10">
-                          <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                            <User className="h-5 w-5 text-blue-600" />
+                          <div className="h-10 w-10 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center">
+                            <User className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                           </div>
                         </div>
                         <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{speaker.name}</div>
-                          <div className="text-sm text-gray-500">ID: {speaker.id}</div>
+                          <div className="text-sm font-medium text-primary">{speaker.name}</div>
+                          <div className="text-sm text-muted">ID: {speaker.id}</div>
                         </div>
                       </div>
                     </td>
@@ -505,10 +505,10 @@ export default function Speakers() {
                         <span>{speaker.enrollment_status}</span>
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-primary">
                       {speaker.audio_sample_count || 0} samples
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-primary">
                       {speaker.total_audio_duration ? formatDuration(speaker.total_audio_duration) : 'N/A'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -517,31 +517,31 @@ export default function Speakers() {
                           {speaker.average_quality.toFixed(1)} dB ({getQualityLabel(speaker.average_quality)})
                         </span>
                       ) : (
-                        <span className="text-gray-500 text-xs">N/A</span>
+                        <span className="text-xs text-muted">N/A</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-muted">
                       {speaker.created_at ? new Date(speaker.created_at).toLocaleDateString() : 'N/A'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <div className="flex justify-end space-x-2">
                         <button
                           onClick={() => setSelectedSpeaker(speaker)}
-                          className="p-1 text-blue-600 hover:text-blue-800"
+                          className="p-1 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
                           title="View Details"
                         >
                           <Eye className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => exportSpeakerData(speaker)}
-                          className="p-1 text-green-600 hover:text-green-800"
+                          className="p-1 text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300"
                           title="Export Data"
                         >
                           <Download className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => setShowDeleteConfirm(speaker.id)}
-                          className="p-1 text-red-600 hover:text-red-800"
+                          className="p-1 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
                           title="Delete Speaker"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -556,9 +556,9 @@ export default function Speakers() {
         </div>
       ) : (
         <div className="text-center py-12">
-          <User className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No Speakers Found</h3>
-          <p className="text-gray-500">
+          <User className="h-16 w-16 text-gray-300 dark:text-gray-500 mx-auto mb-4" />
+          <h3 className="heading-sm mb-2">No Speakers Found</h3>
+          <p className="text-muted">
             {speakers.length === 0 
               ? "No speakers have been enrolled yet." 
               : "No speakers match your current filters."}
@@ -568,14 +568,14 @@ export default function Speakers() {
 
       {/* Speaker Details Modal */}
       {selectedSpeaker && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto">
-            <div className="p-6 border-b">
+        <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto dark:bg-gray-800">
+            <div className="p-6 border-b dark:border-gray-700">
               <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Speaker Details</h2>
+                <h2 className="text-xl font-semibold text-primary">Speaker Details</h2>
                 <button
                   onClick={() => setSelectedSpeaker(null)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
                 >
                   ×
                 </button>
@@ -584,41 +584,41 @@ export default function Speakers() {
             <div className="p-6 space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-500">Name</label>
-                  <p className="text-gray-900 dark:text-gray-100">{selectedSpeaker.name}</p>
+                  <label className="block text-sm font-medium text-muted">Name</label>
+                  <p className="text-primary">{selectedSpeaker.name}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-500">Status</label>
+                  <label className="block text-sm font-medium text-muted">Status</label>
                   <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(selectedSpeaker.enrollment_status)}`}>
                     {getStatusIcon(selectedSpeaker.enrollment_status)}
                     <span>{selectedSpeaker.enrollment_status}</span>
                   </span>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-500">Audio Samples</label>
-                  <p className="text-gray-900 dark:text-gray-100">{selectedSpeaker.audio_sample_count || 0}</p>
+                  <label className="block text-sm font-medium text-muted">Audio Samples</label>
+                  <p className="text-primary">{selectedSpeaker.audio_sample_count || 0}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-500">Total Duration</label>
-                  <p className="text-gray-900 dark:text-gray-100">{formatDuration(selectedSpeaker.total_audio_duration || 0)}</p>
+                  <label className="block text-sm font-medium text-muted">Total Duration</label>
+                  <p className="text-primary">{formatDuration(selectedSpeaker.total_audio_duration || 0)}</p>
+                </div>
+                    <div>
+                      <label className="block text-sm font-medium text-muted">Average Quality</label>
+                      {selectedSpeaker.average_quality ? <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(selectedSpeaker.average_quality)}`}>
+                        {selectedSpeaker.average_quality.toFixed(1)} dB ({getQualityLabel(selectedSpeaker.average_quality)})
+                      </span> : <span className="text-sm text-muted">N/A</span>}
+                    </div>
+                <div>
+                  <label className="block text-sm font-medium text-muted">Created</label>
+                  <p className="text-primary">{new Date(selectedSpeaker.created_at).toLocaleString()}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-500">Average Quality</label>
-                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(selectedSpeaker.average_quality)}`}>
-                    {selectedSpeaker.average_quality.toFixed(1)} dB ({getQualityLabel(selectedSpeaker.average_quality)})
-                  </span>
+                  <label className="block text-sm font-medium text-muted">Last Updated</label>
+                  <p className="text-primary">{new Date(selectedSpeaker.updated_at).toLocaleString()}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-500">Created</label>
-                  <p className="text-gray-900 dark:text-gray-100">{new Date(selectedSpeaker.created_at).toLocaleString()}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Last Updated</label>
-                  <p className="text-gray-900 dark:text-gray-100">{new Date(selectedSpeaker.updated_at).toLocaleString()}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Last Enrollment</label>
-                  <p className="text-gray-900 dark:text-gray-100">{new Date(selectedSpeaker.last_enrollment).toLocaleString()}</p>
+                  <label className="block text-sm font-medium text-muted">Last Enrollment</label>
+                  <p className="text-primary">{new Date(selectedSpeaker.last_enrollment).toLocaleString()}</p>
                 </div>
               </div>
             </div>
@@ -638,23 +638,23 @@ export default function Speakers() {
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-md w-full">
+        <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-md w-full dark:bg-gray-800">
             <div className="p-6">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Delete Speaker</h3>
-              <p className="text-gray-600 mb-6">
+              <h3 className="heading-sm mb-4">Delete Speaker</h3>
+              <p className="text-gray-600 dark:text-gray-300 mb-6">
                 Are you sure you want to delete this speaker? This action cannot be undone and will remove all associated audio data.
               </p>
               <div className="flex justify-end space-x-3">
                 <button
                   onClick={() => setShowDeleteConfirm(null)}
-                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => deleteSpeaker(showDeleteConfirm)}
-                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-800"
                 >
                   Delete
                 </button>
@@ -666,17 +666,17 @@ export default function Speakers() {
 
       {/* Import Dialog Modal */}
       {showImportDialog && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-lg w-full">
+        <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-lg w-full dark:bg-gray-800">
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Import Speakers</h3>
+                <h3 className="heading-sm">Import Speakers</h3>
                 <button
                   onClick={() => {
                     setShowImportDialog(false)
                     setImportFile(null)
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
                 >
                   ×
                 </button>
@@ -684,19 +684,19 @@ export default function Speakers() {
               
               {importFile && (
                 <div className="mb-6">
-                  <div className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg">
-                    <FileJson className="h-8 w-8 text-blue-600" />
+                  <div className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg dark:bg-gray-700">
+                    <FileJson className="h-8 w-8 text-blue-600 dark:text-blue-400" />
                     <div>
-                      <p className="font-medium text-gray-900 dark:text-gray-100">{importFile.name}</p>
-                      <p className="text-sm text-gray-500">{(importFile.size / 1024).toFixed(1)} KB</p>
+                      <p className="font-medium text-primary">{importFile.name}</p>
+                      <p className="text-sm text-muted">{(importFile.size / 1024).toFixed(1)} KB</p>
                     </div>
                   </div>
                 </div>
               )}
 
               <div className="mb-6">
-                <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Conflict Resolution</h4>
-                <p className="text-sm text-gray-600 mb-3">
+                <h4 className="text-sm font-medium text-primary mb-3">Conflict Resolution</h4>
+                <p className="text-sm text-secondary mb-3">
                   How should existing speakers be handled?
                 </p>
                 <div className="space-y-2">
@@ -733,7 +733,7 @@ export default function Speakers() {
                     setShowImportDialog(false)
                     setImportFile(null)
                   }}
-                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
                   disabled={importLoading}
                 >
                   Cancel

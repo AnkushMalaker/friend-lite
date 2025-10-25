@@ -182,7 +182,7 @@ export default function AudioViewer() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-500 dark:text-gray-400">Please select a user to continue.</p>
+        <p className="text-muted">Please select a user to continue.</p>
       </div>
     )
   }
@@ -190,19 +190,19 @@ export default function AudioViewer() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎵 Audio Viewer</h1>
+        <h1 className="heading-lg">🎵 Audio Viewer</h1>
         {audioData && (
           <div className="flex space-x-2">
             <button
               onClick={() => togglePlayback()}
-              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800"
             >
               {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
               <span>{isPlaying ? 'Stop' : 'Play All'}</span>
             </button>
             <button
               onClick={exportFullAudio}
-              className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+              className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800"
             >
               <Download className="h-4 w-4" />
               <span>Export</span>
@@ -211,12 +211,12 @@ export default function AudioViewer() {
         )}
       </div>
 
-      <p className="text-gray-600 dark:text-gray-300">
+      <p className="text-secondary">
         Upload and explore audio files with interactive visualization and segment selection.
       </p>
 
       {/* File Upload */}
-      <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+      <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 dark:border-gray-600">
         <FileUploader
           onUpload={handleFileUpload}
           accept=".wav,.flac,.mp3,.m4a,.ogg"
@@ -225,8 +225,8 @@ export default function AudioViewer() {
         />
         {isLoading && (
           <div className="text-center mt-4">
-            <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Processing audio file...</p>
+            <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 dark:border-blue-400"></div>
+            <p className="mt-2 text-sm text-secondary">Processing audio file...</p>
           </div>
         )}
       </div>
@@ -235,27 +235,27 @@ export default function AudioViewer() {
         <>
           {/* Audio Information */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Duration</div>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <div className="card-secondary p-4">
+              <div className="text-sm font-medium text-muted">Duration</div>
+              <div className="heading-lg">
                 {formatDuration(audioData.buffer.duration)}
               </div>
             </div>
-            <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Sample Rate</div>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <div className="card-secondary p-4">
+              <div className="text-sm font-medium text-muted">Sample Rate</div>
+              <div className="heading-lg">
                 {(audioData.buffer.sampleRate / 1000).toFixed(1)} kHz
               </div>
             </div>
-            <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Channels</div>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <div className="card-secondary p-4">
+              <div className="text-sm font-medium text-muted">Channels</div>
+              <div className="heading-lg">
                 {audioData.buffer.numberOfChannels}
               </div>
             </div>
-            <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-sm font-medium text-gray-500 dark:text-gray-400">SNR</div>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <div className="card-secondary p-4">
+              <div className="text-sm font-medium text-muted">SNR</div>
+              <div className="heading-lg">
                 {audioData.snr.toFixed(1)} dB
               </div>
             </div>
@@ -264,15 +264,15 @@ export default function AudioViewer() {
           {/* Waveform Visualization */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Waveform</h3>
+              <h3 className="heading-sm">Waveform</h3>
               <label className="flex items-center space-x-2">
                 <input
                   type="checkbox"
                   checked={showSpectrogram}
                   onChange={(e) => setShowSpectrogram(e.target.checked)}
-                  className="rounded border-gray-300"
+                  className="rounded border-gray-300 dark:border-gray-600"
                 />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Show Spectrogram</span>
+                <span className="text-sm input-label">Show Spectrogram</span>
               </label>
             </div>
             
@@ -287,9 +287,9 @@ export default function AudioViewer() {
           </div>
 
           {/* Click Instructions */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <h4 className="font-medium text-blue-800 mb-2">Interactive Playback</h4>
-            <p className="text-sm text-blue-700">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 dark:bg-blue-900 dark:border-blue-800">
+            <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">Interactive Playback</h4>
+            <p className="text-sm text-blue-700 dark:text-blue-300">
               Click anywhere on the waveform to play from that position. Click the "Play All" button to play from the beginning.
             </p>
           </div>

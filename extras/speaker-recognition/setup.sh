@@ -141,6 +141,20 @@ if [ -n "$DEEPGRAM_API_KEY" ]; then
     echo "✅ Deepgram API key configured from command line"
 fi
 
+# Determine WEB_UI_PORT and HTTPS setting
+if [ "$HTTPS_MODE" = "https" ]; then
+    WEB_UI_PORT=5175
+    REACT_UI_HTTPS=true
+else
+    WEB_UI_PORT=5174
+    REACT_UI_HTTPS=false
+fi
+
+# Update .env file
+sed -i "s|REACT_UI_HTTPS=.*|REACT_UI_HTTPS=$REACT_UI_HTTPS|" .env
+sed -i "s|REACT_UI_PORT=.*|REACT_UI_PORT=$WEB_UI_PORT|" .env
+
+# Generate SSL certificates (only for HTTPS mode)
 if [ "$HTTPS_MODE" = "https" ]; then
     # Get SERVER_IP if not already set (from command line)
     if [ -z "$SERVER_IP" ]; then
@@ -152,11 +166,6 @@ if [ "$HTTPS_MODE" = "https" ]; then
         SERVER_IP=${SERVER_IP:-localhost}
     fi
     
-    # Update .env for HTTPS mode
-    sed -i "s|REACT_UI_HTTPS=.*|REACT_UI_HTTPS=true|" .env
-    sed -i "s|REACT_UI_PORT=.*|REACT_UI_PORT=5175|" .env
-    
-    # Generate SSL certificates
     echo ""
     echo "📄 Generating SSL certificates..."
     if [ -f "ssl/generate-ssl.sh" ]; then
@@ -165,16 +174,20 @@ if [ "$HTTPS_MODE" = "https" ]; then
     else
         echo "⚠️  ssl/generate-ssl.sh not found, SSL setup skipped"
     fi
-    
-    # Create nginx.conf from template
-    echo "📄 Creating nginx configuration..."
-    if [ -f "nginx.conf.template" ]; then
-        sed "s/TAILSCALE_IP/$SERVER_IP/g" nginx.conf.template > nginx.conf
-        echo "✅ nginx.conf created for: $SERVER_IP"
-    else
-        echo "⚠️  nginx.conf.template not found, nginx config skipped"
-    fi
-    
+fi
+
+# Create nginx.conf from template
+echo "📄 Creating nginx configuration..."
+if [ -f "nginx.conf.template" ]; then
+    # Use SERVER_IP if set, otherwise default to localhost for nginx.conf generation
+    NGINX_SERVER_IP=${SERVER_IP:-localhost}
+    sed "s/TAILSCALE_IP/$NGINX_SERVER_IP/g" nginx.conf.template | sed "s/WEB_UI_PORT_PLACEHOLDER/$WEB_UI_PORT/g" > nginx.conf
+    echo "✅ nginx.conf created for: $NGINX_SERVER_IP"
+else
+    echo "⚠️  nginx.conf.template not found, nginx config skipped"
+fi
+
+if [ "$HTTPS_MODE" = "https" ]; then
     echo ""
     echo "✅ Speaker Recognition configured (HTTPS mode)!"
     echo "📁 Configuration saved to .env"
@@ -186,16 +199,12 @@ if [ "$HTTPS_MODE" = "https" ]; then
     echo "📱 Service API: https://localhost:8444/api/"
     echo "💡 Accept SSL certificate in browser"
 else
-    # HTTP Configuration
-    sed -i "s|REACT_UI_HTTPS=.*|REACT_UI_HTTPS=false|" .env
-    sed -i "s|REACT_UI_PORT=.*|REACT_UI_PORT=5174|" .env
-    
     echo ""
     echo "✅ Speaker Recognition configured (HTTP mode)!"
     echo "📁 Configuration saved to .env"
     echo ""
     echo "🚀 To start: docker compose up --build -d speaker-service web-ui"
     echo "📱 Service API: http://localhost:8085"
-    echo "📱 Web Interface: http://localhost:5174"
+    echo "📱 Web Interface: http://localhost:$WEB_UI_PORT"
     echo "⚠️  Note: Microphone access may not work over HTTP on remote connections"
 fi

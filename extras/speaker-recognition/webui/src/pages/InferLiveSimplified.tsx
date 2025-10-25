@@ -204,13 +204,13 @@ export default function InferLiveSimplified() {
   const getConnectionStatusIcon = () => {
     switch (speakerWS.connectionStatus) {
       case 'connected':
-        return <Wifi className="h-4 w-4 text-green-600" />
+        return <Wifi className="h-4 w-4 text-green-600 dark:text-green-400" />
       case 'connecting':
-        return <Wifi className="h-4 w-4 text-yellow-600 animate-pulse" />
+        return <Wifi className="h-4 w-4 text-yellow-600 dark:text-yellow-400 animate-pulse" />
       case 'error':
-        return <WifiOff className="h-4 w-4 text-red-600" />
+        return <WifiOff className="h-4 w-4 text-red-600 dark:text-red-400" />
       default:
-        return <WifiOff className="h-4 w-4 text-gray-400" />
+        return <WifiOff className="h-4 w-4 text-gray-400 dark:text-gray-500" />
     }
   }
 
@@ -230,9 +230,9 @@ export default function InferLiveSimplified() {
   if (!user) {
     return (
       <div className="text-center py-12">
-        <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">User Required</h3>
-        <p className="text-gray-500">Please select a user to access live inference.</p>
+        <Users className="h-16 w-16 text-muted mx-auto mb-4" />
+        <h3 className="heading-sm mb-2">User Required</h3>
+        <p className="text-muted">Please select a user to access live inference.</p>
       </div>
     )
   }
@@ -242,9 +242,9 @@ export default function InferLiveSimplified() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Live Inference</h1>
-          <p className="text-gray-600">Real-time transcription with server-side processing</p>
-          <p className="text-sm text-gray-500">Server handles audio processing, VAD, and speaker identification</p>
+          <h1 className="heading-lg">🎙️ Live Inference</h1>
+          <p className="text-secondary">Real-time transcription with server-side processing</p>
+          <p className="text-sm text-muted">Server handles audio processing, VAD, and speaker identification</p>
         </div>
       </div>
 
@@ -264,19 +264,19 @@ export default function InferLiveSimplified() {
       />
 
       {/* Connection Status */}
-      <div className="bg-white border rounded-lg p-4">
+      <div className="card p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2">
               {getConnectionStatusIcon()}
-              <span className="text-sm text-gray-900 dark:text-gray-100">
+              <span className="text-sm text-primary">
                 Status: {getConnectionStatusText()}
               </span>
             </div>
             {speakerWS.isStreaming && (
               <div className="flex items-center space-x-2">
                 <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
-                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Recording</span>
+                <span className="text-sm font-medium text-primary">Recording</span>
               </div>
             )}
           </div>
@@ -285,31 +285,31 @@ export default function InferLiveSimplified() {
 
       {/* Session Stats */}
       {speakerWS.isStreaming && (
-        <div className="bg-white border rounded-lg p-4">
+        <div className="card p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-6">
               <div className="flex items-center space-x-2">
-                <Clock className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900 dark:text-gray-100">
+                <Clock className="h-4 w-4 text-muted" />
+                <span className="text-sm text-primary">
                   {formatDuration(speakerWS.stats.sessionDuration)}
                 </span>
               </div>
               <div className="flex items-center space-x-2">
-                <Volume2 className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900 dark:text-gray-100">
+                <Volume2 className="h-4 w-4 text-muted" />
+                <span className="text-sm text-primary">
                   {speakerWS.stats.totalSegments} segments
                 </span>
               </div>
               <div className="flex items-center space-x-2">
-                <Users className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-900 dark:text-gray-100">
+                <Users className="h-4 w-4 text-muted" />
+                <span className="text-sm text-primary">
                   {speakerWS.stats.identifiedSpeakers.size} speakers
                 </span>
               </div>
               {speakerWS.stats.averageConfidence > 0 && (
                 <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Avg Confidence:</span>
-                  <span className="text-sm text-gray-900 dark:text-gray-100">
+                  <span className="text-sm text-muted">Avg Confidence:</span>
+                  <span className="text-sm text-primary">
                     {(speakerWS.stats.averageConfidence * 100).toFixed(1)}%
                   </span>
                 </div>
@@ -326,8 +326,8 @@ export default function InferLiveSimplified() {
           disabled={!deepgramSession.deepgramApiKey || speakerWS.connectionStatus === 'connecting'}
           className={`flex items-center space-x-2 px-8 py-4 rounded-lg font-medium text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
             speakerWS.isStreaming
-              ? 'bg-red-600 text-white hover:bg-red-700'
-              : 'bg-blue-600 text-white hover:bg-blue-700'
+              ? 'bg-red-600 text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-800'
+              : 'bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800'
           }`}
         >
           <Mic className="h-6 w-6" />
@@ -341,48 +341,48 @@ export default function InferLiveSimplified() {
       </div>
 
       {/* Live Results */}
-      <div className="bg-white border rounded-lg">
-        <div className="p-4 border-b">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Live Transcription</h3>
-          <p className="text-sm text-gray-500">Utterance boundaries detected using server-side VAD processing</p>
+      <div className="card">
+        <div className="p-4 border-b dark:border-gray-700">
+          <h3 className="heading-sm">Live Transcription</h3>
+          <p className="text-sm text-muted">Utterance boundaries detected using server-side VAD processing</p>
         </div>
         <div className="p-4 space-y-4 max-h-96 overflow-y-auto">
           {speakerWS.transcriptSegments.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-muted">
               {speakerWS.isStreaming ? 'Listening for speech...' : 'Start streaming to see transcription results'}
             </div>
           ) : (
             speakerWS.transcriptSegments.map((segment) => (
               <div key={segment.id} className={`border-l-4 pl-4 ${
-                segment.status === 'interim' ? 'border-yellow-400 opacity-70' : 'border-blue-500'
+                segment.status === 'interim' ? 'border-yellow-400 opacity-70 dark:border-yellow-500' : 'border-blue-500 dark:border-blue-400'
               }`}>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <div className="flex items-center space-x-2 text-sm text-gray-500 mb-1">
+                    <div className="text-sm text-muted mb-1">
                       <span>
                         {segment.speaker_name || 'Unknown Speaker'}
                       </span>
                       {segment.status === 'interim' && (
-                        <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full animate-pulse">
+                        <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full dark:bg-yellow-900 dark:text-yellow-200 animate-pulse">
                           Speaking...
                         </span>
                       )}
                       {segment.status === 'identified' && segment.confidence > 0 && (
-                        <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                        <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full dark:bg-green-900 dark:text-green-200">
                           {(segment.confidence * 100).toFixed(1)}%
                         </span>
                       )}
                       {segment.duration > 0 && (
-                        <span className="text-xs text-gray-400">
+                        <span className="text-xs text-muted">
                           {segment.duration.toFixed(1)}s
                         </span>
                       )}
                     </div>
-                    <p className={`${segment.status === 'interim' ? 'text-gray-600 italic' : 'text-gray-900'} dark:text-gray-100`}>
+                    <p className={`${segment.status === 'interim' ? 'text-secondary italic' : 'text-primary'}`}>
                       {segment.text}
                     </p>
                   </div>
-                  <div className="text-xs text-gray-400 ml-4">
+                  <div className="text-xs text-muted ml-4">
                     {new Date(segment.timestamp).toLocaleTimeString()}
                   </div>
                 </div>
@@ -397,7 +397,7 @@ export default function InferLiveSimplified() {
         <div className="flex justify-center">
           <button
             onClick={speakerWS.clearTranscripts}
-            className="px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            className="px-4 py-2 border rounded-md transition-colors text-secondary hover-bg"
           >
             Clear Transcripts
           </button>
