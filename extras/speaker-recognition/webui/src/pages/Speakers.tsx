@@ -602,12 +602,12 @@ export default function Speakers() {
                   <label className="block text-sm font-medium text-muted">Total Duration</label>
                   <p className="text-primary">{formatDuration(selectedSpeaker.total_audio_duration || 0)}</p>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-muted">Average Quality</label>
-                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(selectedSpeaker.average_quality)}`}>
-                    {selectedSpeaker.average_quality.toFixed(1)} dB ({getQualityLabel(selectedSpeaker.average_quality)})
-                  </span>
-                </div>
+                    <div>
+                      <label className="block text-sm font-medium text-muted">Average Quality</label>
+                      {selectedSpeaker.average_quality ? <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getQualityColor(selectedSpeaker.average_quality)}`}>
+                        {selectedSpeaker.average_quality.toFixed(1)} dB ({getQualityLabel(selectedSpeaker.average_quality)})
+                      </span> : <span className="text-sm text-muted">N/A</span>}
+                    </div>
                 <div>
                   <label className="block text-sm font-medium text-muted">Created</label>
                   <p className="text-primary">{new Date(selectedSpeaker.created_at).toLocaleString()}</p>
