@@ -434,6 +434,60 @@ class FriendLiteSetup:
 
         self.console.print("[green][SUCCESS][/green] .env file configured successfully with secure permissions")
 
+    def setup_test_environment(self):
+        """Optionally create .env.test for integration testing"""
+        self.console.print()
+        self.console.print("[cyan]─[/cyan]" * 60)
+        self.console.print()
+        self.console.print("[bold cyan]Test Environment Setup[/bold cyan]")
+        self.console.print()
+        self.console.print("The integration tests require a .env.test file with test-specific credentials.")
+        self.console.print("This will:")
+        self.console.print("  • Copy your .env to .env.test")
+        self.console.print("  • Use test credentials (AUTH_SECRET_KEY, ADMIN_PASSWORD, ADMIN_EMAIL)")
+        self.console.print("  • Preserve your API keys (DEEPGRAM_API_KEY, OPENAI_API_KEY, etc.)")
+        self.console.print()
+        self.console.print("[dim]You can run 'uv run --with-requirements setup-requirements.txt python setup_test_env.py' later[/dim]")
+        self.console.print()
+
+        try:
+            setup_test_env = Confirm.ask("Setup test environment (.env.test)?", default=False)
+        except EOFError:
+            self.console.print("Using default: No")
+            setup_test_env = False
+
+        if setup_test_env:
+            try:
+                self.console.print()
+                self.console.print("[blue][INFO][/blue] Running test environment setup...")
+
+                # Run the setup_test_env.py script
+                result = subprocess.run(
+                    ["uv", "run", "--with-requirements", "setup-requirements.txt",
+                     "python", "setup_test_env.py"],
+                    cwd=".",
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                if result.returncode == 0:
+                    self.console.print("[green][SUCCESS][/green] Test environment setup complete!")
+                    self.console.print()
+                    self.console.print("📋 You can now run integration tests with:")
+                    self.console.print("   [cyan]./run-test.sh[/cyan]")
+                else:
+                    self.console.print(f"[yellow][WARNING][/yellow] Test environment setup failed: {result.stderr}")
+                    self.console.print("You can manually run: [cyan]uv run --with-requirements setup-requirements.txt python setup_test_env.py[/cyan]")
+            except subprocess.TimeoutExpired:
+                self.console.print("[yellow][WARNING][/yellow] Test environment setup timed out")
+                self.console.print("You can manually run: [cyan]uv run --with-requirements setup-requirements.txt python setup_test_env.py[/cyan]")
+            except Exception as e:
+                self.console.print(f"[yellow][WARNING][/yellow] Could not setup test environment: {e}")
+                self.console.print("You can manually run: [cyan]uv run --with-requirements setup-requirements.txt python setup_test_env.py[/cyan]")
+        else:
+            self.console.print("[dim]Skipped test environment setup[/dim]")
+
     def copy_config_templates(self):
         """Copy other configuration files"""
         if not Path("memory_config.yaml").exists() and Path("memory_config.yaml.template").exists():
@@ -523,6 +577,7 @@ class FriendLiteSetup:
             # Generate files
             self.print_header("Configuration Complete!")
             self.generate_env_file()
+            self.setup_test_environment()
             self.copy_config_templates()
 
             # Show results
