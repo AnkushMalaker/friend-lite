@@ -548,7 +548,7 @@ export default function Enrollment() {
           {/* Recording Section */}
           <div className="grid md:grid-cols-2 gap-6 mb-6">
             <div className="border rounded-lg p-4">
-              <h3 className="text-lg font-medium mb-4">🎤 Record Audio</h3>
+              <h3 className="text-lg font-medium mb-4 text-gray-900 dark:text-gray-100">🎤 Record Audio</h3>
               <div className="text-center space-y-4">
                 {!isRecording ? (
                   <button
@@ -586,7 +586,7 @@ export default function Enrollment() {
 
             {/* File Upload Section */}
             <div className="border rounded-lg p-4">
-              <h3 className="text-lg font-medium mb-4">📁 Upload Audio</h3>
+              <h3 className="text-lg font-medium mb-4 text-gray-900 dark:text-gray-100">📁 Upload Audio</h3>
               <FileUploader
                 onUpload={handleFileUpload}
                 accept=".wav"
@@ -599,7 +599,7 @@ export default function Enrollment() {
           {currentSession.audioFiles.length > 0 && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-medium">Audio Samples</h3>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Audio Samples</h3>
                 <span className="text-sm text-green-600 bg-green-100 px-2 py-1 rounded-full">
                   💾 Files will be saved during enrollment
                 </span>
@@ -652,7 +652,7 @@ export default function Enrollment() {
 
           {/* Quality Guidelines */}
           <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h4 className="font-medium text-blue-800 mb-2">Quality Guidelines</h4>
+            <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">Quality Guidelines</h4>
             <ul className="text-sm text-blue-700 space-y-1">
               <li>• Excellent: 60+ seconds, 5+ samples, 30+ dB SNR</li>
               <li>• Good: 30+ seconds, 3+ samples, 20+ dB SNR</li>
@@ -667,7 +667,7 @@ export default function Enrollment() {
       {/* Previous Sessions */}
       {sessions.length > 0 && !currentSession && (
         <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Previous Enrollments</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-50">Previous Enrollments</h2>
           <div className="space-y-3">
             {sessions.map((session) => (
               <div
@@ -675,7 +675,7 @@ export default function Enrollment() {
                 className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
               >
                 <div>
-                  <p className="font-medium text-gray-900 dark:text-gray-100">{session.speakerName}</p>
+                  <p className="font-medium text-gray-900 dark:text-gray-50">{session.speakerName}</p>
                   <div className="flex items-center space-x-3 text-sm text-gray-500 dark:text-gray-400">
                     <span>{session.audioFiles.length} samples</span>
                     <span>{formatDuration(session.totalDuration)}</span>

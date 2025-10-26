@@ -98,7 +98,7 @@ export default function Inference() {
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">🎯 Speaker Inference</h1>
-        <p className="text-gray-600 mt-2">
+        <p className="text-gray-600 dark:text-gray-300 mt-2">
           Upload audio files or record live audio for speaker identification and transcription
         </p>
       </div>
@@ -108,7 +108,7 @@ export default function Inference() {
         {/* File Upload */}
         <div className="border rounded-lg p-6">
           <div className="flex items-center space-x-2 mb-4">
-            <Upload className="h-5 w-5 text-gray-600" />
+            <Upload className="h-5 w-5 text-gray-600 dark:text-gray-400" />
             <h4 className="font-medium text-gray-900 dark:text-gray-100">Upload Audio File</h4>
           </div>
           <FileUploader
@@ -132,7 +132,7 @@ export default function Inference() {
 
       {/* Audio Visualization */}
       {audioForProcessing && (
-        <div className="bg-white border rounded-lg p-6">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
           <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-4">🎵 {audioForProcessing.filename}</h4>
           
           {/* Audio Info */}
@@ -166,7 +166,7 @@ export default function Inference() {
           {audioForProcessing.quality && (
             <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">Audio Quality:</span>
+                <span className="text-gray-600 dark:text-gray-300">Audio Quality:</span>
                 <span className={`font-medium ${
                   audioForProcessing.quality.level === 'excellent' ? 'text-green-600' :
                   audioForProcessing.quality.level === 'good' ? 'text-blue-600' :
@@ -286,7 +286,7 @@ export default function Inference() {
             showExport={true}
             showStats={true}
             onExport={speakerProcessing.exportResult}
-            className="bg-white border rounded-lg p-6"
+            className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6"
           />
         )}
 

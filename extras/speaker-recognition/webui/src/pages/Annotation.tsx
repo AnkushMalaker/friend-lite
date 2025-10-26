@@ -788,7 +788,7 @@ export default function Annotation() {
       {/* File Upload */}
       <div className="grid md:grid-cols-2 gap-6">
         <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6">
-          <h3 className="text-lg font-medium mb-4">📁 Upload Audio File</h3>
+          <h3 className="text-lg font-medium mb-4 text-gray-900 dark:text-gray-100">📁 Upload Audio File</h3>
           <FileUploader
             onUpload={handleFileUpload}
             accept=".wav,.flac,.mp3,.m4a,.ogg"
@@ -799,7 +799,7 @@ export default function Annotation() {
 
         {/* Import JSON */}
         <div className="border-2 border-dashed border-blue-300 dark:border-blue-600 rounded-lg p-6">
-          <h3 className="text-lg font-medium mb-4">📄 Import Deepgram JSON</h3>
+          <h3 className="text-lg font-medium mb-4 text-gray-900 dark:text-gray-100">📄 Import Deepgram JSON</h3>
           <FileUploader
             onUpload={handleDeepgramUpload}
             accept=".json"
@@ -815,7 +815,7 @@ export default function Annotation() {
 
       {/* Processing Mode Selector - Full Width Section */}
       <div className="border-2 border-dashed border-green-300 dark:border-green-600 rounded-lg p-6">
-        <h3 className="text-xl font-medium mb-4 text-gray-900 dark:text-gray-100">🎯 Speaker Processing Modes</h3>
+        <h3 className="text-xl font-medium mb-4 text-gray-900 dark:text-gray-50">🎯 Speaker Processing Modes</h3>
         
         {audioData ? (
           <ProcessingModeSelector
@@ -857,7 +857,7 @@ export default function Annotation() {
       {isLoading && (
         <div className="text-center py-8">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <p className="mt-2 text-gray-600">Processing audio file...</p>
+          <p className="mt-2 text-gray-600 dark:text-gray-300">Processing audio file...</p>
         </div>
       )}
 
@@ -865,7 +865,7 @@ export default function Annotation() {
         <>
           {/* Audio Information */}
           <div className="card-secondary p-4">
-            <h3 className="text-lg font-medium mb-2">🎵 {audioData.file.name}</h3>
+            <h3 className="text-lg font-medium mb-2 text-gray-900 dark:text-gray-100">🎵 {audioData.file.name}</h3>
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>Duration: {formatDuration(audioData.buffer.duration * 1000)}</div>
               <div>Sample Rate: {(audioData.buffer.sampleRate / 1000).toFixed(1)} kHz</div>
@@ -876,7 +876,7 @@ export default function Annotation() {
           {/* Waveform with segments */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium">📊 Timeline</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">📊 Timeline</h3>
               <button
                 onClick={addManualSegment}
                 className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
@@ -908,7 +908,7 @@ export default function Annotation() {
 
           {/* Segments List */}
           <div className="space-y-4">
-            <h3 className="text-lg font-medium">🗣️ Speaker Segments</h3>
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">🗣️ Speaker Segments</h3>
             
             {/* Filter Controls */}
             {segments.length > 0 && (
@@ -920,7 +920,7 @@ export default function Annotation() {
                     className="flex items-center space-x-2 px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
                   >
                     <Filter className="h-4 w-4" />
-                    <span className="text-sm">Filter Speakers</span>
+                    <span className="text-sm text-gray-900 dark:text-gray-100">Filter Speakers</span>
                     {selectedSpeakers.size > 0 && (
                       <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
                         {selectedSpeakers.size}
@@ -957,7 +957,7 @@ export default function Annotation() {
                               className="rounded"
                             />
                             <span className="text-sm">{speaker}</span>
-                            <span className="text-xs text-gray-500">({count})</span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400">({count})</span>
                           </label>
                         ))}
                       </div>
@@ -976,7 +976,7 @@ export default function Annotation() {
                             e.stopPropagation()
                             clearAllSpeakers()
                           }}
-                          className="flex-1 px-2 py-1 text-xs bg-gray-100 text-gray-800 rounded hover:bg-gray-200"
+                          className="flex-1 px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
                         >
                           Clear All
                         </button>
@@ -1061,7 +1061,7 @@ export default function Annotation() {
                     step="0.1"
                     min={minDuration}
                   />
-                  <span className="text-sm text-gray-500">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
                     ({filteredSegments.length} segments)
                   </span>
                 </div>
@@ -1154,7 +1154,7 @@ export default function Annotation() {
                         }`}>
                           {speakerLabel}
                         </span>
-                        <span className="text-sm text-gray-600">
+                        <span className="text-sm text-gray-600 dark:text-gray-300">
                           {speakerSegments.length} segments • {formatDuration(totalDuration * 1000)}
                         </span>
                       </div>
@@ -1251,7 +1251,7 @@ export default function Annotation() {
                 <h4 className="font-medium text-primary">🔍 Debug Output</h4>
                 <button
                   onClick={() => setShowJsonOutput(!showJsonOutput)}
-                  className="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+                  className="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
                 >
                   <span>{showJsonOutput ? 'Hide' : 'Show'} JSON</span>
                 </button>

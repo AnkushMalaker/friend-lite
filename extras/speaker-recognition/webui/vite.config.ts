@@ -16,6 +16,24 @@ export default defineConfig({
           '127.0.0.1',
           '.nip.io'
         ],
+    proxy: {
+      '/api': {
+        target: `http://${process.env.SPEAKER_SERVICE_HOST || 'localhost'}:${process.env.SPEAKER_SERVICE_PORT || '8085'}`,
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/ws': {
+        target: `ws://${process.env.SPEAKER_SERVICE_HOST || 'localhost'}:${process.env.SPEAKER_SERVICE_PORT || '8085'}`,
+        ws: true,
+        changeOrigin: true,
+      },
+      '/v1': {
+        target: `http://${process.env.SPEAKER_SERVICE_HOST || 'localhost'}:${process.env.SPEAKER_SERVICE_PORT || '8085'}`,
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
   define: {
     global: 'globalThis',

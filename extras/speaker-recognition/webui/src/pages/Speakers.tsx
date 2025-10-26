@@ -374,19 +374,19 @@ export default function Speakers() {
           {/* Statistics Cards */}
           {stats && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border rounded-lg p-4">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
             <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Speakers</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.total_speakers}</div>
           </div>
-          <div className="bg-white border rounded-lg p-4">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
             <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Audio Samples</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.total_audio_samples}</div>
           </div>
-          <div className="bg-white border rounded-lg p-4">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
             <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Duration</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{formatDuration(stats.total_duration)}</div>
           </div>
-          <div className="bg-white border rounded-lg p-4">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
             <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Avg Quality</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats.average_quality.toFixed(1)} dB</div>
           </div>
@@ -394,7 +394,7 @@ export default function Speakers() {
       )}
 
       {/* Filters and Search */}
-      <div className="bg-white border rounded-lg p-4">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
         <div className="grid md:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Search</label>
@@ -405,17 +405,17 @@ export default function Speakers() {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Search speakers..."
-                className="pl-10 w-full px-3 py-2 border border-gray-300 rounded-md"
+                className="pl-10 w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
               />
             </div>
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
             >
               <option value="all">All Statuses</option>
               <option value="completed">Completed</option>
@@ -425,11 +425,11 @@ export default function Speakers() {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Sort By</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Sort By</label>
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
             >
               <option value="name">Name</option>
               <option value="created_at">Created Date</option>
@@ -440,11 +440,11 @@ export default function Speakers() {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Order</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Order</label>
             <select
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as any)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
             >
               <option value="asc">Ascending</option>
               <option value="desc">Descending</option>
@@ -455,7 +455,7 @@ export default function Speakers() {
 
       {/* Speakers List */}
       {filteredAndSortedSpeakers().length > 0 ? (
-        <div className="bg-white border rounded-lg overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50 dark:bg-gray-700">
@@ -483,7 +483,7 @@ export default function Speakers() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {filteredAndSortedSpeakers().map((speaker) => (
                   <tr key={speaker.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -569,7 +569,7 @@ export default function Speakers() {
       {/* Speaker Details Modal */}
       {selectedSpeaker && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto">
             <div className="p-6 border-b">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Speaker Details</h2>
@@ -639,7 +639,7 @@ export default function Speakers() {
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-md w-full">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full">
             <div className="p-6">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Delete Speaker</h3>
               <p className="text-gray-600 mb-6">
@@ -667,7 +667,7 @@ export default function Speakers() {
       {/* Import Dialog Modal */}
       {showImportDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-lg w-full">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-lg w-full">
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Import Speakers</h3>

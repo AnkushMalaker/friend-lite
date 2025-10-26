@@ -232,7 +232,7 @@ export default function InferLiveSimplified() {
       <div className="text-center py-12">
         <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
         <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">User Required</h3>
-        <p className="text-gray-500">Please select a user to access live inference.</p>
+        <p className="text-gray-500 dark:text-gray-400">Please select a user to access live inference.</p>
       </div>
     )
   }
@@ -243,8 +243,8 @@ export default function InferLiveSimplified() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">🎙️ Live Inference</h1>
-          <p className="text-gray-600">Real-time transcription with server-side processing</p>
-          <p className="text-sm text-gray-500">Server handles audio processing, VAD, and speaker identification</p>
+          <p className="text-gray-600 dark:text-gray-300">Real-time transcription with server-side processing</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Server handles audio processing, VAD, and speaker identification</p>
         </div>
       </div>
 
@@ -264,7 +264,7 @@ export default function InferLiveSimplified() {
       />
 
       {/* Connection Status */}
-      <div className="bg-white border rounded-lg p-4">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2">
@@ -285,7 +285,7 @@ export default function InferLiveSimplified() {
 
       {/* Session Stats */}
       {speakerWS.isStreaming && (
-        <div className="bg-white border rounded-lg p-4">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-6">
               <div className="flex items-center space-x-2">
@@ -308,7 +308,7 @@ export default function InferLiveSimplified() {
               </div>
               {speakerWS.stats.averageConfidence > 0 && (
                 <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Avg Confidence:</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Avg Confidence:</span>
                   <span className="text-sm text-gray-900 dark:text-gray-100">
                     {(speakerWS.stats.averageConfidence * 100).toFixed(1)}%
                   </span>
@@ -341,10 +341,10 @@ export default function InferLiveSimplified() {
       </div>
 
       {/* Live Results */}
-      <div className="bg-white border rounded-lg">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
         <div className="p-4 border-b">
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Live Transcription</h3>
-          <p className="text-sm text-gray-500">Utterance boundaries detected using server-side VAD processing</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Utterance boundaries detected using server-side VAD processing</p>
         </div>
         <div className="p-4 space-y-4 max-h-96 overflow-y-auto">
           {speakerWS.transcriptSegments.length === 0 ? (
@@ -397,7 +397,7 @@ export default function InferLiveSimplified() {
         <div className="flex justify-center">
           <button
             onClick={speakerWS.clearTranscripts}
-            className="px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            className="px-4 py-2 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             Clear Transcripts
           </button>
