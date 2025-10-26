@@ -12,6 +12,7 @@ memory_logger = logging.getLogger("memory_service")
 class LLMProvider(Enum):
     """Supported LLM providers."""
     OPENAI = "openai"
+    OLLAMA = "ollama"
     CUSTOM = "custom"
 
 
@@ -72,6 +73,7 @@ def create_ollama_config(
 ) -> Dict[str, Any]:
     """Create Ollama configuration."""
     return {
+        "api_key": "dummy",  # Ollama doesn't require an API key
         "base_url": base_url,
         "model": model,
         "embedding_model": embedding_model,
@@ -146,10 +148,15 @@ def build_memory_config_from_env() -> MemoryConfig:
         memory_config = config_loader.get_memory_extraction_config()
         
         # Get LLM provider from environment
-        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
-        if llm_provider not in ["openai"]:
+        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
+        memory_logger.info(f"LLM_PROVIDER: {llm_provider}")
+        if llm_provider not in [p.value for p in LLMProvider]:
             raise ValueError(f"Unsupported LLM provider: {llm_provider}")
         
+        llm_config = None
+        llm_provider_enum = None
+        embedding_dims = 1536 # Default
+
         # Build LLM configuration
         if llm_provider == "openai":
             openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -171,18 +178,31 @@ def build_memory_config_from_env() -> MemoryConfig:
                 max_tokens=memory_config.get("llm_settings", {}).get("max_tokens", 2000)
             )
             llm_provider_enum = LLMProvider.OPENAI
+            embedding_dims = get_embedding_dims(llm_config)
+            memory_logger.info(f"🔧 Setting Embedder dims {embedding_dims}")
+        
+        elif llm_provider == "ollama":
+            base_url = os.getenv("OLLAMA_BASE_URL")
+            if not base_url:
+                raise ValueError("OLLAMA_BASE_URL required for Ollama provider")
             
-            # Determine embedding dimensions based on model
-            if embedding_model == "text-embedding-3-small":
-                embedding_dims = 1536
-            elif embedding_model == "text-embedding-3-large":
-                embedding_dims = 3072
-            elif embedding_model == "text-embedding-ada-002":
-                embedding_dims = 1536
-            else:
-                # Default for OpenAI embedding models
-                embedding_dims = 1536
-            
+            model = os.getenv("OLLAMA_MODEL")
+            if not model:
+                raise ValueError("OLLAMA_MODEL required for Ollama provider")
+            embedding_model = os.getenv("OLLAMA_EMBEDDER_MODEL")
+            if not embedding_model:
+                raise ValueError("OLLAMA_EMBEDDER_MODEL required for Ollama provider")
+            memory_logger.info(f"🔧 Memory config: LLM={model}, Embedding={embedding_model}, Base URL={base_url}")
+
+            llm_config = create_ollama_config(
+                base_url=base_url,
+                model=model,
+                embedding_model=embedding_model,
+            )
+            llm_provider_enum = LLMProvider.OLLAMA
+            embedding_dims = get_embedding_dims(llm_config)
+            memory_logger.info(f"🔧 Setting Embedder dims {embedding_dims}")
+
         # Build vector store configuration
         vector_store_provider = os.getenv("VECTOR_STORE_PROVIDER", "qdrant").lower()
         
@@ -220,3 +240,41 @@ def build_memory_config_from_env() -> MemoryConfig:
     except ImportError:
         memory_logger.warning("Config loader not available, using environment variables only")
         raise
+
+
+def get_embedding_dims(llm_config: Dict[str, Any]) -> int:
+    """
+    Query the embedding endpoint and return the embedding vector length.
+    Works for OpenAI and OpenAI-compatible endpoints (e.g., Ollama).
+    """
+    embedding_model = llm_config.get('embedding_model')
+    try:
+        import langfuse.openai as openai
+        client = openai.OpenAI(
+            api_key=llm_config.get('api_key'), 
+            base_url=llm_config.get('base_url')
+        )
+        response = client.embeddings.create(
+            model=embedding_model,
+            input="hello world"
+        )
+        embedding = response.data[0].embedding
+        if not embedding or not isinstance(embedding, list):
+            return 1536
+        return len(embedding)
+
+    except (ImportError, KeyError, AttributeError, IndexError, TypeError, ValueError) as e:
+        embedding_dims = 1536 # default
+        memory_logger.exception(f"Failed to get embedding dimensions for model '{embedding_model}'")
+        if embedding_model == "text-embedding-3-small":
+            embedding_dims = 1536
+        elif embedding_model == "text-embedding-3-large":
+            embedding_dims = 3072
+        elif embedding_model == "text-embedding-ada-002":
+            embedding_dims = 1536
+        elif embedding_model == "nomic-embed-text:latest":
+            embedding_dims = 768
+        else:
+            # Default for OpenAI embedding models
+            memory_logger.info(f"Unrecognized embedding model '{embedding_model}', using default dimension {embedding_dims}")
+        return embedding_dims
