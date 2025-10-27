@@ -45,13 +45,11 @@ class OpenAILLMClient(LLMClient):
 
     def __init__(
         self,
-        provider: str,
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
         temperature: float = 0.1,
     ):
-        self.provider = provider
         super().__init__(model, temperature)
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
@@ -96,79 +94,25 @@ class OpenAILLMClient(LLMClient):
             self.logger.error(f"Error generating completion: {e}")
             raise
 
-    async def health_check(self) -> Dict:
+    def health_check(self) -> Dict:
         """Check OpenAI-compatible service health."""
         try:
-            if not (self.model and self.base_url):
+            # For OpenAI API, check if we have valid configuration
+            # Avoid calling /models endpoint as it can be unreliable
+            if self.api_key and self.api_key != "dummy" and self.model:
                 return {
-                    "status": "⚠️ Configuration incomplete (missing model or base_url)",
+                    "status": "✅ Connected",
                     "base_url": self.base_url,
                     "default_model": self.model,
                     "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
                 }
-
-            if self.provider == "ollama":
-                import aiohttp
-                ollama_health_url = self.base_url.replace("/v1", "") if self.base_url.endswith("/v1") else self.base_url
-                
-                # Initialize response with main LLM status
-                response_data = {
-                    "status": "❌ Unknown",
+            else:
+                return {
+                    "status": "⚠️ Configuration incomplete",
                     "base_url": self.base_url,
                     "default_model": self.model,
-                    "api_key_configured": False,
-                    "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"),
-                    "embedder_status": "❌ Not Checked"
+                    "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
                 }
-
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        # Check main Ollama server health
-                        async with session.get(f"{ollama_health_url}/api/version", timeout=aiohttp.ClientTimeout(total=5)) as response:
-                            if response.status == 200:
-                                response_data["status"] = "✅ Connected"
-                            else:
-                                response_data["status"] = f"⚠️ Ollama Unhealthy: HTTP {response.status}"
-                        
-                        # Check embedder model availability
-                        embedder_model_name = os.getenv("OLLAMA_EMBEDDER_MODEL")
-                        if embedder_model_name:
-                            try:
-                                # Use /api/show to check if model exists
-                                async with session.post(f"{ollama_health_url}/api/show", json={"name": embedder_model_name}, timeout=aiohttp.ClientTimeout(total=5)) as embedder_response:
-                                    if embedder_response.status == 200:
-                                        response_data["embedder_status"] = "✅ Available"
-                                    else:
-                                        response_data["embedder_status"] = "⚠️ Embedder Model Unhealthy"
-                            except aiohttp.ClientError:
-                                response_data["embedder_status"] = "❌ Embedder Model Connection Failed"
-                            except asyncio.TimeoutError:
-                                response_data["embedder_status"] = "❌ Embedder Model Timeout"
-                        else:
-                            response_data["embedder_status"] = "⚠️ Embedder Model Not Configured"
-
-                except aiohttp.ClientError:
-                    response_data["status"] = "❌ Ollama Connection Failed"
-                except asyncio.TimeoutError:
-                    response_data["status"] = "❌ Ollama Connection Timeout (5s)"
-                
-                return response_data
-            else:
-                # For other OpenAI-compatible APIs, check configuration
-                if self.api_key and self.api_key != "dummy":
-                    return {
-                        "status": "✅ Connected",
-                        "base_url": self.base_url,
-                        "default_model": self.model,
-                        "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
-                    }
-                else:
-                    return {
-                        "status": "⚠️ Configuration incomplete (missing API key)",
-                        "base_url": self.base_url,
-                        "default_model": self.model,
-                        "api_key_configured": bool(self.api_key and self.api_key != "dummy"),
-                    }
         except Exception as e:
             self.logger.error(f"Health check failed: {e}")
             return {
@@ -191,19 +135,11 @@ class LLMClientFactory:
         """Create an LLM client based on LLM_PROVIDER environment variable."""
         provider = os.getenv("LLM_PROVIDER", "openai").lower()
 
-        if provider == "openai":
+        if provider in ["openai", "ollama"]:
             return OpenAILLMClient(
-                provider="openai",
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL"),
-            )
-        elif provider == "ollama":
-            return OpenAILLMClient(
-                provider="ollama",
-                api_key="dummy",  # Ollama doesn't require an API key
-                base_url=os.getenv("OLLAMA_BASE_URL"),
-                model=os.getenv("OLLAMA_MODEL"),
             )
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")
@@ -245,4 +181,5 @@ async def async_generate(
 async def async_health_check() -> Dict:
     """Async wrapper for LLM health check."""
     client = get_llm_client()
-    return await client.health_check()
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, client.health_check)

@@ -9,12 +9,6 @@ interface HealthData {
   services: Record<string, {
     healthy: boolean
     message?: string
-    status?: string;
-    base_url?: string;
-    model?: string;
-    embedder_model?: string;
-    embedder_status?: string;
-    provider?: string;
   }>
   timestamp?: string
 }
@@ -279,14 +273,8 @@ export default function System() {
                     )}
                     {(status as any).provider && (
                       <span className="text-xs text-blue-600 dark:text-blue-400">
-                        ({(status as any).provider}
-                        {service === 'audioai' && (status as any).model && ` - ${(status as any).model}`})
+                        ({(status as any).provider})
                       </span>
-                    )}
-                    {service === 'audioai' && (status as any).embedder_model && (
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                        Embedder: {(status as any).embedder_status} <span className="text-blue-600 dark:text-blue-400">({(status as any).embedder_model})</span>
-                      </div>
                     )}
                     {service === 'redis' && (status as any).worker_count !== undefined && (
                       <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
