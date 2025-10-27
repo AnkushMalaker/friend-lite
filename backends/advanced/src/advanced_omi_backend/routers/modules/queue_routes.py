@@ -929,6 +929,7 @@ async def get_dashboard_data(
         failed_jobs = results[3] if not isinstance(results[3], Exception) else []
         stats = results[4] if not isinstance(results[4], Exception) else {"total_jobs": 0}
         streaming_status = results[5] if not isinstance(results[5], Exception) else {"active_sessions": []}
+        recent_conversations = []
         session_jobs_results = results[6:] if len(results) > 6 else []
 
         # Convert session jobs list to dict
@@ -936,6 +937,19 @@ async def get_dashboard_data(
         for result in session_jobs_results:
             if not isinstance(result, Exception) and result:
                 session_jobs[result["session_id"]] = result["jobs"]
+
+        # Convert conversations to dict format for frontend
+        conversations_list = []
+        for conv in recent_conversations:
+            conversations_list.append({
+                "conversation_id": conv.conversation_id,
+                "audio_uuid": conv.audio_uuid,
+                "user_id": str(conv.user_id) if conv.user_id else None,
+                "created_at": conv.created_at.isoformat() if conv.created_at else None,
+                "title": conv.title,
+                "summary": conv.summary,
+                "transcript_text": conv.get_active_transcript_text() if hasattr(conv, 'get_active_transcript_text') else None,
+            })
 
         return {
             "jobs": {
@@ -946,6 +960,7 @@ async def get_dashboard_data(
             },
             "stats": stats,
             "streaming_status": streaming_status,
+            "recent_conversations": conversations_list,
             "session_jobs": session_jobs,
             "timestamp": asyncio.get_event_loop().time()
         }
