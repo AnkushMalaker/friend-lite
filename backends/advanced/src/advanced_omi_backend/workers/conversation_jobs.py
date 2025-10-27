@@ -72,11 +72,32 @@ async def open_conversation_job(
 
             speech_job = Job.fetch(speech_job_id, connection=redis_conn)
             if speech_job and speech_job.meta:
-                speech_job.meta['conversation_id'] = conversation_id
-                # Remove session_level flag - now linked to conversation
-                speech_job.meta.pop('session_level', None)
-                speech_job.save_meta()
-                logger.info(f"🔗 Updated speech job {speech_job_id[:12]} with conversation_id")
+                # Only update if conversation_id not already set (first conversation wins)
+                if not speech_job.meta.get('conversation_id'):
+                    speech_job.meta['conversation_id'] = conversation_id
+                    # Remove session_level flag - now linked to conversation
+                    speech_job.meta.pop('session_level', None)
+                    speech_job.save_meta()
+                    logger.info(f"🔗 Updated speech job {speech_job_id[:12]} with conversation_id")
+                else:
+                    logger.info(f"⏭️ Speech job {speech_job_id[:12]} already linked to conversation {speech_job.meta.get('conversation_id')[:12]}")
+
+                # Also update the speaker check job if referenced in speech job metadata
+                # Only update if it doesn't already have a conversation_id (first conversation wins)
+                speaker_check_job_id = speech_job.meta.get('speaker_check_job_id')
+                if speaker_check_job_id:
+                    try:
+                        speaker_check_job = Job.fetch(speaker_check_job_id, connection=redis_conn)
+                        if speaker_check_job and speaker_check_job.meta:
+                            # Only update if conversation_id not already set
+                            if not speaker_check_job.meta.get('conversation_id'):
+                                speaker_check_job.meta['conversation_id'] = conversation_id
+                                speaker_check_job.save_meta()
+                                logger.info(f"🔗 Updated speaker check job {speaker_check_job_id} with conversation_id")
+                            else:
+                                logger.info(f"⏭️ Speaker check job {speaker_check_job_id} already linked to conversation {speaker_check_job.meta.get('conversation_id')[:12]}")
+                    except Exception as speaker_err:
+                        logger.warning(f"⚠️ Failed to update speaker check job metadata: {speaker_err}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to update speech job metadata: {e}")
 
@@ -292,8 +313,7 @@ async def open_conversation_job(
         logger.info(
             f"📥 Pipeline: transcribe({job_ids['transcription']}) → "
             f"speaker({job_ids['speaker_recognition']}) → "
-            f"crop({job_ids['cropping']}) → "
-            f"memory({job_ids['memory']})"
+            f"[memory({job_ids['memory']}) + title({job_ids['title_summary']})]"
         )
 
         # Wait a moment to ensure jobs are registered in RQ
@@ -354,7 +374,7 @@ async def open_conversation_job(
                 job_timeout=3600,
                 result_ttl=JOB_RESULT_TTL,
                 job_id=f"speech-detect_{session_id[:12]}_{conversation_count}",
-                description=f"Speech detection for conversation #{conversation_count + 1}",
+                description=f"Listening for speech (conversation #{conversation_count + 1})",
                 meta={'audio_uuid': session_id, 'client_id': client_id, 'session_level': True}
             )
 
@@ -377,4 +397,116 @@ async def open_conversation_job(
         "final_result_count": last_result_count,
         "runtime_seconds": time.time() - start_time,
         "timeout_triggered": timeout_triggered
+    }
+
+
+@async_job(redis=True, beanie=True)
+async def generate_title_summary_job(
+    conversation_id: str,
+    redis_client=None
+) -> Dict[str, Any]:
+    """
+    Generate title and summary for a conversation using LLM.
+
+    This job runs independently of transcription and memory jobs to ensure
+    conversations always get meaningful titles and summaries, even if other
+    processing steps fail.
+
+    Uses the utility functions from conversation_utils for consistent title/summary generation.
+
+    Args:
+        conversation_id: Conversation ID
+        redis_client: Redis client (injected by decorator)
+
+    Returns:
+        Dict with generated title and summary
+    """
+    from advanced_omi_backend.models.conversation import Conversation
+    from advanced_omi_backend.utils.conversation_utils import (
+        generate_title_with_speakers,
+        generate_summary_with_speakers
+    )
+
+    logger.info(f"📝 Starting title/summary generation for conversation {conversation_id}")
+
+    start_time = time.time()
+
+    # Get the conversation
+    conversation = await Conversation.find_one(Conversation.conversation_id == conversation_id)
+    if not conversation:
+        logger.error(f"Conversation {conversation_id} not found")
+        return {"success": False, "error": "Conversation not found"}
+
+    # Get segments from active transcript version
+    segments = conversation.segments or []
+
+    if not segments or len(segments) == 0:
+        logger.warning(f"⚠️ No segments available for conversation {conversation_id}")
+        return {
+            "success": False,
+            "error": "No segments available",
+            "conversation_id": conversation_id
+        }
+
+    # Generate title and summary using speaker-aware utilities
+    try:
+        logger.info(f"🤖 Generating title/summary using LLM for conversation {conversation_id}")
+
+        # Convert segments to dict format expected by utils
+        segment_dicts = [
+            {
+                "speaker": seg.speaker,
+                "text": seg.text,
+                "start": seg.start,
+                "end": seg.end
+            }
+            for seg in segments
+        ]
+
+        # Generate title and summary with speaker awareness
+        title = await generate_title_with_speakers(segment_dicts)
+        summary = await generate_summary_with_speakers(segment_dicts)
+
+        conversation.title = title
+        conversation.summary = summary
+
+        logger.info(f"✅ Generated title: '{conversation.title}', summary: '{conversation.summary}'")
+
+    except Exception as gen_error:
+        logger.error(f"❌ Title/summary generation failed: {gen_error}")
+        return {
+            "success": False,
+            "error": str(gen_error),
+            "conversation_id": conversation_id,
+            "processing_time_seconds": time.time() - start_time
+        }
+
+    # Save the updated conversation
+    await conversation.save()
+
+    processing_time = time.time() - start_time
+
+    # Update job metadata
+    from rq import get_current_job
+    current_job = get_current_job()
+    if current_job:
+        if not current_job.meta:
+            current_job.meta = {}
+        current_job.meta.update({
+            "conversation_id": conversation_id,
+            "title": conversation.title,
+            "summary": conversation.summary,
+            "segment_count": len(segments),
+            "processing_time": processing_time
+        })
+        current_job.save_meta()
+
+    logger.info(f"✅ Title/summary generation completed for {conversation_id} in {processing_time:.2f}s")
+
+    return {
+        "success": True,
+        "conversation_id": conversation_id,
+        "title": conversation.title,
+        "summary": conversation.summary,
+        "processing_time_seconds": processing_time
     }

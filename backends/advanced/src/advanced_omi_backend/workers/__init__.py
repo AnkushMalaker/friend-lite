@@ -3,6 +3,7 @@ Workers package - RQ job definitions and queue utilities.
 
 This package provides modular RQ job functions organized by domain:
 - transcription_jobs: Speech-to-text processing
+- speaker_jobs: Speaker recognition and identification
 - conversation_jobs: Conversation management and updates
 - memory_jobs: Memory extraction and processing
 - audio_jobs: Audio file processing and cropping
@@ -13,8 +14,13 @@ Queue configuration and utilities are in controllers/queue_controller.py
 # Import from transcription_jobs
 from .transcription_jobs import (
     transcribe_full_audio_job,
-    recognise_speakers_job,
     stream_speech_detection_job,
+)
+
+# Import from speaker_jobs
+from .speaker_jobs import (
+    check_enrolled_speakers_job,
+    recognise_speakers_job,
 )
 
 # Import from conversation_jobs
@@ -58,8 +64,11 @@ from advanced_omi_backend.models.job import _ensure_beanie_initialized
 __all__ = [
     # Transcription jobs
     "transcribe_full_audio_job",
-    "recognise_speakers_job",
     "stream_speech_detection_job",
+
+    # Speaker jobs
+    "check_enrolled_speakers_job",
+    "recognise_speakers_job",
 
     # Conversation jobs
     "open_conversation_job",

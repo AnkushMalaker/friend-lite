@@ -53,6 +53,12 @@ interface StreamingSession {
   last_chunk_at: number;
   age_seconds: number;
   idle_seconds: number;
+  conversation_count?: number;
+  // Speech detection events
+  last_event?: string;
+  speech_detected_at?: string;
+  speaker_check_status?: string;
+  identified_speakers?: string;
 }
 
 interface StreamConsumer {
@@ -104,6 +110,7 @@ interface StreamingStatus {
 }
 
 const Queue: React.FC = () => {
+  const [jobs, setJobs] = useState<any[]>([]);
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<StreamingStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -238,6 +245,7 @@ const Queue: React.FC = () => {
       }
 
       // Update state
+      setJobs(allFetchedJobs);
       setSessionJobs(jobsBySession);
       setStats(dashboardData.stats);
       setStreamingStatus(dashboardData.streaming_status);
@@ -245,7 +253,9 @@ const Queue: React.FC = () => {
 
       // Auto-expand active conversations (those with open_conversation_job in progress)
       const newExpanded = new Set(expandedSessions);
+      const newExpandedJobs = new Set(expandedJobs);
       let expandedCount = 0;
+      let expandedJobsCount = 0;
 
       // Find all conversations with active open_conversation_job
       Object.entries(jobsBySession).forEach(([_sessionId, jobs]) => {
@@ -257,6 +267,14 @@ const Queue: React.FC = () => {
             expandedCount++;
             console.log(`🔓 Auto-expanding active conversation: ${conversationId}`);
           }
+
+          // Also expand all job cards in active conversations
+          jobs.forEach((job: any) => {
+            if (!expandedJobs.has(job.job_id)) {
+              newExpandedJobs.add(job.job_id);
+              expandedJobsCount++;
+            }
+          });
         }
       });
 
@@ -264,6 +282,12 @@ const Queue: React.FC = () => {
       if (expandedCount > 0) {
         console.log(`📂 Auto-expanded ${expandedCount} active conversation(s)`);
         setExpandedSessions(newExpanded);
+      }
+
+      // Update expanded jobs if any new jobs found
+      if (expandedJobsCount > 0) {
+        console.log(`📂 Auto-expanded ${expandedJobsCount} job card(s) in active conversations`);
+        setExpandedJobs(newExpandedJobs);
       }
     } catch (error) {
       console.error('❌ Error fetching dashboard data:', error);
@@ -554,6 +578,52 @@ const Queue: React.FC = () => {
     return new Date(dateString).toLocaleString();
   };
 
+  const getJobTypeShort = (jobType: string) => {
+    const typeMap: {[key: string]: string} = {
+      'open_conversation_job': 'Open Conv',
+      'stream_speech_detection_job': 'Speech Detect',
+      'enroll_speakers_job': 'Speaker Enroll',
+      'check_enrolled_speakers_job': 'Check Speakers',
+      'audio_persistence_job': 'Audio Persist',
+      'process_transcription_job': 'Transcribe',
+      'process_memory_job': 'Memory',
+      'crop_audio_job': 'Crop Audio'
+    };
+    return typeMap[jobType] || jobType;
+  };
+
+  const retryJob = async (jobId: string) => {
+    try {
+      await queueApi.retryJob(jobId);
+      fetchData();
+    } catch (error) {
+      console.error('Failed to retry job:', error);
+    }
+  };
+
+  const cancelJob = async (jobId: string) => {
+    try {
+      await queueApi.cancelJob(jobId);
+      fetchData();
+    } catch (error) {
+      console.error('Failed to cancel job:', error);
+    }
+  };
+
+  const prevPage = () => {
+    setPagination(prev => ({
+      ...prev,
+      offset: Math.max(0, prev.offset - prev.limit)
+    }));
+  };
+
+  const nextPage = () => {
+    setPagination(prev => ({
+      ...prev,
+      offset: prev.offset + prev.limit
+    }));
+  };
+
   const formatDuration = (job: any) => {
     if (!job.started_at) return '-';
 
@@ -568,6 +638,22 @@ const Queue: React.FC = () => {
     if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
     if (durationMs < 3600000) return `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`;
     return `${Math.floor(durationMs / 3600000)}h ${Math.floor((durationMs % 3600000) / 60000)}m`;
+  };
+
+  // Format seconds to readable time format (e.g., 3m34s or 1h22m32s)
+  const formatSeconds = (seconds: number): string => {
+    if (seconds < 60) {
+      return `${Math.floor(seconds)}s`;
+    } else if (seconds < 3600) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}m${secs}s`;
+    } else {
+      const hours = Math.floor(seconds / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${hours}h${mins}m${secs}s`;
+    }
   };
 
   const toggleSessionExpansion = (sessionId: string) => {
@@ -920,7 +1006,49 @@ const Queue: React.FC = () => {
                                         <span className="text-green-700 font-medium">{new Date(job.meta.speech_detected_at).toLocaleString()}</span>
                                       </div>
                                     )}
+                                    {job.meta?.status && (
+                                      <div className="flex justify-between">
+                                        <span>Status:</span>
+                                        <span className="text-blue-700 font-medium">{job.meta.status.replace(/_/g, ' ')}</span>
+                                      </div>
+                                    )}
                                   </div>
+
+                                  {/* Session Events */}
+                                  {(() => {
+                                    const session = streamingStatus?.active_sessions?.find((s: StreamingSession) => s.session_id === job.meta?.session_id);
+                                    if (!session) return null;
+
+                                    return (
+                                      <div className="text-xs space-y-1 pl-4 mt-2 pt-2 border-t border-gray-200">
+                                        <div className="font-semibold text-gray-700 mb-1">Speech Detection Events:</div>
+                                        {session.last_event && (
+                                          <div className="flex justify-between">
+                                            <span className="text-gray-600">Last Event:</span>
+                                            <span className="text-gray-800 font-mono text-xs">{session.last_event.split(':')[0]}</span>
+                                          </div>
+                                        )}
+                                        {session.speaker_check_status && (
+                                          <div className="flex justify-between">
+                                            <span className="text-gray-600">Speaker Check:</span>
+                                            <span className={`font-medium ${
+                                              session.speaker_check_status === 'enrolled' ? 'text-green-700' :
+                                              session.speaker_check_status === 'checking' ? 'text-blue-700' :
+                                              session.speaker_check_status === 'failed' ? 'text-red-700' :
+                                              session.speaker_check_status === 'timeout' ? 'text-yellow-700' :
+                                              'text-gray-700'
+                                            }`}>{session.speaker_check_status}</span>
+                                          </div>
+                                        )}
+                                        {session.identified_speakers && (
+                                          <div className="flex justify-between">
+                                            <span className="text-gray-600">Speakers:</span>
+                                            <span className="text-green-700 font-medium">{session.identified_speakers}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
                               );
                             })}
@@ -1030,22 +1158,36 @@ const Queue: React.FC = () => {
                         const lastUpdate = meta.last_update || '';
                         const createdAt = openConvJob?.created_at || null;
 
+                        // Check if any jobs have failed
+                        const hasFailedJob = jobs.some(j => j.status === 'failed');
+                        const failedJobCount = jobs.filter(j => j.status === 'failed').length;
+
                         return (
-                          <div key={conversationId} className="bg-cyan-50 rounded-lg border border-cyan-200 overflow-hidden">
+                          <div key={conversationId} className={`rounded-lg border overflow-hidden ${hasFailedJob ? 'bg-red-50 border-red-300' : 'bg-cyan-50 border-cyan-200'}`}>
                             <div
-                              className="flex items-center justify-between p-3 cursor-pointer hover:bg-cyan-100 transition-colors"
+                              className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${hasFailedJob ? 'hover:bg-red-100' : 'hover:bg-cyan-100'}`}
                               onClick={() => toggleSessionExpansion(conversationId)}
                             >
                               <div className="flex-1">
                                 <div className="flex items-center space-x-2">
                                   {isExpanded ? (
-                                    <ChevronDown className="w-4 h-4 text-cyan-600" />
+                                    <ChevronDown className={`w-4 h-4 ${hasFailedJob ? 'text-red-600' : 'text-cyan-600'}`} />
                                   ) : (
-                                    <ChevronRight className="w-4 h-4 text-cyan-600" />
+                                    <ChevronRight className={`w-4 h-4 ${hasFailedJob ? 'text-red-600' : 'text-cyan-600'}`} />
                                   )}
-                                  <Brain className="w-4 h-4 text-cyan-600 animate-pulse" />
+                                  {hasFailedJob ? (
+                                    <AlertTriangle className="w-4 h-4 text-red-600" />
+                                  ) : (
+                                    <Brain className="w-4 h-4 text-cyan-600 animate-pulse" />
+                                  )}
                                   <span className="text-sm font-medium text-gray-900">{clientId}</span>
-                                  <span className="text-xs px-2 py-0.5 bg-cyan-100 text-cyan-700 rounded">Active</span>
+                                  {hasFailedJob ? (
+                                    <span className="text-xs px-2 py-0.5 bg-red-200 text-red-800 rounded font-medium">
+                                      {failedJobCount} Error{failedJobCount > 1 ? 's' : ''}
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs px-2 py-0.5 bg-cyan-100 text-cyan-700 rounded">Active</span>
+                                  )}
                                   {speakers.length > 0 && (
                                     <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
                                       {speakers.length} speaker{speakers.length > 1 ? 's' : ''}
@@ -1516,38 +1658,52 @@ const Queue: React.FC = () => {
                         const title = transcriptionMeta.title || null;
                         const summary = transcriptionMeta.summary || null;
 
-                        // Check if all jobs are complete
+                        // Check job statuses
                         const allComplete = jobs.every(j => j.status === 'completed');
+                        const hasFailedJob = jobs.some(j => j.status === 'failed');
+                        const failedJobCount = jobs.filter(j => j.status === 'failed').length;
+
+                        // Determine status styling
+                        let bgColor = 'bg-yellow-50 border-yellow-200';
+                        let hoverColor = 'hover:bg-yellow-100';
+                        let iconColor = 'text-yellow-600';
+                        let statusBadge = 'bg-yellow-100 text-yellow-700';
+                        let statusText = 'Processing';
+                        let StatusIcon = Clock;
+
+                        if (hasFailedJob) {
+                          bgColor = 'bg-red-50 border-red-300';
+                          hoverColor = 'hover:bg-red-100';
+                          iconColor = 'text-red-600';
+                          statusBadge = 'bg-red-200 text-red-800';
+                          statusText = `${failedJobCount} Error${failedJobCount > 1 ? 's' : ''}`;
+                          StatusIcon = AlertTriangle;
+                        } else if (allComplete) {
+                          bgColor = 'bg-green-50 border-green-200';
+                          hoverColor = 'hover:bg-green-100';
+                          iconColor = 'text-green-600';
+                          statusBadge = 'bg-green-100 text-green-700';
+                          statusText = 'Complete';
+                          StatusIcon = CheckCircle;
+                        }
 
                         return (
-                          <div key={conversationId} className={`rounded-lg border overflow-hidden ${
-                            allComplete
-                              ? 'bg-green-50 border-green-200'
-                              : 'bg-yellow-50 border-yellow-200'
-                          }`}>
+                          <div key={conversationId} className={`rounded-lg border overflow-hidden ${bgColor}`}>
                             <div
-                              className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${
-                                allComplete ? 'hover:bg-green-100' : 'hover:bg-yellow-100'
-                              }`}
+                              className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${hoverColor}`}
                               onClick={() => toggleSessionExpansion(conversationId)}
                             >
                               <div className="flex-1">
                                 <div className="flex items-center space-x-2">
                                   {isExpanded ? (
-                                    <ChevronDown className={`w-4 h-4 ${allComplete ? 'text-green-600' : 'text-yellow-600'}`} />
+                                    <ChevronDown className={`w-4 h-4 ${iconColor}`} />
                                   ) : (
-                                    <ChevronRight className={`w-4 h-4 ${allComplete ? 'text-green-600' : 'text-yellow-600'}`} />
+                                    <ChevronRight className={`w-4 h-4 ${iconColor}`} />
                                   )}
-                                  {allComplete ? (
-                                    <CheckCircle className="w-4 h-4 text-green-600" />
-                                  ) : (
-                                    <Clock className="w-4 h-4 text-yellow-600" />
-                                  )}
+                                  <StatusIcon className={`w-4 h-4 ${iconColor}`} />
                                   <span className="text-sm font-medium text-gray-900">{clientId}</span>
-                                  <span className={`text-xs px-2 py-0.5 rounded ${
-                                    allComplete ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                                  }`}>
-                                    {allComplete ? 'Complete' : 'Processing'}
+                                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${statusBadge}`}>
+                                    {statusText}
                                   </span>
                                   {speakers.length > 0 && (
                                     <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
@@ -1989,6 +2145,125 @@ const Queue: React.FC = () => {
         </div>
       </div>
 
+          {/* Jobs Table */}
+      <div className="bg-white rounded-lg border overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-medium">Jobs</h3>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Date</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Conversation ID</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Job ID</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Type</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Duration</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {jobs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).map((job) => (
+                <tr key={job.job_id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+                    {new Date(job.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </td>
+                  <td className="px-4 py-3 max-w-xs">
+                    <div className="text-xs font-mono text-gray-600 truncate" title={job.meta?.conversation_id || 'N/A'}>
+                      {job.meta?.conversation_id ? job.meta.conversation_id.substring(0, 8) : '—'}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 max-w-xs">
+                    <div className="text-xs font-mono text-gray-900 truncate" title={job.job_id}>
+                      {job.job_id}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{getJobTypeShort(job.job_type)}</div>
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
+                      {getStatusIcon(job.status)}
+                      <span className="ml-1">{job.status.charAt(0).toUpperCase() + job.status.slice(1)}</span>
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <div className="text-sm text-gray-700 font-mono">
+                      {formatDuration(job)}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sm font-medium whitespace-nowrap">
+                    <div className="flex items-center gap-2">
+                      {job.status === 'failed' && (
+                        <button
+                          onClick={() => retryJob(job.job_id)}
+                          className="text-blue-600 hover:text-blue-900"
+                          title="Retry job"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => viewJobDetails(job.job_id)}
+                        className="text-indigo-600 hover:text-indigo-900"
+                        disabled={loadingJobDetails}
+                        title="View details"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                      {(job.status === 'queued' || job.status === 'processing') && (
+                        <button
+                          onClick={() => cancelJob(job.job_id)}
+                          className="text-red-600 hover:text-red-900"
+                          title="Cancel job"
+                        >
+                          <StopCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                      {job.status === 'completed' && (
+                        <button
+                          onClick={() => cancelJob(job.job_id)}
+                          className="text-gray-400 hover:text-gray-600"
+                          title="Delete job"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        {pagination.total > pagination.limit && (
+          <div className="bg-white px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+            <div className="text-sm text-gray-700">
+              Showing {pagination.offset + 1} to {Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total} results
+            </div>
+            <div className="flex space-x-2">
+              <button
+                onClick={prevPage}
+                disabled={pagination.offset === 0}
+                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                onClick={nextPage}
+                disabled={!pagination.has_more}
+                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
       {/* Old Jobs Table and Pagination - Removed in favor of session-based view above */}
 
       {/* Job Details Modal */}
@@ -2212,7 +2487,7 @@ const Queue: React.FC = () => {
                       <div className="bg-green-50 p-3 rounded mb-3 space-y-2">
                         {selectedJob.meta.cropped_duration_seconds !== undefined && (
                           <div className="text-sm">
-                            <span className="font-medium">Cropped Duration:</span> {selectedJob.meta.cropped_duration_seconds.toFixed(1)}s
+                            <span className="font-medium">Cropped Duration:</span> {formatSeconds(selectedJob.meta.cropped_duration_seconds)}
                           </div>
                         )}
                         {selectedJob.meta.segments_cropped !== undefined && (

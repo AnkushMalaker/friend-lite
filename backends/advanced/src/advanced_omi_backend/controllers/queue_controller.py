@@ -271,7 +271,7 @@ def start_streaming_jobs(
         job_timeout=3600,  # 1 hour for long recordings
         result_ttl=JOB_RESULT_TTL,
         job_id=f"speech-detect_{session_id[:12]}",
-        description=f"Stream speech detection for {session_id[:12]}",
+        description=f"Listening for speech...",
         meta={'audio_uuid': session_id, 'client_id': client_id, 'session_level': True}
     )
     logger.info(f"📥 RQ: Enqueued speech detection job {speech_job.id}")
@@ -321,7 +321,8 @@ def start_post_conversation_jobs(
     1. Audio cropping job - Removes silence from audio
     2. [Optional] Transcription job - Batch transcription (if post_transcription=True)
     3. Speaker recognition job - Identifies speakers in audio
-    4. Memory extraction job - Extracts memories from conversation
+    4. Memory extraction job - Extracts memories from conversation (parallel)
+    5. Title/summary generation job - Generates title and summary (parallel)
 
     Args:
         conversation_id: Conversation identifier
@@ -336,16 +337,18 @@ def start_post_conversation_jobs(
     Returns:
         Dict with job IDs (transcription will be None if post_transcription=False)
     """
-    from advanced_omi_backend.workers.transcription_jobs import (
-        transcribe_full_audio_job,
-        recognise_speakers_job,
-    )
+    from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job
+    from advanced_omi_backend.workers.speaker_jobs import recognise_speakers_job
     from advanced_omi_backend.workers.audio_jobs import process_cropping_job
     from advanced_omi_backend.workers.memory_jobs import process_memory_job
+    from advanced_omi_backend.workers.conversation_jobs import generate_title_summary_job
 
     version_id = transcript_version_id or str(uuid.uuid4())
 
     # Step 1: Audio cropping job
+    crop_job_id = f"crop_{conversation_id[:12]}"
+    logger.info(f"🔍 DEBUG: Creating crop job with job_id={crop_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
+
     cropping_job = default_queue.enqueue(
         process_cropping_job,
         conversation_id,
@@ -353,15 +356,18 @@ def start_post_conversation_jobs(
         job_timeout=300,  # 5 minutes
         result_ttl=JOB_RESULT_TTL,
         depends_on=depends_on_job,
-        job_id=f"crop_{audio_uuid[:12]}",
-        description=f"Crop audio for {audio_uuid[:12]}",
+        job_id=crop_job_id,
+        description=f"Crop audio for conversation {conversation_id[:8]}",
         meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
     )
-    logger.info(f"📥 RQ: Enqueued cropping job {cropping_job.id}")
+    logger.info(f"📥 RQ: Enqueued cropping job {cropping_job.id}, meta={cropping_job.meta}")
 
     # Step 2: Transcription job (conditional)
     transcription_job = None
     if post_transcription:
+        transcribe_job_id = f"transcribe_{conversation_id[:12]}"
+        logger.info(f"🔍 DEBUG: Creating transcribe job with job_id={transcribe_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
+
         transcription_job = transcription_queue.enqueue(
             transcribe_full_audio_job,
             conversation_id,
@@ -372,17 +378,20 @@ def start_post_conversation_jobs(
             job_timeout=1800,  # 30 minutes
             result_ttl=JOB_RESULT_TTL,
             depends_on=cropping_job,
-            job_id=f"transcribe_{audio_uuid[:12]}",
-            description=f"Transcribe audio {audio_uuid[:12]}",
+            job_id=transcribe_job_id,
+            description=f"Transcribe conversation {conversation_id[:8]}",
             meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
         )
-        logger.info(f"📥 RQ: Enqueued transcription job {transcription_job.id} (depends on {cropping_job.id})")
+        logger.info(f"📥 RQ: Enqueued transcription job {transcription_job.id}, meta={transcription_job.meta} (depends on {cropping_job.id})")
         speaker_depends_on = transcription_job
     else:
         logger.info(f"⏭️  RQ: Skipping transcription (streaming already has transcript)")
         speaker_depends_on = cropping_job
 
     # Step 3: Speaker recognition job
+    speaker_job_id = f"speaker_{conversation_id[:12]}"
+    logger.info(f"🔍 DEBUG: Creating speaker job with job_id={speaker_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
+
     speaker_job = transcription_queue.enqueue(
         recognise_speakers_job,
         conversation_id,
@@ -393,30 +402,51 @@ def start_post_conversation_jobs(
         job_timeout=1200,  # 20 minutes
         result_ttl=JOB_RESULT_TTL,
         depends_on=speaker_depends_on,
-        job_id=f"speaker_{audio_uuid[:12]}",
-        description=f"Speaker recognition for {audio_uuid[:12]}",
+        job_id=speaker_job_id,
+        description=f"Speaker recognition for conversation {conversation_id[:8]}",
         meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
     )
-    logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id} (depends on {speaker_depends_on.id})")
+    logger.info(f"📥 RQ: Enqueued speaker recognition job {speaker_job.id}, meta={speaker_job.meta} (depends on {speaker_depends_on.id})")
 
-    # Step 4: Memory extraction job
+    # Step 4: Memory extraction job (parallel with title/summary)
+    memory_job_id = f"memory_{conversation_id[:12]}"
+    logger.info(f"🔍 DEBUG: Creating memory job with job_id={memory_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
+
     memory_job = memory_queue.enqueue(
         process_memory_job,
         conversation_id,
         job_timeout=900,  # 15 minutes
         result_ttl=JOB_RESULT_TTL,
         depends_on=speaker_job,
-        job_id=f"memory_{audio_uuid[:12]}",
-        description=f"Memory extraction for {audio_uuid[:12]}",
+        job_id=memory_job_id,
+        description=f"Memory extraction for conversation {conversation_id[:8]}",
         meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
     )
-    logger.info(f"📥 RQ: Enqueued memory extraction job {memory_job.id} (depends on {speaker_job.id})")
+    logger.info(f"📥 RQ: Enqueued memory extraction job {memory_job.id}, meta={memory_job.meta} (depends on {speaker_job.id})")
+
+    # Step 5: Title/summary generation job (parallel with memory, independent)
+    # This ensures conversations always get titles/summaries even if memory job fails
+    title_job_id = f"title_summary_{conversation_id[:12]}"
+    logger.info(f"🔍 DEBUG: Creating title/summary job with job_id={title_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
+
+    title_summary_job = default_queue.enqueue(
+        generate_title_summary_job,
+        conversation_id,
+        job_timeout=300,  # 5 minutes
+        result_ttl=JOB_RESULT_TTL,
+        depends_on=speaker_job,  # Depends on speaker job, NOT memory job
+        job_id=title_job_id,
+        description=f"Generate title and summary for conversation {conversation_id[:8]}",
+        meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
+    )
+    logger.info(f"📥 RQ: Enqueued title/summary job {title_summary_job.id}, meta={title_summary_job.meta} (depends on {speaker_job.id})")
 
     return {
         'cropping': cropping_job.id,
         'transcription': transcription_job.id if transcription_job else None,
         'speaker_recognition': speaker_job.id,
-        'memory': memory_job.id
+        'memory': memory_job.id,
+        'title_summary': title_summary_job.id
     }
 
 
