@@ -33,6 +33,9 @@ shutdown() {
     kill $RQ_WORKER_1_PID 2>/dev/null || true
     kill $RQ_WORKER_2_PID 2>/dev/null || true
     kill $RQ_WORKER_3_PID 2>/dev/null || true
+    kill $RQ_WORKER_4_PID 2>/dev/null || true
+    kill $RQ_WORKER_5_PID 2>/dev/null || true
+    kill $RQ_WORKER_6_PID 2>/dev/null || true
     kill $AUDIO_PERSISTENCE_WORKER_PID 2>/dev/null || true
     kill $AUDIO_STREAM_WORKER_PID 2>/dev/null || true
     wait
@@ -46,14 +49,20 @@ trap shutdown SIGTERM SIGINT
 # Configure Python logging for RQ workers
 export PYTHONUNBUFFERED=1
 
-# Start 3 RQ workers listening to ALL queues
-echo "🔧 Starting RQ workers (3 workers, all queues: transcription, memory, default)..."
+# Start 6 RQ workers listening to ALL queues
+echo "🔧 Starting RQ workers (6 workers, all queues: transcription, memory, default)..."
 uv run python -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
 RQ_WORKER_1_PID=$!
 uv run python -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
 RQ_WORKER_2_PID=$!
 uv run python -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
 RQ_WORKER_3_PID=$!
+uv run python -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
+RQ_WORKER_4_PID=$!
+uv run python -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
+RQ_WORKER_5_PID=$!
+uv run python -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
+RQ_WORKER_6_PID=$!
 
 # Start 1 dedicated audio persistence worker
 # Single worker for audio persistence jobs (file rotation)
@@ -71,6 +80,9 @@ echo "✅ All workers started:"
 echo "  - RQ worker 1: PID $RQ_WORKER_1_PID (transcription, memory, default)"
 echo "  - RQ worker 2: PID $RQ_WORKER_2_PID (transcription, memory, default)"
 echo "  - RQ worker 3: PID $RQ_WORKER_3_PID (transcription, memory, default)"
+echo "  - RQ worker 4: PID $RQ_WORKER_4_PID (transcription, memory, default)"
+echo "  - RQ worker 5: PID $RQ_WORKER_5_PID (transcription, memory, default)"
+echo "  - RQ worker 6: PID $RQ_WORKER_6_PID (transcription, memory, default)"
 echo "  - Audio persistence worker: PID $AUDIO_PERSISTENCE_WORKER_PID (audio queue - file rotation)"
 echo "  - Audio stream worker: PID $AUDIO_STREAM_WORKER_PID (Redis Streams consumer - sequential processing)"
 
@@ -82,6 +94,9 @@ echo "⚠️  One worker exited, stopping all workers..."
 kill $RQ_WORKER_1_PID 2>/dev/null || true
 kill $RQ_WORKER_2_PID 2>/dev/null || true
 kill $RQ_WORKER_3_PID 2>/dev/null || true
+kill $RQ_WORKER_4_PID 2>/dev/null || true
+kill $RQ_WORKER_5_PID 2>/dev/null || true
+kill $RQ_WORKER_6_PID 2>/dev/null || true
 kill $AUDIO_PERSISTENCE_WORKER_PID 2>/dev/null || true
 kill $AUDIO_STREAM_WORKER_PID 2>/dev/null || true
 wait

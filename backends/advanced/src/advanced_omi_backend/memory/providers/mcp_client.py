@@ -79,7 +79,7 @@ class MCPClient:
         try:
             # Use REST API endpoint for creating memories
             response = await self.client.post(
-                f"{self.server_url}/api/v1/memories/",
+                f"{self.server_url}/{self.client_name}/sse/{self.user_id}",
                 json={
                     "user_id": self.user_id,
                     "text": text,

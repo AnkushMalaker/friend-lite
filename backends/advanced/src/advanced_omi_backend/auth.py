@@ -183,7 +183,7 @@ async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[Use
 
     # Try JWT token from query parameter first
     if token:
-        logger.debug("Attempting WebSocket auth with query token.")
+        logger.info(f"Attempting WebSocket auth with query token (first 20 chars): {token[:20]}...")
         try:
             user_db_gen = get_user_db()
             user_db = await user_db_gen.__anext__()
@@ -192,8 +192,10 @@ async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[Use
             if user and user.is_active:
                 logger.info(f"WebSocket auth successful for user {user.user_id} using query token.")
                 return user
+            else:
+                logger.warning(f"Token validated but user inactive or not found: user={user}")
         except Exception as e:
-            logger.warning(f"WebSocket auth with query token failed: {e}")
+            logger.error(f"WebSocket auth with query token failed: {type(e).__name__}: {e}", exc_info=True)
 
     # Try cookie authentication
     logger.debug("Attempting WebSocket auth with cookie.")

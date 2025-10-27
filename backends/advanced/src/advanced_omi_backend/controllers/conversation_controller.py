@@ -345,7 +345,8 @@ async def reprocess_transcript(conversation_id: str, user: User):
         version_id = str(uuid.uuid4())
 
         # Enqueue job chain with RQ (transcription -> speaker recognition -> cropping -> memory)
-        from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job, recognise_speakers_job
+        from advanced_omi_backend.workers.transcription_jobs import transcribe_full_audio_job
+        from advanced_omi_backend.workers.speaker_jobs import recognise_speakers_job
         from advanced_omi_backend.workers.audio_jobs import process_cropping_job
         from advanced_omi_backend.workers.memory_jobs import process_memory_job
         from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, default_queue, JOB_RESULT_TTL

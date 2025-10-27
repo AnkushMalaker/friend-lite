@@ -54,7 +54,12 @@ async def get_session_info(redis_client, session_id: str) -> Optional[Dict]:
             "last_chunk_at": last_chunk_at,
             "age_seconds": time.time() - started_at,
             "idle_seconds": time.time() - last_chunk_at,
-            "conversation_count": conversation_count
+            "conversation_count": conversation_count,
+            # Speech detection events
+            "last_event": session_data.get(b"last_event", b"").decode(),
+            "speech_detected_at": session_data.get(b"speech_detected_at", b"").decode(),
+            "speaker_check_status": session_data.get(b"speaker_check_status", b"").decode(),
+            "identified_speakers": session_data.get(b"identified_speakers", b"").decode()
         }
 
     except Exception as e:
