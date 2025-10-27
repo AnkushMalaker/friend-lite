@@ -31,14 +31,24 @@ uv sync --group gpu
 
 If you choose GPU, uncomment the deploy section with GPU requirements from docker-compose.yml
 
-### 3. Initialize HTTPS (Required for Microphone Access)
+### 3. Run Setup Script
 
 ```bash
 cd extras/speaker-recognition
-./init.sh 100.83.66.30  # Replace with your Tailscale/network IP
+./init.sh
 ```
 
-This generates SSL certificates and configures nginx for your IP address.
+This interactive setup will guide you through:
+- Configuring your Hugging Face token
+- Choosing compute mode (CPU/GPU)
+- Setting up HTTPS for remote access (optional)
+
+For non-interactive setup:
+```bash
+./init.sh --hf-token YOUR_TOKEN --compute-mode cpu
+# Or for HTTPS with specific IP:
+./init.sh --hf-token YOUR_TOKEN --compute-mode gpu --enable-https --server-ip 100.83.66.30
+```
 
 ### 4. Start the system
 ```bash

@@ -11,21 +11,28 @@ Get the speaker recognition system running in 5 minutes and start processing aud
 
 ## Setup
 
-### 1. Initialize with Tailscale IP
+### 1. Run Setup Script
 
-First, run the initialization script with your Tailscale IP address:
+Run the interactive setup script:
 
 ```bash
 cd extras/speaker-recognition
-./init.sh <your-tailscale-ip>
+./init.sh
 ```
 
-Example:
+The script will guide you through:
+- **HF Token**: Your Hugging Face API token (required)
+- **Compute Mode**: CPU or GPU acceleration
+- **HTTPS Setup**: Optional for remote access/microphone support
+
+**For automated setup:**
 ```bash
-./init.sh 100.83.66.30
-```
+# Basic CPU setup
+./init.sh --hf-token YOUR_TOKEN --compute-mode cpu
 
-This creates the nginx configuration file needed for the proxy setup.
+# HTTPS with custom IP/domain
+./init.sh --hf-token YOUR_TOKEN --compute-mode gpu --enable-https --server-ip 100.83.66.30
+```
 
 ### 2. Start the Services
 
@@ -116,9 +123,9 @@ DEEPGRAM_API_KEY=your_key   # For transcription modes
 3. Restart: `docker compose down && docker compose up -d`
 
 ### "nginx.conf not found" error
-1. Make sure you ran `./init.sh <tailscale-ip>` first
+1. Make sure you ran `./init.sh` first
 2. Verify nginx.conf.template exists in the directory
-3. Re-run init script if needed
+3. Re-run setup script if needed
 
 ## API Usage
 
@@ -179,5 +186,5 @@ DEEPGRAM_API_KEY=your_key  # For transcription modes
 - **Service not starting?** → `docker compose logs`
 - **Web UI not loading?** → Check https://localhost/ and accept SSL cert
 - **API not responding?** → Verify `curl -k https://localhost/api/health` returns `{"status": "ok"}`
-- **nginx.conf missing?** → Run `./init.sh <tailscale-ip>` first
+- **nginx.conf missing?** → Run `./init.sh` first
 - **Still stuck?** → Check the main README for detailed documentation

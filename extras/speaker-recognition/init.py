@@ -303,6 +303,8 @@ class SpeakerRecognitionSetup:
 
                     # Replace TAILSCALE_IP with server_ip
                     nginx_content = nginx_content.replace('TAILSCALE_IP', server_ip)
+                    # Replace WEB_UI_PORT_PLACEHOLDER with the configured port
+                    nginx_content = nginx_content.replace('WEB_UI_PORT_PLACEHOLDER', self.config["REACT_UI_PORT"])
 
                     with open('nginx.conf', 'w') as f:
                         f.write(nginx_content)
