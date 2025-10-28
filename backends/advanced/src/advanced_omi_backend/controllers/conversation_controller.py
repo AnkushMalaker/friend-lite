@@ -349,7 +349,7 @@ async def reprocess_transcript(conversation_id: str, user: User):
         from advanced_omi_backend.workers.speaker_jobs import recognise_speakers_job
         from advanced_omi_backend.workers.audio_jobs import process_cropping_job
         from advanced_omi_backend.workers.memory_jobs import process_memory_job
-        from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, default_queue, JOB_RESULT_TTL
+        from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, default_queue, JOB_RESULT_TTL, redis_conn
 
         # Job 1: Transcribe audio to text
         transcript_job = transcription_queue.enqueue(
@@ -402,10 +402,8 @@ async def reprocess_transcript(conversation_id: str, user: User):
         # Job 4: Extract memories (depends on cropping)
         memory_job = memory_queue.enqueue(
             process_memory_job,
-            None,  # client_id - will be read from conversation in DB
-            str(user.user_id),
-            "",  # user_email - will be read from user in DB
             conversation_id,
+            redis_conn,
             depends_on=cropping_job,
             job_timeout=1800,
             result_ttl=JOB_RESULT_TTL,

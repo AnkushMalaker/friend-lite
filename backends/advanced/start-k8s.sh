@@ -54,7 +54,7 @@ fi
 
 # Clean up stale worker registrations from previous runs
 echo "🧹 Cleaning up stale worker registrations from Redis..."
-uv run --no-sync python3 -c "
+python3 -c "
 from rq import Worker
 from redis import Redis
 import os
@@ -118,7 +118,7 @@ sleep 1
 # NEW WORKERS - Redis Streams multi-provider architecture
 # Single worker ensures sequential processing of audio chunks (matching start-workers.sh)
 echo "🎵 Starting audio stream Deepgram worker (1 worker for sequential processing)..."
-if uv run --no-sync python3 -m advanced_omi_backend.workers.audio_stream_deepgram_worker &
+if python3 -m advanced_omi_backend.workers.audio_stream_deepgram_worker &
 then
     AUDIO_WORKER_1_PID=$!
     echo "  ✅ Deepgram stream worker started with PID: $AUDIO_WORKER_1_PID"
@@ -129,7 +129,7 @@ fi
 
 # Start 3 RQ workers listening to ALL queues (matching start-workers.sh)
 echo "🔧 Starting RQ workers (3 workers, all queues: transcription, memory, default)..."
-if uv run --no-sync python3 -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
+if python3 -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
 then
     RQ_WORKER_1_PID=$!
     echo "  ✅ RQ worker 1 started with PID: $RQ_WORKER_1_PID"
@@ -139,7 +139,7 @@ else
     exit 1
 fi
 
-if uv run --no-sync python3 -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
+if python3 -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
 then
     RQ_WORKER_2_PID=$!
     echo "  ✅ RQ worker 2 started with PID: $RQ_WORKER_2_PID"
@@ -149,7 +149,7 @@ else
     exit 1
 fi
 
-if uv run --no-sync python3 -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
+if python3 -m advanced_omi_backend.workers.rq_worker_entry transcription memory default &
 then
     RQ_WORKER_3_PID=$!
     echo "  ✅ RQ worker 3 started with PID: $RQ_WORKER_3_PID"
@@ -161,7 +161,7 @@ fi
 
 # Start 1 dedicated audio persistence worker (matching start-workers.sh)
 echo "💾 Starting audio persistence worker (1 worker for audio queue)..."
-if uv run --no-sync python3 -m advanced_omi_backend.workers.rq_worker_entry audio &
+if python3 -m advanced_omi_backend.workers.rq_worker_entry audio &
 then
     AUDIO_PERSISTENCE_WORKER_PID=$!
     echo "  ✅ Audio persistence worker started with PID: $AUDIO_PERSISTENCE_WORKER_PID"
@@ -176,7 +176,7 @@ sleep 3
 
 # Start the main FastAPI application
 echo "🌐 Starting FastAPI backend..."
-if uv run --no-sync python3 src/advanced_omi_backend/main.py &
+if python3 src/advanced_omi_backend/main.py &
 then
     BACKEND_PID=$!
     echo "  ✅ FastAPI backend started with PID: $BACKEND_PID"

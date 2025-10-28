@@ -112,7 +112,7 @@ async def cancel_job(
                 raise HTTPException(status_code=403, detail="Access forbidden")
 
         # Cancel if queued or processing, delete if completed/failed
-        if job.is_queued or job.is_started:
+        if job.is_queued or job.is_started or job.is_deferred or job.is_scheduled:
             # Cancel the job
             job.cancel()
             logger.info(f"Cancelled job {job_id}")
@@ -131,7 +131,7 @@ async def cancel_job(
                 "message": f"Job {job_id} has been deleted"
             }
 
-    except Exception as e:
+    except HTTPException as e:
         logger.error(f"Failed to cancel/delete job {job_id}: {e}")
         raise HTTPException(status_code=404, detail=f"Job not found or could not be cancelled: {str(e)}")
 

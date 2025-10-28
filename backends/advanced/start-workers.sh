@@ -13,16 +13,20 @@ uv run python -c "
 from rq import Worker
 from redis import Redis
 import os
+import socket
 
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 redis_conn = Redis.from_url(redis_url)
+hostname = socket.gethostname()
 
-# Get all workers and clean up dead ones
+# Only clean up workers from THIS hostname (pod)
 workers = Worker.all(connection=redis_conn)
+cleaned = 0
 for worker in workers:
-    # Force cleanup of all registered workers from previous runs
-    worker.register_death()
-print(f'Cleaned up {len(workers)} stale workers')
+    if hostname in worker.name:
+        worker.register_death()
+        cleaned += 1
+print(f'Cleaned up {cleaned} stale workers from {hostname}')
 " 2>/dev/null || echo "No stale workers to clean"
 
 sleep 1

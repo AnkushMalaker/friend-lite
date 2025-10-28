@@ -40,6 +40,9 @@ COPY memory_config.yaml ./
 COPY start-k8s.sh start-workers.sh ./
 RUN chmod +x start-k8s.sh start-workers.sh
 
+# Activate virtual environment in PATH
+ENV PATH="/app/.venv/bin:$PATH"
+
 # Run the application with workers
-# K8s startup script starts both FastAPI backend and RQ workers with --no-sync
+# K8s startup script starts both FastAPI backend and RQ workers
 CMD ["./start-k8s.sh"]

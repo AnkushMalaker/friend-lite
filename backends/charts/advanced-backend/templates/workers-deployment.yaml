@@ -17,20 +17,6 @@ spec:
         {{- include "advanced-backend.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: workers
     spec:
-      dnsPolicy: "ClusterFirst"
-      dnsConfig:
-        nameservers:
-          - 8.8.8.8
-          - 8.8.4.4
-        options:
-          - name: ndots
-            value: "5"
-      initContainers:
-        - name: disable-ipv6
-          image: busybox:latest
-          command: ["sh", "-c", "sysctl -w net.ipv6.conf.all.disable_ipv6=1 || true"]
-          securityContext:
-            privileged: true
       containers:
         - name: {{ .Chart.Name }}-workers
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
