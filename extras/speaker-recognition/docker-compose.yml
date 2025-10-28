@@ -6,7 +6,7 @@ services:
     platform: linux/amd64
     build:
       context: .
-      dockerfile: Dockerfile-M2
+      dockerfile: Dockerfile
     image: speaker-recognition:latest
     env_file:
       - .env
@@ -31,6 +31,27 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  speaker-service-gpu:
+      <<: *base-speaker-service
+      profiles: ["gpu"]
+      networks:
+        default:
+          aliases:
+            - speaker-service
+      build:
+        context: .
+        dockerfile: Dockerfile
+        args:
+          PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cu121}
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: all
+                capabilities: [gpu]
+
 
   # React Web UI
   web-ui:

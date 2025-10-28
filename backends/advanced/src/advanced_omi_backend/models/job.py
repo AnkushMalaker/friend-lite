@@ -22,42 +22,46 @@ logger = logging.getLogger(__name__)
 
 # Global flag to track if Beanie is initialized in this process
 _beanie_initialized = False
-
+_beanie_init_lock = asyncio.Lock()
 
 async def _ensure_beanie_initialized():
     """Ensure Beanie is initialized in the current process (for RQ workers)."""
     global _beanie_initialized
+    async with _beanie_init_lock:
+        if _beanie_initialized:            
+            return
+        try:
+            import os
+            from motor.motor_asyncio import AsyncIOMotorClient
+            from beanie import init_beanie
+            from advanced_omi_backend.models.conversation import Conversation
+            from advanced_omi_backend.models.audio_file import AudioFile
+            from advanced_omi_backend.models.user import User                       
+            from pymongo.errors import ConfigurationError
+  
+            # Get MongoDB URI from environment
+            mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 
-    if _beanie_initialized:
-        return
+            # Create MongoDB client
+            client = AsyncIOMotorClient(mongodb_uri)
+            try:
+                database = client.get_default_database("friend-lite")
+            except ConfigurationError:
+                database = client["friend-lite"]
+                raise
+            _beanie_initialized = True
+            # Initialize Beanie
+            await init_beanie(
+                database=database,
+                document_models=[User, Conversation, AudioFile],
+            )
 
-    try:
-        import os
-        from motor.motor_asyncio import AsyncIOMotorClient
-        from beanie import init_beanie
-        from advanced_omi_backend.models.conversation import Conversation
-        from advanced_omi_backend.models.audio_file import AudioFile
-        from advanced_omi_backend.models.user import User
+            _beanie_initialized = True
+            logger.info("✅ Beanie initialized in RQ worker process")
 
-        # Get MongoDB URI from environment
-        mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-
-        # Create MongoDB client
-        client = AsyncIOMotorClient(mongodb_uri)
-        database = client.get_default_database("friend-lite")
-
-        # Initialize Beanie
-        await init_beanie(
-            database=database,
-            document_models=[User, Conversation, AudioFile],
-        )
-
-        _beanie_initialized = True
-        logger.info("✅ Beanie initialized in RQ worker process")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize Beanie in RQ worker: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Beanie in RQ worker: {e}")
+            raise
 
 
 class JobPriority(str, Enum):

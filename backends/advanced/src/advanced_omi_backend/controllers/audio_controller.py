@@ -147,8 +147,17 @@ async def upload_and_process_audio_files(
                     f"jobs: {job_ids['transcription']} → {job_ids['speaker_recognition']} → {job_ids['memory']}"
                 )
 
+            except (OSError, IOError) as e:
+                # File I/O errors during audio processing
+                audio_logger.exception(f"File I/O error processing {file.filename}")
+                processed_files.append({
+                    "filename": file.filename or "unknown",
+                    "status": "error",
+                    "error": str(e),
+                })
             except Exception as e:
-                audio_logger.error(f"Error processing file {file.filename}: {e}")
+                # Unexpected errors during file processing
+                audio_logger.exception(f"Unexpected error processing file {file.filename}")
                 processed_files.append({
                     "filename": file.filename or "unknown",
                     "status": "error",
@@ -169,8 +178,15 @@ async def upload_and_process_audio_files(
             },
         }
 
+    except (OSError, IOError) as e:
+        # File system errors during upload handling
+        audio_logger.exception("File I/O error in upload_and_process_audio_files")
+        return JSONResponse(
+            status_code=500, content={"error": f"File upload failed: {str(e)}"}
+        )
     except Exception as e:
-        audio_logger.error(f"Error in upload_and_process_audio_files: {e}")
+        # Unexpected errors in upload handler
+        audio_logger.exception("Unexpected error in upload_and_process_audio_files")
         return JSONResponse(
             status_code=500, content={"error": f"File upload failed: {str(e)}"}
         )
@@ -207,7 +223,8 @@ async def get_cropped_audio_info(audio_uuid: str, user: User):
         }
 
     except Exception as e:
-        audio_logger.error(f"Error fetching cropped audio info: {e}")
+        # Database or unexpected errors when fetching audio metadata
+        audio_logger.exception("Error fetching cropped audio info")
         return JSONResponse(status_code=500, content={"error": "Error fetching cropped audio info"})
 
 
@@ -296,13 +313,22 @@ async def reprocess_audio_cropping(audio_uuid: str, user: User):
                     status_code=500, content={"error": "Failed to reprocess audio cropping"}
                 )
 
+        except (OSError, IOError) as processing_error:
+            # File I/O errors during audio cropping
+            audio_logger.exception("File I/O error during audio cropping reprocessing")
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"Audio processing failed: {str(processing_error)}"},
+            )
         except Exception as processing_error:
-            audio_logger.error(f"Error during audio cropping reprocessing: {processing_error}")
+            # Unexpected errors during cropping operation
+            audio_logger.exception("Unexpected error during audio cropping reprocessing")
             return JSONResponse(
                 status_code=500,
                 content={"error": f"Audio processing failed: {str(processing_error)}"},
             )
 
     except Exception as e:
-        audio_logger.error(f"Error reprocessing audio cropping: {e}")
+        # Database or unexpected errors in reprocessing handler
+        audio_logger.exception("Error reprocessing audio cropping")
         return JSONResponse(status_code=500, content={"error": "Error reprocessing audio cropping"})
