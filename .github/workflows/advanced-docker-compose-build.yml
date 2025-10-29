@@ -37,22 +37,28 @@ jobs:
         with:
           script: |
             const {owner, repo} = context.repo;
-            const response = await github.rest.actions.listSelfHostedRunnersForRepo({
-              owner,
-              repo,
-              per_page: 100
-            });
-            const available = response.data.runners.find((runner) => runner.status === 'online' && !runner.busy);
+            try {
+              const response = await github.rest.actions.listSelfHostedRunnersForRepo({
+                owner,
+                repo,
+                per_page: 100
+              });
+              const available = response.data.runners.find((runner) => runner.status === 'online' && !runner.busy);
 
-            if (available) {
-              core.info(`Using self-hosted runner "${available.name}" with labels: ${available.labels.map((label) => label.name).join(', ')}`);
-              core.setOutput('runner', '["self-hosted","linux","x64"]');
-              core.setOutput('label', 'self-hosted');
-            } else {
+              if (available) {
+                core.info(`Using self-hosted runner "${available.name}" with labels: ${available.labels.map((label) => label.name).join(', ')}`);
+                core.setOutput('runner', '["self-hosted","linux","x64"]');
+                core.setOutput('label', 'self-hosted');
+                return;
+              }
+
               core.info('No idle self-hosted runners available; falling back to "ubuntu-latest".');
-              core.setOutput('runner', '"ubuntu-latest"');
-              core.setOutput('label', 'ubuntu-latest');
+            } catch (error) {
+              core.warning(`Unable to query self-hosted runners (${error.message}); falling back to "ubuntu-latest".`);
             }
+
+            core.setOutput('runner', '"ubuntu-latest"');
+            core.setOutput('label', 'ubuntu-latest');
 
   build-and-deploy:
     needs: detect-runner
