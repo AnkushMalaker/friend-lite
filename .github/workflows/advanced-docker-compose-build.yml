@@ -74,6 +74,7 @@ jobs:
     steps:
       - name: Show selected runner
         run: echo "Workflow running on ${{ needs.detect-runner.outputs.label }} runner"
+        working-directory: .
 
       - name: Checkout
         uses: actions/checkout@v4
