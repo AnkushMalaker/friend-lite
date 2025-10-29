@@ -47,7 +47,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create .env from secret (if provided)
-        if: ${{ env.ADVANCED_ENV != '' }}
+        if: env.ADVANCED_ENV != ''
         run: |
           echo "Writing .env from ADVANCED_ENV secret"
           printf "%s\n" "${ADVANCED_ENV}" > .env
