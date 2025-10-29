@@ -25,55 +25,21 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  detect-runner:
-    runs-on: ubuntu-latest
-    outputs:
-      runner: ${{ steps.determine.outputs.runner }}
-      label: ${{ steps.determine.outputs.label }}
-    steps:
-      - name: Determine runner target
-        id: determine
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            try {
-              const response = await github.rest.actions.listSelfHostedRunnersForRepo({
-                owner,
-                repo,
-                per_page: 100
-              });
-              const available = response.data.runners.find((runner) => runner.status === 'online' && !runner.busy);
-
-              if (available) {
-                core.info(`Using self-hosted runner "${available.name}" with labels: ${available.labels.map((label) => label.name).join(', ')}`);
-                core.setOutput('runner', '["self-hosted","linux","x64"]');
-                core.setOutput('label', 'self-hosted');
-                return;
-              }
-
-              core.info('No idle self-hosted runners available; falling back to "ubuntu-latest".');
-            } catch (error) {
-              core.info(`Unable to query self-hosted runners (${error.message}); falling back to "ubuntu-latest".`);
-            }
-
-            core.setOutput('runner', '"ubuntu-latest"');
-            core.setOutput('label', 'ubuntu-latest');
-
-  build-and-deploy:
-    needs: detect-runner
-    runs-on: ${{ fromJson(needs.detect-runner.outputs.runner) }}
+  build-self-hosted:
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 60
+    continue-on-error: true
     env:
       ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
+      RUNNER_FLAVOUR: self-hosted
     defaults:
       run:
         shell: bash
         working-directory: backends/advanced
 
-    steps:
+    steps: &advanced_build_steps
       - name: Show selected runner
-        run: echo "Workflow running on ${{ needs.detect-runner.outputs.label }} runner"
+        run: echo "Workflow running on ${RUNNER_FLAVOUR} runner"
         working-directory: .
 
       - name: Checkout
@@ -190,4 +156,18 @@ jobs:
 
             echo "Pushing $target_image"
             docker push "$target_image"
+
+  build-default:
+    needs: build-self-hosted
+    if: needs.build-self-hosted.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
+      RUNNER_FLAVOUR: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: backends/advanced
+    steps: *advanced_build_steps
           done
