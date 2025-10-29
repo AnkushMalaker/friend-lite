@@ -54,7 +54,7 @@ jobs:
 
               core.info('No idle self-hosted runners available; falling back to "ubuntu-latest".');
             } catch (error) {
-              core.warning(`Unable to query self-hosted runners (${error.message}); falling back to "ubuntu-latest".`);
+              core.info(`Unable to query self-hosted runners (${error.message}); falling back to "ubuntu-latest".`);
             }
 
             core.setOutput('runner', '"ubuntu-latest"');
