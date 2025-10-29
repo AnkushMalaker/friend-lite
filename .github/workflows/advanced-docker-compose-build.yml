@@ -142,7 +142,7 @@ jobs:
 
             echo "Pushing $target_image"
             docker push "$target_image"
-            echo "Removing local image tags for $svc_name"
+            echo "Removing local image tags for $svc_repo"
             docker image rm -f "$target_image" || true
             docker image rm -f "$img_id" || true
             echo "Pruning Docker builder cache and unused data"
@@ -153,7 +153,7 @@ jobs:
 
   build-default:
     needs: build-self-hosted
-    if: needs.build-self-hosted.result == 'success'
+    if: needs.build-self-hosted.result != 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
