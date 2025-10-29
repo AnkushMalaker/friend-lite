@@ -45,10 +45,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create .env from secret (if provided)
-        if: ${{ secrets.ADVANCED_ENV != '' }}
+        env:
+          ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
         run: |
-          echo "Writing .env from ADVANCED_ENV secret"
-          printf "%s\n" "${{ secrets.ADVANCED_ENV }}" > .env
+          if [ -n "${ADVANCED_ENV}" ]; then
+            echo "Writing .env from ADVANCED_ENV secret"
+            printf "%s\n" "${ADVANCED_ENV}" > .env
+          else
+            echo "ADVANCED_ENV secret not set; skipping .env creation"
+          fi
 
       - name: Source .env (if present)
         run: |
@@ -89,6 +94,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           set -euo pipefail
+          OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           # Only services with local Dockerfiles (skip redis/mongo/qdrant/caddy etc.)
           services=("friend-backend" "workers" "webui")
 
@@ -102,7 +108,7 @@ jobs:
               continue
             fi
 
-            target_image="$REGISTRY/$OWNER/$svc:$VERSION"
+            target_image="$REGISTRY/$OWNER_LC/$svc:$VERSION"
             echo "Tagging $img_id as $target_image"
             docker tag "$img_id" "$target_image"
 
