@@ -111,40 +111,32 @@ jobs:
           set -euo pipefail
           docker compose version
           OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
-          # Only services with local Dockerfiles (skip redis/mongo/qdrant/caddy etc.)
-          # Advanced project builds use the "advanced-" prefix; extras use explicit names
-          services=("advanced-friend-backend" "advanced-workers" "advanced-webui" "parakeet-asr" "speaker-recognition")
-          service_names=("friend-backend" "workers" "webui" "parakeet-asr" "speaker-recognition")
+          service_specs=(
+            "friend-backend|advanced-friend-backend|docker-compose.yml|."
+            "workers|advanced-workers|docker-compose.yml|."
+            "webui|advanced-webui|docker-compose.yml|."
+            "parakeet-asr|parakeet-asr|../../extras/asr-services/docker-compose.yml|../../extras/asr-services"
+            "speaker-service|speaker-recognition|../../extras/speaker-recognition/docker-compose.yml|../../extras/speaker-recognition"
+          )
 
-          for i in "${!services[@]}"; do
-            svc="${services[$i]}"
-            svc_name="${service_names[$i]}"
+          for spec in "${service_specs[@]}"; do
+            IFS='|' read -r svc svc_repo compose_file project_dir <<< "$spec"
 
-            echo "::group::Building $svc_name"
-            case "$svc" in
-              advanced-friend-backend|advanced-workers|advanced-webui)
-                docker compose build --pull "$svc"
-                ;;
-              parakeet-asr)
-                docker compose -f ../../extras/asr-services/docker-compose.yml --project-directory ../../extras/asr-services build parakeet-asr
-                ;;
-              speaker-recognition)
-                docker compose -f ../../extras/speaker-recognition/docker-compose.yml --project-directory ../../extras/speaker-recognition build speaker-service
-                ;;
-              *)
-                echo "Unknown service '$svc'; aborting."
-                exit 1
-                ;;
-            esac
+            echo "::group::Building $svc_repo"
+            if [ "$compose_file" = "docker-compose.yml" ] && [ "$project_dir" = "." ]; then
+              docker compose build --pull "$svc"
+            else
+              docker compose -f "$compose_file" --project-directory "$project_dir" build "$svc"
+            fi
 
-            img_id=$(docker images --format "{{.Repository}} {{.Tag}} {{.ID}}" | awk -v repo="$svc" '$1 == repo {print $3; exit}')
+            img_id=$(docker images --format "{{.ID}}" --filter "reference=${svc_repo}:*" | head -n1)
             if [ -z "${img_id:-}" ]; then
-              echo "Skipping $svc_name (no built image found after build)"
+              echo "Skipping $svc_repo (no built image found after build)"
               echo "::endgroup::"
               continue
             fi
 
-            target_image="$REGISTRY/$OWNER_LC/$svc_name:$VERSION"
+            target_image="$REGISTRY/$OWNER_LC/$svc_repo:$VERSION"
             echo "Tagging $img_id as $target_image"
             docker tag "$img_id" "$target_image"
 
