@@ -103,50 +103,44 @@ jobs:
           fi
           echo "VERSION=$VERSION" | tee -a "$GITHUB_OUTPUT"
 
-      - name: Docker Compose build (only services with local Dockerfiles)
-        run: |
-          docker compose version
-          docker compose build --pull
-
-      - name: Docker Compose build (extras/asr-services parakeet-asr)
-        run: |
-          docker compose version
-          docker compose -f ../../extras/asr-services/docker-compose.yml --project-directory ../../extras/asr-services build parakeet-asr
-
-      - name: Docker Compose build (extras/speaker-recognition speaker-service)
-        run: |
-          docker compose version
-          docker compose -f ../../extras/speaker-recognition/docker-compose.yml --project-directory ../../extras/speaker-recognition build speaker-service
-
-      - name: Install jq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
-
-      - name: Tag and push built images to GHCR
+      - name: Build, push, and prune services sequentially
         env:
           OWNER: ${{ github.repository_owner }}
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           set -euo pipefail
+          docker compose version
           OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           # Only services with local Dockerfiles (skip redis/mongo/qdrant/caddy etc.)
           # Advanced project builds use the "advanced-" prefix; extras use explicit names
           services=("advanced-friend-backend" "advanced-workers" "advanced-webui" "parakeet-asr" "speaker-recognition")
           service_names=("friend-backend" "workers" "webui" "parakeet-asr" "speaker-recognition")
 
-          # Get built images using docker images instead of docker compose images
-          echo "Looking for built images..."
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | grep -E "(advanced-friend-backend|advanced-workers|advanced-webui|parakeet-asr|speaker-recognition)" || echo "No matching images found"
-
           for i in "${!services[@]}"; do
             svc="${services[$i]}"
             svc_name="${service_names[$i]}"
-            
-            # Look for images with the service name as repository
-            img_id=$(docker images --format "{{.ID}}" --filter "reference=${svc}:*" | head -n1)
+
+            echo "::group::Building $svc_name"
+            case "$svc" in
+              advanced-friend-backend|advanced-workers|advanced-webui)
+                docker compose build --pull "$svc"
+                ;;
+              parakeet-asr)
+                docker compose -f ../../extras/asr-services/docker-compose.yml --project-directory ../../extras/asr-services build parakeet-asr
+                ;;
+              speaker-recognition)
+                docker compose -f ../../extras/speaker-recognition/docker-compose.yml --project-directory ../../extras/speaker-recognition build speaker-service
+                ;;
+              *)
+                echo "Unknown service '$svc'; aborting."
+                exit 1
+                ;;
+            esac
+
+            img_id=$(docker images --format "{{.Repository}} {{.Tag}} {{.ID}}" | awk -v repo="$svc" '$1 == repo {print $3; exit}')
             if [ -z "${img_id:-}" ]; then
-              echo "Skipping $svc_name (no built image found)"
+              echo "Skipping $svc_name (no built image found after build)"
+              echo "::endgroup::"
               continue
             fi
 
@@ -156,11 +150,18 @@ jobs:
 
             echo "Pushing $target_image"
             docker push "$target_image"
+            echo "Removing local image tags for $svc_name"
+            docker image rm -f "$target_image" || true
+            docker image rm -f "$img_id" || true
+            echo "Pruning Docker builder cache and unused data"
+            docker builder prune -af || true
+            docker system prune -af || true
+            echo "::endgroup::"
           done
 
   build-default:
     needs: build-self-hosted
-    if: needs.build-self-hosted.result != 'success'
+    if: needs.build-self-hosted.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
