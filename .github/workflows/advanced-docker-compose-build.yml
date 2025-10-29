@@ -106,8 +106,20 @@ jobs:
           # Only services with local Dockerfiles (skip redis/mongo/qdrant/caddy etc.)
           services=("friend-backend" "workers" "webui")
 
-          images_json=$(docker compose images --format json || echo "[]")
-          echo "$images_json" | jq '.' >/dev/null
+          # Get built images, handle empty/null response
+          images_output=$(docker compose images --format json 2>/dev/null || echo "")
+          if [ -z "$images_output" ] || [ "$images_output" = "null" ]; then
+            echo "No images found from docker compose images"
+            images_json="[]"
+          else
+            images_json="$images_output"
+          fi
+
+          # Validate JSON
+          if ! echo "$images_json" | jq empty 2>/dev/null; then
+            echo "Invalid JSON from docker compose images, using empty array"
+            images_json="[]"
+          fi
 
           for svc in "${services[@]}"; do
             img_id=$(echo "$images_json" | jq -r ".[] | select(.Name==\"$svc\") | .ID" | head -n1)
