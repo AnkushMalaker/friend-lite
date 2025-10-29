@@ -104,21 +104,26 @@ jobs:
           set -euo pipefail
           OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           # Only services with local Dockerfiles (skip redis/mongo/qdrant/caddy etc.)
-          services=("friend-backend" "workers" "webui")
+          # Docker Compose creates images with "advanced-" prefix
+          services=("advanced-friend-backend" "advanced-workers" "advanced-webui")
+          service_names=("friend-backend" "workers" "webui")
 
           # Get built images using docker images instead of docker compose images
           echo "Looking for built images..."
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | grep -E "(friend-backend|workers|webui)" || echo "No matching images found"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | grep -E "(advanced-friend-backend|advanced-workers|advanced-webui)" || echo "No matching images found"
 
-          for svc in "${services[@]}"; do
+          for i in "${!services[@]}"; do
+            svc="${services[$i]}"
+            svc_name="${service_names[$i]}"
+            
             # Look for images with the service name as repository
             img_id=$(docker images --format "{{.ID}}" --filter "reference=${svc}:*" | head -n1)
             if [ -z "${img_id:-}" ]; then
-              echo "Skipping $svc (no built image found)"
+              echo "Skipping $svc_name (no built image found)"
               continue
             fi
 
-            target_image="$REGISTRY/$OWNER_LC/$svc:$VERSION"
+            target_image="$REGISTRY/$OWNER_LC/$svc_name:$VERSION"
             echo "Tagging $img_id as $target_image"
             docker tag "$img_id" "$target_image"
 
