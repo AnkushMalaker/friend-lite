@@ -156,6 +156,7 @@ jobs:
 
             echo "Pushing $target_image"
             docker push "$target_image"
+          done
 
   build-default:
     needs: build-self-hosted
@@ -170,4 +171,3 @@ jobs:
         shell: bash
         working-directory: backends/advanced
     steps: *advanced_build_steps
-          done
