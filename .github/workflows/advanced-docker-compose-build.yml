@@ -1,0 +1,113 @@
+name: Build and Deploy Advanced (Docker Compose)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version tag override (e.g. v1.2.3)
+        required: false
+  push:
+    branches: [ "main" ]
+    paths:
+      - "backends/advanced/**"
+      - ".github/workflows/advanced-docker-compose-build.yml"
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: backends/advanced
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create .env from secret (if provided)
+        if: ${{ secrets.ADVANCED_ENV != '' }}
+        run: |
+          echo "Writing .env from ADVANCED_ENV secret"
+          printf "%s\n" "${{ secrets.ADVANCED_ENV }}" > .env
+
+      - name: Source .env (if present)
+        run: |
+          if [ -f .env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            source .env
+            set +a
+          else
+            echo ".env not found; continuing"
+          fi
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="sha-${GITHUB_SHA::7}"
+          fi
+          echo "VERSION=$VERSION" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Docker Compose build (only services with local Dockerfiles)
+        run: |
+          docker compose version
+          docker compose build --pull
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Tag and push built images to GHCR
+        env:
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          # Only services with local Dockerfiles (skip redis/mongo/qdrant/caddy etc.)
+          services=("friend-backend" "workers" "webui")
+
+          images_json=$(docker compose images --format json || echo "[]")
+          echo "$images_json" | jq '.' >/dev/null
+
+          for svc in "${services[@]}"; do
+            img_id=$(echo "$images_json" | jq -r ".[] | select(.Name==\"$svc\") | .ID" | head -n1)
+            if [ -z "${img_id:-}" ] || [ "$img_id" = "null" ]; then
+              echo "Skipping $svc (no built image found)"
+              continue
+            fi
+
+            target_image="$REGISTRY/$OWNER/$svc:$VERSION"
+            echo "Tagging $img_id as $target_image"
+            docker tag "$img_id" "$target_image"
+
+            echo "Pushing $target_image"
+            docker push "$target_image"
+          done
+
+
