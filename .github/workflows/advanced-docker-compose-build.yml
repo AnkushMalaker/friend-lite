@@ -50,12 +50,22 @@ jobs:
 
       - name: Copy .env.template to .env
         run: |
-          if [ -f .env.template ]; then
-            echo "Copying .env.template to .env"
-            cp .env.template .env
-          else
-            echo ".env.template not found; skipping"
-          fi
+          set -euo pipefail
+          copy_env() {
+            local dir="$1"
+            local template="${dir}/.env.template"
+            local target="${dir}/.env"
+            if [ -f "$template" ]; then
+              echo "Copying $template to $target"
+              cp "$template" "$target"
+            else
+              echo "$template not found; skipping"
+            fi
+          }
+
+          copy_env .
+          copy_env ../../extras/asr-services
+          copy_env ../../extras/speaker-recognition
 
       - name: Create .env from secret (if provided)
         if: env.ADVANCED_ENV != ''
@@ -91,6 +101,16 @@ jobs:
           docker compose version
           docker compose build --pull
 
+      - name: Docker Compose build (extras/asr-services parakeet-asr)
+        run: |
+          docker compose version
+          docker compose -f ../../extras/asr-services/docker-compose.yml --project-directory ../../extras/asr-services build parakeet-asr
+
+      - name: Docker Compose build (extras/speaker-recognition speaker-service)
+        run: |
+          docker compose version
+          docker compose -f ../../extras/speaker-recognition/docker-compose.yml --project-directory ../../extras/speaker-recognition build speaker-service
+
       - name: Install jq
         run: |
           sudo apt-get update
@@ -104,13 +124,13 @@ jobs:
           set -euo pipefail
           OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           # Only services with local Dockerfiles (skip redis/mongo/qdrant/caddy etc.)
-          # Docker Compose creates images with "advanced-" prefix
-          services=("advanced-friend-backend" "advanced-workers" "advanced-webui")
-          service_names=("friend-backend" "workers" "webui")
+          # Advanced project builds use the "advanced-" prefix; extras use explicit names
+          services=("advanced-friend-backend" "advanced-workers" "advanced-webui" "parakeet-asr" "speaker-recognition")
+          service_names=("friend-backend" "workers" "webui" "parakeet-asr" "speaker-recognition")
 
           # Get built images using docker images instead of docker compose images
           echo "Looking for built images..."
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | grep -E "(advanced-friend-backend|advanced-workers|advanced-webui)" || echo "No matching images found"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | grep -E "(advanced-friend-backend|advanced-workers|advanced-webui|parakeet-asr|speaker-recognition)" || echo "No matching images found"
 
           for i in "${!services[@]}"; do
             svc="${services[$i]}"
@@ -130,4 +150,3 @@ jobs:
             echo "Pushing $target_image"
             docker push "$target_image"
           done
-
