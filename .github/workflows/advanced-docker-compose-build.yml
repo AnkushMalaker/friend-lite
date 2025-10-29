@@ -48,6 +48,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Copy .env.template to .env
+        run: |
+          if [ -f .env.template ]; then
+            echo "Copying .env.template to .env"
+            cp .env.template .env
+          else
+            echo ".env.template not found; skipping"
+          fi
+
       - name: Create .env from secret (if provided)
         if: env.ADVANCED_ENV != ''
         run: |
