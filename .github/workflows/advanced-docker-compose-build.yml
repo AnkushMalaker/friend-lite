@@ -19,13 +19,44 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: read
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-and-deploy:
+  detect-runner:
     runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.determine.outputs.runner }}
+      label: ${{ steps.determine.outputs.label }}
+    steps:
+      - name: Determine runner target
+        id: determine
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const response = await github.rest.actions.listSelfHostedRunnersForRepo({
+              owner,
+              repo,
+              per_page: 100
+            });
+            const available = response.data.runners.find((runner) => runner.status === 'online' && !runner.busy);
+
+            if (available) {
+              core.info(`Using self-hosted runner "${available.name}" with labels: ${available.labels.map((label) => label.name).join(', ')}`);
+              core.setOutput('runner', '["self-hosted","linux","x64"]');
+              core.setOutput('label', 'self-hosted');
+            } else {
+              core.info('No idle self-hosted runners available; falling back to "ubuntu-latest".');
+              core.setOutput('runner', '"ubuntu-latest"');
+              core.setOutput('label', 'ubuntu-latest');
+            }
+
+  build-and-deploy:
+    needs: detect-runner
+    runs-on: ${{ fromJson(needs.detect-runner.outputs.runner) }}
     timeout-minutes: 60
     env:
       ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
@@ -35,6 +66,9 @@ jobs:
         working-directory: backends/advanced
 
     steps:
+      - name: Show selected runner
+        run: echo "Workflow running on ${{ needs.detect-runner.outputs.label }} runner"
+
       - name: Checkout
         uses: actions/checkout@v4
 
