@@ -25,6 +25,8 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
     defaults:
       run:
         shell: bash
@@ -45,15 +47,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create .env from secret (if provided)
-        env:
-          ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
+        if: ${{ env.ADVANCED_ENV != '' }}
         run: |
-          if [ -n "${ADVANCED_ENV}" ]; then
-            echo "Writing .env from ADVANCED_ENV secret"
-            printf "%s\n" "${ADVANCED_ENV}" > .env
-          else
-            echo "ADVANCED_ENV secret not set; skipping .env creation"
-          fi
+          echo "Writing .env from ADVANCED_ENV secret"
+          printf "%s\n" "${ADVANCED_ENV}" > .env
 
       - name: Source .env (if present)
         run: |
@@ -115,5 +112,4 @@ jobs:
             echo "Pushing $target_image"
             docker push "$target_image"
           done
-
 
