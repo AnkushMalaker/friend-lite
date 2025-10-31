@@ -8,10 +8,7 @@ dependencies = [
     "fastapi>=0.115.12",
     "uvicorn>=0.34.2",
     "scipy>=1.10.0",
-    "pyannote.audio==3.1.1",  # Version 3.3+ requires torchcodec which lacks ARM wheels
-    "torch>=2.0.0,<2.3.0",  # Pin to versions compatible with pyannote.audio 3.1.1
-    "torchaudio>=2.0.0,<2.3.0",  # Pin to versions compatible with pyannote.audio 3.1.1
-    "numpy>=1.20.0,<2.0.0",  # Pin to numpy 1.x for pyannote.audio 3.1.1 compatibility
+    "pyannote.audio>=3.3.2",
     "aiohttp>=3.8.0",
     "python-multipart>=0.0.6",
     "pydantic>=2.0.0",
@@ -22,7 +19,6 @@ dependencies = [
     "pydub>=0.25.1",
     "yt-dlp>=2025.7.21",
     "websockets>=12.0",
-    "packaging>=21.0",
     # Audio processing and visualization
     "librosa>=0.10.0",
     "plotly>=5.18.0",
