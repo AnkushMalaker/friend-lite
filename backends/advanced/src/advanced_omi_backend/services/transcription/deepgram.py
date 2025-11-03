@@ -184,11 +184,13 @@ class DeepgramProvider(BatchTranscriptionProvider):
                             logger.warning("Deepgram returned empty transcript")
                             return {"text": "", "words": [], "segments": []}
                     else:
-                        logger.warning("Deepgram response missing expected transcript structure")
-                        return {"text": "", "words": [], "segments": []}
+                        error_msg = "Deepgram response missing expected transcript structure"
+                        logger.error(error_msg)
+                        raise RuntimeError(error_msg)
                 else:
-                    logger.error(f"Deepgram API error: {response.status_code} - {response.text}")
-                    return {"text": "", "words": [], "segments": []}
+                    error_msg = f"Deepgram API error: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
 
         except httpx.TimeoutException as e:
             timeout_type = "unknown"
@@ -200,13 +202,16 @@ class DeepgramProvider(BatchTranscriptionProvider):
                 timeout_type = "write (upload)"
             elif "pool" in str(e).lower():
                 timeout_type = "connection pool"
-            logger.error(
-                f"HTTP {timeout_type} timeout during Deepgram API call for {len(audio_data)} bytes: {e}"
-            )
-            return {"text": "", "words": [], "segments": []}
+            error_msg = f"HTTP {timeout_type} timeout during Deepgram API call for {len(audio_data)} bytes: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+        except RuntimeError:
+            # Re-raise RuntimeError from above (API errors, timeouts)
+            raise
         except Exception as e:
-            logger.error(f"Error calling Deepgram API: {e}")
-            return {"text": "", "words": [], "segments": []}
+            error_msg = f"Unexpected error calling Deepgram API: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
 
 class DeepgramStreamingProvider(StreamingTranscriptionProvider):

@@ -446,11 +446,11 @@ async def flush_jobs(
         raise HTTPException(status_code=403, detail="Admin access required")
 
     try:
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from rq.registry import FinishedJobRegistry, FailedJobRegistry, CanceledJobRegistry
         from advanced_omi_backend.controllers.queue_controller import get_queue
 
-        cutoff_time = datetime.utcnow() - timedelta(hours=request.older_than_hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=request.older_than_hours)
         total_removed = 0
 
         # Get all queues

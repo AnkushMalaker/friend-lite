@@ -9,6 +9,15 @@ from enum import Enum
 memory_logger = logging.getLogger("memory_service")
 
 
+def _is_langfuse_enabled() -> bool:
+    """Check if Langfuse is properly configured."""
+    return bool(
+        os.getenv("LANGFUSE_PUBLIC_KEY")
+        and os.getenv("LANGFUSE_SECRET_KEY")
+        and os.getenv("LANGFUSE_HOST")
+    )
+
+
 class LLMProvider(Enum):
     """Supported LLM providers."""
     OPENAI = "openai"
@@ -249,11 +258,19 @@ def get_embedding_dims(llm_config: Dict[str, Any]) -> int:
     """
     embedding_model = llm_config.get('embedding_model')
     try:
-        import langfuse.openai as openai
-        client = openai.OpenAI(
-            api_key=llm_config.get('api_key'), 
-            base_url=llm_config.get('base_url')
-        )
+        # Conditionally use Langfuse if configured
+        if _is_langfuse_enabled():
+            import langfuse.openai as openai
+            client = openai.OpenAI(
+                api_key=llm_config.get('api_key'),
+                base_url=llm_config.get('base_url')
+            )
+        else:
+            from openai import OpenAI
+            client = OpenAI(
+                api_key=llm_config.get('api_key'),
+                base_url=llm_config.get('base_url')
+            )
         response = client.embeddings.create(
             model=embedding_model,
             input="hello world"

@@ -57,12 +57,25 @@ class OpenAILLMClient(LLMClient):
         if not self.api_key or not self.base_url or not self.model:
             raise ValueError("OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL must be set")
 
-        # Initialize OpenAI client
+        # Initialize OpenAI client with optional Langfuse tracing
         try:
-            import langfuse.openai as openai
+            # Check if Langfuse is configured
+            langfuse_enabled = (
+                os.getenv("LANGFUSE_PUBLIC_KEY")
+                and os.getenv("LANGFUSE_SECRET_KEY")
+                and os.getenv("LANGFUSE_HOST")
+            )
 
-            self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
-            self.logger.info(f"OpenAI client initialized with base_url: {self.base_url}")
+            if langfuse_enabled:
+                # Use Langfuse-wrapped OpenAI for tracing
+                import langfuse.openai as openai
+                self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+                self.logger.info(f"OpenAI client initialized with Langfuse tracing, base_url: {self.base_url}")
+            else:
+                # Use regular OpenAI client without tracing
+                from openai import OpenAI
+                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+                self.logger.info(f"OpenAI client initialized (no tracing), base_url: {self.base_url}")
         except ImportError:
             self.logger.error("OpenAI library not installed. Install with: pip install openai")
             raise
