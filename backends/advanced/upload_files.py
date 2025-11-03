@@ -219,8 +219,8 @@ def upload_files_async(files: list[str], token: str, base_url: str = "http://loc
         logger.error("No files to upload.")
         return False
     
-    logger.info(f"🚀 Starting async upload to {base_url}/api/process-audio-files-async ...")
-    
+    logger.info(f"🚀 Starting async upload to {base_url}/api/audio/upload ...")
+
     # Prepare files for upload
     files_data = []
     for file_path in files:
@@ -229,15 +229,15 @@ def upload_files_async(files: list[str], token: str, base_url: str = "http://loc
         except IOError as e:
             logger.error(f"Error opening file {file_path}: {e}")
             continue
-    
+
     if not files_data:
         logger.error("No files could be opened for upload.")
         return False
-    
+
     try:
         # Submit files for async processing
         response = requests.post(
-            f"{base_url}/api/process-audio-files-async",
+            f"{base_url}/api/audio/upload",
             files=files_data,
             data={'device_name': 'file_upload_batch'},
             headers={
@@ -288,7 +288,7 @@ def upload_files_async(files: list[str], token: str, base_url: str = "http://loc
 
 def poll_job_status(job_id: str, token: str, base_url: str, total_files: int) -> bool:
     """Poll job status until completion with progress updates."""
-    status_url = f"{base_url}/api/process-audio-files/jobs/{job_id}"
+    status_url = f"{base_url}/api/queue/jobs/{job_id}"
     headers = {'Authorization': f'Bearer {token}'}
     
     start_time = time.time()

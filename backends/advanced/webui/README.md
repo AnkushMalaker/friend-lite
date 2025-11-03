@@ -191,7 +191,7 @@ The frontend integrates with these backend endpoints:
 - `GET /api/clients/active` - Active WebSocket clients
 
 ### Upload (Admin)
-- `POST /api/process-audio-files` - Upload and process audio files
+- `POST /api/audio/upload` - Upload and process audio files
 
 ## Deployment Notes
 

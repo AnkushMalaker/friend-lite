@@ -1,69 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "advanced-backend.fullname" . }}
+  name: {{ include "advanced-backend.fullname" . }}-workers
   labels:
     {{- include "advanced-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workers
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.workers.replicaCount | default 1 }}
   selector:
     matchLabels:
       {{- include "advanced-backend.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: workers
   template:
     metadata:
       labels:
         {{- include "advanced-backend.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: workers
     spec:
       containers:
-        # Main FastAPI backend
-        - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          ports:
-            - name: http
-              containerPort: {{ .Values.service.port }}
-              protocol: TCP
-          envFrom:
-            - configMapRef:
-                name: friend-lite-config
-            - secretRef:
-                name: friend-lite-secrets
-          env:
-            # Override specific values from Kubernetes/Helm if needed
-            {{- range $key, $value := .Values.env }}
-            - name: {{ $key }}
-              value: {{ $value | quote }}
-            {{- end }}
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 60
-            periodSeconds: 120
-            timeoutSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /readiness
-              port: http
-            initialDelaySeconds: 30
-            periodSeconds: 120
-            timeoutSeconds: 10
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            {{- if .Values.persistence.enabled }}
-            - name: data-volume
-              mountPath: {{ .Values.persistence.mountPath }}
-            - name: data-volume
-              mountPath: /app/audio_chunks
-            {{- end }}
-            - name: mem0-ca-cert
-              mountPath: /etc/ssl/certs/mem0-ca.crt
-              subPath: ca.crt
-              readOnly: true
-
-        {{- if .Values.workers.sidecar.enabled }}
-        # Workers sidecar container (optional)
         - name: {{ .Chart.Name }}-workers
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -74,6 +28,7 @@ spec:
             - secretRef:
                 name: friend-lite-secrets
           env:
+            # Override specific values from Kubernetes/Helm if needed
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
@@ -91,7 +46,6 @@ spec:
               mountPath: /etc/ssl/certs/mem0-ca.crt
               subPath: ca.crt
               readOnly: true
-        {{- end }}
       volumes:
         {{- if .Values.persistence.enabled }}
         - name: data-volume
@@ -101,15 +55,15 @@ spec:
         - name: mem0-ca-cert
           configMap:
             name: mem0-ca-cert
-      {{- with .Values.nodeSelector }}
+      {{- with .Values.workers.nodeSelector | default .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with .Values.workers.affinity | default .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with .Values.workers.tolerations | default .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}

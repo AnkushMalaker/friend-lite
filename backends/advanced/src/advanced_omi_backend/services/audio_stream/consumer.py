@@ -577,7 +577,7 @@ class BaseAudioStreamConsumer(ABC):
             approximate=True
         )
 
-        logger.info(
+        logger.debug(
             f"➡️ Stored result {chunk_id} in {session_results_stream}: "
             f"text_len={len(text)}, msg_id={message_id.decode()}"
         )

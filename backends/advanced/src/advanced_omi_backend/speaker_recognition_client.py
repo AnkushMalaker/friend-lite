@@ -5,6 +5,7 @@ This module provides an optional integration with the speaker recognition servic
 to enhance transcripts with actual speaker names instead of generic labels.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import aiohttp
-from aiohttp import ClientConnectorError, ClientTimeout
+from aiohttp import ClientConnectorError
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ class SpeakerRecognitionClient:
         except ClientConnectorError as e:
             logger.error(f"🎤 Failed to connect to speaker recognition service: {e}")
             return {}
-        except ClientTimeout as e:
+        except asyncio.TimeoutError as e:
             logger.error(f"🎤 Timeout connecting to speaker recognition service: {e}")
             return {}
         except aiohttp.ClientError as e:
@@ -475,7 +476,7 @@ class SpeakerRecognitionClient:
         import uuid
         from pathlib import Path
         from advanced_omi_backend.utils.audio_extraction import extract_audio_for_results
-        from advanced_omi_backend.audio_utils import write_pcm_to_wav
+        from advanced_omi_backend.utils.audio_utils import write_pcm_to_wav
 
         logger.info(f"🎤 [SPEAKER CHECK] Starting speaker check for session {session_id}")
         logger.info(f"🎤 [SPEAKER CHECK] Client: {client_id}, User: {user_id}")

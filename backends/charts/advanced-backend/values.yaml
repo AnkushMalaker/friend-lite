@@ -1,6 +1,26 @@
 # Default values for advanced-backend
 replicaCount: 1
 
+# Workers configuration
+workers:
+  # Option 1: Sidecar mode (workers in same pod as API)
+  # Simpler setup, shares volumes automatically, no separate deployment
+  sidecar:
+    enabled: true  # Set to false to use separate deployment instead
+
+  # Option 2: Separate deployment (only used if sidecar.enabled = false)
+  # Better for production - independent scaling and resource isolation
+  replicaCount: 1
+
+  # Worker resource limits (applies to both modes)
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 50m  # Reduced from 500m - actual usage is ~1-6m
+      memory: 2Gi
+
 image:
   repository: advanced-backend
   pullPolicy: Always
