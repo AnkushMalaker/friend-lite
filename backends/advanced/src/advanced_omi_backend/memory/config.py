@@ -1,10 +1,10 @@
 """Memory service configuration utilities."""
 
-import os
 import logging
-from typing import Dict, Any
+import os
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict
 
 memory_logger = logging.getLogger("memory_service")
 
@@ -260,8 +260,8 @@ def get_embedding_dims(llm_config: Dict[str, Any]) -> int:
     try:
         # Conditionally use Langfuse if configured
         if _is_langfuse_enabled():
-            import langfuse.openai as openai
-            client = openai.OpenAI(
+            from langfuse.openai import OpenAI
+            client = OpenAI(
                 api_key=llm_config.get('api_key'),
                 base_url=llm_config.get('base_url')
             )

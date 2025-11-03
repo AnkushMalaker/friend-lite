@@ -1005,7 +1005,7 @@ src/advanced_omi_backend/
 - `GET /api/conversations/{conversation_id}/versions` - Get version history
 - `POST /api/conversations/{conversation_id}/activate-transcript` - Switch transcript version
 - `POST /api/conversations/{conversation_id}/activate-memory` - Switch memory version
-- `POST /api/process-audio-files` - Batch audio file processing
+- `POST /api/audio/upload` - Batch audio file upload and processing
 - WebSocket `/ws_omi` - Real-time Opus audio streaming with Wyoming protocol (OMI devices)
 - WebSocket `/ws_pcm` - Real-time PCM audio streaming with Wyoming protocol (all apps)
 
