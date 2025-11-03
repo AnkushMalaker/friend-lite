@@ -35,6 +35,9 @@ MEMORY_QUEUE = "memory"
 AUDIO_QUEUE = "audio"
 DEFAULT_QUEUE = "default"
 
+# Centralized list of all queue names
+QUEUE_NAMES = [DEFAULT_QUEUE, TRANSCRIPTION_QUEUE, MEMORY_QUEUE, AUDIO_QUEUE]
+
 # Job retention configuration
 JOB_RESULT_TTL = int(os.getenv("RQ_RESULT_TTL", 3600))  # 1 hour default
 
@@ -66,7 +69,7 @@ def get_job_stats() -> Dict[str, Any]:
     cancelled_jobs = 0
     deferred_jobs = 0  # Jobs waiting for dependencies (depends_on)
 
-    for queue_name in [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, AUDIO_QUEUE, DEFAULT_QUEUE]:
+    for queue_name in QUEUE_NAMES:
         queue = get_queue(queue_name)
 
         queued_jobs += len(queue)
@@ -104,7 +107,7 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
     """
     all_jobs = []
 
-    queues_to_check = [queue_name] if queue_name else [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, AUDIO_QUEUE, DEFAULT_QUEUE]
+    queues_to_check = [queue_name] if queue_name else QUEUE_NAMES
 
     for qname in queues_to_check:
         queue = get_queue(qname)
@@ -472,7 +475,7 @@ def get_queue_health() -> Dict[str, Any]:
         return health
 
     # Check each queue
-    for queue_name in [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, AUDIO_QUEUE, DEFAULT_QUEUE]:
+    for queue_name in QUEUE_NAMES:
         queue = get_queue(queue_name)
         health["queues"][queue_name] = {
             "count": len(queue),

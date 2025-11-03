@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from advanced_omi_backend.auth import current_active_user
-from advanced_omi_backend.controllers.queue_controller import get_jobs, get_job_stats, get_queue_health, redis_conn
+from advanced_omi_backend.controllers.queue_controller import get_jobs, get_job_stats, get_queue_health, redis_conn, QUEUE_NAMES
 from advanced_omi_backend.users import User
 from rq.job import Job
 import redis.asyncio as aioredis
@@ -154,7 +154,7 @@ async def get_jobs_by_session(
 
         all_jobs = []
         processed_job_ids = set()  # Track which jobs we've already processed
-        queues = ["default", "transcription", "memory", "audio"]
+        queues = QUEUE_NAMES
 
         def get_job_status(job, registries_map):
             """Determine job status from registries."""
@@ -454,7 +454,7 @@ async def flush_jobs(
         total_removed = 0
 
         # Get all queues
-        queues = ["default", "transcription", "memory", "audio"]
+        queues = QUEUE_NAMES
 
         for queue_name in queues:
             queue = get_queue(queue_name)
@@ -528,7 +528,7 @@ async def flush_all_jobs(
         from advanced_omi_backend.controllers.queue_controller import get_queue
 
         total_removed = 0
-        queues = ["default", "transcription", "memory", "audio"]
+        queues = QUEUE_NAMES
 
         for queue_name in queues:
             queue = get_queue(queue_name)
@@ -733,7 +733,7 @@ async def get_dashboard_data(
         async def fetch_jobs_by_status(status_name: str, limit: int = 100):
             """Fetch jobs by status using existing registry logic."""
             try:
-                queues = ["default", "transcription", "memory", "audio"]
+                queues = QUEUE_NAMES
                 all_jobs = []
 
                 for queue_name in queues:
@@ -823,7 +823,7 @@ async def get_dashboard_data(
 
                 all_jobs = []
                 processed_job_ids = set()
-                queues = ["default", "transcription", "memory", "audio"]
+                queues = QUEUE_NAMES
 
                 def get_job_status(job):
                     if job.is_queued:
