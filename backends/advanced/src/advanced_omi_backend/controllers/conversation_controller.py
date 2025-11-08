@@ -137,10 +137,13 @@ async def get_conversations(user: User):
         # Convert conversations to API format
         conversations = []
         for conv in user_conversations:
-            # Format conversation for list - use model_dump with exclusions
+            # Ensure legacy fields are populated from active transcript version
+            conv._update_legacy_transcript_fields()
+            
+            # Format conversation for list - include segments but exclude large nested fields
             conv_dict = conv.model_dump(
                 mode='json',  # Automatically converts datetime to ISO strings
-                exclude={'id', 'transcript', 'segments', 'transcript_versions', 'memory_versions'}  # Exclude large fields for list view
+                exclude={'id', 'transcript_versions', 'memory_versions'}  # Include segments for UI display
             )
 
             # Add computed/external fields
@@ -349,7 +352,7 @@ async def reprocess_transcript(conversation_id: str, user: User):
         from advanced_omi_backend.workers.speaker_jobs import recognise_speakers_job
         from advanced_omi_backend.workers.audio_jobs import process_cropping_job
         from advanced_omi_backend.workers.memory_jobs import process_memory_job
-        from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, default_queue, JOB_RESULT_TTL, redis_conn
+        from advanced_omi_backend.controllers.queue_controller import transcription_queue, memory_queue, default_queue, JOB_RESULT_TTL
 
         # Job 1: Transcribe audio to text
         transcript_job = transcription_queue.enqueue(
@@ -400,10 +403,10 @@ async def reprocess_transcript(conversation_id: str, user: User):
         logger.info(f"📥 RQ: Enqueued audio cropping job {cropping_job.id} (depends on {speaker_job.id})")
 
         # Job 4: Extract memories (depends on cropping)
+        # Note: redis_client is injected by @async_job decorator, don't pass it directly
         memory_job = memory_queue.enqueue(
             process_memory_job,
             conversation_id,
-            redis_conn,
             depends_on=cropping_job,
             job_timeout=1800,
             result_ttl=JOB_RESULT_TTL,

@@ -197,19 +197,52 @@ async def transcribe_full_audio_job(
 
     # Convert segments to SpeakerSegment objects
     speaker_segments = []
-    for seg in segments:
-        # Use identified_as if available (from speaker recognition), otherwise use speaker label
-        speaker_name = seg.get("identified_as") or seg.get("speaker", "Unknown")
+    
+    if segments:
+        # Use provided segments
+        for seg in segments:
+            # Use identified_as if available (from speaker recognition), otherwise use speaker label
+            speaker_name = seg.get("identified_as") or seg.get("speaker", "Unknown")
 
+            speaker_segments.append(
+                Conversation.SpeakerSegment(
+                    start=seg.get("start", 0),
+                    end=seg.get("end", 0),
+                    text=seg.get("text", ""),
+                    speaker=speaker_name,
+                    confidence=seg.get("confidence")
+                )
+            )
+    elif transcript_text:
+        # NOTE: Parakeet falls here. 
+        # If no segments but we have text, create a single segment from the full transcript
+        # Calculate duration from words if available, otherwise estimate from audio
+        start_time_seg = 0.0
+        end_time_seg = 0.0
+        
+        if words:
+            # Use word timestamps if available
+            start_times = [w.get("start", 0) for w in words if "start" in w]
+            end_times = [w.get("end", 0) for w in words if "end" in w]
+            if start_times:
+                start_time_seg = min(start_times)
+            if end_times:
+                end_time_seg = max(end_times)
+        else:
+            # Estimate duration: assume ~150 words per minute, or use audio file duration
+            # For now, use a default duration if we can't calculate it
+            end_time_seg = len(transcript_text.split()) * 0.4  # Rough estimate: 0.4s per word
+        
         speaker_segments.append(
             Conversation.SpeakerSegment(
-                start=seg.get("start", 0),
-                end=seg.get("end", 0),
-                text=seg.get("text", ""),
-                speaker=speaker_name,
-                confidence=seg.get("confidence")
+                start=start_time_seg,
+                end=end_time_seg if end_time_seg > start_time_seg else start_time_seg + 1.0,
+                text=transcript_text,
+                speaker="Unknown",
+                confidence=None
             )
         )
+        logger.info(f"📊 Created single segment from transcript text (no segments returned by provider)")
 
     logger.info(f"📊 Created {len(speaker_segments)} speaker segments")
 

@@ -158,7 +158,7 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
         # For advanced backend, pass URLs of other selected services and HTTPS config
         cmd = service['cmd'].copy()
         if 'speaker-recognition' in selected_services:
-            cmd.extend(['--speaker-service-url', 'http://host.docker.internal:8085'])
+            cmd.extend(['--speaker-service-url', 'http://127.0.0.1:8085'])
         if 'asr-services' in selected_services:
             cmd.extend(['--parakeet-asr-url', 'http://host.docker.internal:8767'])
         
@@ -174,21 +174,40 @@ def run_service_setup(service_name, selected_services, https_enabled=False, serv
         if service_name == 'speaker-recognition' and https_enabled and server_ip:
             cmd.extend(['--enable-https', '--server-ip', server_ip])
         
-        # For speaker-recognition, try to pass API keys and config if available
+        # For speaker-recognition, validate HF_TOKEN is required
         if service_name == 'speaker-recognition':
+            # HF_TOKEN is required for speaker-recognition
+            speaker_env_path = 'extras/speaker-recognition/.env'
+            hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
+            
+            # Check if HF_TOKEN is missing or is a placeholder
+            if not hf_token or is_placeholder(hf_token, 'your_huggingface_token_here', 'your-huggingface-token-here', 'hf_xxxxx'):
+                console.print("\n[red][ERROR][/red] HF_TOKEN is required for speaker-recognition service")
+                console.print("[yellow]Speaker recognition requires a Hugging Face token to download models[/yellow]")
+                console.print("Get your token from: https://huggingface.co/settings/tokens")
+                console.print()
+                
+                # Prompt for HF_TOKEN
+                try:
+                    hf_token_input = console.input("[cyan]Enter your HF_TOKEN[/cyan]: ").strip()
+                    if not hf_token_input or is_placeholder(hf_token_input, 'your_huggingface_token_here', 'your-huggingface-token-here', 'hf_xxxxx'):
+                        console.print("[red][ERROR][/red] Invalid HF_TOKEN provided. Speaker-recognition setup cancelled.")
+                        return False
+                    hf_token = hf_token_input
+                except EOFError:
+                    console.print("[red][ERROR][/red] HF_TOKEN is required. Speaker-recognition setup cancelled.")
+                    return False
+            
+            # Pass HF Token to init script
+            cmd.extend(['--hf-token', hf_token])
+            console.print("[green][SUCCESS][/green] HF_TOKEN configured")
+            
             # Pass Deepgram API key from backend if available
             backend_env_path = 'backends/advanced/.env'
             deepgram_key = read_env_value(backend_env_path, 'DEEPGRAM_API_KEY')
             if deepgram_key and not is_placeholder(deepgram_key, 'your_deepgram_api_key_here', 'your-deepgram-api-key-here'):
                 cmd.extend(['--deepgram-api-key', deepgram_key])
                 console.print("[blue][INFO][/blue] Found existing DEEPGRAM_API_KEY from backend config, reusing")
-
-            # Pass HF Token from existing speaker recognition .env if available
-            speaker_env_path = 'extras/speaker-recognition/.env'
-            hf_token = read_env_value(speaker_env_path, 'HF_TOKEN')
-            if hf_token and not is_placeholder(hf_token, 'your_huggingface_token_here', 'your-huggingface-token-here'):
-                cmd.extend(['--hf-token', hf_token])
-                console.print("[blue][INFO][/blue] Found existing HF_TOKEN, reusing")
 
             # Pass compute mode from existing .env if available
             compute_mode = read_env_value(speaker_env_path, 'COMPUTE_MODE')

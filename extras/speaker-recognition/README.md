@@ -50,7 +50,29 @@ For non-interactive setup:
 ./init.sh --hf-token YOUR_TOKEN --compute-mode gpu --enable-https --server-ip 100.83.66.30
 ```
 
-### 4. Start the system
+### 4. Generate SSL Certificates (Required for Nginx)
+
+**⚠️ Important**: The nginx proxy requires SSL certificates to start. SSL certificates are optional through `wizard.sh`. If you haven't generated them during setup, you must create them manually:
+
+```bash
+cd extras/speaker-recognition
+# Generate certificates for localhost (default)
+bash ssl/generate-ssl.sh localhost
+
+# Or generate for a specific IP/domain (e.g., Tailscale IP)
+bash ssl/generate-ssl.sh 100.83.66.30
+```
+
+This creates:
+- `ssl/server.crt` - SSL certificate
+- `ssl/server.key` - Private key
+
+**Note**: If SSL certificates are missing, nginx will fail to start with errors like:
+```
+cannot load certificate "/etc/nginx/ssl/server.crt": BIO_new_file() failed
+```
+
+### 5. Start the system
 ```bash
 # For CPU-only
 docker compose --profile cpu up --build -d
@@ -73,7 +95,7 @@ docker compose --profile cpu down
 docker compose --profile gpu down
 ```
 
-### 5. Access the Web UI
+### 6. Access the Web UI
 
 **HTTPS Mode (Recommended for microphone access):**
 - **Secure Access**: https://localhost:8444/ or https://your-ip:8444/
@@ -85,7 +107,7 @@ docker compose --profile gpu down
 
 **Microphone access requires HTTPS for network connections (not just localhost).**
 
-### 6. Get Started
+### 7. Get Started
 1. **Create a user** using the sidebar
 2. **Upload audio** in the "Audio Viewer" page
 3. **Annotate segments** in the "Annotation" page
@@ -393,9 +415,20 @@ The React UI is configured with HTTPS enabled by default (`REACT_UI_HTTPS=true`)
 
 ## 🚨 Troubleshooting
 
+**Nginx failing to start with SSL certificate errors?**
+- Error: `cannot load certificate "/etc/nginx/ssl/server.crt": BIO_new_file() failed`
+- **Solution**: Generate SSL certificates (see step 4 in Quick Start):
+  ```bash
+  cd extras/speaker-recognition
+  bash ssl/generate-ssl.sh localhost
+  ```
+- Verify certificates exist: `ls -la ssl/server.crt ssl/server.key`
+- Restart nginx: `docker compose --profile cpu restart nginx` (or `--profile gpu`)
+
 **Can't access the web UI?**
 - Check if services are running: `docker compose --profile cpu ps` (or `--profile gpu`)
 - View logs: `docker compose --profile cpu logs web-ui`
+- Check nginx logs: `docker compose --profile cpu logs nginx`
 
 **Speaker service not responding?**
 - Check backend logs: `docker compose --profile cpu logs speaker-service`

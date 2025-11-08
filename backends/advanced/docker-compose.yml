@@ -17,6 +17,7 @@ services:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - MISTRAL_MODEL=${MISTRAL_MODEL}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER}
+      - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
       - OFFLINE_ASR_TCP_URI=${OFFLINE_ASR_TCP_URI}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - HF_TOKEN=${HF_TOKEN}
@@ -31,7 +32,7 @@ services:
       - NEO4J_HOST=${NEO4J_HOST}
       - NEO4J_USER=${NEO4J_USER}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
-      - CORS_ORIGINS=http://localhost:3010,http://localhost:8000,https://localhost:3010,https://localhost:8000,https://100.105.225.45,https://localhost
+      - CORS_ORIGINS=http://localhost:3010,http://localhost:8000,http://192.168.1.153:3010,http://192.168.1.153:8000,https://localhost:3010,https://localhost:8000,https://100.105.225.45,https://localhost
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       qdrant:
@@ -51,6 +52,7 @@ services:
     restart: unless-stopped
 
   # Unified Worker Container
+  # No CUDA needed for friend-backend and workers, workers only orchestrate jobs and call external services
   # Runs all workers in a single container for efficiency:
   # - 3 RQ workers (transcription, memory, default queues)
   # - 1 Audio stream worker (Redis Streams consumer - must be single to maintain sequential chunks)
@@ -63,6 +65,7 @@ services:
       - .env
     volumes:
       - ./src:/app/src
+      - ./start-workers.sh:/app/start-workers.sh
       - ./data/audio_chunks:/app/audio_chunks
       - ./data:/app/data
     environment:
