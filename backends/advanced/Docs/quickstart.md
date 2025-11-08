@@ -260,13 +260,13 @@ The system supports processing existing audio files through the file upload API.
 export USER_TOKEN="your-jwt-token"
 
 # Upload single WAV file
-curl -X POST "http://localhost:8000/api/process-audio-files" \
+curl -X POST "http://localhost:8000/api/audio/upload" \
   -H "Authorization: Bearer $USER_TOKEN" \
   -F "files=@/path/to/audio.wav" \
   -F "device_name=file_upload"
 
 # Upload multiple WAV files
-curl -X POST "http://localhost:8000/api/process-audio-files" \
+curl -X POST "http://localhost:8000/api/audio/upload" \
   -H "Authorization: Bearer $USER_TOKEN" \
   -F "files=@/path/to/recording1.wav" \
   -F "files=@/path/to/recording2.wav" \

@@ -735,7 +735,7 @@ class IntegrationTestRunner:
             
             logger.info("📤 Sending upload request...")
             response = requests.post(
-                f"{BACKEND_URL}/api/process-audio-files",
+                f"{BACKEND_URL}/api/audio/upload",
                 files=files,
                 data=data,
                 headers=headers,
@@ -749,118 +749,124 @@ class IntegrationTestRunner:
             
         result = response.json()
         logger.info(f"📤 Upload response: {json.dumps(result, indent=2)}")
-        
+
         # Extract client_id from response
-        client_id = None
-        if result.get('conversations'):
-            client_id = result['conversations'][0].get('client_id')
-        elif result.get('processed_files'):
-            client_id = result['processed_files'][0].get('client_id')
-        elif result.get('files'):
-            client_id = result['files'][0].get('client_id')
-            
+        client_id = result.get('client_id')
         if not client_id:
             raise RuntimeError("No client_id in upload response")
-            
+
         logger.info(f"📤 Generated client_id: {client_id}")
-        return client_id
+        return result  # Return full response with job IDs
         
-    def verify_processing_results(self, client_id: str):
-        """Verify that audio was processed correctly."""
-        logger.info(f"🔍 Verifying processing results for client: {client_id}")
-        
-        # Use backend API instead of direct MongoDB connection
-        
-        # First, wait for processing to complete using processor status endpoint
-        logger.info("🔍 Waiting for processing to complete...")
+    def verify_processing_results(self, upload_response: dict):
+        """Verify that audio was processed correctly using job tracking."""
+        client_id = upload_response.get('client_id')
+        files = upload_response.get('files', [])
+
+        if not files:
+            raise RuntimeError("No files in upload response")
+
+        file_info = files[0]
+        transcript_job_id = file_info.get('transcript_job_id')
+        conversation_id = file_info.get('conversation_id')
+
+        logger.info(f"🔍 Verifying processing results:")
+        logger.info(f"  - Client ID: {client_id}")
+        logger.info(f"  - Conversation ID: {conversation_id}")
+        logger.info(f"  - Transcript Job ID: {transcript_job_id}")
+
+        # Wait for transcription job to complete
+        logger.info("🔍 Waiting for transcription job to complete...")
         start_time = time.time()
-        processing_complete = False
-        
-        while time.time() - start_time < 60:  # Wait up to 60 seconds for processing
+        job_complete = False
+
+        while time.time() - start_time < 60:  # Wait up to 60 seconds for transcription
             try:
-                # Check processor status for this client
+                # Check job status via queue API
                 response = requests.get(
-                    f"{BACKEND_URL}/api/processor/tasks/{client_id}",
+                    f"{BACKEND_URL}/api/queue/jobs/{transcript_job_id}",
                     headers={"Authorization": f"Bearer {self.token}"},
                     timeout=10
                 )
-                
+
                 if response.status_code == 200:
-                    data = response.json()
-                    stages = data.get("stages", {})
-                    
-                    # Check if transcription stage is complete
-                    transcription_stage = stages.get("transcription", {})
-                    if transcription_stage.get("completed", False):
-                        logger.info(f"✅ Transcription processing completed for client_id: {client_id}")
-                        processing_complete = True
+                    job_data = response.json()
+                    status = job_data.get("status")
+
+                    if status == "completed":
+                        logger.info(f"✅ Transcription job completed successfully")
+                        job_complete = True
                         break
-                    
-                    # Check for errors
-                    if transcription_stage.get("error"):
-                        logger.error(f"❌ Transcription error: {transcription_stage.get('error')}")
+                    elif status == "failed":
+                        error = job_data.get("exc_info", "Unknown error")
+                        logger.error(f"❌ Transcription job failed: {error}")
                         break
-                    
-                    # Show processing status
-                    logger.info(f"📊 Processing status: {data.get('status', 'unknown')}")
-                    for stage_name, stage_info in stages.items():
-                        completed = stage_info.get("completed", False)
-                        error = stage_info.get("error")
-                        status = "✅" if completed else "❌" if error else "⏳"
-                        logger.info(f"  {status} {stage_name}: {'completed' if completed else 'error' if error else 'processing'}")
-                        
+                    else:
+                        logger.info(f"⏳ Job status: {status} ({time.time() - start_time:.1f}s)")
+
                 else:
-                    logger.warning(f"❌ Processor status API call failed with status: {response.status_code}")
-                    
+                    logger.warning(f"⚠️ Job status check returned {response.status_code}")
+
             except Exception as e:
-                logger.warning(f"❌ Error calling processor status API: {e}")
-                
-            logger.info(f"⏳ Still waiting for processing... ({time.time() - start_time:.1f}s)")
-            time.sleep(3)
-        
-        if not processing_complete:
-            logger.error(f"❌ Processing did not complete within timeout for client_id: {client_id}")
-            # Don't fail immediately, try to get conversation anyway
-        
-        # Now get the conversation via API
-        logger.info("🔍 Retrieving conversation...")
+                logger.warning(f"⚠️ Error checking job status: {e}")
+
+            time.sleep(5)
+
+        if not job_complete:
+            raise AssertionError(f"Transcription job did not complete within 60 seconds. Last status: {status if 'status' in locals() else 'unknown'}")
+
+        # Get the conversation via API
+        logger.info(f"🔍 Retrieving conversation...")
         conversation = None
-        
+
         try:
-            # Get conversations via API
+            # Get conversations list
             response = requests.get(
                 f"{BACKEND_URL}/api/conversations",
                 headers={"Authorization": f"Bearer {self.token}"},
                 timeout=10
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
-                conversations = data.get("conversations", {})
-                
-                # Look for our client_id in the conversations
-                if client_id in conversations:
-                    conversation_list = conversations[client_id]
-                    if conversation_list:
-                        conversation = conversation_list[0]  # Get the first (most recent) conversation
-                        logger.info(f"✅ Found conversation for client_id: {client_id}")
-                    else:
-                        logger.warning(f"⚠️ Client ID found but no conversations in list")
+                conversations_list = data.get("conversations", [])
+
+                # Find our conversation by conversation_id or client_id
+                for conv in conversations_list:
+                    if conv.get('conversation_id') == conversation_id or conv.get('client_id') == client_id:
+                        conversation = conv
+                        logger.info(f"✅ Found conversation in list: {conv.get('conversation_id')}")
+                        break
+
+                if not conversation:
+                    logger.error(f"❌ Conversation not found in list of {len(conversations_list)} conversations")
+                    if conversations_list:
+                        logger.error(f"📊 Available conversations: {[c.get('conversation_id') for c in conversations_list[:5]]}")
                 else:
-                    # Debug: show available conversations
-                    available_clients = list(conversations.keys())
-                    logger.error(f"❌ Client ID {client_id} not found in conversations")
-                    logger.error(f"📊 Available client_ids: {available_clients}")
-                    
+                    # Fetch full conversation details (list endpoint excludes transcript for performance)
+                    logger.info(f"🔍 Fetching full conversation details...")
+                    detail_response = requests.get(
+                        f"{BACKEND_URL}/api/conversations/{conversation['conversation_id']}",
+                        headers={"Authorization": f"Bearer {self.token}"},
+                        timeout=10
+                    )
+
+                    if detail_response.status_code == 200:
+                        conversation = detail_response.json()["conversation"]
+                        logger.info(f"✅ Retrieved full conversation details with transcript")
+                    else:
+                        logger.error(f"❌ Failed to fetch conversation details: {detail_response.status_code}")
+                        logger.error(f"Response: {detail_response.text}")
+
             else:
-                logger.error(f"❌ Conversations API call failed with status: {response.status_code}")
-                
+                logger.error(f"❌ Conversations API returned status: {response.status_code}")
+                logger.error(f"Response: {response.text}")
+
         except Exception as e:
-            logger.error(f"❌ Error calling conversations API: {e}")
-            
+            logger.error(f"❌ Error retrieving conversations: {e}", exc_info=True)
+
         if not conversation:
-            logger.error(f"❌ No conversation found for client_id: {client_id}")
-            raise AssertionError(f"No conversation found for client_id: {client_id}")
+            raise AssertionError(f"No conversation found for conversation_id: {conversation_id}")
             
         logger.info(f"✓ Conversation found: {conversation['audio_uuid']}")
         
@@ -871,19 +877,14 @@ class IntegrationTestRunner:
         logger.info(f"  - Audio Path: {conversation.get('audio_path', 'N/A')}")
         logger.info(f"  - Timestamp: {conversation.get('timestamp', 'N/A')}")
         
-        # Verify transcription (stored as array in conversation)
-        transcript_segments = conversation.get('transcript', [])
+        # Verify transcription (transcript is a string, segments is an array)
+        transcription = conversation.get('transcript', '')
+        segments = conversation.get('segments', [])
+
         logger.info(f"📝 Transcription details:")
-        logger.info(f"  - Transcript segments: {len(transcript_segments)}")
-        
-        # Extract full transcription text from segments
-        transcription = ""
-        if transcript_segments:
-            # Combine all transcript segments
-            transcription = " ".join([segment.get('text', '') for segment in transcript_segments])
-        
-        logger.info(f"  - Length: {len(transcription)} characters")
+        logger.info(f"  - Transcript length: {len(transcription)} characters")
         logger.info(f"  - Word count: {len(transcription.split()) if transcription else 0}")
+        logger.info(f"  - Speaker segments: {len(segments)}")
         
         if transcription:
             # Show first 200 characters of transcription
@@ -916,7 +917,7 @@ class IntegrationTestRunner:
             
         # Verify conversation has required fields
         assert conversation.get('transcript'), "Conversation missing transcript"
-        assert len(conversation['transcript']) > 0, "Transcript array is empty"
+        assert len(conversation['transcript']) > 0, "Transcript is empty"
         assert transcription.strip(), "Transcription text is empty"
         
         # Check for memory extraction (if LLM is configured)
@@ -937,12 +938,20 @@ class IntegrationTestRunner:
         
         return conversation, transcription
     
-    def validate_memory_extraction(self, client_id: str):
+    def validate_memory_extraction(self, upload_response: dict):
         """Validate that memory extraction worked correctly."""
+        client_id = upload_response.get('client_id')
+        files = upload_response.get('files', [])
+
         logger.info(f"🧠 Validating memory extraction for client: {client_id}")
-        
+
+        # Get memory job ID from upload response
+        memory_job_id = files[0].get('memory_job_id') if files else None
+        if not memory_job_id:
+            raise RuntimeError("No memory_job_id in upload response")
+
         # Wait for memory processing to complete
-        client_memories = self.wait_for_memory_processing(client_id)
+        client_memories = self.wait_for_memory_processing(memory_job_id, client_id)
         
         # Check if we're using OpenMemory MCP provider
         memory_provider = os.environ.get("MEMORY_PROVIDER", "friend_lite")
@@ -1148,67 +1157,47 @@ class IntegrationTestRunner:
             logger.error(f"Error fetching memories: {e}")
             return []
     
-    def wait_for_memory_processing(self, client_id: str, timeout: int = 120):
-        """Wait for memory processing to complete using processor status API."""
-        logger.info(f"⏳ Waiting for memory processing to complete for client: {client_id}")
-        
+    def wait_for_memory_processing(self, memory_job_id: str, client_id: str, timeout: int = 120):
+        """Wait for memory processing to complete using queue API."""
+        logger.info(f"⏳ Waiting for memory job {memory_job_id} to complete...")
+
         start_time = time.time()
-        memory_processing_complete = False
-        
-        # First, wait for memory processing completion using processor status API
+        job_complete = False
+
         while time.time() - start_time < timeout:
             try:
-                # Check processor status for this client (same pattern as transcription)
+                # Check job status via queue API
                 response = requests.get(
-                    f"{BACKEND_URL}/api/processor/tasks/{client_id}",
+                    f"{BACKEND_URL}/api/queue/jobs/{memory_job_id}",
                     headers={"Authorization": f"Bearer {self.token}"},
                     timeout=10
                 )
-                
+
                 if response.status_code == 200:
-                    data = response.json()
-                    
-                    # DEBUG: Log full API response to see exactly what we're getting
-                    logger.info(f"🔍 Full processor status API response: {data}")
-                    
-                    stages = data.get("stages", {})
-                    
-                    # Check if memory stage is complete
-                    memory_stage = stages.get("memory", {})
-                    logger.info(f"🧠 Memory stage data: {memory_stage}")
-                    
-                    if memory_stage.get("completed", False):
-                        logger.info(f"✅ Memory processing completed for client_id: {client_id}")
-                        memory_processing_complete = True
+                    job_data = response.json()
+                    status = job_data.get("status")
+
+                    if status == "completed":
+                        logger.info(f"✅ Memory job completed successfully")
+                        job_complete = True
                         break
-                    
-                    # Check for errors
-                    if memory_stage.get("error"):
-                        logger.error(f"❌ Memory processing error: {memory_stage.get('error')}")
+                    elif status == "failed":
+                        error = job_data.get("exc_info", "Unknown error")
+                        logger.error(f"❌ Memory job failed: {error}")
                         break
-                    
-                    # Show processing status for memory stage
-                    logger.info(f"📊 Memory processing status: {data.get('status', 'unknown')}")
-                    for stage_name, stage_info in stages.items():
-                        if stage_name == "memory":  # Focus on memory stage
-                            completed = stage_info.get("completed", False)
-                            error = stage_info.get("error")
-                            status = "✅" if completed else "❌" if error else "⏳"
-                            logger.info(f"  {status} {stage_name}: {'completed' if completed else 'error' if error else 'processing'}")
-                            # DEBUG: Show all fields in memory stage
-                            logger.info(f"    All memory stage fields: {stage_info}")
-                            
+                    else:
+                        logger.info(f"⏳ Memory job status: {status} ({time.time() - start_time:.1f}s)")
+
                 else:
-                    logger.warning(f"❌ Processor status API call failed with status: {response.status_code}")
-                    
+                    logger.warning(f"⚠️ Memory job status check returned {response.status_code}")
+
             except Exception as e:
-                logger.warning(f"❌ Error calling processor status API: {e}")
-                
-            logger.info(f"⏳ Still waiting for memory processing... ({time.time() - start_time:.1f}s)")
-            time.sleep(3)
-        
-        if not memory_processing_complete:
-            logger.warning(f"⚠️ Memory processing did not complete within {timeout}s, trying to fetch existing memories anyway")
+                logger.warning(f"⚠️ Error checking memory job status: {e}")
+
+            time.sleep(5)
+
+        if not job_complete:
+            raise AssertionError(f"Memory job did not complete within {timeout} seconds. Last status: {status if 'status' in locals() else 'unknown'}")
         
         # Now fetch the memories from the API
         memories = self.get_memories_from_api()
@@ -1467,21 +1456,22 @@ def test_full_pipeline_integration(test_runner):
         # Phase 5: Audio upload and processing
         phase_start = time.time()
         logger.info("📤 Phase 5: Audio upload...")
-        client_id = test_runner.upload_test_audio()
+        upload_response = test_runner.upload_test_audio()
+        client_id = upload_response.get('client_id')
         phase_times['audio_upload'] = time.time() - phase_start
         logger.info(f"✅ Audio upload completed in {phase_times['audio_upload']:.2f}s")
-        
+
         # Phase 6: Transcription processing
         phase_start = time.time()
         logger.info("🎤 Phase 6: Transcription processing...")
-        conversation, transcription = test_runner.verify_processing_results(client_id)
+        conversation, transcription = test_runner.verify_processing_results(upload_response)
         phase_times['transcription_processing'] = time.time() - phase_start
         logger.info(f"✅ Transcription processing completed in {phase_times['transcription_processing']:.2f}s")
-        
+
         # Phase 7: Memory extraction
         phase_start = time.time()
         logger.info("🧠 Phase 7: Memory extraction...")
-        memories = test_runner.validate_memory_extraction(client_id)
+        memories = test_runner.validate_memory_extraction(upload_response)
         phase_times['memory_extraction'] = time.time() - phase_start
         logger.info(f"✅ Memory extraction completed in {phase_times['memory_extraction']:.2f}s")
         

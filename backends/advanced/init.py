@@ -394,23 +394,37 @@ class FriendLiteSetup:
             # Generate Caddyfile from template
             self.console.print("[blue][INFO][/blue] Creating Caddyfile configuration...")
             caddyfile_template = script_dir / "Caddyfile.template"
+            caddyfile_path = script_dir / "Caddyfile"
+
             if caddyfile_template.exists():
                 try:
-                    with open(caddyfile_template, 'r') as f:
-                        caddyfile_content = f.read()
+                    # Check if Caddyfile exists as a directory (common issue)
+                    if caddyfile_path.exists() and caddyfile_path.is_dir():
+                        self.console.print("[red]❌ ERROR: 'Caddyfile' exists as a directory![/red]")
+                        self.console.print("[yellow]   Please remove it manually:[/yellow]")
+                        self.console.print(f"[yellow]   rm -rf {caddyfile_path}[/yellow]")
+                        self.console.print("[red]   HTTPS will NOT work without a proper Caddyfile![/red]")
+                        self.config["HTTPS_ENABLED"] = "false"
+                    else:
+                        with open(caddyfile_template, 'r') as f:
+                            caddyfile_content = f.read()
 
-                    # Replace TAILSCALE_IP with server_ip
-                    caddyfile_content = caddyfile_content.replace('TAILSCALE_IP', server_ip)
+                        # Replace TAILSCALE_IP with server_ip
+                        caddyfile_content = caddyfile_content.replace('TAILSCALE_IP', server_ip)
 
-                    with open('Caddyfile', 'w') as f:
-                        f.write(caddyfile_content)
+                        with open(caddyfile_path, 'w') as f:
+                            f.write(caddyfile_content)
 
-                    self.console.print(f"[green][SUCCESS][/green] Caddyfile created for: {server_ip}")
+                        self.console.print(f"[green][SUCCESS][/green] Caddyfile created for: {server_ip}")
 
                 except Exception as e:
-                    self.console.print(f"[yellow][WARNING][/yellow] Caddyfile generation failed: {e}")
+                    self.console.print(f"[red]❌ ERROR: Caddyfile generation failed: {e}[/red]")
+                    self.console.print("[red]   HTTPS will NOT work without a proper Caddyfile![/red]")
+                    self.config["HTTPS_ENABLED"] = "false"
             else:
-                self.console.print("[yellow][WARNING][/yellow] Caddyfile.template not found")
+                self.console.print("[red]❌ ERROR: Caddyfile.template not found[/red]")
+                self.console.print("[red]   HTTPS will NOT work without a proper Caddyfile![/red]")
+                self.config["HTTPS_ENABLED"] = "false"
         else:
             self.config["HTTPS_ENABLED"] = "false"
 

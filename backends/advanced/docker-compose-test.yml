@@ -95,7 +95,7 @@ services:
     # Use test database name to ensure isolation
     command: mongod --dbpath /data/db --bind_ip_all
     healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.runCommand('ping').ok", "--quiet"]
+      test: ["CMD", "mongosh", "--eval", "db.runCommand('ping').ok", "--quiet"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -113,6 +113,47 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  workers-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ./start-workers.sh
+    volumes:
+      - ./src:/app/src
+      - ./data/test_audio_chunks:/app/audio_chunks
+      - ./data/test_debug_dir:/app/debug_dir
+      - ./data/test_data:/app/data
+    environment:
+      # Same environment as backend
+      - MONGODB_URI=mongodb://mongo-test:27017/test_db
+      - QDRANT_BASE_URL=qdrant-test
+      - QDRANT_PORT=6333
+      - REDIS_URL=redis://redis-test:6379/0
+      - DEBUG_DIR=/app/debug_dir
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - AUTH_SECRET_KEY=test-jwt-signing-key-for-integration-tests
+      - ADMIN_PASSWORD=test-admin-password-123
+      - ADMIN_EMAIL=test-admin@example.com
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-friend_lite}
+      - OPENMEMORY_MCP_URL=${OPENMEMORY_MCP_URL:-http://host.docker.internal:8765}
+      - OPENMEMORY_USER_ID=${OPENMEMORY_USER_ID:-openmemory}
+      - DISABLE_SPEAKER_RECOGNITION=false
+      - SPEAKER_SERVICE_URL=https://localhost:8085
+    depends_on:
+      friend-backend-test:
+        condition: service_healthy
+      mongo-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_started
+      qdrant-test:
+        condition: service_started
+    restart: unless-stopped
 
   # caddy:
   #   image: caddy:2-alpine

@@ -77,7 +77,37 @@ class MCPClient:
             MCPError: If the server request fails
         """
         try:
-            # Use REST API endpoint for creating memories
+            # Get app_id first to handle duplicate app names
+            apps_response = await self.client.get(f"{self.server_url}/api/v1/apps/")
+            apps_response.raise_for_status()
+            apps_data = apps_response.json()
+
+            memory_logger.debug(f"Apps API response: {apps_data}")
+            memory_logger.debug(f"Apps data type: {type(apps_data)}")
+            if isinstance(apps_data, dict):
+                memory_logger.debug(f"Apps dict keys: {apps_data.keys()}")
+                if "apps" in apps_data:
+                    memory_logger.debug(f"Number of apps: {len(apps_data['apps'])}")
+                    memory_logger.debug(f"Apps list: {apps_data['apps']}")
+
+            app_id = None
+            if apps_data.get("apps"):
+                # Find matching app by name, prefer one with most memories
+                matching = [a for a in apps_data["apps"] if a["name"] == self.client_name]
+                memory_logger.debug(f"Matching apps for '{self.client_name}': {matching}")
+                if matching:
+                    matching.sort(key=lambda x: x.get("total_memories_created", 0), reverse=True)
+                    app_id = matching[0]["id"]
+                    memory_logger.info(f"Found matching app with ID: {app_id}")
+                else:
+                    app_id = apps_data["apps"][0]["id"]
+                    memory_logger.info(f"No matching app name, using first app ID: {app_id}")
+
+            if not app_id:
+                memory_logger.error("No apps found in OpenMemory - cannot create memory")
+                raise MCPError("No apps found in OpenMemory")
+
+            # Use REST API endpoint for creating memories (trailing slash required)
             response = await self.client.post(
                 f"{self.server_url}/api/v1/memories/",
                 json={
@@ -87,8 +117,8 @@ class MCPClient:
                         "source": "friend_lite",
                         "client": self.client_name
                     },
-                    "infer": True,  # Let OpenMemory extract memories
-                    "app": self.client_name  # Use client name as app name
+                    "infer": True,
+                    "app_id": app_id  # Use app_id to avoid duplicate name issues
                 }
             )
             response.raise_for_status()

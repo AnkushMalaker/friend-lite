@@ -4,12 +4,12 @@ Provides basic endpoints for viewing job status and statistics.
 """
 
 import logging
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
 from advanced_omi_backend.auth import current_active_user
-from advanced_omi_backend.controllers.queue_controller import get_jobs, get_job_stats, get_queue_health, redis_conn
+from advanced_omi_backend.controllers.queue_controller import get_jobs, get_job_stats, get_queue_health, redis_conn, QUEUE_NAMES
 from advanced_omi_backend.users import User
 from rq.job import Job
 import redis.asyncio as aioredis
@@ -86,6 +86,7 @@ async def get_job(
             "func_name": job.func_name if hasattr(job, 'func_name') else "",
             "args": job.args,
             "kwargs": job.kwargs,
+            "meta": job.meta if job.meta else {},
             "result": job.result,
             "error_message": str(job.exc_info) if job.exc_info else None,
         }
@@ -93,6 +94,46 @@ async def get_job(
     except Exception as e:
         logger.error(f"Failed to get job {job_id}: {e}")
         raise HTTPException(status_code=404, detail="Job not found")
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_job(
+    job_id: str,
+    current_user: User = Depends(current_active_user)
+):
+    """Cancel or delete a job."""
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+
+        # Check user permission (non-admins can only cancel their own jobs)
+        if not current_user.is_superuser:
+            job_user_id = job.kwargs.get("user_id") if job.kwargs else None
+            if job_user_id != str(current_user.user_id):
+                raise HTTPException(status_code=403, detail="Access forbidden")
+
+        # Cancel if queued or processing, delete if completed/failed
+        if job.is_queued or job.is_started or job.is_deferred or job.is_scheduled:
+            # Cancel the job
+            job.cancel()
+            logger.info(f"Cancelled job {job_id}")
+            return {
+                "job_id": job_id,
+                "action": "cancelled",
+                "message": f"Job {job_id} has been cancelled"
+            }
+        else:
+            # Delete completed/failed jobs
+            job.delete()
+            logger.info(f"Deleted job {job_id}")
+            return {
+                "job_id": job_id,
+                "action": "deleted",
+                "message": f"Job {job_id} has been deleted"
+            }
+
+    except HTTPException as e:
+        logger.error(f"Failed to cancel/delete job {job_id}: {e}")
+        raise HTTPException(status_code=404, detail=f"Job not found or could not be cancelled: {str(e)}")
 
 
 @router.get("/jobs/by-session/{session_id}")
@@ -113,7 +154,7 @@ async def get_jobs_by_session(
 
         all_jobs = []
         processed_job_ids = set()  # Track which jobs we've already processed
-        queues = ["default", "transcription", "memory"]
+        queues = QUEUE_NAMES
 
         def get_job_status(job, registries_map):
             """Determine job status from registries."""
@@ -159,6 +200,9 @@ async def get_jobs_by_session(
                 "ended_at": job.ended_at.isoformat() if job.ended_at else None,
                 "description": job.description or "",
                 "result": job.result,
+                "meta": job.meta if job.meta else {},
+                "args": job.args,
+                "kwargs": job.kwargs if job.kwargs else {},
                 "error_message": str(job.exc_info) if job.exc_info else None,
             })
 
@@ -402,15 +446,15 @@ async def flush_jobs(
         raise HTTPException(status_code=403, detail="Admin access required")
 
     try:
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from rq.registry import FinishedJobRegistry, FailedJobRegistry, CanceledJobRegistry
         from advanced_omi_backend.controllers.queue_controller import get_queue
 
-        cutoff_time = datetime.utcnow() - timedelta(hours=request.older_than_hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=request.older_than_hours)
         total_removed = 0
 
         # Get all queues
-        queues = ["default", "transcription", "memory"]
+        queues = QUEUE_NAMES
 
         for queue_name in queues:
             queue = get_queue(queue_name)
@@ -484,32 +528,57 @@ async def flush_all_jobs(
         from advanced_omi_backend.controllers.queue_controller import get_queue
 
         total_removed = 0
-        queues = ["default", "transcription", "memory"]
+        queues = QUEUE_NAMES
 
         for queue_name in queues:
             queue = get_queue(queue_name)
 
+            # First, empty the queue itself (removes queued jobs)
+            queued_count = len(queue)
+            queue.empty()
+            total_removed += queued_count
+            logger.info(f"Emptied {queued_count} queued jobs from {queue_name}")
+
             # Remove from all registries
             registries = [
-                FinishedJobRegistry(queue=queue),
-                FailedJobRegistry(queue=queue),
-                CanceledJobRegistry(queue=queue),
-                StartedJobRegistry(queue=queue),
-                DeferredJobRegistry(queue=queue),
-                ScheduledJobRegistry(queue=queue)
+                ("finished", FinishedJobRegistry(queue=queue)),
+                ("failed", FailedJobRegistry(queue=queue)),
+                ("canceled", CanceledJobRegistry(queue=queue)),
+                ("started", StartedJobRegistry(queue=queue)),
+                ("deferred", DeferredJobRegistry(queue=queue)),
+                ("scheduled", ScheduledJobRegistry(queue=queue))
             ]
 
-            for registry in registries:
-                for job_id in registry.get_job_ids():
+            for registry_name, registry in registries:
+                job_ids = list(registry.get_job_ids())  # Convert to list to avoid iterator issues
+                logger.info(f"Flushing {len(job_ids)} jobs from {queue_name}/{registry_name}")
+
+                for job_id in job_ids:
                     try:
+                        # Try to fetch and delete the job
                         job = Job.fetch(job_id, connection=redis_conn)
+
+                        # Cancel if running, then delete
+                        if job.is_started:
+                            try:
+                                job.cancel()
+                                logger.info(f"Cancelled running job {job_id}")
+                            except Exception as cancel_error:
+                                logger.warning(f"Could not cancel job {job_id}: {cancel_error}")
+
                         job.delete()
                         total_removed += 1
-                    except Exception as e:
-                        logger.error(f"Error deleting job {job_id}: {e}")
 
-            # Also empty the queue itself
-            queue.empty()
+                    except Exception as e:
+                        # Job might already be deleted or not exist - try to remove from registry anyway
+                        logger.warning(f"Error deleting job {job_id}: {e}")
+                        try:
+                            registry.remove(job_id)
+                            logger.info(f"Removed stale job reference {job_id} from {registry_name} registry")
+                        except Exception as reg_error:
+                            logger.error(f"Could not remove {job_id} from registry: {reg_error}")
+
+        logger.info(f"Flushed {total_removed} jobs from all queues")
 
         return {
             "total_removed": total_removed,
@@ -549,6 +618,12 @@ async def get_redis_sessions(
                 session_data = await redis_client.hgetall(key)
                 if session_data:
                     session_id = key.decode().replace("audio:session:", "")
+
+                    # Get conversation count for this session
+                    conversation_count_key = f"session:conversation_count:{session_id}"
+                    conversation_count_bytes = await redis_client.get(conversation_count_key)
+                    conversation_count = int(conversation_count_bytes.decode()) if conversation_count_bytes else 0
+
                     sessions.append({
                         "session_id": session_id,
                         "user_id": session_data.get(b"user_id", b"").decode(),
@@ -559,7 +634,8 @@ async def get_redis_sessions(
                         "status": session_data.get(b"status", b"").decode(),
                         "started_at": session_data.get(b"started_at", b"").decode(),
                         "chunks_published": int(session_data.get(b"chunks_published", b"0").decode() or 0),
-                        "last_chunk_at": session_data.get(b"last_chunk_at", b"").decode()
+                        "last_chunk_at": session_data.get(b"last_chunk_at", b"").decode(),
+                        "conversation_count": conversation_count
                     })
             except Exception as e:
                 logger.error(f"Error getting session info for {key}: {e}")
@@ -627,3 +703,268 @@ async def clear_old_sessions(
     except Exception as e:
         logger.error(f"Failed to clear sessions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to clear sessions: {str(e)}")
+
+
+@router.get("/dashboard")
+async def get_dashboard_data(
+    request: Request,
+    expanded_sessions: str = Query(default="", description="Comma-separated list of session IDs to fetch jobs for"),
+    current_user: User = Depends(current_active_user)
+):
+    """Get all data needed for the Queue dashboard in a single API call.
+
+    Returns:
+    - Jobs grouped by status (queued, processing, completed, failed)
+    - Queue statistics
+    - Streaming status
+    - Session jobs for expanded sessions
+    """
+    try:
+        from advanced_omi_backend.controllers import system_controller
+        from rq.registry import FinishedJobRegistry, FailedJobRegistry, StartedJobRegistry
+        from advanced_omi_backend.controllers.queue_controller import get_queue
+
+        # Parse expanded sessions list
+        expanded_session_ids = [s.strip() for s in expanded_sessions.split(",") if s.strip()] if expanded_sessions else []
+
+        # Fetch all data in parallel
+        import asyncio
+
+        async def fetch_jobs_by_status(status_name: str, limit: int = 100):
+            """Fetch jobs by status using existing registry logic."""
+            try:
+                queues = QUEUE_NAMES
+                all_jobs = []
+
+                for queue_name in queues:
+                    queue = get_queue(queue_name)
+
+                    # Get job IDs based on status
+                    if status_name == "queued":
+                        job_ids = queue.job_ids[:limit]
+                    elif status_name == "processing":
+                        job_ids = list(StartedJobRegistry(queue=queue).get_job_ids())[:limit]
+                    elif status_name == "completed":
+                        job_ids = list(FinishedJobRegistry(queue=queue).get_job_ids())[:limit]
+                    elif status_name == "failed":
+                        job_ids = list(FailedJobRegistry(queue=queue).get_job_ids())[:limit]
+                    else:
+                        continue
+
+                    # Fetch job details
+                    for job_id in job_ids:
+                        try:
+                            job = Job.fetch(job_id, connection=redis_conn)
+
+                            # Check user permission
+                            if not current_user.is_superuser:
+                                job_user_id = job.kwargs.get("user_id") if job.kwargs else None
+                                if job_user_id != str(current_user.user_id):
+                                    continue
+
+                            # Add job with metadata
+                            all_jobs.append({
+                                "job_id": job.id,
+                                "job_type": job.func_name.split('.')[-1] if job.func_name else "unknown",
+                                "user_id": job.kwargs.get("user_id") if job.kwargs else None,
+                                "status": status_name,
+                                "priority": "normal",  # RQ doesn't have priority concept
+                                "data": {"description": job.description or ""},
+                                "result": job.result,
+                                "meta": job.meta if job.meta else {},
+                                "kwargs": job.kwargs if job.kwargs else {},
+                                "error_message": str(job.exc_info) if job.exc_info else None,
+                                "created_at": job.created_at.isoformat() if job.created_at else None,
+                                "started_at": job.started_at.isoformat() if job.started_at else None,
+                                "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+                                "retry_count": 0,  # RQ doesn't track this by default
+                                "max_retries": 0,
+                                "progress_percent": 0,
+                                "progress_message": "",
+                                "queue": queue_name
+                            })
+                        except Exception as e:
+                            logger.debug(f"Error fetching job {job_id}: {e}")
+                            continue
+
+                return all_jobs
+            except Exception as e:
+                logger.error(f"Error fetching {status_name} jobs: {e}")
+                return []
+
+        async def fetch_stats():
+            """Fetch queue stats."""
+            try:
+                return get_job_stats()
+            except Exception as e:
+                logger.error(f"Error fetching stats: {e}")
+                return {"total_jobs": 0, "queued_jobs": 0, "processing_jobs": 0, "completed_jobs": 0, "failed_jobs": 0}
+
+        async def fetch_streaming_status():
+            """Fetch streaming status."""
+            try:
+                # Import session_controller for streaming status
+                from advanced_omi_backend.controllers import session_controller
+                # Use the actual request object from the parent function
+                return await session_controller.get_streaming_status(request)
+            except Exception as e:
+                logger.error(f"Error fetching streaming status: {e}")
+                return {"active_sessions": [], "stream_health": {}, "rq_queues": {}}
+
+        async def fetch_session_jobs(session_id: str):
+            """Fetch jobs for a specific session."""
+            try:
+                # Reuse the existing logic from get_jobs_by_session endpoint
+                from advanced_omi_backend.models.conversation import Conversation
+
+                # Get conversation IDs for this session
+                conversations = await Conversation.find(Conversation.audio_uuid == session_id).to_list()
+                conversation_ids = {conv.conversation_id for conv in conversations}
+
+                all_jobs = []
+                processed_job_ids = set()
+                queues = QUEUE_NAMES
+
+                def get_job_status(job):
+                    if job.is_queued:
+                        return "queued"
+                    elif job.is_started:
+                        return "processing"
+                    elif job.is_finished:
+                        return "completed"
+                    elif job.is_failed:
+                        return "failed"
+                    elif job.is_deferred:
+                        return "deferred"
+                    else:
+                        return "unknown"
+
+                # Find all jobs for this session
+                for queue_name in queues:
+                    queue = get_queue(queue_name)
+
+                    # Check all registries
+                    from rq.registry import (
+                        FinishedJobRegistry, FailedJobRegistry, StartedJobRegistry,
+                        CanceledJobRegistry, DeferredJobRegistry, ScheduledJobRegistry
+                    )
+
+                    registries = [
+                        ("queued", queue.job_ids),
+                        ("processing", StartedJobRegistry(queue=queue).get_job_ids()),
+                        ("completed", FinishedJobRegistry(queue=queue).get_job_ids()),
+                        ("failed", FailedJobRegistry(queue=queue).get_job_ids())
+                    ]
+
+                    for status_name, job_ids in registries:
+                        for job_id in job_ids:
+                            if job_id in processed_job_ids:
+                                continue
+
+                            try:
+                                job = Job.fetch(job_id, connection=redis_conn)
+
+                                # Check if job belongs to this session
+                                matches_session = False
+                                if job.meta and 'audio_uuid' in job.meta and job.meta['audio_uuid'] == session_id:
+                                    matches_session = True
+                                elif job.args and len(job.args) > 0 and job.args[0] == session_id:
+                                    matches_session = True
+
+                                if not matches_session:
+                                    continue
+
+                                # Check user permission
+                                if not current_user.is_superuser:
+                                    job_user_id = job.kwargs.get("user_id") if job.kwargs else None
+                                    if job_user_id != str(current_user.user_id):
+                                        continue
+
+                                processed_job_ids.add(job_id)
+                                all_jobs.append({
+                                    "job_id": job.id,
+                                    "job_type": job.func_name.split('.')[-1] if job.func_name else "unknown",
+                                    "queue": queue_name,
+                                    "status": get_job_status(job),
+                                    "created_at": job.created_at.isoformat() if job.created_at else None,
+                                    "started_at": job.started_at.isoformat() if job.started_at else None,
+                                    "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+                                    "description": job.description or "",
+                                    "result": job.result,
+                                    "meta": job.meta if job.meta else {},
+                                    "error_message": str(job.exc_info) if job.exc_info else None
+                                })
+                            except Exception as e:
+                                logger.debug(f"Error fetching job {job_id}: {e}")
+                                continue
+
+                return {"session_id": session_id, "jobs": all_jobs}
+            except Exception as e:
+                logger.error(f"Error fetching jobs for session {session_id}: {e}")
+                return {"session_id": session_id, "jobs": []}
+
+        # Execute all fetches in parallel
+        queued_jobs_task = fetch_jobs_by_status("queued", limit=100)
+        processing_jobs_task = fetch_jobs_by_status("processing", limit=100)
+        completed_jobs_task = fetch_jobs_by_status("completed", limit=50)
+        failed_jobs_task = fetch_jobs_by_status("failed", limit=50)
+        stats_task = fetch_stats()
+        streaming_status_task = fetch_streaming_status()
+        session_jobs_tasks = [fetch_session_jobs(sid) for sid in expanded_session_ids]
+
+        results = await asyncio.gather(
+            queued_jobs_task,
+            processing_jobs_task,
+            completed_jobs_task,
+            failed_jobs_task,
+            stats_task,
+            streaming_status_task,
+            *session_jobs_tasks,
+            return_exceptions=True
+        )
+
+        queued_jobs = results[0] if not isinstance(results[0], Exception) else []
+        processing_jobs = results[1] if not isinstance(results[1], Exception) else []
+        completed_jobs = results[2] if not isinstance(results[2], Exception) else []
+        failed_jobs = results[3] if not isinstance(results[3], Exception) else []
+        stats = results[4] if not isinstance(results[4], Exception) else {"total_jobs": 0}
+        streaming_status = results[5] if not isinstance(results[5], Exception) else {"active_sessions": []}
+        recent_conversations = []
+        session_jobs_results = results[6:] if len(results) > 6 else []
+
+        # Convert session jobs list to dict
+        session_jobs = {}
+        for result in session_jobs_results:
+            if not isinstance(result, Exception) and result:
+                session_jobs[result["session_id"]] = result["jobs"]
+
+        # Convert conversations to dict format for frontend
+        conversations_list = []
+        for conv in recent_conversations:
+            conversations_list.append({
+                "conversation_id": conv.conversation_id,
+                "audio_uuid": conv.audio_uuid,
+                "user_id": str(conv.user_id) if conv.user_id else None,
+                "created_at": conv.created_at.isoformat() if conv.created_at else None,
+                "title": conv.title,
+                "summary": conv.summary,
+                "transcript_text": conv.get_active_transcript_text() if hasattr(conv, 'get_active_transcript_text') else None,
+            })
+
+        return {
+            "jobs": {
+                "queued": queued_jobs,
+                "processing": processing_jobs,
+                "completed": completed_jobs,
+                "failed": failed_jobs
+            },
+            "stats": stats,
+            "streaming_status": streaming_status,
+            "recent_conversations": conversations_list,
+            "session_jobs": session_jobs,
+            "timestamp": asyncio.get_event_loop().time()
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get dashboard data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get dashboard data: {str(e)}")

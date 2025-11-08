@@ -190,28 +190,12 @@ async def health_check():
     # Check LLM service (non-critical service - may not be running)
     try:
         llm_health = await asyncio.wait_for(async_health_check(), timeout=8.0)
-        
-        # Determine overall health for audioai service based on LLM and embedder status
-        is_llm_healthy = "✅" in llm_health.get("status", "")
-        
-        # Determine embedder health based on provider
-        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
-        if llm_provider == "ollama":
-            is_embedder_healthy = "✅" in llm_health.get("embedder_status", "") or llm_health.get("embedder_status") == "⚠️ Embedder Model Not Configured"
-        else:
-            # For OpenAI and other providers, embedder status is not applicable, so consider it healthy
-            is_embedder_healthy = True
-        
-        audioai_overall_healthy = is_llm_healthy and is_embedder_healthy
-
         health_status["services"]["audioai"] = {
             "status": llm_health.get("status", "❌ Unknown"),
-            "healthy": audioai_overall_healthy,
+            "healthy": "✅" in llm_health.get("status", ""),
             "base_url": llm_health.get("base_url", ""),
             "model": llm_health.get("default_model", ""),
             "provider": os.getenv("LLM_PROVIDER", "openai"),
-            "embedder_model": llm_health.get("embedder_model", ""),
-            "embedder_status": llm_health.get("embedder_status", ""),
             "critical": False,
         }
     except asyncio.TimeoutError:
@@ -220,8 +204,6 @@ async def health_check():
             "healthy": False,
             "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
-            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"),
-            "embedder_status": "❌ Not Checked (Timeout)"
         }
         overall_healthy = False
     except Exception as e:
@@ -230,8 +212,6 @@ async def health_check():
             "healthy": False,
             "provider": os.getenv("LLM_PROVIDER", "openai"),
             "critical": False,
-            "embedder_model": os.getenv("OLLAMA_EMBEDDER_MODEL"),
-            "embedder_status": "❌ Not Checked (Connection Failed)"
         }
         overall_healthy = False
 

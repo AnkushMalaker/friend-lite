@@ -142,16 +142,26 @@ export const systemApi = {
 }
 
 export const queueApi = {
-  getJobs: (params: URLSearchParams) => api.get(`/api/queue/jobs?${params}`),
+  // Consolidated dashboard endpoint - replaces individual getJobs, getStats, getStreamingStatus calls
+  getDashboard: (expandedSessions: string[] = []) => api.get('/api/queue/dashboard', {
+    params: { expanded_sessions: expandedSessions.join(',') }
+  }),
+
+  // Individual endpoints (kept for debugging and specific use cases)
   getJob: (jobId: string) => api.get(`/api/queue/jobs/${jobId}`),
-  getJobsBySession: (sessionId: string) => api.get(`/api/queue/jobs/by-session/${sessionId}`),
-  getStats: () => api.get('/api/queue/stats'),
-  getStreamingStatus: () => api.get('/api/streaming/status'),
-  cleanupStuckWorkers: () => api.post('/api/streaming/cleanup'),
-  cleanupOldSessions: (maxAgeSeconds: number = 3600) => api.post(`/api/streaming/cleanup-sessions?max_age_seconds=${maxAgeSeconds}`),
   retryJob: (jobId: string, force: boolean = false) =>
     api.post(`/api/queue/jobs/${jobId}/retry`, { force }),
   cancelJob: (jobId: string) => api.delete(`/api/queue/jobs/${jobId}`),
+
+  // Cleanup operations
+  cleanupStuckWorkers: () => api.post('/api/streaming/cleanup'),
+  cleanupOldSessions: (maxAgeSeconds: number = 3600) => api.post(`/api/streaming/cleanup-sessions?max_age_seconds=${maxAgeSeconds}`),
+
+  // Legacy endpoints - kept for backward compatibility but not used in Queue page
+  // getJobs: (params: URLSearchParams) => api.get(`/api/queue/jobs?${params}`),
+  // getJobsBySession: (sessionId: string) => api.get(`/api/queue/jobs/by-session/${sessionId}`),
+  // getStats: () => api.get('/api/queue/stats'),
+  // getStreamingStatus: () => api.get('/api/streaming/status'),
 }
 
 export const uploadApi = {
