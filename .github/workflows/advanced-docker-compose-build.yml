@@ -6,10 +6,6 @@ on:
       version:
         description: Optional version tag override (e.g. v1.2.3)
         required: false
-      use_self_hosted:
-        description: Run on self-hosted runner instead of default
-        type: boolean
-        default: false
   push:
     branches: [ "main" ]
     paths:
@@ -32,20 +28,18 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-self-hosted:
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.use_self_hosted == 'true') || vars.USE_SELF_HOSTED == 'true' }}
-    runs-on: [self-hosted, linux, x64]
+  build-default:
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    continue-on-error: false
     env:
       ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
-      RUNNER_FLAVOUR: self-hosted
+      RUNNER_FLAVOUR: ubuntu-latest
     defaults:
       run:
         shell: bash
         working-directory: backends/advanced
 
-    steps: &advanced_build_steps
+    steps:
       - name: Show selected runner
         run: echo "Workflow running on ${RUNNER_FLAVOUR} runner"
         working-directory: .
@@ -252,17 +246,3 @@ jobs:
           echo "Built and pushed images with version tag: ${VERSION}"
           echo "Images pushed to: $REGISTRY/$OWNER_LC/"
           echo "::endgroup::"
-
-  # Default runner build (primary): runs when self-hosted flag is not set
-  build-default:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.use_self_hosted == 'true') && vars.USE_SELF_HOSTED != 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
-      RUNNER_FLAVOUR: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-        working-directory: backends/advanced
-    steps: *advanced_build_steps

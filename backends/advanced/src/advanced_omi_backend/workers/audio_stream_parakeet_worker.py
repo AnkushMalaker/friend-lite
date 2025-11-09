@@ -54,9 +54,11 @@ async def main():
     )
 
     # Setup signal handlers for graceful shutdown
-    def signal_handler(signum, frame):
+    shutdown_event = asyncio.Event()
+
+    def signal_handler(signum, _frame):
         logger.info(f"Received signal {signum}, shutting down...")
-        asyncio.create_task(consumer.stop())
+        shutdown_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -64,8 +66,20 @@ async def main():
     try:
         logger.info("✅ Parakeet worker ready")
 
-        # This blocks until consumer is stopped
-        await consumer.start_consuming()
+        # This blocks until consumer is stopped or shutdown signaled
+        consume_task = asyncio.create_task(consumer.start_consuming())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+        done, pending = await asyncio.wait(
+            [consume_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # Cancel pending tasks
+        for task in pending:
+            task.cancel()
+
+        await consumer.stop()
 
     except Exception as e:
         logger.error(f"Worker error: {e}", exc_info=True)
