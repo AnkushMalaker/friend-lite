@@ -42,7 +42,7 @@ http {
     
     # Upstream services
     upstream speaker_service {
-        server http://127.0.0.1:8085;
+        server speaker-service:8085;
     }
     
     upstream web_ui {
