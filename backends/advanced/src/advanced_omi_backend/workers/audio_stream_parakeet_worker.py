@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Deepgram audio stream worker.
+Parakeet audio stream worker.
 
-Starts a consumer that reads from audio:stream:deepgram and transcribes audio.
+Starts a consumer that reads from audio:stream:* and transcribes audio using Parakeet.
 """
 
 import asyncio
@@ -13,7 +13,7 @@ import sys
 
 import redis.asyncio as redis
 
-from advanced_omi_backend.services.transcription.deepgram import DeepgramStreamConsumer
+from advanced_omi_backend.services.transcription.parakeet_stream_consumer import ParakeetStreamConsumer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 
 async def main():
     """Main worker entry point."""
-    logger.info("🚀 Starting Deepgram audio stream worker")
+    logger.info("🚀 Starting Parakeet audio stream worker")
 
     # Get configuration from environment
-    api_key = os.getenv("DEEPGRAM_API_KEY")
-    if not api_key:
-        logger.warning("DEEPGRAM_API_KEY environment variable not set - Deepgram audio stream worker will not start")
+    service_url = os.getenv("PARAKEET_ASR_URL") or os.getenv("OFFLINE_ASR_TCP_URI")
+    if not service_url:
+        logger.warning("PARAKEET_ASR_URL or OFFLINE_ASR_TCP_URI environment variable not set - Parakeet audio stream worker will not start")
         logger.warning("Audio transcription will use alternative providers if configured")
         return
 
@@ -47,33 +47,48 @@ async def main():
     # Create consumer with balanced buffer size
     # 20 chunks = ~5 seconds of audio
     # Balance between transcription accuracy and latency
-    consumer = DeepgramStreamConsumer(
+    consumer = ParakeetStreamConsumer(
         redis_client=redis_client,
-        api_key=api_key,
+        service_url=service_url,
         buffer_chunks=20  # 5 seconds - good context without excessive delay
     )
 
     # Setup signal handlers for graceful shutdown
-    def signal_handler(signum, frame):
+    shutdown_event = asyncio.Event()
+
+    def signal_handler(signum, _frame):
         logger.info(f"Received signal {signum}, shutting down...")
-        asyncio.create_task(consumer.stop())
+        shutdown_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        logger.info("✅ Deepgram worker ready")
+        logger.info("✅ Parakeet worker ready")
 
-        # This blocks until consumer is stopped
-        await consumer.start_consuming()
+        # This blocks until consumer is stopped or shutdown signaled
+        consume_task = asyncio.create_task(consumer.start_consuming())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+        done, pending = await asyncio.wait(
+            [consume_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # Cancel pending tasks
+        for task in pending:
+            task.cancel()
+
+        await consumer.stop()
 
     except Exception as e:
         logger.error(f"Worker error: {e}", exc_info=True)
         sys.exit(1)
     finally:
         await redis_client.aclose()
-        logger.info("👋 Deepgram worker stopped")
+        logger.info("👋 Parakeet worker stopped")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+

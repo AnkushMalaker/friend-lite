@@ -159,6 +159,19 @@ class Conversation(Document):
                     elif not isinstance(segment['speaker'], str):
                         segment['speaker'] = "unknown"
 
+        # Populate legacy fields from active transcript version if they're empty
+        active_version_id = data.get('active_transcript_version')
+        if active_version_id and 'transcript_versions' in data and isinstance(data['transcript_versions'], list):
+            for version in data['transcript_versions']:
+                if isinstance(version, dict) and version.get('version_id') == active_version_id:
+                    # Populate transcript if missing
+                    if not data.get('transcript') and version.get('transcript'):
+                        data['transcript'] = version['transcript']
+                    # Populate segments if missing or empty
+                    if (not data.get('segments') or len(data.get('segments', [])) == 0) and version.get('segments'):
+                        data['segments'] = version['segments']
+                    break
+
         return data
 
     @property

@@ -7,6 +7,7 @@ Provides both batch and streaming transcription using NeMo's Parakeet ASR models
 import asyncio
 import json
 import logging
+import os
 import tempfile
 from typing import Dict, Optional
 

@@ -41,7 +41,8 @@ shutdown() {
     kill $RQ_WORKER_5_PID 2>/dev/null || true
     kill $RQ_WORKER_6_PID 2>/dev/null || true
     kill $AUDIO_PERSISTENCE_WORKER_PID 2>/dev/null || true
-    kill $AUDIO_STREAM_WORKER_PID 2>/dev/null || true
+    [ -n "$AUDIO_STREAM_WORKER_PID" ] && kill $AUDIO_STREAM_WORKER_PID 2>/dev/null || true
+    [ -n "$PARAKEET_STREAM_WORKER_PID" ] && kill $PARAKEET_STREAM_WORKER_PID 2>/dev/null || true
     wait
     echo "✅ All workers stopped"
     exit 0
@@ -74,11 +75,28 @@ echo "💾 Starting audio persistence worker (1 worker for audio queue)..."
 uv run python -m advanced_omi_backend.workers.rq_worker_entry audio &
 AUDIO_PERSISTENCE_WORKER_PID=$!
 
-# Start 1 audio stream worker for Deepgram
+# Start 1 audio stream worker for Deepgram (only if DEEPGRAM_API_KEY is set)
 # Single worker ensures sequential processing of audio chunks
-echo "🎵 Starting audio stream Deepgram worker (1 worker for sequential processing)..."
-uv run python -m advanced_omi_backend.workers.audio_stream_deepgram_worker &
-AUDIO_STREAM_WORKER_PID=$!
+if [ -n "$DEEPGRAM_API_KEY" ]; then
+    echo "🎵 Starting audio stream Deepgram worker (1 worker for sequential processing)..."
+    uv run python -m advanced_omi_backend.workers.audio_stream_deepgram_worker &
+    AUDIO_STREAM_WORKER_PID=$!
+else
+    echo "⏭️  Skipping Deepgram audio stream worker (DEEPGRAM_API_KEY not set)"
+    AUDIO_STREAM_WORKER_PID=""
+fi
+
+# Start 1 audio stream worker for Parakeet (only if PARAKEET_ASR_URL or OFFLINE_ASR_TCP_URI is set)
+# Single worker ensures sequential processing of audio chunks
+PARAKEET_URL="${PARAKEET_ASR_URL:-${OFFLINE_ASR_TCP_URI:-}}"
+if [ -n "$PARAKEET_URL" ]; then
+    echo "🎤 Starting audio stream Parakeet worker (1 worker for sequential processing)..."
+    uv run python -m advanced_omi_backend.workers.audio_stream_parakeet_worker &
+    PARAKEET_STREAM_WORKER_PID=$!
+else
+    echo "⏭️  Skipping Parakeet audio stream worker (PARAKEET_ASR_URL or OFFLINE_ASR_TCP_URI not set)"
+    PARAKEET_STREAM_WORKER_PID=""
+fi
 
 echo "✅ All workers started:"
 echo "  - RQ worker 1: PID $RQ_WORKER_1_PID (transcription, memory, default)"
@@ -88,7 +106,12 @@ echo "  - RQ worker 4: PID $RQ_WORKER_4_PID (transcription, memory, default)"
 echo "  - RQ worker 5: PID $RQ_WORKER_5_PID (transcription, memory, default)"
 echo "  - RQ worker 6: PID $RQ_WORKER_6_PID (transcription, memory, default)"
 echo "  - Audio persistence worker: PID $AUDIO_PERSISTENCE_WORKER_PID (audio queue - file rotation)"
-echo "  - Audio stream worker: PID $AUDIO_STREAM_WORKER_PID (Redis Streams consumer - sequential processing)"
+if [ -n "$AUDIO_STREAM_WORKER_PID" ]; then
+    echo "  - Audio stream Deepgram worker: PID $AUDIO_STREAM_WORKER_PID (Redis Streams consumer - sequential processing)"
+fi
+if [ -n "$PARAKEET_STREAM_WORKER_PID" ]; then
+    echo "  - Audio stream Parakeet worker: PID $PARAKEET_STREAM_WORKER_PID (Redis Streams consumer - sequential processing)"
+fi
 
 # Wait for any process to exit
 wait -n
@@ -102,7 +125,7 @@ kill $RQ_WORKER_4_PID 2>/dev/null || true
 kill $RQ_WORKER_5_PID 2>/dev/null || true
 kill $RQ_WORKER_6_PID 2>/dev/null || true
 kill $AUDIO_PERSISTENCE_WORKER_PID 2>/dev/null || true
-kill $AUDIO_STREAM_WORKER_PID 2>/dev/null || true
+[ -n "$AUDIO_STREAM_WORKER_PID" ] && kill $AUDIO_STREAM_WORKER_PID 2>/dev/null || true
 wait
 
 echo "🔄 All workers stopped"

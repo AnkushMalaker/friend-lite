@@ -313,13 +313,30 @@ async def _initialize_streaming_session(
     client_state.stream_audio_format = audio_format
     application_logger.info(f"🆔 Created stream session: {client_state.stream_session_id}")
 
+    # Determine transcription provider from environment
+    transcription_provider = os.getenv("TRANSCRIPTION_PROVIDER", "").lower()
+    if transcription_provider in ["offline", "parakeet"]:
+        provider = "parakeet"
+    elif transcription_provider == "deepgram":
+        provider = "deepgram"
+    else:
+        # Auto-detect: prefer Parakeet if URL is set, otherwise Deepgram
+        parakeet_url = os.getenv("PARAKEET_ASR_URL") or os.getenv("OFFLINE_ASR_TCP_URI")
+        deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+        if parakeet_url:
+            provider = "parakeet"
+        elif deepgram_key:
+            provider = "deepgram"
+        else:
+            raise ValueError("No transcription provider configured (DEEPGRAM_API_KEY or PARAKEET_ASR_URL required)")
+    
     # Initialize session tracking in Redis
     await audio_stream_producer.init_session(
         session_id=client_state.stream_session_id,
         user_id=user_id,
         client_id=client_id,
         mode="streaming",
-        provider="deepgram"
+        provider=provider
     )
 
     # Enqueue streaming jobs (speech detection + audio persistence)

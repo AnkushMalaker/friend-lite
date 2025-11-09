@@ -127,7 +127,7 @@ Note (Linux): If `host.docker.internal` is unavailable, add `extra_hosts: - "hos
 
 ### Container-to-Container Communication
 Services use `host.docker.internal` for inter-container communication:
-- `http://host.docker.internal:8085` - Speaker Recognition
+- `http://127.0.0.1:8085` - Speaker Recognition
 - `http://host.docker.internal:8767` - Parakeet ASR  
 - `http://host.docker.internal:8765` - OpenMemory MCP
 

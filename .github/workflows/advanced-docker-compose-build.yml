@@ -1,0 +1,248 @@
+name: Build and Deploy Advanced (Docker Compose)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version tag override (e.g. v1.2.3)
+        required: false
+  push:
+    branches: [ "main" ]
+    paths:
+      - "*"
+      - "backends/advanced/**"
+      - "extras/asr-services/**"
+      - "extras/speaker-recognition/**"
+      - "extras/openmemory-mcp/**"
+      - ".github/workflows/advanced-docker-compose-build.yml"
+    tags:
+      - "v*"
+
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-default:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ADVANCED_ENV: ${{ secrets.ADVANCED_ENV }}
+      RUNNER_FLAVOUR: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: backends/advanced
+
+    steps:
+      - name: Show selected runner
+        run: echo "Workflow running on ${RUNNER_FLAVOUR} runner"
+        working-directory: .
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print commit details
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: $GITHUB_REF"
+          echo "Ref name: ${{ github.ref_name }}"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Actor: $GITHUB_ACTOR"
+          echo "SHA: $GITHUB_SHA"
+          echo "Short SHA: ${GITHUB_SHA::7}"
+          echo "Commit info:"
+          git log -1 --pretty=format:'Author: %an <%ae>%nDate:   %ad%nSubject: %s' || true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy .env.template to .env
+        run: |
+          set -euo pipefail
+          copy_env() {
+            local dir="$1"
+            local template="${dir}/.env.template"
+            local target="${dir}/.env"
+            if [ -f "$template" ]; then
+              echo "Copying $template to $target"
+              cp "$template" "$target"
+            else
+              echo "$template not found; skipping"
+            fi
+          }
+
+          copy_env .
+          copy_env ../../extras/asr-services
+          copy_env ../../extras/speaker-recognition
+          copy_env ../../extras/openmemory-mcp
+
+      - name: Create .env from secret (if provided)
+        if: env.ADVANCED_ENV != ''
+        run: |
+          echo "Writing .env from ADVANCED_ENV secret"
+          printf "%s\n" "${ADVANCED_ENV}" > .env
+
+      - name: Source .env (if present)
+        run: |
+          if [ -f .env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            source .env
+            set +a
+          else
+            echo ".env not found; continuing"
+          fi
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="sha-${GITHUB_SHA::7}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build, tag, and push services sequentially with version
+        env:
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          docker compose version
+          OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          
+          # CUDA variants from pyproject.toml
+          CUDA_VARIANTS=("cpu" "cu121" "cu126" "cu128")
+          
+          # Base services (no CUDA variants, no profiles)
+          base_service_specs=(
+            "friend-backend|advanced-friend-backend|docker-compose.yml|."
+            "workers|advanced-workers|docker-compose.yml|."
+            "webui|advanced-webui|docker-compose.yml|."
+            "openmemory-mcp|openmemory-mcp|../../extras/openmemory-mcp/docker-compose.yml|../../extras/openmemory-mcp"
+          )
+          
+          # Build and push base services
+          for spec in "${base_service_specs[@]}"; do
+            IFS='|' read -r svc svc_repo compose_file project_dir <<< "$spec"
+            
+            echo "::group::Building and pushing $svc_repo"
+            if [ "$compose_file" = "docker-compose.yml" ] && [ "$project_dir" = "." ]; then
+              docker compose build --pull "$svc"
+            else
+              docker compose -f "$compose_file" --project-directory "$project_dir" build "$svc"
+            fi
+            # Resolve the built image ID via compose (avoids name mismatches)
+            if [ "$compose_file" = "docker-compose.yml" ] && [ "$project_dir" = "." ]; then
+              img_id=$(docker compose images -q "$svc" | head -n1)
+            else
+              img_id=$(docker compose -f "$compose_file" --project-directory "$project_dir" images -q "$svc" | head -n1)
+            fi
+            if [ -z "${img_id:-}" ]; then
+              echo "Skipping $svc_repo (no built image found after build)"
+              echo "::endgroup::"
+              continue
+            fi
+            
+            # Tag and push with version
+            target_image="$REGISTRY/$OWNER_LC/$svc_repo:$VERSION"
+            latest_image="$REGISTRY/$OWNER_LC/$svc_repo:latest"
+            echo "Tagging $img_id as $target_image"
+            docker tag "$img_id" "$target_image"
+            echo "Tagging $img_id as $latest_image"
+            docker tag "$img_id" "$latest_image"
+            
+            echo "Pushing $target_image"
+            docker push "$target_image"
+            echo "Pushing $latest_image"
+            docker push "$latest_image"
+            
+            # Clean up local tags
+            docker image rm -f "$target_image" || true
+            docker image rm -f "$latest_image" || true
+            echo "::endgroup::"
+          done
+          
+          # Build and push parakeet-asr with CUDA variants (cu121, cu126, cu128)
+          echo "::group::Building and pushing parakeet-asr CUDA variants"
+          cd ../../extras/asr-services
+          for cuda_variant in cu121 cu126 cu128; do
+            echo "Building parakeet-asr-${cuda_variant}"
+            export CUDA_VERSION="${cuda_variant}"
+            docker compose build parakeet-asr
+            
+            img_id=$(docker compose images -q parakeet-asr | head -n1)
+            if [ -n "${img_id:-}" ]; then
+              target_image="$REGISTRY/$OWNER_LC/parakeet-asr-${cuda_variant}:$VERSION"
+              latest_image="$REGISTRY/$OWNER_LC/parakeet-asr-${cuda_variant}:latest"
+              echo "Tagging $img_id as $target_image"
+              docker tag "$img_id" "$target_image"
+              echo "Tagging $img_id as $latest_image"
+              docker tag "$img_id" "$latest_image"
+              
+              echo "Pushing $target_image"
+              docker push "$target_image"
+              echo "Pushing $latest_image"
+              docker push "$latest_image"
+              
+              # Clean up local tags
+              docker image rm -f "$target_image" || true
+              docker image rm -f "$latest_image" || true
+            fi
+          done
+          cd - > /dev/null
+          echo "::endgroup::"
+          
+          # Build and push speaker-recognition with all CUDA variants (including CPU)
+          # Note: speaker-service has profiles, but we can build it directly by setting PYTORCH_CUDA_VERSION
+          echo "::group::Building and pushing speaker-recognition variants"
+          cd ../../extras/speaker-recognition
+          for cuda_variant in "${CUDA_VARIANTS[@]}"; do
+            echo "Building speaker-recognition-${cuda_variant}"
+            export PYTORCH_CUDA_VERSION="${cuda_variant}"
+            # Build speaker-service directly (profiles only affect 'up', not 'build')
+            docker compose build speaker-service
+            
+            img_id=$(docker compose images -q speaker-service | head -n1)
+            if [ -n "${img_id:-}" ]; then
+              target_image="$REGISTRY/$OWNER_LC/speaker-recognition-${cuda_variant}:$VERSION"
+              latest_image="$REGISTRY/$OWNER_LC/speaker-recognition-${cuda_variant}:latest"
+              echo "Tagging $img_id as $target_image"
+              docker tag "$img_id" "$target_image"
+              echo "Tagging $img_id as $latest_image"
+              docker tag "$img_id" "$latest_image"
+              
+              echo "Pushing $target_image"
+              docker push "$target_image"
+              echo "Pushing $latest_image"
+              docker push "$latest_image"
+              
+              # Clean up local tags
+              docker image rm -f "$target_image" || true
+              docker image rm -f "$latest_image" || true
+            fi
+          done
+          cd - > /dev/null
+          echo "::endgroup::"
+          
+          # Summary
+          echo "::group::Build Summary"
+          echo "Built and pushed images with version tag: ${VERSION}"
+          echo "Images pushed to: $REGISTRY/$OWNER_LC/"
+          echo "::endgroup::"
