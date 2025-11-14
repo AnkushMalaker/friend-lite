@@ -66,7 +66,7 @@ export default function Conversations() {
   const audioRefs = useRef<{ [key: string]: HTMLAudioElement }>({})
   const segmentTimerRef = useRef<number | null>(null)
 
-  // Reprocessing state
+  // Reprocessing state - keyed by conversation_id to avoid conflicts with shared audio_uuid
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [reprocessingTranscript, setReprocessingTranscript] = useState<Set<string>>(new Set())
   const [reprocessingMemory, setReprocessingMemory] = useState<Set<string>>(new Set())
@@ -458,7 +458,8 @@ export default function Conversations() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      setOpenDropdown(openDropdown === conversation.audio_uuid ? null : conversation.audio_uuid)
+                      const dropdownKey = conversation.conversation_id || conversation.audio_uuid
+                      setOpenDropdown(openDropdown === dropdownKey ? null : dropdownKey)
                     }}
                     className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
                     title="Conversation options"
@@ -467,7 +468,7 @@ export default function Conversations() {
                   </button>
 
                   {/* Dropdown Menu */}
-                  {openDropdown === conversation.audio_uuid && (
+                  {openDropdown === (conversation.conversation_id || conversation.audio_uuid) && (
                     <div className="absolute right-0 top-8 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-600 py-2 z-10">
                       <button
                         onClick={() => handleReprocessTranscript(conversation)}
