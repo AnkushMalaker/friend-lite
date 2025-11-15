@@ -70,7 +70,7 @@ class Conversation(Document):
 
     # Core identifiers
     conversation_id: Indexed(str, unique=True) = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique conversation identifier")
-    audio_uuid: Indexed(str) = Field(description="Link to audio_chunks collection")
+    audio_uuid: Indexed(str) = Field(description="Session/audio identifier (for tracking audio files)")
     user_id: Indexed(str) = Field(description="User who owns this conversation")
     client_id: Indexed(str) = Field(description="Client device identifier")
 
@@ -304,7 +304,7 @@ def create_conversation(
     Factory function to create a new conversation.
 
     Args:
-        audio_uuid: Link to audio_chunks collection
+        audio_uuid: Unique identifier for the audio session
         user_id: User who owns this conversation
         client_id: Client device identifier
         conversation_id: Optional unique conversation identifier (auto-generated if not provided)

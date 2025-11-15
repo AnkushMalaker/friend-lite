@@ -16,7 +16,6 @@ from wyoming.audio import AudioChunk
 
 if TYPE_CHECKING:
     from advanced_omi_backend.client import ClientState
-    from advanced_omi_backend.database import AudioChunksRepository
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -264,13 +263,15 @@ async def _process_audio_cropping_with_relative_timestamps(
     speech_segments: list[tuple[float, float]],
     output_path: str,
     audio_uuid: str,
-    chunk_repo: Optional['AudioChunksRepository'] = None,
+    _deprecated_chunk_repo=None,  # Deprecated - kept for backward compatibility
 ) -> bool:
     """
     Process audio cropping with speech segments already in relative format.
 
     The segments are expected to be in relative format (seconds from audio start),
     as provided by Deepgram transcription. No timestamp conversion is needed.
+
+    Note: Database updates are now handled by the caller (audio_jobs.py).
     """
     try:
         # Validate input segments
@@ -310,10 +311,7 @@ async def _process_audio_cropping_with_relative_timestamps(
 
         success = await _crop_audio_with_ffmpeg(original_path, validated_segments, output_path)
         if success:
-            # Update database with cropped file info
             cropped_filename = output_path.split("/")[-1]
-            if chunk_repo is not None:
-                await chunk_repo.update_cropped_audio(audio_uuid, cropped_filename, speech_segments)
             logger.info(f"Successfully processed cropped audio: {cropped_filename}")
             return True
         else:

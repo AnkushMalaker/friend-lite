@@ -13,11 +13,6 @@ from advanced_omi_backend.config import (
     save_diarization_settings_to_file,
 )
 from advanced_omi_backend.models.user import User
-# TODO: Remove old processor architecture
-# from advanced_omi_backend.processors import get_processor_manager
-def get_processor_manager():
-    """Stub - processors being removed."""
-    return None
 from advanced_omi_backend.task_manager import get_task_manager
 from fastapi.responses import JSONResponse
 
@@ -61,52 +56,23 @@ async def get_auth_config():
 
 
 async def get_all_processing_tasks():
-    """Get all active processing tasks."""
-    try:
-        processor_manager = get_processor_manager()
-        return processor_manager.get_all_processing_status()
-    except Exception as e:
-        logger.error(f"Error getting processing tasks: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": f"Failed to get processing tasks: {str(e)}"}
-        )
+    """Get all active processing tasks.
+
+    NOTE: This function is deprecated - old processor architecture has been removed.
+    Kept for backward compatibility but always returns empty list.
+    """
+    logger.warning("get_all_processing_tasks called - deprecated function")
+    return []
 
 
 async def get_processing_task_status(client_id: str):
-    """Get processing task status for a specific client."""
-    try:
-        processor_manager = get_processor_manager()
-        processing_status = processor_manager.get_processing_status(client_id)
+    """Get processing task status for a specific client.
 
-        # Check if transcription is marked as started but not completed, and verify with database
-        stages = processing_status.get("stages", {})
-        transcription_stage = stages.get("transcription", {})
-
-        """This is a hack to update it the DB INCASE a process failed
-        if transcription_stage.get("status") == "started" and not transcription_stage.get("completed", False):
-            # Check if transcription is actually complete by checking the database
-            try:
-                chunk = await chunks_col.find_one({"client_id": client_id})
-                if chunk and chunk.get("transcript") and len(chunk.get("transcript", [])) > 0:
-                    # Transcription is complete! Update the processor state
-                    processor_manager.track_processing_stage(
-                        client_id,
-                        "transcription",
-                        "completed",
-                        {"audio_uuid": chunk.get("audio_uuid"), "segments": len(chunk.get("transcript", []))}
-                    )
-                    logger.info(f"Detected transcription completion for client {client_id} ({len(chunk.get('transcript', []))} segments)")
-                    # Get updated status
-                    processing_status = processor_manager.get_processing_status(client_id)
-            except Exception as e:
-                logger.debug(f"Error checking transcription completion: {e}")
-        """
-        return processing_status
-    except Exception as e:
-        logger.error(f"Error getting processing task status for {client_id}: {e}")
-        return JSONResponse(
-            status_code=500, content={"error": f"Failed to get processing task status: {str(e)}"}
-        )
+    NOTE: This function is deprecated - old processor architecture has been removed.
+    Kept for backward compatibility but always returns None.
+    """
+    logger.warning(f"get_processing_task_status called for {client_id} - deprecated function")
+    return None
 
 
 async def get_processor_status():

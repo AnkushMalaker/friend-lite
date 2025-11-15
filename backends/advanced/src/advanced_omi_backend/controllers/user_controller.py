@@ -15,8 +15,9 @@ from advanced_omi_backend.auth import (
     UserManager,
 )
 from advanced_omi_backend.client_manager import get_user_clients_all
-from advanced_omi_backend.database import chunks_col, db, users_col
+from advanced_omi_backend.database import db, users_col
 from advanced_omi_backend.memory import get_memory_service
+from advanced_omi_backend.models.conversation import Conversation
 from advanced_omi_backend.users import User, UserCreate, UserUpdate
 
 logger = logging.getLogger(__name__)
@@ -174,8 +175,8 @@ async def delete_user(
         deleted_data["user_deleted"] = user_result.deleted_count > 0
 
         if delete_conversations:
-            # Delete all conversations (audio chunks) for this user
-            conversations_result = await chunks_col.delete_many({"client_id": user_id})
+            # Delete all conversations for this user
+            conversations_result = await Conversation.find(Conversation.user_id == user_id).delete()
             deleted_data["conversations_deleted"] = conversations_result.deleted_count
 
         if delete_memories:

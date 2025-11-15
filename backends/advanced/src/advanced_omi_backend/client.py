@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from advanced_omi_backend.database import AudioChunksRepository
 from advanced_omi_backend.task_manager import get_task_manager
 from wyoming.audio import AudioChunk
 
@@ -29,14 +28,12 @@ class ClientState:
     def __init__(
         self,
         client_id: str,
-        ac_db_collection_helper: AudioChunksRepository,
         chunk_dir: Path,
         user_id: str,
         user_email: Optional[str] = None,
     ):
         self.client_id = client_id
         self.connected = True
-        self.db_helper = ac_db_collection_helper
         self.chunk_dir = chunk_dir
 
         # Store user data for memory processing

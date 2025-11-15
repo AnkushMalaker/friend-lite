@@ -10,10 +10,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from advanced_omi_backend.auth import current_active_user
-from advanced_omi_backend.client_manager import (
-    ClientManager,
-    get_client_manager_dependency,
-)
 from advanced_omi_backend.controllers import conversation_controller, audio_controller
 from advanced_omi_backend.users import User
 
@@ -26,12 +22,9 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 async def close_current_conversation(
     client_id: str,
     current_user: User = Depends(current_active_user),
-    client_manager: ClientManager = Depends(get_client_manager_dependency),
 ):
-    """Close the current conversation for a specific client. Users can only close their own conversations."""
-    return await conversation_controller.close_current_conversation(
-        client_id, current_user, client_manager
-    )
+    """Close the current active conversation for a client. Works for both connected and disconnected clients."""
+    return await conversation_controller.close_current_conversation(client_id, current_user)
 
 
 @router.get("")
@@ -113,9 +106,9 @@ async def get_conversation_version_history(
     return await conversation_controller.get_conversation_version_history(conversation_id, current_user)
 
 
-@router.delete("/{audio_uuid}")
+@router.delete("/{conversation_id}")
 async def delete_conversation(
-    audio_uuid: str, current_user: User = Depends(current_active_user)
+    conversation_id: str, current_user: User = Depends(current_active_user)
 ):
     """Delete a conversation and its associated audio file. Users can only delete their own conversations."""
-    return await conversation_controller.delete_conversation(audio_uuid, current_user)
+    return await conversation_controller.delete_conversation(conversation_id, current_user)

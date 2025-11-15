@@ -120,6 +120,7 @@ async def transcribe_full_audio_job(
     audio_path: str,
     version_id: str,
     trigger: str = "reprocess",
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """
@@ -335,6 +336,7 @@ async def stream_speech_detection_job(
     session_id: str,
     user_id: str,
     client_id: str,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """

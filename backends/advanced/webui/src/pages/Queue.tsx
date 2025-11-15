@@ -289,8 +289,14 @@ const Queue: React.FC = () => {
         console.log(`📂 Auto-expanded ${expandedJobsCount} job card(s) in active conversations`);
         setExpandedJobs(newExpandedJobs);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Error fetching dashboard data:', error);
+
+      // If it's a 401 error, stop auto-refresh to prevent repeated failed requests
+      if (error?.response?.status === 401) {
+        console.warn('🔐 Authentication error detected - disabling auto-refresh');
+        setAutoRefreshEnabled(false);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);

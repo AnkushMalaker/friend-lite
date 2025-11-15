@@ -93,27 +93,16 @@ async def parse_wyoming_protocol(ws: WebSocket) -> tuple[dict, Optional[bytes]]:
 
 async def create_client_state(client_id: str, user, device_name: Optional[str] = None):
     """Create and register a new client state."""
-    # Get client manager and repository
+    # Get client manager
     client_manager = get_client_manager()
-    from advanced_omi_backend.database import AudioChunksRepository
-    from motor.motor_asyncio import AsyncIOMotorClient
-    
-    # MongoDB Configuration
-    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
-    mongo_client = AsyncIOMotorClient(MONGODB_URI)
-    db = mongo_client.get_default_database("friend-lite")
-    chunks_col = db["audio_chunks"]
-    
-    # Initialize repository
-    ac_repository = AudioChunksRepository(chunks_col)
-    
+
     # Directory where WAV chunks are written
     from pathlib import Path
     CHUNK_DIR = Path("./audio_chunks")  # This will be mounted to ./data/audio_chunks by Docker
-    
+
     # Use ClientManager for atomic client creation and registration
     client_state = client_manager.create_client(
-        client_id, ac_repository, CHUNK_DIR, user.user_id, user.email
+        client_id, CHUNK_DIR, user.user_id, user.email
     )
 
     # Also track in persistent mapping (for database queries)

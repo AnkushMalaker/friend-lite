@@ -30,7 +30,6 @@ class AppConfig:
         self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
         self.mongo_client = AsyncIOMotorClient(self.mongodb_uri)
         self.db = self.mongo_client.get_default_database("friend-lite")
-        self.chunks_col = self.db["audio_chunks"]
         self.users_col = self.db["users"]
         self.speakers_col = self.db["speakers"]
 
@@ -104,7 +103,6 @@ def get_audio_chunk_dir() -> Path:
 def get_mongo_collections():
     """Get MongoDB collections."""
     return {
-        'chunks': app_config.chunks_col,
         'users': app_config.users_col,
         'speakers': app_config.speakers_col,
     }
