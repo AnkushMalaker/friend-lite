@@ -254,12 +254,12 @@ export default function Conversations() {
     }
   }
 
-  const handleSegmentPlayPause = (audioUuid: string, segmentIndex: number, segment: any, audioPath: string) => {
-    const segmentId = `${audioUuid}-${segmentIndex}`;
-    
+  const handleSegmentPlayPause = (conversationId: string, segmentIndex: number, segment: any, audioPath: string) => {
+    const segmentId = `${conversationId}-${segmentIndex}`;
+
     // If this segment is already playing, pause it
     if (playingSegment === segmentId) {
-      const audio = audioRefs.current[audioUuid];
+      const audio = audioRefs.current[conversationId];
       if (audio) {
         audio.pause();
       }
@@ -270,11 +270,11 @@ export default function Conversations() {
       setPlayingSegment(null);
       return;
     }
-    
+
     // Stop any currently playing segment
     if (playingSegment) {
-      const [currentAudioUuid] = playingSegment.split('-');
-      const currentAudio = audioRefs.current[currentAudioUuid];
+      const [currentConversationId] = playingSegment.split('-');
+      const currentAudio = audioRefs.current[currentConversationId];
       if (currentAudio) {
         currentAudio.pause();
       }
@@ -283,12 +283,12 @@ export default function Conversations() {
         segmentTimerRef.current = null;
       }
     }
-    
+
     // Get or create audio element for this conversation
-    let audio = audioRefs.current[audioUuid];
+    let audio = audioRefs.current[conversationId];
     if (!audio) {
       audio = new Audio(`${BACKEND_URL}/audio/${audioPath}`);
-      audioRefs.current[audioUuid] = audio;
+      audioRefs.current[conversationId] = audio;
       
       // Add event listener to handle when audio ends naturally
       audio.addEventListener('ended', () => {
@@ -603,10 +603,12 @@ export default function Conversations() {
                         return conversation.segments.map((segment, index) => {
                           const speaker = segment.speaker || 'Unknown';
                           const speakerColor = speakerColorMap[speaker];
-                          const segmentId = `${conversation.audio_uuid}-${index}`;
+                          // Use conversation_id for unique segment IDs (falls back to audio_uuid for backward compatibility)
+                          const conversationKey = conversation.conversation_id || conversation.audio_uuid;
+                          const segmentId = `${conversationKey}-${index}`;
                           const isPlaying = playingSegment === segmentId;
-                          const audioPath = debugMode 
-                            ? conversation.audio_path 
+                          const audioPath = debugMode
+                            ? conversation.audio_path
                             : conversation.cropped_audio_path || conversation.audio_path;
                           
                           return (
@@ -619,7 +621,7 @@ export default function Conversations() {
                               {/* Play/Pause Button */}
                               {audioPath && (
                                 <button
-                                  onClick={() => handleSegmentPlayPause(conversation.audio_uuid, index, segment, audioPath)}
+                                  onClick={() => handleSegmentPlayPause(conversationKey, index, segment, audioPath)}
                                   className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors mt-0.5 ${
                                     isPlaying 
                                       ? 'bg-blue-600 text-white hover:bg-blue-700' 

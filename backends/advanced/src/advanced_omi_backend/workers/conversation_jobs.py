@@ -64,6 +64,14 @@ async def open_conversation_job(
     conversation_id = conversation.conversation_id  # Get the auto-generated ID
     logger.info(f"✅ Created streaming conversation {conversation_id} for session {session_id}")
 
+    # Update THIS job's metadata with conversation_id (for Queue page grouping)
+    if current_job:
+        if not current_job.meta:
+            current_job.meta = {}
+        current_job.meta['conversation_id'] = conversation_id
+        current_job.save_meta()
+        logger.info(f"🔗 Updated open_conversation_job {current_job.id[:12]} metadata with conversation_id")
+
     # Update speech detection job metadata with conversation_id
     if speech_job_id:
         try:

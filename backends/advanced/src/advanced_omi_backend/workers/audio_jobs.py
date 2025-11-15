@@ -102,10 +102,27 @@ async def process_cropping_job(
         # Calculate cropped duration
         cropped_duration_seconds = sum(end - start for start, end in speech_segments)
 
-        # Update conversation with cropped audio path
+        # Update segment timestamps to match cropped audio
+        # After cropping, segments are concatenated, so they need new timestamps
+        updated_segments = []
+        current_time = 0.0
+        for i, seg in enumerate(segments):
+            original_duration = seg.end - seg.start
+            updated_seg = seg.model_copy()
+            updated_seg.start = current_time
+            updated_seg.end = current_time + original_duration
+            updated_segments.append(updated_seg)
+            current_time += original_duration
+            logger.debug(f"Updated segment {i}: {seg.start:.2f}-{seg.end:.2f}s → {updated_seg.start:.2f}-{updated_seg.end:.2f}s")
+
+        # Update conversation with cropped audio path and adjusted segments
         conversation.cropped_audio_path = cropped_filename
+        conversation.segments = updated_segments
+        # Also update the active transcript version segments
+        if conversation.active_transcript:
+            conversation.active_transcript.segments = updated_segments
         await conversation.save()
-        logger.info(f"💾 Updated conversation {conversation_id[:12]} with cropped_audio_path: {cropped_filename}")
+        logger.info(f"💾 Updated conversation {conversation_id[:12]} with cropped_audio_path and adjusted {len(updated_segments)} segment timestamps")
 
         logger.info(f"✅ RQ: Completed audio cropping for conversation {conversation_id} ({cropped_duration_seconds:.1f}s)")
 
