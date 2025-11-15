@@ -321,8 +321,8 @@ def start_post_conversation_jobs(
     Start post-conversation processing jobs after conversation is created.
 
     This creates the standard processing chain after a conversation is created:
-    1. Audio cropping job - Removes silence from audio
-    2. [Optional] Transcription job - Batch transcription (if post_transcription=True)
+    1. [Optional] Transcription job - Batch transcription (if post_transcription=True)
+    2. Audio cropping job - Removes silence from audio
     3. Speaker recognition job - Identifies speakers in audio
     4. Memory extraction job - Extracts memories from conversation (parallel)
     5. Title/summary generation job - Generates title and summary (parallel)
@@ -348,7 +348,29 @@ def start_post_conversation_jobs(
 
     version_id = transcript_version_id or str(uuid.uuid4())
 
-    # Step 1: Audio cropping job
+    # Step 1: Batch transcription job (ALWAYS run to get correct conversation-relative timestamps)
+    # Even for streaming, we need batch transcription before cropping to fix cumulative timestamps
+    transcribe_job_id = f"transcribe_{conversation_id[:12]}"
+    logger.info(f"🔍 DEBUG: Creating transcribe job with job_id={transcribe_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
+
+    transcription_job = transcription_queue.enqueue(
+        transcribe_full_audio_job,
+        conversation_id,
+        audio_uuid,
+        audio_file_path,
+        version_id,
+        "batch",  # trigger
+        job_timeout=1800,  # 30 minutes
+        result_ttl=JOB_RESULT_TTL,
+        depends_on=depends_on_job,
+        job_id=transcribe_job_id,
+        description=f"Transcribe conversation {conversation_id[:8]}",
+        meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
+    )
+    logger.info(f"📥 RQ: Enqueued transcription job {transcription_job.id}, meta={transcription_job.meta}")
+    crop_depends_on = transcription_job
+
+    # Step 2: Audio cropping job (depends on transcription if it ran, otherwise depends_on_job)
     crop_job_id = f"crop_{conversation_id[:12]}"
     logger.info(f"🔍 DEBUG: Creating crop job with job_id={crop_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
 
@@ -358,38 +380,15 @@ def start_post_conversation_jobs(
         audio_file_path,
         job_timeout=300,  # 5 minutes
         result_ttl=JOB_RESULT_TTL,
-        depends_on=depends_on_job,
+        depends_on=crop_depends_on,
         job_id=crop_job_id,
         description=f"Crop audio for conversation {conversation_id[:8]}",
         meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
     )
     logger.info(f"📥 RQ: Enqueued cropping job {cropping_job.id}, meta={cropping_job.meta}")
 
-    # Step 2: Transcription job (conditional)
-    transcription_job = None
-    if post_transcription:
-        transcribe_job_id = f"transcribe_{conversation_id[:12]}"
-        logger.info(f"🔍 DEBUG: Creating transcribe job with job_id={transcribe_job_id}, conversation_id={conversation_id[:12]}, audio_uuid={audio_uuid[:12]}")
-
-        transcription_job = transcription_queue.enqueue(
-            transcribe_full_audio_job,
-            conversation_id,
-            audio_uuid,
-            audio_file_path,
-            version_id,
-            "batch",  # trigger
-            job_timeout=1800,  # 30 minutes
-            result_ttl=JOB_RESULT_TTL,
-            depends_on=cropping_job,
-            job_id=transcribe_job_id,
-            description=f"Transcribe conversation {conversation_id[:8]}",
-            meta={'audio_uuid': audio_uuid, 'conversation_id': conversation_id}
-        )
-        logger.info(f"📥 RQ: Enqueued transcription job {transcription_job.id}, meta={transcription_job.meta} (depends on {cropping_job.id})")
-        speaker_depends_on = transcription_job
-    else:
-        logger.info(f"⏭️  RQ: Skipping transcription (streaming already has transcript)")
-        speaker_depends_on = cropping_job
+    # Speaker recognition depends on cropping
+    speaker_depends_on = cropping_job
 
     # Step 3: Speaker recognition job
     speaker_job_id = f"speaker_{conversation_id[:12]}"
