@@ -131,7 +131,7 @@ class ClientManager:
         from advanced_omi_backend.client import ClientState
 
         # Create client state
-        client_state = ClientState(client_id, ac_repository, chunk_dir, user_id, user_email)
+        client_state = ClientState(client_id, chunk_dir, user_id, user_email)
 
         # Atomically add to internal storage and register mapping
         self._active_clients[client_id] = client_state

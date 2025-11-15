@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 async def process_cropping_job(
     conversation_id: str,
     audio_path: str,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """
@@ -34,7 +35,7 @@ async def process_cropping_job(
     1. Reads transcript segments from conversation
     2. Extracts speech timestamps
     3. Creates cropped audio file with only speech segments
-    4. Updates audio_chunks collection with cropped file path
+    4. Updates conversation with cropped file path
 
     Args:
         conversation_id: Conversation ID
@@ -46,7 +47,6 @@ async def process_cropping_job(
     """
     from pathlib import Path
     from advanced_omi_backend.utils.audio_utils import _process_audio_cropping_with_relative_timestamps
-    from advanced_omi_backend.database import get_collections, AudioChunksRepository
     from advanced_omi_backend.models.conversation import Conversation
     from advanced_omi_backend.config import CHUNK_DIR
 
@@ -78,17 +78,13 @@ async def process_cropping_job(
         cropped_filename = f"cropped_{original_path.name}"
         output_path = CHUNK_DIR / cropped_filename
 
-        # Get repository for database updates
-        collections = get_collections()
-        repository = AudioChunksRepository(collections["chunks_col"])
-
-        # Process cropping
+        # Process cropping (no repository needed - we update conversation directly)
         success = await _process_audio_cropping_with_relative_timestamps(
             str(original_path),
             speech_segments,
             str(output_path),
             audio_uuid,
-            repository
+            None  # No repository - we update conversation model directly
         )
 
         if not success:
@@ -140,6 +136,7 @@ async def audio_streaming_persistence_job(
     session_id: str,
     user_id: str,
     client_id: str,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """

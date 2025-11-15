@@ -62,11 +62,11 @@ export default function Conversations() {
   // Transcript expand/collapse state
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
   // Audio playback state
-  const [playingSegment, setPlayingSegment] = useState<string | null>(null) // Format: "audioUuid-segmentIndex"
+  const [playingSegment, setPlayingSegment] = useState<string | null>(null) // Format: "conversationId-segmentIndex"
   const audioRefs = useRef<{ [key: string]: HTMLAudioElement }>({})
   const segmentTimerRef = useRef<number | null>(null)
 
-  // Reprocessing state
+  // Reprocessing state - keyed by conversation_id to avoid conflicts with shared audio_uuid
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [reprocessingTranscript, setReprocessingTranscript] = useState<Set<string>>(new Set())
   const [reprocessingMemory, setReprocessingMemory] = useState<Set<string>>(new Set())
@@ -184,7 +184,7 @@ export default function Conversations() {
     }
   }
 
-  const handleDeleteConversation = async (audioUuid: string) => {
+  const handleDeleteConversation = async (conversationId: string | undefined, audioUuid: string) => {
     try {
       const confirmed = window.confirm('Are you sure you want to delete this conversation? This action cannot be undone.')
       if (!confirmed) return
@@ -192,10 +192,13 @@ export default function Conversations() {
       setDeletingConversation(prev => new Set(prev).add(audioUuid))
       setOpenDropdown(null)
 
-      const response = await conversationsApi.delete(audioUuid)
+      const response = await conversationsApi.delete(conversationId!)
 
       if (response.status === 200) {
-        // Refresh conversations to show updated data
+        // Immediately remove from UI for instant feedback
+        setConversations(prev => prev.filter(c => c.conversation_id !== conversationId))
+
+        // Then refresh to ensure consistency with server
         await loadConversations()
       } else {
         setError(`Failed to delete conversation: ${response.data?.error || 'Unknown error'}`)
@@ -254,12 +257,12 @@ export default function Conversations() {
     }
   }
 
-  const handleSegmentPlayPause = (audioUuid: string, segmentIndex: number, segment: any, audioPath: string) => {
-    const segmentId = `${audioUuid}-${segmentIndex}`;
-    
+  const handleSegmentPlayPause = (conversationId: string, segmentIndex: number, segment: any, audioPath: string) => {
+    const segmentId = `${conversationId}-${segmentIndex}`;
+
     // If this segment is already playing, pause it
     if (playingSegment === segmentId) {
-      const audio = audioRefs.current[audioUuid];
+      const audio = audioRefs.current[conversationId];
       if (audio) {
         audio.pause();
       }
@@ -270,11 +273,11 @@ export default function Conversations() {
       setPlayingSegment(null);
       return;
     }
-    
+
     // Stop any currently playing segment
     if (playingSegment) {
-      const [currentAudioUuid] = playingSegment.split('-');
-      const currentAudio = audioRefs.current[currentAudioUuid];
+      const [currentConversationId] = playingSegment.split('-');
+      const currentAudio = audioRefs.current[currentConversationId];
       if (currentAudio) {
         currentAudio.pause();
       }
@@ -283,24 +286,24 @@ export default function Conversations() {
         segmentTimerRef.current = null;
       }
     }
-    
+
     // Get or create audio element for this conversation
-    let audio = audioRefs.current[audioUuid];
+    let audio = audioRefs.current[conversationId];
     if (!audio) {
       audio = new Audio(`${BACKEND_URL}/audio/${audioPath}`);
-      audioRefs.current[audioUuid] = audio;
-      
+      audioRefs.current[conversationId] = audio;
+
       // Add event listener to handle when audio ends naturally
       audio.addEventListener('ended', () => {
         setPlayingSegment(null);
       });
     }
-    
+
     // Set the start time and play
     audio.currentTime = segment.start;
     audio.play().then(() => {
       setPlayingSegment(segmentId);
-      
+
       // Set a timer to stop at the segment end time
       const duration = (segment.end - segment.start) * 1000; // Convert to milliseconds
       segmentTimerRef.current = window.setTimeout(() => {
@@ -458,7 +461,8 @@ export default function Conversations() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      setOpenDropdown(openDropdown === conversation.audio_uuid ? null : conversation.audio_uuid)
+                      const dropdownKey = conversation.conversation_id || conversation.audio_uuid
+                      setOpenDropdown(openDropdown === dropdownKey ? null : dropdownKey)
                     }}
                     className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
                     title="Conversation options"
@@ -467,7 +471,7 @@ export default function Conversations() {
                   </button>
 
                   {/* Dropdown Menu */}
-                  {openDropdown === conversation.audio_uuid && (
+                  {openDropdown === (conversation.conversation_id || conversation.audio_uuid) && (
                     <div className="absolute right-0 top-8 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-600 py-2 z-10">
                       <button
                         onClick={() => handleReprocessTranscript(conversation)}
@@ -501,7 +505,7 @@ export default function Conversations() {
                       </button>
                       <div className="border-t border-gray-200 dark:border-gray-600 my-1"></div>
                       <button
-                        onClick={() => handleDeleteConversation(conversation.audio_uuid)}
+                        onClick={() => handleDeleteConversation(conversation.conversation_id, conversation.audio_uuid)}
                         disabled={deletingConversation.has(conversation.audio_uuid)}
                         className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
@@ -603,26 +607,26 @@ export default function Conversations() {
                         return conversation.segments.map((segment, index) => {
                           const speaker = segment.speaker || 'Unknown';
                           const speakerColor = speakerColorMap[speaker];
-                          const segmentId = `${conversation.audio_uuid}-${index}`;
+                          const segmentId = `${conversation.conversation_id}-${index}`;
                           const isPlaying = playingSegment === segmentId;
-                          const audioPath = debugMode 
-                            ? conversation.audio_path 
+                          const audioPath = debugMode
+                            ? conversation.audio_path
                             : conversation.cropped_audio_path || conversation.audio_path;
-                          
+
                           return (
-                            <div 
-                              key={index} 
+                            <div
+                              key={index}
                               className={`text-sm leading-relaxed flex items-start space-x-2 py-1 px-2 rounded transition-colors ${
                                 isPlaying ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700'
                               }`}
                             >
                               {/* Play/Pause Button */}
-                              {audioPath && (
+                              {audioPath && conversation.conversation_id && (
                                 <button
-                                  onClick={() => handleSegmentPlayPause(conversation.audio_uuid, index, segment, audioPath)}
+                                  onClick={() => handleSegmentPlayPause(conversation.conversation_id!, index, segment, audioPath)}
                                   className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors mt-0.5 ${
-                                    isPlaying 
-                                      ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                                    isPlaying
+                                      ? 'bg-blue-600 text-white hover:bg-blue-700'
                                       : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
                                   }`}
                                   title={isPlaying ? 'Pause segment' : 'Play segment'}
@@ -634,7 +638,7 @@ export default function Conversations() {
                                   )}
                                 </button>
                               )}
-                              
+
                               <div className="flex-1 min-w-0">
                                 {debugMode && (
                                   <span className="text-xs text-gray-400 mr-2">

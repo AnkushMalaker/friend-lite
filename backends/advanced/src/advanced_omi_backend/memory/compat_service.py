@@ -281,13 +281,13 @@ class MemoryService:
         # Get memories first
         memories = await self.get_all_memories(user_id, limit)
         
-        # Import database connection
+        # Import Conversation model
         try:
-            from advanced_omi_backend.database import chunks_col
+            from advanced_omi_backend.models.conversation import Conversation
         except ImportError:
-            memory_logger.error("Cannot import database connection")
+            memory_logger.error("Cannot import Conversation model")
             return memories  # Return memories without transcript enrichment
-        
+
         # Extract source IDs for bulk query
         source_ids = []
         for memory in memories:
@@ -295,12 +295,15 @@ class MemoryService:
             source_id = metadata.get("source_id") or metadata.get("audio_uuid")  # Backward compatibility
             if source_id:
                 source_ids.append(source_id)
-        
-        # Bulk query for chunks (support both old audio_uuid and new source_id)
-        chunks_cursor = chunks_col.find({"audio_uuid": {"$in": source_ids}})
-        chunks_by_id = {}
-        async for chunk in chunks_cursor:
-            chunks_by_id[chunk["audio_uuid"]] = chunk
+
+        # Bulk query for conversations (support both old audio_uuid and new source_id)
+        conversations_list = await Conversation.find(
+            Conversation.audio_uuid.in_(source_ids)
+        ).to_list()
+
+        conversations_by_id = {}
+        for conv in conversations_list:
+            conversations_by_id[conv.audio_uuid] = conv
         
         enriched_memories = []
         
@@ -328,15 +331,15 @@ class MemoryService:
                 enriched_memory["client_id"] = metadata.get("client_id")
                 enriched_memory["user_email"] = metadata.get("user_email")
                 
-                # Get transcript from bulk-loaded chunks
-                chunk = chunks_by_id.get(source_id)
-                if chunk:
-                    transcript_segments = chunk.get("transcript", [])
+                # Get transcript from bulk-loaded conversations
+                conversation = conversations_by_id.get(source_id)
+                if conversation:
+                    transcript_segments = conversation.segments
                     if transcript_segments:
                         full_transcript = " ".join(
-                            segment.get("text", "")
+                            segment.text
                             for segment in transcript_segments
-                            if isinstance(segment, dict) and segment.get("text")
+                            if segment.text
                         )
                         
                         if full_transcript.strip():

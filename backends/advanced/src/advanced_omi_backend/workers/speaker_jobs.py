@@ -20,6 +20,7 @@ async def check_enrolled_speakers_job(
     session_id: str,
     user_id: str,
     client_id: str,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """
@@ -106,6 +107,7 @@ async def recognise_speakers_job(
     audio_path: str,
     transcript_text: str,
     words: list,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """

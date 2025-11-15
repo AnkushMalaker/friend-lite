@@ -21,6 +21,7 @@ async def open_conversation_job(
     client_id: str,
     speech_detected_at: float,
     speech_job_id: str = None,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """
@@ -403,6 +404,7 @@ async def open_conversation_job(
 @async_job(redis=True, beanie=True)
 async def generate_title_summary_job(
     conversation_id: str,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """

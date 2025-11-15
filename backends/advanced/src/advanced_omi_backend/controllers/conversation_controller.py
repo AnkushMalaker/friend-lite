@@ -11,7 +11,7 @@ from advanced_omi_backend.client_manager import (
     ClientManager,
     client_belongs_to_user,
 )
-from advanced_omi_backend.database import chunks_col
+from advanced_omi_backend.models.audio_file import AudioFile
 from advanced_omi_backend.models.conversation import Conversation
 from advanced_omi_backend.users import User
 from fastapi.responses import JSONResponse
@@ -174,32 +174,27 @@ async def delete_conversation(audio_uuid: str, user: User):
 
         # Detailed debugging only when debug level is enabled
         if logger.isEnabledFor(logging.DEBUG):
-            total_count = await chunks_col.count_documents({})
-            logger.debug(f"Total conversations in collection: {total_count}")
+            total_count = await AudioFile.count()
+            logger.debug(f"Total audio files in collection: {total_count}")
             logger.debug(f"UUID length: {len(audio_uuid)}, type: {type(audio_uuid)}")
 
-        # First, get the audio chunk record to check ownership and get conversation_id
-        audio_chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
+        # First, get the audio file record to check ownership and get conversation_id
+        audio_file = await AudioFile.find_one(AudioFile.audio_uuid == audio_uuid)
 
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Audio chunk lookup result: {'found' if audio_chunk else 'not found'}")
-            if audio_chunk:
-                logger.debug(f"Found audio chunk with client_id: {audio_chunk.get('client_id')}")
-                logger.debug(f"Audio chunk has conversation_id: {audio_chunk.get('conversation_id')}")
-            else:
-                # Try alternative queries for debugging
-                regex_result = await chunks_col.find_one({"audio_uuid": {"$regex": f"^{audio_uuid}$", "$options": "i"}})
-                contains_result = await chunks_col.find_one({"audio_uuid": {"$regex": audio_uuid}})
-                logger.debug(f"Alternative query attempts - case insensitive: {'found' if regex_result else 'not found'}, substring: {'found' if contains_result else 'not found'}")
+            logger.debug(f"Audio file lookup result: {'found' if audio_file else 'not found'}")
+            if audio_file:
+                logger.debug(f"Found audio file with client_id: {audio_file.client_id}")
+                logger.debug(f"Audio file has conversation_id: {audio_file.conversation_id}")
 
-        if not audio_chunk:
+        if not audio_file:
             return JSONResponse(
                 status_code=404,
-                content={"error": f"Audio chunk with audio_uuid '{audio_uuid}' not found"}
+                content={"error": f"Audio file with audio_uuid '{audio_uuid}' not found"}
             )
 
         # Check if user has permission to delete this conversation
-        client_id = audio_chunk.get("client_id")
+        client_id = audio_file.client_id
         if not user.is_superuser and not client_belongs_to_user(client_id, user.user_id):
             logger.warning(
                 f"User {user.user_id} attempted to delete conversation {audio_uuid} without permission"
@@ -213,25 +208,18 @@ async def delete_conversation(audio_uuid: str, user: User):
             )
 
         # Get audio file paths for deletion
-        audio_path = audio_chunk.get("audio_path")
-        cropped_audio_path = audio_chunk.get("cropped_audio_path")
+        audio_path = audio_file.audio_path
+        cropped_audio_path = audio_file.cropped_audio_path
 
-        # Get conversation_id if this audio chunk has an associated conversation
-        conversation_id = audio_chunk.get("conversation_id")
+        # Get conversation_id if this audio file has an associated conversation
+        conversation_id = audio_file.conversation_id
         conversation_deleted = False
 
-        # Delete from audio_chunks collection first
-        audio_result = await chunks_col.delete_one({"audio_uuid": audio_uuid})
+        # Delete the audio file from database first
+        await audio_file.delete()
+        logger.info(f"Deleted audio file {audio_uuid}")
 
-        if audio_result.deleted_count == 0:
-            return JSONResponse(
-                status_code=404,
-                content={"error": f"Failed to delete audio chunk with audio_uuid '{audio_uuid}'"}
-            )
-
-        logger.info(f"Deleted audio chunk {audio_uuid}")
-
-        # If this audio chunk has an associated conversation, delete it using Beanie
+        # If this audio file has an associated conversation, delete it using Beanie
         if conversation_id:
             try:
                 conversation_model = await Conversation.find_one(Conversation.conversation_id == conversation_id)

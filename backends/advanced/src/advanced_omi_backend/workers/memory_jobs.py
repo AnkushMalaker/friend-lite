@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 @async_job(redis=True, beanie=True)
 async def process_memory_job(
     conversation_id: str,
+    *,
     redis_client=None
 ) -> Dict[str, Any]:
     """
@@ -208,10 +209,7 @@ def enqueue_memory_processing(
 
     job = memory_queue.enqueue(
         process_memory_job,
-        client_id,
-        user_id,
-        user_email,
-        conversation_id,
+        conversation_id,  # Only argument needed - job fetches conversation data internally
         job_timeout=timeout_mapping.get(priority, 1800),
         result_ttl=JOB_RESULT_TTL,
         job_id=f"memory_{conversation_id[:8]}",

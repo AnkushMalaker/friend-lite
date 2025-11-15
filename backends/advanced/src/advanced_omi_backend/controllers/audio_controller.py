@@ -4,7 +4,7 @@ Audio file upload and processing controller.
 Handles audio file uploads and processes them directly.
 Simplified to write files immediately and enqueue transcription.
 
-Also includes audio cropping operations that work with the audio_chunks collection.
+Also includes audio cropping operations that work with the Conversation model.
 """
 
 import logging
@@ -23,8 +23,7 @@ from advanced_omi_backend.utils.audio_utils import (
 from advanced_omi_backend.models.job import JobPriority
 from advanced_omi_backend.models.user import User
 from advanced_omi_backend.models.conversation import create_conversation
-from advanced_omi_backend.database import AudioChunksRepository, chunks_col
-from advanced_omi_backend.client_manager import client_belongs_to_user
+from advanced_omi_backend.models.conversation import Conversation
 
 logger = logging.getLogger(__name__)
 audio_logger = logging.getLogger("audio_processing")
@@ -115,6 +114,8 @@ async def upload_and_process_audio_files(
                     title=title,
                     summary="Processing uploaded audio file..."
                 )
+                # Set audio_path so the frontend can play the audio
+                conversation.audio_path = wav_filename
                 await conversation.insert()
                 conversation_id = conversation.conversation_id  # Get the auto-generated ID
 
@@ -194,32 +195,32 @@ async def upload_and_process_audio_files(
 
 async def get_cropped_audio_info(audio_uuid: str, user: User):
     """
-    Get audio cropping metadata from the audio_chunks collection.
+    Get audio cropping metadata from the conversation.
 
     This is an audio service operation that retrieves cropping-related metadata
     such as speech segments, cropped audio path, and cropping timestamps.
 
     Used for: Checking cropping status and retrieving audio processing details.
-    Works with: audio_chunks collection (audio service operations).
+    Works with: Conversation model.
     """
     try:
-        # Find the audio chunk
-        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        # Find the conversation
+        conversation = await Conversation.find_one(Conversation.audio_uuid == audio_uuid)
+        if not conversation:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
         if not user.is_superuser:
-            if not client_belongs_to_user(chunk["client_id"], user.user_id):
+            if conversation.user_id != str(user.user_id):
                 return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         return {
             "audio_uuid": audio_uuid,
-            "cropped_audio_path": chunk.get("cropped_audio_path"),
-            "speech_segments": chunk.get("speech_segments", []),
-            "cropped_duration": chunk.get("cropped_duration"),
-            "cropped_at": chunk.get("cropped_at"),
-            "original_audio_path": chunk.get("audio_path"),
+            "cropped_audio_path": conversation.cropped_audio_path,
+            "speech_segments": conversation.speech_segments if hasattr(conversation, 'speech_segments') else [],
+            "cropped_duration": conversation.cropped_duration if hasattr(conversation, 'cropped_duration') else None,
+            "cropped_at": conversation.cropped_at if hasattr(conversation, 'cropped_at') else None,
+            "original_audio_path": conversation.audio_path,
         }
 
     except Exception as e:
@@ -236,20 +237,20 @@ async def reprocess_audio_cropping(audio_uuid: str, user: User):
     to extract only speech segments from the full audio file.
 
     Used for: Re-processing audio when cropping failed or needs updating.
-    Works with: audio_chunks collection and audio_utils cropping functions.
+    Works with: Conversation model and audio_utils cropping functions.
     """
     try:
-        # Find the audio chunk
-        chunk = await chunks_col.find_one({"audio_uuid": audio_uuid})
-        if not chunk:
+        # Find the conversation
+        conversation = await Conversation.find_one(Conversation.audio_uuid == audio_uuid)
+        if not conversation:
             return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
         # Check ownership for non-admin users
         if not user.is_superuser:
-            if not client_belongs_to_user(chunk["client_id"], user.user_id):
+            if conversation.user_id != str(user.user_id):
                 return JSONResponse(status_code=404, content={"error": "Conversation not found"})
 
-        audio_path = chunk.get("audio_path")
+        audio_path = conversation.audio_path
         if not audio_path:
             return JSONResponse(
                 status_code=400, content={"error": "No audio file found for this conversation"}
@@ -277,8 +278,8 @@ async def reprocess_audio_cropping(audio_uuid: str, user: User):
                 }
             )
 
-        # Get speech segments from the chunk
-        speech_segments = chunk.get("speech_segments", [])
+        # Get speech segments from the conversation
+        speech_segments = conversation.speech_segments if hasattr(conversation, 'speech_segments') else []
         if not speech_segments:
             return JSONResponse(
                 status_code=400,
@@ -289,20 +290,21 @@ async def reprocess_audio_cropping(audio_uuid: str, user: User):
         cropped_filename = f"cropped_{audio_uuid}.wav"
         output_path = Path("/app/audio_chunks") / cropped_filename
 
-        # Get repository for database updates
-        chunk_repo = AudioChunksRepository(chunks_col)
-
-        # Reprocess the audio cropping
+        # Reprocess the audio cropping (simplified without repository)
         try:
-            result = await _process_audio_cropping_with_relative_timestamps(
+            from advanced_omi_backend.utils.audio_utils import extract_speech_segments
+
+            success = await extract_speech_segments(
                 str(full_audio_path),
                 speech_segments,
-                str(output_path),
-                audio_uuid,
-                chunk_repo
+                str(output_path)
             )
 
-            if result:
+            if success:
+                # Update conversation with cropped audio path
+                conversation.cropped_audio_path = cropped_filename
+                await conversation.save()
+
                 audio_logger.info(f"Successfully reprocessed audio cropping for {audio_uuid}")
                 return JSONResponse(
                     content={"message": f"Audio cropping reprocessed for {audio_uuid}"}
